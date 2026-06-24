@@ -1,0 +1,21 @@
+# LAN Mesh 配置文件
+# 放置在 ~/.lan_mesh/config.yaml 或项目根目录 config.yaml 即可自动加载
+
+# UDP 发现配置
+discovery:
+  port: 45454              # UDP 广播发现端口 (与 QuickLAN 一致)
+  presence_interval: 3     # 广播间隔 (秒)
+  device_ttl: 12           # 设备离线判定阈值 (秒)
+
+# Worker 节点配置
+worker:
+  api_port: 45460          # HTTP API 起始端口
+  shared_folder: ~/lan_mesh_shared
+  device_name: ""          # 留空则自动使用 hostname
+
+# Master 节点配置
+master:
+  api_port: 45470          # HTTP API + Web UI 端口
+  shared_folder: ~/lan_mesh_shared
+  device_name: ""          # 留空则自动使用 hostname-master
+  db_path: ~/.lan_mesh/master.sqlite3

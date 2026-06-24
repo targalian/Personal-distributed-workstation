@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LAN Mesh - 分布式主机仪表盘</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242836;
+    --border: #2e3344;
+    --text: #e4e7ef;
+    --text-dim: #8b90a0;
+    --accent: #5b8cff;
+    --green: #4ade80;
+    --yellow: #fbbf24;
+    --red: #f87171;
+    --radius: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  /* ── 顶栏 ── */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+  .topbar h1 {
+    font-size: 20px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .topbar h1 .logo { font-size: 28px; }
+  .stats {
+    display: flex;
+    gap: 24px;
+    font-size: 14px;
+  }
+  .stat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-dim);
+  }
+  .stat .val { font-weight: 700; font-size: 18px; color: var(--text); }
+  .stat .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot.online { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.offline { background: var(--red); }
+
+  /* ── 工具栏 ── */
+  .toolbar {
+    padding: 12px 28px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  .toolbar input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    color: var(--text);
+    font-size: 14px;
+    width: 260px;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .toolbar input:focus { border-color: var(--accent); }
+  .btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 16px;
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .btn:hover { background: var(--border); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); }
+  .btn.primary:hover { filter: brightness(1.1); }
+  .ws-status {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ws-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); animation: pulse 2s infinite;
+  }
+  .ws-dot.offline { background: var(--red); animation: none; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+
+  /* ── 主机网格 ── */
+  .host-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 16px;
+    padding: 0 28px 28px;
+  }
+  .host-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    transition: all .2s;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+  }
+  .host-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .host-card.offline { opacity: .55; }
+  .host-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: var(--green);
+  }
+  .host-card.offline::before { background: var(--red); }
+  .host-card.master::before { background: var(--accent); }
+
+  .host-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .host-name {
+    font-size: 17px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .host-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .host-badge.master { background: rgba(91,140,255,.15); color: var(--accent); }
+  .host-badge.worker { background: rgba(74,222,128,.1); color: var(--green); }
+  .host-status {
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .host-meta {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-bottom: 14px;
+    line-height: 1.6;
+  }
+  .host-meta span { color: var(--text); }
+
+  /* 资源进度条 */
+  .resource-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .resource-label {
+    font-size: 12px;
+    color: var(--text-dim);
+    width: 42px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+  .progress-bar {
+    flex: 1;
+    height: 8px;
+    background: var(--surface2);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width .5s ease;
+  }
+  .progress-fill.low { background: var(--green); }
+  .progress-fill.mid { background: var(--yellow); }
+  .progress-fill.high { background: var(--red); }
+  .resource-value {
+    font-size: 12px;
+    font-weight: 600;
+    width: 64px;
+    text-align: right;
+  }
+
+  /* ── 详情面板 ── */
+  .detail-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.6);
+    z-index: 200;
+    justify-content: center;
+    align-items: center;
+  }
+  .detail-overlay.show { display: flex; }
+  .detail-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px;
+    width: 90%;
+    max-width: 560px;
+    max-height: 85vh;
+    overflow-y: auto;
+  }
+  .detail-panel h2 { margin-bottom: 4px; font-size: 22px; }
+  .detail-close {
+    float: right;
+    cursor: pointer;
+    font-size: 24px;
+    color: var(--text-dim);
+    line-height: 1;
+  }
+  .detail-close:hover { color: var(--text); }
+  .detail-section {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .detail-section h3 {
+    font-size: 14px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    letter-spacing: .5px;
+    margin-bottom: 10px;
+  }
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 16px;
+    font-size: 14px;
+  }
+  .detail-grid .key { color: var(--text-dim); }
+  .detail-grid .val { color: var(--text); font-weight: 500; text-align: right; word-break: break-all; }
+
+  /* ── 空状态 ── */
+  .empty {
+    text-align: center;
+    padding: 80px 20px;
+    color: var(--text-dim);
+  }
+  .empty .icon { font-size: 56px; margin-bottom: 16px; opacity: .3; }
+  .empty p { font-size: 15px; margin-bottom: 6px; }
+  .empty .hint { font-size: 13px; opacity: .6; }
+
+  /* ── 响应式 ── */
+  @media (max-width: 640px) {
+    .topbar { flex-direction: column; gap: 12px; }
+    .stats { flex-wrap: wrap; justify-content: center; }
+    .toolbar { flex-wrap: wrap; }
+    .toolbar input { width: 100%; }
+    .host-grid { grid-template-columns: 1fr; padding: 0 16px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1><span class="logo">🕸️</span> LAN Mesh 仪表盘</h1>
+  <div class="stats">
+    <div class="stat">
+      <span class="val" id="stat-total">0</span> 主机总数
+    </div>
+    <div class="stat">
+      <span class="dot online"></span>
+      <span class="val" id="stat-online">0</span> 在线
+    </div>
+    <div class="stat">
+      <span class="dot offline"></span>
+      <span class="val" id="stat-offline">0</span> 离线
+    </div>
+  </div>
+</div>
+
+<div class="toolbar">
+  <input type="text" id="search" placeholder="搜索主机名 / IP / 平台...">
+  <button class="btn primary" onclick="refreshHosts()">🔄 刷新</button>
+  <button class="btn" onclick="probeIP()">📡 探测 IP</button>
+  <button class="btn" onclick="showNetworkInfo()">🌐 网络</button>
+  <div class="ws-status">
+    <span class="ws-dot" id="ws-dot"></span>
+    <span id="ws-label">WebSocket 已连接</span>
+  </div>
+</div>
+
+<div class="host-grid" id="host-grid">
+  <div class="empty">
+    <div class="icon">⏳</div>
+    <p>正在搜索局域网内的主机...</p>
+    <p class="hint">请确保各主机已启动 Worker (<code>python main.py worker</code>)</p>
+  </div>
+</div>
+
+<!-- 详情面板 -->
+<div class="detail-overlay" id="detail-overlay" onclick="closeDetail(event)">
+  <div class="detail-panel" id="detail-panel"></div>
+</div>
+
+<script>
+let allHosts = [];
+let ws = null;
+
+// ── 初始化 ──────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  refreshHosts();
+  connectWS();
+  setInterval(refreshHosts, 5000);
+  document.getElementById('search').addEventListener('input', renderHosts);
+});
+
+// ── WebSocket 实时更新 ──────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => {
+    document.getElementById('ws-dot').classList.remove('offline');
+    document.getElementById('ws-label').textContent = 'WebSocket 已连接';
+  };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'hosts' || msg.type === 'heartbeat' || msg.type === 'host_registered') {
+      refreshHosts();
+    }
+  };
+  ws.onclose = () => {
+    document.getElementById('ws-dot').classList.add('offline');
+    document.getElementById('ws-label').textContent = 'WebSocket 断开,重试中...';
+    setTimeout(connectWS, 3000);
+  };
+}
+
+// ── 获取主机列表 ────────────────────────────────────────────────
+async function refreshHosts() {
+  try {
+    const resp = await fetch('/api/hosts');
+    const data = await resp.json();
+    allHosts = data.hosts || [];
+    renderHosts();
+  } catch (e) {
+    console.error('刷新失败:', e);
+  }
+}
+
+// ── 渲染主机卡片 ────────────────────────────────────────────────
+function renderHosts() {
+  const grid = document.getElementById('host-grid');
+  const search = document.getElementById('search').value.toLowerCase();
+  const hosts = allHosts.filter(h => {
+    return !search ||
+      (h.device_name || '').toLowerCase().includes(search) ||
+      (h.hostname || '').toLowerCase().includes(search) ||
+      (h.ip || '').toLowerCase().includes(search) ||
+      (h.platform || '').toLowerCase().includes(search);
+  });
+
+  // 统计
+  document.getElementById('stat-total').textContent = allHosts.length;
+  document.getElementById('stat-online').textContent = allHosts.filter(h => h.online).length;
+  document.getElementById('stat-offline').textContent = allHosts.filter(h => !h.online).length;
+
+  if (hosts.length === 0) {
+    grid.innerHTML = `
+      <div class="empty">
+        <div class="icon">🖥️</div>
+        <p>暂无主机</p>
+        <p class="hint">请在各主机上运行: <code>python main.py worker</code></p>
+      </div>`;
+    return;
+  }
+
+  grid.innerHTML = hosts.map(h => {
+    const isMaster = h.role === 'master';
+    const cls = `host-card ${h.online ? '' : 'offline'} ${isMaster ? 'master' : ''}`;
+    return `
+    <div class="${cls}" onclick='showDetail(${JSON.stringify(h.device_id)})'>
+      <div class="host-header">
+        <div class="host-name">
+          ${escapeHtml(h.device_name || h.hostname || '未知')}
+          <span class="host-badge ${isMaster ? 'master' : 'worker'}">${isMaster ? 'MASTER' : 'WORKER'}</span>
+        </div>
+        <div class="host-status">
+          <span class="dot ${h.online ? 'online' : 'offline'}"></span>
+          ${h.online ? '在线' : '离线'}
+        </div>
+      </div>
+      <div class="host-meta">
+        🖥️ <span>${escapeHtml(h.hostname || '-')}</span> &nbsp;|&nbsp;
+        📡 <span>${escapeHtml(h.ip || '-')}</span> &nbsp;|&nbsp;
+        💻 <span>${escapeHtml(h.platform || '-')}</span><br>
+        📁 共享: <span>${escapeHtml(h.shared_folder || '-')}</span> (${h.shared_file_count || 0} 文件)
+      </div>
+      ${resourceBar('CPU', h.cpu_count + '核', h.cpu_percent, '%')}
+      ${resourceBar('内存', fmtMem(h.memory_total_mb), h.memory_percent, '%')}
+      ${resourceBar('磁盘', h.disk_total_gb + 'GB', h.disk_percent, '%')}
+    </div>`;
+  }).join('');
+}
+
+function resourceBar(label, total, percent, unit) {
+  const p = Math.round(percent || 0);
+  const cls = p < 60 ? 'low' : p < 85 ? 'mid' : 'high';
+  return `
+    <div class="resource-row">
+      <span class="resource-label">${label}</span>
+      <div class="progress-bar"><div class="progress-fill ${cls}" style="width:${p}%"></div></div>
+      <span class="resource-value">${p}${unit} / ${total}</span>
+    </div>`;
+}
+
+// ── 详情面板 ────────────────────────────────────────────────────
+async function showDetail(deviceId) {
+  const host = allHosts.find(h => h.device_id === deviceId);
+  if (!host) return;
+
+  const panel = document.getElementById('detail-panel');
+  const online = host.online;
+  panel.innerHTML = `
+    <span class="detail-close" onclick="closeDetailForce()">&times;</span>
+    <h2>${escapeHtml(host.device_name || host.hostname || '未知主机')}</h2>
+    <p style="color:var(--text-dim); font-size:14px;">
+      <span class="dot ${online ? 'online' : 'offline'}" style="display:inline-block;vertical-align:middle"></span>
+      ${online ? '在线' : '离线'} · ${host.role === 'master' ? 'Master 节点' : 'Worker 节点'}
+    </p>
+
+    <div class="detail-section">
+      <h3>基本信息</h3>
+      <div class="detail-grid">
+        <span class="key">设备 ID</span><span class="val">${escapeHtml(host.device_id)}</span>
+        <span class="key">主机名</span><span class="val">${escapeHtml(host.hostname || '-')}</span>
+        <span class="key">IP 地址</span><span class="val">${escapeHtml(host.ip || '-')}</span>
+        <span class="key">平台</span><span class="val">${escapeHtml(host.platform || '-')}</span>
+        <span class="key">API 端口</span><span class="val">${host.api_port || '-'}</span>
+        <span class="key">注册时间</span><span class="val">${fmtTime(host.registered_at)}</span>
+        <span class="key">最后心跳</span><span class="val">${fmtTime(host.last_seen)}</span>
+      </div>
+    </div>
+
+    <div class="detail-section">
+      <h3>硬件资源</h3>
+      <div class="detail-grid">
+        <span class="key">CPU 核心</span><span class="val">${host.cpu_count || 0} 核</span>
+        <span class="key">CPU 使用率</span><span class="val">${host.cpu_percent || 0}%</span>
+        <span class="key">内存总量</span><span class="val">${fmtMem(host.memory_total_mb)}</span>
+        <span class="key">内存使用率</span><span class="val">${host.memory_percent || 0}%</span>
+        <span class="key">磁盘总量</span><span class="val">${host.disk_total_gb || 0} GB</span>
+        <span class="key">磁盘使用率</span><span class="val">${host.disk_percent || 0}%</span>
+      </div>
+    </div>
+
+    <div class="detail-section">
+      <h3>共享文件夹</h3>
+      <div class="detail-grid">
+        <span class="key">路径</span><span class="val">${escapeHtml(host.shared_folder || '-')}</span>
+        <span class="key">文件数</span><span class="val">${host.shared_file_count || 0}</span>
+      </div>
+      ${host.ip && host.api_port ? `
+      <div style="margin-top:12px;">
+        <button class="btn primary" onclick="browseFiles('${escapeHtml(host.ip)}', ${host.api_port})">
+          📂 浏览共享文件
+        </button>` : ''}
+      </div>
+    </div>
+  `;
+  document.getElementById('detail-overlay').classList.add('show');
+}
+
+function closeDetail(e) {
+  if (e.target === e.currentTarget) {
+    document.getElementById('detail-overlay').classList.remove('show');
+  }
+}
+function closeDetailForce() {
+  document.getElementById('detail-overlay').classList.remove('show');
+}
+
+// ── 浏览远程共享文件 ────────────────────────────────────────────
+async function browseFiles(ip, port) {
+  try {
+    const resp = await fetch(`http://${ip}:${port}/shared`);
+    const data = await resp.json();
+    let html = `<div class="detail-section"><h3>远程共享文件 (${ip})</h3>`;
+    if (data.files && data.files.length > 0) {
+      html += '<div class="detail-grid">';
+      for (const f of data.files) {
+        const dl = `http://${ip}:${port}/shared/${encodeURIComponent(f.path)}`;
+        html += `<span class="key">${f.is_dir ? '📁' : '📄'} ${escapeHtml(f.name)}</span>`;
+        html += `<span class="val"><a href="${dl}" target="_blank" style="color:var(--accent)">下载</a> (${fmtSize(f.size)})</span>`;
+      }
+      html += '</div>';
+    } else {
+      html += '<p style="color:var(--text-dim);">共享文件夹为空</p>';
+    }
+    html += '</div>';
+    document.getElementById('detail-panel').insertAdjacentHTML('beforeend', html);
+  } catch (e) {
+    alert('无法访问远程主机共享文件: ' + e.message);
+  }
+}
+
+// ── 探测 IP ─────────────────────────────────────────────────────
+function probeIP() {
+  const ip = prompt('输入要探测的主机 IP:');
+  if (!ip) return;
+  fetch(`/api/probe/${ip}`, { method: 'POST' })
+    .then(r => r.json())
+    .then(d => { alert(d.message || '已发送'); setTimeout(refreshHosts, 2000); })
+    .catch(e => alert('探测失败: ' + e.message));
+}
+
+// ── 网络信息 ────────────────────────────────────────────────────
+async function showNetworkInfo() {
+  try {
+    const resp = await fetch('/api/network');
+    const data = await resp.json();
+    alert(
+      `本机网络状态:\n\n` +
+      `UDP 发现端口: ${data.udp_port}\n` +
+      `API 端口: ${data.api_port}\n\n` +
+      `本地 IP:\n${data.local_ips.join('\n')}\n\n` +
+      `广播目标:\n${data.broadcast_targets.join('\n')}`
+    );
+  } catch (e) {
+    alert('获取网络信息失败: ' + e.message);
+  }
+}
+
+// ── 工具函数 ────────────────────────────────────────────────────
+function escapeHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function fmtMem(mb) {
+  if (!mb) return '-';
+  if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+  return mb + ' MB';
+}
+function fmtSize(bytes) {
+  if (!bytes) return '0 B';
+  const u = ['B','KB','MB','GB','TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + u[i];
+}
+function fmtTime(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts * 1000);
+  return d.toLocaleString('zh-CN');
+}
+</script>
+</body>
+</html>

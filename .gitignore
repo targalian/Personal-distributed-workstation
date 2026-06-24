@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+
+# LAN Mesh runtime data
+.lan_mesh/
+lan_mesh_shared/
+*.sqlite3
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.test_*
+
+# Node.js / 前端构建产物
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Rust / Tauri 构建产物
+target/
+
+# 敏感配置 (密钥、凭证)
+.env
+.env.*
+*.secret
+model_pool.yaml
+secrets.yaml
+
+# 日志
+*.log
+
+# Tauri 自动生成 (可选保留，按需取消注释)
+# src-tauri/gen/schemas/
