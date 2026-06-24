@@ -297,6 +297,38 @@ class Task:
         return cls(**valid)
 
 
+# ── 模型路由相关 (Phase 2) ─────────────────────────────────────────
+
+
+class DifficultyLevel(str, Enum):
+    """任务难度分级 (L1-L4)。"""
+    L1 = "L1"   # 极简: 关键词提取、格式转换
+    L2 = "L2"   # 常规: 文档摘要、邮件撰写
+    L3 = "L3"   # 复杂: 代码生成、多步逻辑推理
+    L4 = "L4"   # 专家级: 大型架构设计、深度分析
+
+
+@dataclass
+class RoutingResult:
+    """模型路由决策结果 — 由 ModelRouter 返回。"""
+    selected_model: str = ""           # 推荐使用的模型 ID
+    provider: str = ""                 # 模型厂商 (openai / deepseek / anthropic / qwen)
+    base_url: str = ""                 # API Base URL
+    difficulty: str = "L2"             # 难度级别 (L1/L2/L3/L4)
+    score: float = 0.0                 # 综合评分
+    candidates: list = field(default_factory=list)  # 所有候选模型评分 [{model, score}]
+    fallback_chain: list = field(default_factory=list)  # 降级链 [model_id, ...]
+    strategy: str = "balanced"         # 路由策略 (cost_first / quality_first / balanced)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RoutingResult":
+        valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**valid)
+
+
 # ── 项目隔离模型 (Phase 3) ───────────────────────────────────────
 
 

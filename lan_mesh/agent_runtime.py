@@ -25,6 +25,16 @@ from typing import Optional
 import requests
 
 
+# ── Provider 默认配置 (provider → base_url) ──────────────────────
+
+PROVIDER_CONFIG = {
+    "deepseek":  {"base_url": "https://api.deepseek.com/v1", "api_key_env": "DEEPSEEK_API_KEY"},
+    "openai":    {"base_url": "https://api.openai.com/v1", "api_key_env": "OPENAI_API_KEY"},
+    "anthropic": {"base_url": "https://api.anthropic.com/v1", "api_key_env": "ANTHROPIC_API_KEY"},
+    "qwen":      {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "api_key_env": "QWEN_API_KEY"},
+}
+
+
 class AgentRuntime:
     """Worker 端 Agent 运行时。
 
@@ -47,8 +57,12 @@ class AgentRuntime:
     def execute(self, subtask: dict) -> dict:
         """执行子任务,返回结果字典。
 
+        支持模型路由器注入: 从 subtask payload 中提取 model_preference 和
+        fallback_models, 传递给 LLM 技能处理器, 实现智能模型选择和降级链重试。
+
         Args:
-            subtask: 包含 name, description, required_skill, input_data 的字典
+            subtask: 包含 name, description, required_skill, input_data,
+                     model_preference, fallback_models 的字典
 
         Returns:
             {"output": {...}, "status": "completed"|"failed", "error": "..."}
@@ -63,8 +77,13 @@ class AgentRuntime:
                 "error": f"未知的技能类型: {skill}",
             }
 
+        # 提取路由器注入的模型偏好 (由 orchestrator 写入 payload)
+        input_data = dict(subtask.get("input_data", {}))
+        input_data["_model_preference"] = subtask.get("model_preference", "")
+        input_data["_fallback_models"] = subtask.get("fallback_models", [])
+
         try:
-            result = handler(subtask.get("input_data", {}))
+            result = handler(input_data)
             # 提取 LLM 调用的 token 用量 (如果 handler 返回了 usage)
             usage = {}
             if isinstance(result, dict) and "usage" in result:
@@ -85,7 +104,7 @@ class AgentRuntime:
         if context:
             prompt += f"\n\n已有代码/上下文:\n{context}"
 
-        resp = self._call_llm_full(prompt)
+        resp = self._call_llm_with_routing(prompt, input_data)
         return {"code": resp["content"], "language": language, "usage": {"model": resp["model"], "input_tokens": resp["input_tokens"], "output_tokens": resp["output_tokens"]}}
 
     def _handle_code_review(self, input_data: dict) -> dict:
@@ -97,7 +116,7 @@ class AgentRuntime:
         if language:
             prompt = f"语言: {language}\n" + prompt
 
-        resp = self._call_llm_full(prompt)
+        resp = self._call_llm_with_routing(prompt, input_data)
         return {"review": resp["content"], "usage": {"model": resp["model"], "input_tokens": resp["input_tokens"], "output_tokens": resp["output_tokens"]}}
 
     def _handle_document_summary(self, input_data: dict) -> dict:
@@ -106,7 +125,7 @@ class AgentRuntime:
         max_length = input_data.get("max_length", 500)
 
         prompt = f"请将以下内容生成不超过 {max_length} 字的摘要:\n{text}"
-        resp = self._call_llm_full(prompt)
+        resp = self._call_llm_with_routing(prompt, input_data)
         return {"summary": resp["content"], "usage": {"model": resp["model"], "input_tokens": resp["input_tokens"], "output_tokens": resp["output_tokens"]}}
 
     def _handle_rag_search(self, input_data: dict) -> dict:
@@ -167,23 +186,111 @@ class AgentRuntime:
             "timestamp": time.time(),
         }
 
-    # ── LLM API 调用 ────────────────────────────────────────────
+    # ── LLM API 调用 (支持多 Provider + 降级链重试) ──────────────────
+
+    def _call_llm_with_routing(self, prompt: str, input_data: dict) -> dict:
+        """带路由决策的 LLM 调用, 支持降级链重试。
+
+        优先使用 orchestrator 注入的 model_preference,
+        失败时沿 fallback_models 链路重试。
+        如果无路由器信息, 回退到旧逻辑 (deepseek → openai)。
+        """
+        model_pref = input_data.get("_model_preference", "")
+        fallbacks = input_data.get("_fallback_models", [])
+
+        if model_pref:
+            # 构建完整重试链: [preferred] + fallbacks
+            chain = [model_pref] + [m for m in fallbacks if m != model_pref]
+            last_error = None
+
+            for model_id in chain:
+                provider_cfg = self._resolve_provider(model_id)
+                if not provider_cfg:
+                    continue
+                try:
+                    return self._call_openai_compatible(
+                        prompt, model_id,
+                        provider_cfg["base_url"],
+                        provider_cfg["api_key"],
+                    )
+                except Exception as e:
+                    last_error = e
+                    print(f"[AgentRuntime] 模型 {model_id} 调用失败: {e}, 尝试降级...")
+                    continue
+
+            # 整条链都失败
+            return {
+                "content": f"[模型调用失败] 降级链均不可用: {last_error}",
+                "model": "none",
+                "input_tokens": 0,
+                "output_tokens": 0,
+            }
+
+        # 无路由器信息, 回退旧逻辑
+        return self._call_llm_full(prompt)
+
+    def _resolve_provider(self, model_id: str) -> Optional[dict]:
+        """根据模型 ID 解析 provider 配置, 返回 {base_url, api_key} 或 None。"""
+        for provider, cfg in PROVIDER_CONFIG.items():
+            api_key = os.environ.get(cfg["api_key_env"], "")
+            if not api_key:
+                continue
+            if provider == "deepseek" and model_id.startswith("deepseek"):
+                return {"base_url": cfg["base_url"], "api_key": api_key}
+            if provider == "openai" and model_id.startswith("gpt"):
+                return {"base_url": cfg["base_url"], "api_key": api_key}
+            if provider == "anthropic" and model_id.startswith("claude"):
+                return {"base_url": cfg["base_url"], "api_key": api_key}
+            if provider == "qwen" and model_id.startswith("qwen"):
+                return {"base_url": cfg["base_url"], "api_key": api_key}
+        return None
+
+    def _call_openai_compatible(
+        self, prompt: str, model_id: str, base_url: str, api_key: str
+    ) -> dict:
+        """通用 OpenAI 兼容 API 调用 — 支持所有厂商 (DeepSeek/OpenAI/Qwen/...)。"""
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        resp = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model_id,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 4096,
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        usage = data.get("usage", {})
+        return {
+            "content": data["choices"][0]["message"]["content"],
+            "model": model_id,
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
+        }
 
     def _call_llm_full(self, prompt: str) -> dict:
-        """调用外部 LLM API,返回完整响应 (含 token 用量)。
+        """调用外部 LLM API (回退逻辑, 无路由器时使用)。
 
-        返回: {"content": str, "model": str, "input_tokens": int, "output_tokens": int}
-        优先使用 DeepSeek (成本低),其次 OpenAI。
+        优先使用 DeepSeek (成本低), 其次 OpenAI。
         """
-        # DeepSeek API
         deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
         if deepseek_key:
-            return self._call_deepseek(prompt, deepseek_key)
+            return self._call_openai_compatible(
+                prompt, "deepseek-chat",
+                PROVIDER_CONFIG["deepseek"]["base_url"], deepseek_key,
+            )
 
-        # OpenAI API
         openai_key = os.environ.get("OPENAI_API_KEY")
         if openai_key:
-            return self._call_openai(prompt, openai_key)
+            return self._call_openai_compatible(
+                prompt, "gpt-4o-mini",
+                PROVIDER_CONFIG["openai"]["base_url"], openai_key,
+            )
 
         return {
             "content": "[未配置 LLM API Key] 请设置 DEEPSEEK_API_KEY 或 OPENAI_API_KEY 环境变量。",
@@ -195,47 +302,3 @@ class AgentRuntime:
     def _call_llm(self, prompt: str) -> str:
         """调用外部 LLM API 生成回复 (仅返回文本内容)。"""
         return self._call_llm_full(prompt)["content"]
-
-    def _call_deepseek(self, prompt: str, api_key: str) -> dict:
-        """调用 DeepSeek API,返回含 token 用量的完整响应。"""
-        resp = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": "deepseek-chat",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 4096,
-            },
-            timeout=120,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        usage = data.get("usage", {})
-        return {
-            "content": data["choices"][0]["message"]["content"],
-            "model": "deepseek-chat",
-            "input_tokens": usage.get("prompt_tokens", 0),
-            "output_tokens": usage.get("completion_tokens", 0),
-        }
-
-    def _call_openai(self, prompt: str, api_key: str) -> dict:
-        """调用 OpenAI API,返回含 token 用量的完整响应。"""
-        resp = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 4096,
-            },
-            timeout=120,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        usage = data.get("usage", {})
-        return {
-            "content": data["choices"][0]["message"]["content"],
-            "model": "gpt-4o-mini",
-            "input_tokens": usage.get("prompt_tokens", 0),
-            "output_tokens": usage.get("completion_tokens", 0),
-        }

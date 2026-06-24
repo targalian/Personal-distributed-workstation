@@ -1,0 +1,138 @@
+# 模型池配置 (Model Pool)
+# 复制为 model_pool.yaml 并填入实际 API Key 环境变量名
+# model_pool.yaml 已在 .gitignore 中排除,请勿提交到版本库
+
+models:
+  # ── DeepSeek ─────────────────────────────────────────────────────
+  - id: deepseek-chat
+    provider: deepseek
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com/v1
+    cost_input_per_1k: 0.0014
+    cost_output_per_1k: 0.0028
+    capabilities: [reasoning, coding]
+    quality_score: 0.85
+    speed_score: 0.80
+    rate_limit_rpm: 200
+    max_context_tokens: 65536
+    fallback: [gpt-4o-mini, qwen-turbo]
+
+  - id: deepseek-coder
+    provider: deepseek
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com/v1
+    cost_input_per_1k: 0.0014
+    cost_output_per_1k: 0.0028
+    capabilities: [coding]
+    quality_score: 0.88
+    speed_score: 0.78
+    rate_limit_rpm: 200
+    max_context_tokens: 65536
+    fallback: [deepseek-chat, gpt-4o-mini]
+
+  - id: deepseek-reasoner
+    provider: deepseek
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com/v1
+    cost_input_per_1k: 0.004
+    cost_output_per_1k: 0.016
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.92
+    speed_score: 0.55
+    rate_limit_rpm: 100
+    max_context_tokens: 65536
+    fallback: [gpt-4o, claude-3-5-sonnet]
+
+  # ── OpenAI ───────────────────────────────────────────────────────
+  - id: gpt-4o
+    provider: openai
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+    cost_input_per_1k: 0.0025
+    cost_output_per_1k: 0.01
+    capabilities: [reasoning, coding, vision, long_context]
+    quality_score: 0.95
+    speed_score: 0.70
+    rate_limit_rpm: 100
+    max_context_tokens: 128000
+    fallback: [claude-3-5-sonnet, deepseek-reasoner]
+
+  - id: gpt-4o-mini
+    provider: openai
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+    cost_input_per_1k: 0.00015
+    cost_output_per_1k: 0.0006
+    capabilities: [general, lightweight]
+    quality_score: 0.75
+    speed_score: 0.90
+    rate_limit_rpm: 500
+    max_context_tokens: 128000
+    fallback: [qwen-turbo, deepseek-chat]
+
+  - id: gpt-4-turbo
+    provider: openai
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+    cost_input_per_1k: 0.01
+    cost_output_per_1k: 0.03
+    capabilities: [reasoning, coding, vision, long_context]
+    quality_score: 0.93
+    speed_score: 0.55
+    rate_limit_rpm: 60
+    max_context_tokens: 128000
+    fallback: [gpt-4o, claude-3-5-sonnet]
+
+  # ── Anthropic ────────────────────────────────────────────────────
+  - id: claude-3-haiku
+    provider: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+    base_url: https://api.anthropic.com/v1
+    cost_input_per_1k: 0.00025
+    cost_output_per_1k: 0.00125
+    capabilities: [general, lightweight]
+    quality_score: 0.78
+    speed_score: 0.88
+    rate_limit_rpm: 300
+    max_context_tokens: 200000
+    fallback: [gpt-4o-mini, qwen-turbo]
+
+  - id: claude-3-5-sonnet
+    provider: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+    base_url: https://api.anthropic.com/v1
+    cost_input_per_1k: 0.003
+    cost_output_per_1k: 0.015
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.96
+    speed_score: 0.65
+    rate_limit_rpm: 100
+    max_context_tokens: 200000
+    fallback: [gpt-4o, deepseek-reasoner]
+
+  # ── 通义千问 ─────────────────────────────────────────────────────
+  - id: qwen-turbo
+    provider: qwen
+    api_key_env: QWEN_API_KEY
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0003
+    cost_output_per_1k: 0.0006
+    capabilities: [general, lightweight]
+    quality_score: 0.72
+    speed_score: 0.92
+    rate_limit_rpm: 300
+    max_context_tokens: 32768
+    fallback: [gpt-4o-mini, deepseek-chat]
+
+  - id: qwen-plus
+    provider: qwen
+    api_key_env: QWEN_API_KEY
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0013
+    cost_output_per_1k: 0.0038
+    capabilities: [reasoning, coding]
+    quality_score: 0.82
+    speed_score: 0.75
+    rate_limit_rpm: 200
+    max_context_tokens: 65536
+    fallback: [deepseek-chat, gpt-4o-mini]

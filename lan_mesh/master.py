@@ -30,7 +30,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import create_master_router, create_worker_router, broadcast_ws
-from .config import AppConfig, get_db_path
+from .config import AppConfig, get_db_path, load_model_pool
 from .database import Database
 from .discovery import DiscoveryService
 from .host_info import (
@@ -43,6 +43,7 @@ from .shared_folder import SharedFolderManager
 from .orchestrator import Orchestrator
 from .mcp_gateway import MCPGateway
 from .project import ProjectManager
+from .model_router import ModelRouter
 
 
 # ── Web UI 模板路径 ─────────────────────────────────────────────
@@ -102,8 +103,14 @@ class MasterController:
         # 项目管理器
         self.project_manager = ProjectManager(self.db)
 
+        # 模型路由器 (Phase 2)
+        model_pool = load_model_pool()
+        self.model_router = ModelRouter(model_pool.models, self.project_manager) if model_pool.models else None
+        if self.model_router:
+            print(f"[Master] 模型路由器已加载: {self.model_router.pool_size} 个模型")
+
         # 任务编排器
-        self.orchestrator = Orchestrator(self.db, self.project_manager)
+        self.orchestrator = Orchestrator(self.db, self.project_manager, self.model_router)
 
         # MCP 工具网关
         self.mcp_gateway = MCPGateway()
@@ -198,6 +205,7 @@ class MasterController:
             orchestrator=self.orchestrator,
             mcp_gateway=self.mcp_gateway,
             project_manager=self.project_manager,
+            model_router=self.model_router,
         )
         app.include_router(master_router)
 

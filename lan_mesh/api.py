@@ -109,6 +109,7 @@ def create_master_router(
     orchestrator=None,       # Orchestrator instance (optional)
     mcp_gateway=None,        # MCPGateway instance (optional)
     project_manager=None,    # ProjectManager instance (optional)
+    model_router=None,       # ModelRouter instance (optional)
 ) -> APIRouter:
     """创建 Master 节点的 API 路由。"""
     router = APIRouter()
@@ -496,6 +497,36 @@ def create_master_router(
             raise HTTPException(status_code=503, detail="MCP 网关未初始化")
         mcp_gateway.unregister_server(name)
         return {"ok": True, "name": name}
+
+    # ── 模型路由 API (Phase 2) ───────────────────────────────────
+
+    @router.post("/api/route/dry-run")
+    async def route_dry_run(payload: dict):
+        """模型路由决策预览 (dry-run)。
+
+        输入任务描述, 返回路由器推荐模型、难度分级和评分详情。
+        不会实际执行任务。
+        """
+        if not model_router:
+            raise HTTPException(status_code=503, detail="模型路由器未加载")
+
+        text = payload.get("text", payload.get("description", ""))
+        skill = payload.get("skill", "")
+        project_id = payload.get("project_id", "")
+
+        routing = model_router.route(
+            text=text,
+            skill=skill,
+            project_id=project_id,
+        )
+        return routing.to_dict()
+
+    @router.get("/api/models")
+    async def list_models():
+        """返回模型池列表 (含可用状态)。"""
+        if not model_router:
+            return {"models": [], "message": "模型路由器未加载 (请配置 model_pool.yaml)"}
+        return {"models": model_router.list_models()}
 
     # WebSocket 实时推送
     @router.websocket("/ws")

@@ -61,9 +61,10 @@ class Orchestrator:
     在 Master 端运行,负责任务分解、Agent 匹配、子任务分发与结果聚合。
     """
 
-    def __init__(self, db: Database, project_manager=None):
+    def __init__(self, db: Database, project_manager=None, model_router=None):
         self.db = db
         self.project_manager = project_manager
+        self.model_router = model_router
         self._lock = threading.Lock()
         self._active_dags: dict[str, TaskDAG] = {}  # task_id → DAG
 
@@ -155,12 +156,34 @@ class Orchestrator:
             time.sleep(2)
 
     def _dispatch_subtask(self, task_id: str, subtask: SubTask, agent: AgentCard, dag: TaskDAG):
-        """分发子任务到目标 Agent (HTTP 调用)。"""
+        """分发子任务到目标 Agent (HTTP 调用)。
+
+        在分发前调用 ModelRouter 确定推荐模型和降级链,
+        将 model_preference 和 fallback_models 写入 payload。
+        """
         dag.update_subtask(subtask.subtask_id, status="assigned", assigned_agent_id=agent.agent_id)
         self._sync_dag_to_db(task_id, dag)
 
         # 标记 Agent 为忙碌
         self.db.update_agent_status(agent.agent_id, "busy", agent.current_task_count + 1)
+
+        # 模型路由决策
+        model_preference = ""
+        fallback_models = []
+        if self.model_router:
+            parent_task = self.db.get_task(task_id)
+            project_id = parent_task.project_id if parent_task else ""
+            routing = self.model_router.route(
+                text=subtask.description,
+                skill=subtask.required_skill,
+                project_id=project_id,
+            )
+            model_preference = routing.selected_model
+            fallback_models = routing.fallback_chain
+            print(
+                f"[Router] {subtask.name} → {routing.selected_model} "
+                f"(难度={routing.difficulty}, 评分={routing.score:.3f}, 策略={routing.strategy})"
+            )
 
         # HTTP 调用 Worker 执行
         url = f"http://{agent.ip}:{agent.api_port}/tasks/execute"
@@ -171,6 +194,8 @@ class Orchestrator:
             "description": subtask.description,
             "required_skill": subtask.required_skill,
             "input_data": subtask.input_data,
+            "model_preference": model_preference,
+            "fallback_models": fallback_models,
         }
 
         def _execute_and_collect():
