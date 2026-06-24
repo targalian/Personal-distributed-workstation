@@ -286,11 +286,70 @@ class Task:
     created_at: float = field(default_factory=time.time)
     completed_at: float = 0.0
     created_by: str = "user"
+    project_id: str = ""               # 关联的项目 ID (项目隔离)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Task":
+        valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**valid)
+
+
+# ── 项目隔离模型 (Phase 3) ───────────────────────────────────────
+
+
+class ProjectStatus(str, Enum):
+    """项目状态。"""
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    ARCHIVED = "archived"
+
+
+@dataclass
+class Project:
+    """项目 — 每个项目拥有独立的工作空间、预算配额和模型限制。
+
+    不同项目之间上下文隔离,预算独立,互不影响。
+    """
+    project_id: str = ""
+    name: str = ""
+    description: str = ""
+    workspace_path: str = ""              # 独立工作空间目录
+    budget_limit_usd: float = 0.0          # 月度预算上限 (美元)
+    budget_used_usd: float = 0.0           # 已消费金额 (美元)
+    allowed_models: list = field(default_factory=list)   # 允许使用的模型 ID 列表 (空=全部允许)
+    routing_strategy: str = "balanced"    # cost_first | quality_first | balanced
+    status: str = "active"                # active | suspended | archived
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Project":
+        valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**valid)
+
+
+@dataclass
+class UsageRecord:
+    """模型调用消费记录 — 用于项目预算追踪。"""
+    project_id: str = ""
+    task_id: str = ""
+    subtask_id: str = ""
+    model: str = ""                       # 调用的模型名称
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0                  # 本次调用成本 (美元)
+    timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "UsageRecord":
         valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
         return cls(**valid)

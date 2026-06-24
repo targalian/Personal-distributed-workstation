@@ -42,6 +42,7 @@ from .protocol import DiscoveryPacket, HEARTBEAT_INTERVAL_SECS, HostInfo, PRUNE_
 from .shared_folder import SharedFolderManager
 from .orchestrator import Orchestrator
 from .mcp_gateway import MCPGateway
+from .project import ProjectManager
 
 
 # ── Web UI 模板路径 ─────────────────────────────────────────────
@@ -98,8 +99,11 @@ class MasterController:
         # 发现服务
         self.discovery: Optional[DiscoveryService] = None
 
+        # 项目管理器
+        self.project_manager = ProjectManager(self.db)
+
         # 任务编排器
-        self.orchestrator = Orchestrator(self.db)
+        self.orchestrator = Orchestrator(self.db, self.project_manager)
 
         # MCP 工具网关
         self.mcp_gateway = MCPGateway()
@@ -193,6 +197,7 @@ class MasterController:
             state=self.state,
             orchestrator=self.orchestrator,
             mcp_gateway=self.mcp_gateway,
+            project_manager=self.project_manager,
         )
         app.include_router(master_router)
 

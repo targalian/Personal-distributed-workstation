@@ -3,579 +3,463 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LAN Mesh - 分布式主机仪表盘</title>
+<title>LAN Mesh - 分布式AI工作站</title>
 <style>
-  :root {
-    --bg: #0f1117;
-    --surface: #1a1d27;
-    --surface2: #242836;
-    --border: #2e3344;
-    --text: #e4e7ef;
-    --text-dim: #8b90a0;
-    --accent: #5b8cff;
-    --green: #4ade80;
-    --yellow: #fbbf24;
-    --red: #f87171;
-    --radius: 12px;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-  }
-
-  /* ── 顶栏 ── */
-  .topbar {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 16px 28px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    backdrop-filter: blur(8px);
-  }
-  .topbar h1 {
-    font-size: 20px;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .topbar h1 .logo { font-size: 28px; }
-  .stats {
-    display: flex;
-    gap: 24px;
-    font-size: 14px;
-  }
-  .stat {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--text-dim);
-  }
-  .stat .val { font-weight: 700; font-size: 18px; color: var(--text); }
-  .stat .dot { width: 8px; height: 8px; border-radius: 50%; }
-  .dot.online { background: var(--green); box-shadow: 0 0 8px var(--green); }
-  .dot.offline { background: var(--red); }
-
-  /* ── 工具栏 ── */
-  .toolbar {
-    padding: 12px 28px;
-    display: flex;
-    gap: 12px;
-    align-items: center;
-  }
-  .toolbar input {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px 14px;
-    color: var(--text);
-    font-size: 14px;
-    width: 260px;
-    outline: none;
-    transition: border-color .2s;
-  }
-  .toolbar input:focus { border-color: var(--accent); }
-  .btn {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px 16px;
-    color: var(--text);
-    font-size: 14px;
-    cursor: pointer;
-    transition: all .15s;
-  }
-  .btn:hover { background: var(--border); }
-  .btn.primary { background: var(--accent); border-color: var(--accent); }
-  .btn.primary:hover { filter: brightness(1.1); }
-  .ws-status {
-    margin-left: auto;
-    font-size: 12px;
-    color: var(--text-dim);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .ws-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--green); animation: pulse 2s infinite;
-  }
-  .ws-dot.offline { background: var(--red); animation: none; }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
-
-  /* ── 主机网格 ── */
-  .host-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-    gap: 16px;
-    padding: 0 28px 28px;
-  }
-  .host-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
-    transition: all .2s;
-    cursor: pointer;
-    position: relative;
-    overflow: hidden;
-  }
-  .host-card:hover { border-color: var(--accent); transform: translateY(-2px); }
-  .host-card.offline { opacity: .55; }
-  .host-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 3px;
-    background: var(--green);
-  }
-  .host-card.offline::before { background: var(--red); }
-  .host-card.master::before { background: var(--accent); }
-
-  .host-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 14px;
-  }
-  .host-name {
-    font-size: 17px;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .host-badge {
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-weight: 600;
-  }
-  .host-badge.master { background: rgba(91,140,255,.15); color: var(--accent); }
-  .host-badge.worker { background: rgba(74,222,128,.1); color: var(--green); }
-  .host-status {
-    font-size: 12px;
-    color: var(--text-dim);
-    display: flex;
-    align-items: center;
-    gap: 5px;
-  }
-
-  .host-meta {
-    font-size: 13px;
-    color: var(--text-dim);
-    margin-bottom: 14px;
-    line-height: 1.6;
-  }
-  .host-meta span { color: var(--text); }
-
-  /* 资源进度条 */
-  .resource-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 8px;
-  }
-  .resource-label {
-    font-size: 12px;
-    color: var(--text-dim);
-    width: 42px;
-    text-transform: uppercase;
-    letter-spacing: .5px;
-  }
-  .progress-bar {
-    flex: 1;
-    height: 8px;
-    background: var(--surface2);
-    border-radius: 4px;
-    overflow: hidden;
-  }
-  .progress-fill {
-    height: 100%;
-    border-radius: 4px;
-    transition: width .5s ease;
-  }
-  .progress-fill.low { background: var(--green); }
-  .progress-fill.mid { background: var(--yellow); }
-  .progress-fill.high { background: var(--red); }
-  .resource-value {
-    font-size: 12px;
-    font-weight: 600;
-    width: 64px;
-    text-align: right;
-  }
-
-  /* ── 详情面板 ── */
-  .detail-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,.6);
-    z-index: 200;
-    justify-content: center;
-    align-items: center;
-  }
-  .detail-overlay.show { display: flex; }
-  .detail-panel {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 28px;
-    width: 90%;
-    max-width: 560px;
-    max-height: 85vh;
-    overflow-y: auto;
-  }
-  .detail-panel h2 { margin-bottom: 4px; font-size: 22px; }
-  .detail-close {
-    float: right;
-    cursor: pointer;
-    font-size: 24px;
-    color: var(--text-dim);
-    line-height: 1;
-  }
-  .detail-close:hover { color: var(--text); }
-  .detail-section {
-    margin-top: 20px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border);
-  }
-  .detail-section h3 {
-    font-size: 14px;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    letter-spacing: .5px;
-    margin-bottom: 10px;
-  }
-  .detail-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px 16px;
-    font-size: 14px;
-  }
-  .detail-grid .key { color: var(--text-dim); }
-  .detail-grid .val { color: var(--text); font-weight: 500; text-align: right; word-break: break-all; }
-
-  /* ── 空状态 ── */
-  .empty {
-    text-align: center;
-    padding: 80px 20px;
-    color: var(--text-dim);
-  }
-  .empty .icon { font-size: 56px; margin-bottom: 16px; opacity: .3; }
-  .empty p { font-size: 15px; margin-bottom: 6px; }
-  .empty .hint { font-size: 13px; opacity: .6; }
-
-  /* ── 响应式 ── */
-  @media (max-width: 640px) {
-    .topbar { flex-direction: column; gap: 12px; }
-    .stats { flex-wrap: wrap; justify-content: center; }
-    .toolbar { flex-wrap: wrap; }
-    .toolbar input { width: 100%; }
-    .host-grid { grid-template-columns: 1fr; padding: 0 16px 16px; }
-  }
+  :root{--bg:#0f1117;--surface:#1a1d27;--surface2:#242836;--border:#2e3344;--text:#e4e7ef;--dim:#8b90a0;--accent:#5b8cff;--green:#4ade80;--yellow:#fbbf24;--red:#f87171;--radius:12px}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+  .topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+  .topbar h1{font-size:20px;font-weight:700;display:flex;align-items:center;gap:10px}
+  .topbar h1 .logo{font-size:26px}
+  .ws-status{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:6px}
+  .ws-dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+  .ws-dot.offline{background:var(--red);animation:none}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  .tabs{display:flex;gap:0;background:var(--surface);border-bottom:1px solid var(--border);padding:0 28px;overflow-x:auto}
+  .tab{padding:12px 20px;cursor:pointer;font-size:14px;color:var(--dim);border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s}
+  .tab:hover{color:var(--text)}
+  .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+  .panel{display:none;padding:20px 28px 28px}
+  .panel.active{display:block}
+  .toolbar{display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+  .toolbar input,.toolbar select,.toolbar textarea{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 14px;color:var(--text);font-size:14px;outline:none;transition:border-color .2s}
+  .toolbar input:focus,.toolbar select:focus,.toolbar textarea:focus{border-color:var(--accent)}
+  .toolbar input{width:220px}
+  .toolbar textarea{width:100%;min-height:60px;resize:vertical}
+  .btn{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 16px;color:var(--text);font-size:14px;cursor:pointer;transition:all .15s}
+  .btn:hover{background:var(--border)}
+  .btn.primary{background:var(--accent);border-color:var(--accent)}
+  .btn.primary:hover{filter:brightness(1.1)}
+  .btn.sm{padding:4px 10px;font-size:12px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;transition:all .2s;cursor:pointer;position:relative;overflow:hidden}
+  .card:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--green)}
+  .card.offline::before{background:var(--red)}
+  .card.master::before{background:var(--accent)}
+  .card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .card-title{font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px}
+  .badge{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600}
+  .badge.master{background:rgba(91,140,255,.15);color:var(--accent)}
+  .badge.worker{background:rgba(74,222,128,.1);color:var(--green)}
+  .badge.idle{background:rgba(74,222,128,.1);color:var(--green)}
+  .badge.busy{background:rgba(251,191,36,.15);color:var(--yellow)}
+  .badge.archived{background:rgba(248,113,113,.1);color:var(--red)}
+  .badge.suspended{background:rgba(251,191,36,.15);color:var(--yellow)}
+  .badge.active{background:rgba(74,222,128,.1);color:var(--green)}
+  .card-meta{font-size:13px;color:var(--dim);margin-bottom:12px;line-height:1.6}
+  .card-meta span{color:var(--text)}
+  .res-row{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .res-label{font-size:12px;color:var(--dim);width:42px;text-transform:uppercase;letter-spacing:.5px}
+  .pbar{flex:1;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden}
+  .pfill{height:100%;border-radius:4px;transition:width .5s ease}
+  .pfill.low{background:var(--green)}.pfill.mid{background:var(--yellow)}.pfill.high{background:var(--red)}
+  .res-val{font-size:12px;font-weight:600;width:70px;text-align:right}
+  .empty{text-align:center;padding:60px 20px;color:var(--dim)}
+  .empty .icon{font-size:48px;margin-bottom:12px;opacity:.3}
+  .empty p{font-size:14px;margin-bottom:4px}
+  .empty .hint{font-size:12px;opacity:.6}
+  .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;justify-content:center;align-items:center}
+  .overlay.show{display:flex}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px;width:90%;max-width:560px;max-height:85vh;overflow-y:auto}
+  .modal h2{margin-bottom:4px;font-size:20px}
+  .modal-close{float:right;cursor:pointer;font-size:24px;color:var(--dim);line-height:1}
+  .modal-close:hover{color:var(--text)}
+  .modal-sec{margin-top:18px;padding-top:14px;border-top:1px solid var(--border)}
+  .modal-sec h3{font-size:13px;text-transform:uppercase;color:var(--dim);letter-spacing:.5px;margin-bottom:8px}
+  .kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:13px}
+  .kv-grid .k{color:var(--dim)}.kv-grid .v{color:var(--text);font-weight:500;text-align:right;word-break:break-all}
+  .form-row{margin-bottom:12px}
+  .form-row label{display:block;font-size:13px;color:var(--dim);margin-bottom:4px}
+  .form-row input,.form-row select,.form-row textarea{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:14px;outline:none}
+  .form-row input:focus,.form-row select:focus,.form-row textarea:focus{border-color:var(--accent)}
+  .stitle{font-size:14px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin:20px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+  .task-step{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px}
+  .step-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+  .step-dot.pending{background:var(--dim)}.step-dot.assigned{background:var(--yellow)}.step-dot.completed{background:var(--green)}.step-dot.failed{background:var(--red)}
+  pre{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;font-size:12px;max-height:200px;overflow-y:auto}
+  code{background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:12px}
+  @media(max-width:640px){.topbar{flex-direction:column;gap:8px}.tabs{padding:0 12px}.panel{padding:16px}.grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 
 <div class="topbar">
-  <h1><span class="logo">🕸️</span> LAN Mesh 仪表盘</h1>
-  <div class="stats">
-    <div class="stat">
-      <span class="val" id="stat-total">0</span> 主机总数
-    </div>
-    <div class="stat">
-      <span class="dot online"></span>
-      <span class="val" id="stat-online">0</span> 在线
-    </div>
-    <div class="stat">
-      <span class="dot offline"></span>
-      <span class="val" id="stat-offline">0</span> 离线
-    </div>
-  </div>
+  <h1><span class="logo">🕸️</span> LAN Mesh 分布式AI工作站</h1>
+  <div class="ws-status"><span class="ws-dot" id="ws-dot"></span><span id="ws-label">连接中...</span></div>
 </div>
 
-<div class="toolbar">
-  <input type="text" id="search" placeholder="搜索主机名 / IP / 平台...">
-  <button class="btn primary" onclick="refreshHosts()">🔄 刷新</button>
-  <button class="btn" onclick="probeIP()">📡 探测 IP</button>
-  <button class="btn" onclick="showNetworkInfo()">🌐 网络</button>
-  <div class="ws-status">
-    <span class="ws-dot" id="ws-dot"></span>
-    <span id="ws-label">WebSocket 已连接</span>
-  </div>
+<div class="tabs" id="tabs">
+  <div class="tab active" data-tab="hosts">🖥️ 主机监控</div>
+  <div class="tab" data-tab="tasks">📋 任务管理</div>
+  <div class="tab" data-tab="agents">🤖 Agent状态</div>
+  <div class="tab" data-tab="tools">🔧 MCP工具</div>
+  <div class="tab" data-tab="projects">📁 项目管理</div>
 </div>
 
-<div class="host-grid" id="host-grid">
-  <div class="empty">
-    <div class="icon">⏳</div>
-    <p>正在搜索局域网内的主机...</p>
-    <p class="hint">请确保各主机已启动 Worker (<code>python main.py worker</code>)</p>
+<!-- 面板: 主机监控 -->
+<div class="panel active" id="panel-hosts">
+  <div class="toolbar">
+    <input type="text" id="host-search" placeholder="搜索主机名/IP/平台...">
+    <button class="btn primary" onclick="refreshHosts()">🔄 刷新</button>
+    <button class="btn" onclick="probeIP()">📡 探测IP</button>
+    <button class="btn" onclick="showNetworkInfo()">🌐 网络</button>
+    <span style="margin-left:auto;font-size:14px;color:var(--dim)">
+      总计 <b id="stat-total" style="color:var(--text)">0</b> ·
+      在线 <b id="stat-online" style="color:var(--green)">0</b> ·
+      离线 <b id="stat-offline" style="color:var(--red)">0</b>
+    </span>
   </div>
+  <div class="grid" id="host-grid"><div class="empty"><div class="icon">⏳</div><p>正在搜索局域网内的主机...</p><p class="hint">请确保各主机已启动 Worker</p></div></div>
 </div>
 
-<!-- 详情面板 -->
-<div class="detail-overlay" id="detail-overlay" onclick="closeDetail(event)">
-  <div class="detail-panel" id="detail-panel"></div>
+<!-- 面板: 任务管理 -->
+<div class="panel" id="panel-tasks">
+  <div class="toolbar">
+    <input type="text" id="task-name" placeholder="任务名称">
+    <input type="text" id="task-desc" placeholder="任务描述" style="width:300px">
+    <select id="task-project"><option value="">不关联项目</option></select>
+    <button class="btn primary" onclick="submitTask()">📤 提交任务</button>
+    <button class="btn" onclick="refreshTasks()">🔄 刷新</button>
+  </div>
+  <div class="grid" id="task-grid"><div class="empty"><div class="icon">📋</div><p>暂无任务</p><p class="hint">提交一个任务来开始编排</p></div></div>
+</div>
+
+<!-- 面板: Agent 状态 -->
+<div class="panel" id="panel-agents">
+  <div class="toolbar">
+    <button class="btn primary" onclick="refreshAgents()">🔄 刷新</button>
+    <span style="margin-left:auto;font-size:14px;color:var(--dim)">
+      总计 <b id="agent-total" style="color:var(--text)">0</b> ·
+      空闲 <b id="agent-idle" style="color:var(--green)">0</b> ·
+      忙碌 <b id="agent-busy" style="color:var(--yellow)">0</b>
+    </span>
+  </div>
+  <div class="grid" id="agent-grid"><div class="empty"><div class="icon">🤖</div><p>暂无Agent</p><p class="hint">启动Worker后Agent会自动注册</p></div></div>
+</div>
+
+<!-- 面板: MCP 工具 -->
+<div class="panel" id="panel-tools">
+  <div class="toolbar">
+    <button class="btn primary" onclick="refreshTools()">🔄 刷新</button>
+    <button class="btn" onclick="showRegisterServer()">➕ 注册Server</button>
+    <span style="margin-left:auto;font-size:14px;color:var(--dim)">
+      Servers <b id="srv-total" style="color:var(--text)">0</b> ·
+      工具 <b id="tool-total" style="color:var(--accent)">0</b>
+    </span>
+  </div>
+  <div class="stitle">MCP Servers</div>
+  <div class="grid" id="server-grid"><div class="empty"><div class="icon">🔌</div><p>未注册任何MCP Server</p></div></div>
+  <div class="stitle">工具列表</div>
+  <div class="grid" id="tool-grid"></div>
+</div>
+
+<!-- 面板: 项目管理 -->
+<div class="panel" id="panel-projects">
+  <div class="toolbar">
+    <button class="btn primary" onclick="showCreateProject()">➕ 创建项目</button>
+    <button class="btn" onclick="refreshProjects()">🔄 刷新</button>
+    <span style="margin-left:auto;font-size:14px;color:var(--dim)">
+      总计 <b id="proj-total" style="color:var(--text)">0</b> ·
+      活跃 <b id="proj-active" style="color:var(--green)">0</b>
+    </span>
+  </div>
+  <div class="grid" id="project-grid"><div class="empty"><div class="icon">📁</div><p>暂无项目</p><p class="hint">创建项目以启用预算控制与隔离</p></div></div>
+</div>
+
+<!-- 通用详情弹窗 -->
+<div class="overlay" id="overlay" onclick="closeOverlay(event)">
+  <div class="modal" id="modal"></div>
 </div>
 
 <script>
-let allHosts = [];
-let ws = null;
+let allHosts=[],allTasks=[],allAgents=[],allProjects=[];
+let ws=null;
 
-// ── 初始化 ──────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  refreshHosts();
-  connectWS();
-  setInterval(refreshHosts, 5000);
-  document.getElementById('search').addEventListener('input', renderHosts);
+// ── Tab切换 ──
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click',()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('panel-'+t.dataset.tab).classList.add('active');
+    let tab=t.dataset.tab;
+    if(tab==='hosts')refreshHosts();
+    if(tab==='tasks')refreshTasks();
+    if(tab==='agents')refreshAgents();
+    if(tab==='tools')refreshTools();
+    if(tab==='projects')refreshProjects();
+  });
 });
 
-// ── WebSocket 实时更新 ──────────────────────────────────────────
-function connectWS() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => {
-    document.getElementById('ws-dot').classList.remove('offline');
-    document.getElementById('ws-label').textContent = 'WebSocket 已连接';
+// ── WebSocket ──
+function connectWS(){
+  const proto=location.protocol==='https:'?'wss':'ws';
+  ws=new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen=()=>{document.getElementById('ws-dot').classList.remove('offline');document.getElementById('ws-label').textContent='已连接';};
+  ws.onmessage=(e)=>{
+    const msg=JSON.parse(e.data);
+    if(msg.type==='hosts'||msg.type==='heartbeat'||msg.type==='host_registered')refreshHosts();
+    if(msg.type==='task_submitted')refreshTasks();
+    if(msg.type==='agent_registered')refreshAgents();
+    if(msg.type==='project_created'||msg.type==='project_updated'||msg.type==='project_archived')refreshProjects();
   };
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'hosts' || msg.type === 'heartbeat' || msg.type === 'host_registered') {
-      refreshHosts();
-    }
-  };
-  ws.onclose = () => {
-    document.getElementById('ws-dot').classList.add('offline');
-    document.getElementById('ws-label').textContent = 'WebSocket 断开,重试中...';
-    setTimeout(connectWS, 3000);
-  };
+  ws.onclose=()=>{document.getElementById('ws-dot').classList.add('offline');document.getElementById('ws-label').textContent='重连中...';setTimeout(connectWS,3000);};
 }
 
-// ── 获取主机列表 ────────────────────────────────────────────────
-async function refreshHosts() {
-  try {
-    const resp = await fetch('/api/hosts');
-    const data = await resp.json();
-    allHosts = data.hosts || [];
-    renderHosts();
-  } catch (e) {
-    console.error('刷新失败:', e);
-  }
+// ── 主机面板 ──
+async function refreshHosts(){
+  try{
+    const r=await fetch('/api/hosts');const d=await r.json();allHosts=d.hosts||[];renderHosts();
+  }catch(e){console.error('刷新主机失败:',e);}
 }
-
-// ── 渲染主机卡片 ────────────────────────────────────────────────
-function renderHosts() {
-  const grid = document.getElementById('host-grid');
-  const search = document.getElementById('search').value.toLowerCase();
-  const hosts = allHosts.filter(h => {
-    return !search ||
-      (h.device_name || '').toLowerCase().includes(search) ||
-      (h.hostname || '').toLowerCase().includes(search) ||
-      (h.ip || '').toLowerCase().includes(search) ||
-      (h.platform || '').toLowerCase().includes(search);
-  });
-
-  // 统计
-  document.getElementById('stat-total').textContent = allHosts.length;
-  document.getElementById('stat-online').textContent = allHosts.filter(h => h.online).length;
-  document.getElementById('stat-offline').textContent = allHosts.filter(h => !h.online).length;
-
-  if (hosts.length === 0) {
-    grid.innerHTML = `
-      <div class="empty">
-        <div class="icon">🖥️</div>
-        <p>暂无主机</p>
-        <p class="hint">请在各主机上运行: <code>python main.py worker</code></p>
-      </div>`;
-    return;
-  }
-
-  grid.innerHTML = hosts.map(h => {
-    const isMaster = h.role === 'master';
-    const cls = `host-card ${h.online ? '' : 'offline'} ${isMaster ? 'master' : ''}`;
-    return `
-    <div class="${cls}" onclick='showDetail(${JSON.stringify(h.device_id)})'>
-      <div class="host-header">
-        <div class="host-name">
-          ${escapeHtml(h.device_name || h.hostname || '未知')}
-          <span class="host-badge ${isMaster ? 'master' : 'worker'}">${isMaster ? 'MASTER' : 'WORKER'}</span>
-        </div>
-        <div class="host-status">
-          <span class="dot ${h.online ? 'online' : 'offline'}"></span>
-          ${h.online ? '在线' : '离线'}
-        </div>
-      </div>
-      <div class="host-meta">
-        🖥️ <span>${escapeHtml(h.hostname || '-')}</span> &nbsp;|&nbsp;
-        📡 <span>${escapeHtml(h.ip || '-')}</span> &nbsp;|&nbsp;
-        💻 <span>${escapeHtml(h.platform || '-')}</span><br>
-        📁 共享: <span>${escapeHtml(h.shared_folder || '-')}</span> (${h.shared_file_count || 0} 文件)
-      </div>
-      ${resourceBar('CPU', h.cpu_count + '核', h.cpu_percent, '%')}
-      ${resourceBar('内存', fmtMem(h.memory_total_mb), h.memory_percent, '%')}
-      ${resourceBar('磁盘', h.disk_total_gb + 'GB', h.disk_percent, '%')}
+function renderHosts(){
+  const grid=document.getElementById('host-grid');
+  const s=document.getElementById('host-search').value.toLowerCase();
+  const hosts=allHosts.filter(h=>!s||(h.device_name||'').toLowerCase().includes(s)||(h.ip||'').toLowerCase().includes(s)||(h.platform||'').toLowerCase().includes(s));
+  document.getElementById('stat-total').textContent=allHosts.length;
+  document.getElementById('stat-online').textContent=allHosts.filter(h=>h.online).length;
+  document.getElementById('stat-offline').textContent=allHosts.filter(h=>!h.online).length;
+  if(!hosts.length){grid.innerHTML='<div class="empty"><div class="icon">🖥️</div><p>暂无主机</p><p class="hint">请在各主机上运行 Worker</p></div>';return;}
+  grid.innerHTML=hosts.map(h=>{
+    const m=h.role==='master';
+    return `<div class="card ${h.online?'':'offline'} ${m?'master':''}" onclick='showHostDetail("${h.device_id}")'>
+      <div class="card-head"><div class="card-title">${esc(h.device_name||h.hostname||'未知')}<span class="badge ${m?'master':'worker'}">${m?'MASTER':'WORKER'}</span></div><span class="badge ${h.online?'idle':'archived'}">${h.online?'在线':'离线'}</span></div>
+      <div class="card-meta">🖥️ <span>${esc(h.hostname||'-')}</span> | 📡 <span>${esc(h.ip||'-')}</span> | 💻 <span>${esc(h.platform||'-')}</span><br>📁 <span>${esc(h.shared_folder||'-')}</span> (${h.shared_file_count||0}文件)</div>
+      ${resBar('CPU',h.cpu_count+'核',h.cpu_percent)}${resBar('内存',fmtMem(h.memory_total_mb),h.memory_percent)}${resBar('磁盘',h.disk_total_gb+'GB',h.disk_percent)}
     </div>`;
   }).join('');
 }
+document.getElementById('host-search').addEventListener('input',renderHosts);
+function resBar(l,t,p){p=Math.round(p||0);const c=p<60?'low':p<85?'mid':'high';return `<div class="res-row"><span class="res-label">${l}</span><div class="pbar"><div class="pfill ${c}" style="width:${p}%"></div></div><span class="res-val">${p}% / ${t}</span></div>`;}
+async function showHostDetail(id){
+  const h=allHosts.find(x=>x.device_id===id);if(!h)return;
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>${esc(h.device_name||h.hostname)}</h2><p style="color:var(--dim);font-size:13px">${h.online?'在线':'离线'} · ${h.role==='master'?'Master':'Worker'}</p>
+  <div class="modal-sec"><h3>基本信息</h3><div class="kv-grid"><span class="k">设备ID</span><span class="v">${esc(h.device_id)}</span><span class="k">主机名</span><span class="v">${esc(h.hostname||'-')}</span><span class="k">IP</span><span class="v">${esc(h.ip||'-')}</span><span class="k">平台</span><span class="v">${esc(h.platform||'-')}</span><span class="k">API端口</span><span class="v">${h.api_port||'-'}</span><span class="k">注册时间</span><span class="v">${fmtTime(h.registered_at)}</span><span class="k">最后心跳</span><span class="v">${fmtTime(h.last_seen)}</span></div></div>
+  <div class="modal-sec"><h3>硬件资源</h3><div class="kv-grid"><span class="k">CPU</span><span class="v">${h.cpu_count||0}核 / ${h.cpu_percent||0}%</span><span class="k">内存</span><span class="v">${fmtMem(h.memory_total_mb)} / ${h.memory_percent||0}%</span><span class="k">磁盘</span><span class="v">${h.disk_total_gb||0}GB / ${h.disk_percent||0}%</span></div></div>
+  <div class="modal-sec"><h3>共享文件夹</h3><div class="kv-grid"><span class="k">路径</span><span class="v">${esc(h.shared_folder||'-')}</span><span class="k">文件数</span><span class="v">${h.shared_file_count||0}</span></div>${h.ip&&h.api_port?`<div style="margin-top:10px"><button class="btn primary sm" onclick="browseFiles('${esc(h.ip)}',${h.api_port})">📂 浏览共享文件</button></div>`:''}</div>`;
+  document.getElementById('overlay').classList.add('show');
+}
+async function browseFiles(ip,port){
+  try{const r=await fetch(`http://${ip}:${port}/shared`);const d=await r.json();let h='<div class="modal-sec"><h3>远程文件</h3>';
+    if(d.files&&d.files.length){h+='<div class="kv-grid">';for(const f of d.files){const dl=`http://${ip}:${port}/shared/${encodeURIComponent(f.path)}`;h+=`<span class="k">${f.is_dir?'📁':'📄'} ${esc(f.name)}</span><span class="v"><a href="${dl}" target="_blank" style="color:var(--accent)">下载</a> (${fmtSize(f.size)})</span>`;}h+='</div>';}else{h+='<p style="color:var(--dim)">共享文件夹为空</p>';}h+='</div>';
+    document.getElementById('modal').insertAdjacentHTML('beforeend',h);
+  }catch(e){alert('无法访问:'+e.message);}
+}
+function probeIP(){const ip=prompt('输入要探测的主机IP:');if(!ip)return;fetch(`/api/probe/${ip}`,{method:'POST'}).then(r=>r.json()).then(d=>{alert(d.message||'已发送');setTimeout(refreshHosts,2000);}).catch(e=>alert('失败:'+e.message));}
+async function showNetworkInfo(){try{const r=await fetch('/api/network');const d=await r.json();alert(`UDP端口: ${d.udp_port}\nAPI端口: ${d.api_port}\n\n本地IP:\n${d.local_ips.join('\n')}\n\n广播目标:\n${d.broadcast_targets.join('\n')}`);}catch(e){alert('失败:'+e.message);}}
 
-function resourceBar(label, total, percent, unit) {
-  const p = Math.round(percent || 0);
-  const cls = p < 60 ? 'low' : p < 85 ? 'mid' : 'high';
-  return `
-    <div class="resource-row">
-      <span class="resource-label">${label}</span>
-      <div class="progress-bar"><div class="progress-fill ${cls}" style="width:${p}%"></div></div>
-      <span class="resource-value">${p}${unit} / ${total}</span>
+// ── 任务面板 ──
+async function refreshTasks(){
+  try{const r=await fetch('/api/tasks');const d=await r.json();allTasks=d.tasks||[];renderTasks();}catch(e){console.error(e);}
+}
+function renderTasks(){
+  const grid=document.getElementById('task-grid');
+  if(!allTasks.length){grid.innerHTML='<div class="empty"><div class="icon">📋</div><p>暂无任务</p></div>';return;}
+  grid.innerHTML=allTasks.map(t=>{
+    const sc=(t.subtasks||[]).length;const done=(t.subtasks||[]).filter(s=>s.status==='completed').length;
+    const pct=sc?Math.round(done/sc*100):0;
+    const c=t.status==='completed'?'idle':t.status==='failed'?'archived':'busy';
+    return `<div class="card" onclick='showTaskDetail("${t.task_id}")'>
+      <div class="card-head"><div class="card-title">${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span></div></div>
+      <div class="card-meta">${esc(t.description||'-')}<br>📊 ${done}/${sc} 子任务 (${pct}%) ${t.project_id?'| 📁 '+esc(t.project_id.slice(0,8)):''}</div>
+      <div class="pbar"><div class="pfill ${pct>=100?'low':'mid'}" style="width:${pct}%"></div></div>
     </div>`;
+  }).join('');
+}
+async function showTaskDetail(id){
+  const t=allTasks.find(x=>x.task_id===id);if(!t)return;
+  let steps=(t.subtasks||[]).map(s=>`<div class="task-step"><span class="step-dot ${s.status}"></span><span>${esc(s.name||s.description||'子任务')} <span style="color:var(--dim)">[${s.status}]</span>${s.assigned_agent_id?' → '+esc(s.assigned_agent_id.slice(0,8)):''}</span></div>`).join('');
+  let out=t.output_data&&Object.keys(t.output_data).length?`<pre>${esc(JSON.stringify(t.output_data,null,2))}</pre>`:'<p style="color:var(--dim)">暂无输出</p>';
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>${esc(t.name)}</h2><p style="color:var(--dim);font-size:13px">${t.status} · ${fmtTime(t.created_at)}${t.completed_at?' → '+fmtTime(t.completed_at):''}</p>
+  <div class="modal-sec"><h3>描述</h3><p style="font-size:14px">${esc(t.description||'-')}</p></div>
+  <div class="modal-sec"><h3>子任务 (${(t.subtasks||[]).length})</h3>${steps||'<p style="color:var(--dim)">无子任务</p>'}</div>
+  <div class="modal-sec"><h3>输出结果</h3>${out}</div>`;
+  document.getElementById('overlay').classList.add('show');
+}
+async function submitTask(){
+  const name=document.getElementById('task-name').value.trim();
+  const desc=document.getElementById('task-desc').value.trim();
+  const proj=document.getElementById('task-project').value;
+  if(!name){alert('请输入任务名称');return;}
+  try{const r=await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:desc,project_id:proj})});
+    if(r.status===402){const d=await r.json();alert('预算超支: '+d.detail);return;}
+    const t=await r.json();document.getElementById('task-name').value='';document.getElementById('task-desc').value='';refreshTasks();alert('任务已提交: '+t.task_id.slice(0,8));
+  }catch(e){alert('提交失败:'+e.message);}
 }
 
-// ── 详情面板 ────────────────────────────────────────────────────
-async function showDetail(deviceId) {
-  const host = allHosts.find(h => h.device_id === deviceId);
-  if (!host) return;
-
-  const panel = document.getElementById('detail-panel');
-  const online = host.online;
-  panel.innerHTML = `
-    <span class="detail-close" onclick="closeDetailForce()">&times;</span>
-    <h2>${escapeHtml(host.device_name || host.hostname || '未知主机')}</h2>
-    <p style="color:var(--text-dim); font-size:14px;">
-      <span class="dot ${online ? 'online' : 'offline'}" style="display:inline-block;vertical-align:middle"></span>
-      ${online ? '在线' : '离线'} · ${host.role === 'master' ? 'Master 节点' : 'Worker 节点'}
-    </p>
-
-    <div class="detail-section">
-      <h3>基本信息</h3>
-      <div class="detail-grid">
-        <span class="key">设备 ID</span><span class="val">${escapeHtml(host.device_id)}</span>
-        <span class="key">主机名</span><span class="val">${escapeHtml(host.hostname || '-')}</span>
-        <span class="key">IP 地址</span><span class="val">${escapeHtml(host.ip || '-')}</span>
-        <span class="key">平台</span><span class="val">${escapeHtml(host.platform || '-')}</span>
-        <span class="key">API 端口</span><span class="val">${host.api_port || '-'}</span>
-        <span class="key">注册时间</span><span class="val">${fmtTime(host.registered_at)}</span>
-        <span class="key">最后心跳</span><span class="val">${fmtTime(host.last_seen)}</span>
-      </div>
-    </div>
-
-    <div class="detail-section">
-      <h3>硬件资源</h3>
-      <div class="detail-grid">
-        <span class="key">CPU 核心</span><span class="val">${host.cpu_count || 0} 核</span>
-        <span class="key">CPU 使用率</span><span class="val">${host.cpu_percent || 0}%</span>
-        <span class="key">内存总量</span><span class="val">${fmtMem(host.memory_total_mb)}</span>
-        <span class="key">内存使用率</span><span class="val">${host.memory_percent || 0}%</span>
-        <span class="key">磁盘总量</span><span class="val">${host.disk_total_gb || 0} GB</span>
-        <span class="key">磁盘使用率</span><span class="val">${host.disk_percent || 0}%</span>
-      </div>
-    </div>
-
-    <div class="detail-section">
-      <h3>共享文件夹</h3>
-      <div class="detail-grid">
-        <span class="key">路径</span><span class="val">${escapeHtml(host.shared_folder || '-')}</span>
-        <span class="key">文件数</span><span class="val">${host.shared_file_count || 0}</span>
-      </div>
-      ${host.ip && host.api_port ? `
-      <div style="margin-top:12px;">
-        <button class="btn primary" onclick="browseFiles('${escapeHtml(host.ip)}', ${host.api_port})">
-          📂 浏览共享文件
-        </button>` : ''}
-      </div>
-    </div>
-  `;
-  document.getElementById('detail-overlay').classList.add('show');
+// ── Agent面板 ──
+async function refreshAgents(){
+  try{const r=await fetch('/api/agents');const d=await r.json();allAgents=d.agents||[];renderAgents();}catch(e){console.error(e);}
+}
+function renderAgents(){
+  const grid=document.getElementById('agent-grid');
+  document.getElementById('agent-total').textContent=allAgents.length;
+  document.getElementById('agent-idle').textContent=allAgents.filter(a=>a.status==='idle').length;
+  document.getElementById('agent-busy').textContent=allAgents.filter(a=>a.status==='busy').length;
+  if(!allAgents.length){grid.innerHTML='<div class="empty"><div class="icon">🤖</div><p>暂无Agent</p></div>';return;}
+  grid.innerHTML=allAgents.map(a=>{
+    const sc=(a.skills||[]).length,tc=(a.tools||[]).length;
+    return `<div class="card" onclick='showAgentDetail("${a.agent_id}")'>
+      <div class="card-head"><div class="card-title">🤖 ${esc(a.agent_name||'未知')}<span class="badge ${a.status==='idle'?'idle':'busy'}">${a.status}</span></div></div>
+      <div class="card-meta">📡 <span>${esc(a.ip||'-')}</span>:${a.api_port||'-'} | 🖥️ <span>${esc(a.hostname||'-')}</span><br>🎯 ${sc}技能 | 🔧 ${tc}工具 | ⚡ ${a.current_task_count||0}/${a.max_concurrent_tasks}并发</div>
+    </div>`;
+  }).join('');
+}
+function showAgentDetail(id){
+  const a=allAgents.find(x=>x.agent_id===id);if(!a)return;
+  const skills=(a.skills||[]).map(s=>`<span class="badge worker">${esc(s.name)}</span> `).join('')||'<span style="color:var(--dim)">无</span>';
+  const tools=(a.tools||[]).map(t=>`<span class="badge idle">${esc(t.name)}</span> `).join('')||'<span style="color:var(--dim)">无</span>';
+  const models=(a.model_preferences||[]).map(m=>`<code>${esc(m)}</code>`).join(' ')||'<span style="color:var(--dim)">无</span>';
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🤖 ${esc(a.agent_name)}</h2><p style="color:var(--dim);font-size:13px">${a.status} · v${a.version}</p>
+  <div class="modal-sec"><h3>宿主信息</h3><div class="kv-grid"><span class="k">AgentID</span><span class="v">${esc(a.agent_id)}</span><span class="k">设备ID</span><span class="v">${esc(a.device_id)}</span><span class="k">主机名</span><span class="v">${esc(a.hostname||'-')}</span><span class="k">IP:端口</span><span class="v">${esc(a.ip||'-')}:${a.api_port||'-'}</span><span class="k">并发</span><span class="v">${a.current_task_count||0}/${a.max_concurrent_tasks}</span><span class="k">注册时间</span><span class="v">${fmtTime(a.registered_at)}</span></div></div>
+  <div class="modal-sec"><h3>技能 (${(a.skills||[]).length})</h3><div style="display:flex;flex-wrap:wrap;gap:4px">${skills}</div></div>
+  <div class="modal-sec"><h3>工具 (${(a.tools||[]).length})</h3><div style="display:flex;flex-wrap:wrap;gap:4px">${tools}</div></div>
+  <div class="modal-sec"><h3>模型偏好</h3><div>${models}</div></div>`;
+  document.getElementById('overlay').classList.add('show');
 }
 
-function closeDetail(e) {
-  if (e.target === e.currentTarget) {
-    document.getElementById('detail-overlay').classList.remove('show');
-  }
+// ── MCP工具面板 ──
+async function refreshTools(){
+  try{const r=await fetch('/tools/list');const d=await r.json();renderTools(d);renderServers(d.servers||[]);}catch(e){console.error(e);}
 }
-function closeDetailForce() {
-  document.getElementById('detail-overlay').classList.remove('show');
+function renderServers(servers){
+  const grid=document.getElementById('server-grid');
+  document.getElementById('srv-total').textContent=servers.length;
+  if(!servers.length){grid.innerHTML='<div class="empty"><div class="icon">🔌</div><p>未注册MCP Server</p></div>';return;}
+  grid.innerHTML=servers.map(s=>`<div class="card ${s.connected?'':'offline'}" onclick="showServerDetail('${esc(s.name)}')">
+    <div class="card-head"><div class="card-title">🔌 ${esc(s.name)}<span class="badge ${s.connected?'idle':'archived'}">${s.connected?'已连接':'断开'}</span></div></div>
+    <div class="card-meta">传输: <span>${esc(s.transport)}</span> | 工具数: <span>${s.tool_count||0}</span><br>连接时间: <span>${fmtTime(s.connected_at)}</span></div>
+  </div>`).join('');
+}
+function renderTools(data){
+  const grid=document.getElementById('tool-grid');
+  const tools=data.tools||[];
+  document.getElementById('tool-total').textContent=tools.length;
+  if(!tools.length){grid.innerHTML='';return;}
+  grid.innerHTML=tools.map(t=>`<div class="card" onclick='callTool("${esc(t.name)}")'>
+    <div class="card-head"><div class="card-title">🔧 ${esc(t.name)}</div><span class="badge idle">${esc(t.source_server||'')}</span></div>
+    <div class="card-meta">${esc((t.description||'').slice(0,100))}</div>
+  </div>`).join('');
+}
+function showServerDetail(name){
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🔌 ${esc(name)}</h2>
+  <div class="modal-sec"><h3>操作</h3><button class="btn" onclick="fetch('/tools/servers/${encodeURIComponent(name)}',{method:'DELETE'}).then(()=>{refreshTools();closeOverlayForce();})">🗑️ 注销Server</button></div>`;
+  document.getElementById('overlay').classList.add('show');
+}
+function showRegisterServer(){
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>注册 MCP Server</h2>
+  <div class="modal-sec">
+    <div class="form-row"><label>Server名称</label><input id="srv-name" placeholder="filesystem"></div>
+    <div class="form-row"><label>传输方式</label><select id="srv-transport"><option value="stdio">stdio</option><option value="http">http</option></select></div>
+    <div class="form-row"><label>命令 (stdio)</label><input id="srv-command" placeholder="npx"></div>
+    <div class="form-row"><label>参数 (逗号分隔)</label><input id="srv-args" placeholder="@modelcontextprotocol/server-filesystem,/tmp"></div>
+    <div class="form-row"><label>URL (http)</label><input id="srv-url" placeholder="http://192.168.1.100:3000/mcp"></div>
+    <button class="btn primary" onclick="registerServer()">注册</button>
+  </div>`;
+  document.getElementById('overlay').classList.add('show');
+}
+async function registerServer(){
+  const name=document.getElementById('srv-name').value.trim();if(!name){alert('请输入名称');return;}
+  const transport=document.getElementById('srv-transport').value;
+  const config={transport};
+  if(transport==='stdio'){config.command=document.getElementById('srv-command').value.trim();const args=document.getElementById('srv-args').value.trim();config.args=args?args.split(',').map(s=>s.trim()):[];}
+  else{config.url=document.getElementById('srv-url').value.trim();}
+  try{const r=await fetch('/tools/servers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,config})});const d=await r.json();if(d.ok){refreshTools();closeOverlayForce();}else{alert('注册失败');}}catch(e){alert('失败:'+e.message);}
+}
+function callTool(name){
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🔧 调用 ${esc(name)}</h2>
+  <div class="modal-sec"><h3>参数 (JSON)</h3><div class="form-row"><textarea id="tool-args" style="width:100%;min-height:120px" placeholder='{"path": "/tmp/test.txt"}'></textarea></div>
+  <button class="btn primary" onclick='execTool("${esc(name)}")'>执行</button></div>
+  <div class="modal-sec" id="tool-result" style="display:none"><h3>结果</h3><pre id="tool-output"></pre></div>`;
+  document.getElementById('overlay').classList.add('show');
+}
+async function execTool(name){
+  const argsText=document.getElementById('tool-args').value.trim();
+  let args={};try{args=argsText?JSON.parse(argsText):{};}catch(e){alert('JSON格式错误');return;}
+  try{const r=await fetch('/tools/call',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tool_name:name,arguments:args})});const d=await r.json();
+    document.getElementById('tool-result').style.display='block';
+    document.getElementById('tool-output').textContent=JSON.stringify(d,null,2);
+  }catch(e){alert('调用失败:'+e.message);}
 }
 
-// ── 浏览远程共享文件 ────────────────────────────────────────────
-async function browseFiles(ip, port) {
-  try {
-    const resp = await fetch(`http://${ip}:${port}/shared`);
-    const data = await resp.json();
-    let html = `<div class="detail-section"><h3>远程共享文件 (${ip})</h3>`;
-    if (data.files && data.files.length > 0) {
-      html += '<div class="detail-grid">';
-      for (const f of data.files) {
-        const dl = `http://${ip}:${port}/shared/${encodeURIComponent(f.path)}`;
-        html += `<span class="key">${f.is_dir ? '📁' : '📄'} ${escapeHtml(f.name)}</span>`;
-        html += `<span class="val"><a href="${dl}" target="_blank" style="color:var(--accent)">下载</a> (${fmtSize(f.size)})</span>`;
-      }
-      html += '</div>';
-    } else {
-      html += '<p style="color:var(--text-dim);">共享文件夹为空</p>';
-    }
-    html += '</div>';
-    document.getElementById('detail-panel').insertAdjacentHTML('beforeend', html);
-  } catch (e) {
-    alert('无法访问远程主机共享文件: ' + e.message);
-  }
+// ── 项目面板 ──
+async function refreshProjects(){
+  try{const r=await fetch('/api/projects');const d=await r.json();allProjects=d.projects||[];renderProjects();updateProjectSelect();}catch(e){console.error(e);}
+}
+function renderProjects(){
+  const grid=document.getElementById('project-grid');
+  document.getElementById('proj-total').textContent=allProjects.length;
+  document.getElementById('proj-active').textContent=allProjects.filter(p=>p.status==='active').length;
+  if(!allProjects.length){grid.innerHTML='<div class="empty"><div class="icon">📁</div><p>暂无项目</p></div>';return;}
+  grid.innerHTML=allProjects.map(p=>{
+    const ratio=p.budget_limit_usd>0?Math.min(1,p.budget_used_usd/p.budget_limit_usd):0;
+    const pct=Math.round(ratio*100);const c=ratio>=1?'high':ratio>=0.8?'mid':'low';
+    return `<div class="card ${p.status!=='active'?'offline':''}" onclick='showProjectDetail("${p.project_id}")'>
+      <div class="card-head"><div class="card-title">📁 ${esc(p.name)}<span class="badge ${p.status}">${p.status}</span></div></div>
+      <div class="card-meta">💰 $${(p.budget_used_usd||0).toFixed(4)} / $${(p.budget_limit_usd||0).toFixed(2)} (${pct}%)<br>🎯 ${esc(p.routing_strategy)} | 🤖 ${(p.allowed_models||[]).length}模型</div>
+      ${p.budget_limit_usd>0?`<div class="pbar"><div class="pfill ${c}" style="width:${pct}%"></div></div>`:''}
+    </div>`;
+  }).join('');
+}
+function updateProjectSelect(){
+  const sel=document.getElementById('task-project');
+  sel.innerHTML='<option value="">不关联项目</option>';
+  allProjects.filter(p=>p.status==='active').forEach(p=>{sel.innerHTML+=`<option value="${p.project_id}">${esc(p.name)}</option>`;});
+}
+async function showProjectDetail(id){
+  try{const r=await fetch(`/api/projects/${id}`);const p=await r.json();
+    const ratio=p.budget_ratio||0;const pct=Math.round(ratio*100);
+    let models=(p.allowed_models||[]).map(m=>`<code>${esc(m)}</code>`).join(' ')||'<span style="color:var(--dim)">全部允许</span>';
+    document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>📁 ${esc(p.name)}</h2><p style="color:var(--dim);font-size:13px">${p.status} · ${esc(p.routing_strategy)} · ${fmtTime(p.created_at)}</p>
+    <div class="modal-sec"><h3>预算</h3><div class="kv-grid"><span class="k">预算上限</span><span class="v">$${(p.budget_limit_usd||0).toFixed(2)}</span><span class="k">已消费</span><span class="v">$${(p.budget_used_usd||0).toFixed(4)}</span><span class="k">使用率</span><span class="v">${pct}%</span><span class="k">剩余</span><span class="v">$${(p.budget_remaining||0).toFixed(4)}</span><span class="k">超支</span><span class="v">${p.is_over_budget?'是':'否'}</span><span class="k">经济模式</span><span class="v">${p.should_use_economy?'是':'否'}</span></div></div>
+    <div class="modal-sec"><h3>配置</h3><div class="kv-grid"><span class="k">工作空间</span><span class="v">${esc(p.workspace_path||'-')}</span><span class="k">路由策略</span><span class="v">${esc(p.routing_strategy)}</span></div></div>
+    <div class="modal-sec"><h3>允许模型</h3><div>${models}</div></div>
+    <div class="modal-sec"><h3>最近调用 (${p.recent_calls||0})</h3><div class="kv-grid"><span class="k">输入tokens</span><span class="v">${p.recent_input_tokens||0}</span><span class="k">输出tokens</span><span class="v">${p.recent_output_tokens||0}</span></div>
+    <button class="btn sm" style="margin-top:8px" onclick="showUsageLog('${p.project_id}')">查看消费记录</button></div>`;
+    document.getElementById('overlay').classList.add('show');
+  }catch(e){alert('失败:'+e.message);}
+}
+async function showUsageLog(pid){
+  try{const r=await fetch(`/api/projects/${pid}/usage`);const d=await r.json();
+    let rows=(d.records||[]).map(r=>`<div class="task-step"><span class="step-dot completed"></span><span>${esc(r.model)} · ${r.input_tokens}+${r.output_tokens}tokens · $${(r.cost_usd||0).toFixed(6)} · ${fmtTime(r.timestamp)}</span></div>`).join('');
+    document.getElementById('modal').insertAdjacentHTML('beforeend',`<div class="modal-sec"><h3>消费记录 (${d.total})</h3>${rows||'<p style="color:var(--dim)">无记录</p>'}</div>`);
+  }catch(e){alert('失败:'+e.message);}
+}
+function showCreateProject(){
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>创建项目</h2>
+  <div class="modal-sec">
+    <div class="form-row"><label>项目名称</label><input id="proj-name" placeholder="my-blog-dev"></div>
+    <div class="form-row"><label>描述</label><textarea id="proj-desc" placeholder="项目描述"></textarea></div>
+    <div class="form-row"><label>月度预算 (USD)</label><input id="proj-budget" type="number" step="0.5" value="10" min="0"></div>
+    <div class="form-row"><label>路由策略</label><select id="proj-strategy"><option value="balanced">balanced (均衡)</option><option value="cost_first">cost_first (优先省钱)</option><option value="quality_first">quality_first (优先质量)</option></select></div>
+    <div class="form-row"><label>允许模型 (逗号分隔,空=全部)</label><input id="proj-models" placeholder="deepseek-chat,gpt-4o-mini"></div>
+    <button class="btn primary" onclick="createProject()">创建</button>
+  </div>`;
+  document.getElementById('overlay').classList.add('show');
+}
+async function createProject(){
+  const name=document.getElementById('proj-name').value.trim();if(!name){alert('请输入名称');return;}
+  const desc=document.getElementById('proj-desc').value.trim();
+  const budget=parseFloat(document.getElementById('proj-budget').value)||0;
+  const strategy=document.getElementById('proj-strategy').value;
+  const modelsText=document.getElementById('proj-models').value.trim();
+  const allowed_models=modelsText?modelsText.split(',').map(s=>s.trim()):[];
+  try{const r=await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:desc,budget_limit_usd:budget,routing_strategy:strategy,allowed_models})});
+    const d=await r.json();refreshProjects();closeOverlayForce();alert('项目已创建: '+d.name);}
+  catch(e){alert('失败:'+e.message);}
 }
 
-// ── 探测 IP ─────────────────────────────────────────────────────
-function probeIP() {
-  const ip = prompt('输入要探测的主机 IP:');
-  if (!ip) return;
-  fetch(`/api/probe/${ip}`, { method: 'POST' })
-    .then(r => r.json())
-    .then(d => { alert(d.message || '已发送'); setTimeout(refreshHosts, 2000); })
-    .catch(e => alert('探测失败: ' + e.message));
-}
+// ── 通用工具 ──
+function closeOverlay(e){if(e.target===e.currentTarget)document.getElementById('overlay').classList.remove('show');}
+function closeOverlayForce(){document.getElementById('overlay').classList.remove('show');}
+function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function fmtMem(mb){if(!mb)return'-';return mb>=1024?(mb/1024).toFixed(1)+' GB':mb+' MB';}
+function fmtSize(b){if(!b)return'0 B';const u=['B','KB','MB','GB','TB'];const i=Math.floor(Math.log(b)/Math.log(1024));return(b/Math.pow(1024,i)).toFixed(1)+' '+u[i];}
+function fmtTime(ts){if(!ts)return'-';return new Date(ts*1000).toLocaleString('zh-CN');}
 
-// ── 网络信息 ────────────────────────────────────────────────────
-async function showNetworkInfo() {
-  try {
-    const resp = await fetch('/api/network');
-    const data = await resp.json();
-    alert(
-      `本机网络状态:\n\n` +
-      `UDP 发现端口: ${data.udp_port}\n` +
-      `API 端口: ${data.api_port}\n\n` +
-      `本地 IP:\n${data.local_ips.join('\n')}\n\n` +
-      `广播目标:\n${data.broadcast_targets.join('\n')}`
-    );
-  } catch (e) {
-    alert('获取网络信息失败: ' + e.message);
-  }
-}
-
-// ── 工具函数 ────────────────────────────────────────────────────
-function escapeHtml(s) {
-  if (!s) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-function fmtMem(mb) {
-  if (!mb) return '-';
-  if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
-  return mb + ' MB';
-}
-function fmtSize(bytes) {
-  if (!bytes) return '0 B';
-  const u = ['B','KB','MB','GB','TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + u[i];
-}
-function fmtTime(ts) {
-  if (!ts) return '-';
-  const d = new Date(ts * 1000);
-  return d.toLocaleString('zh-CN');
-}
+// ── 初始化 ──
+document.addEventListener('DOMContentLoaded',()=>{refreshHosts();connectWS();setInterval(refreshHosts,5000);});
 </script>
 </body>
 </html>

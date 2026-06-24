@@ -108,6 +108,7 @@ def create_master_router(
     state,                  # MasterState shared object
     orchestrator=None,       # Orchestrator instance (optional)
     mcp_gateway=None,        # MCPGateway instance (optional)
+    project_manager=None,    # ProjectManager instance (optional)
 ) -> APIRouter:
     """创建 Master 节点的 API 路由。"""
     router = APIRouter()
@@ -300,14 +301,26 @@ def create_master_router(
 
     @router.post("/api/tasks")
     async def submit_task(payload: dict):
-        """提交新任务,自动分解并调度。"""
+        """提交新任务,自动分解并调度。
+
+        请求体可选 project_id 字段,关联到指定项目进行预算控制。
+        """
         if not orchestrator:
             raise HTTPException(status_code=503, detail="编排器未初始化")
+        project_id = payload.get("project_id", "")
+        # 如果关联了项目,检查预算
+        if project_id and project_manager:
+            if not project_manager.check_budget(project_id):
+                raise HTTPException(
+                    status_code=402,
+                    detail="项目预算已起支或已暂停,无法提交任务",
+                )
         task = orchestrator.submit_task(
             name=payload.get("name", ""),
             description=payload.get("description", ""),
             input_data=payload.get("input_data", {}),
             created_by=payload.get("created_by", "user"),
+            project_id=project_id,
         )
         await broadcast_ws(state, "task_submitted", task.to_dict())
         return task.to_dict()
@@ -328,6 +341,86 @@ def create_master_router(
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
         return task.to_dict()
+
+    # ── 项目管理端点 ─────────────────────────────────────────
+
+    @router.post("/api/projects")
+    async def create_project(payload: dict):
+        """创建新项目。"""
+        if not project_manager:
+            raise HTTPException(status_code=503, detail="项目管理器未初始化")
+        project = project_manager.create_project(
+            name=payload.get("name", ""),
+            description=payload.get("description", ""),
+            budget_limit_usd=payload.get("budget_limit_usd", 10.0),
+            allowed_models=payload.get("allowed_models", []),
+            routing_strategy=payload.get("routing_strategy", "balanced"),
+            workspace_base=payload.get("workspace_base", ""),
+        )
+        await broadcast_ws(state, "project_created", project.to_dict())
+        return project.to_dict()
+
+    @router.get("/api/projects")
+    async def list_projects(status: str = None):
+        """列出所有项目,可按状态过滤。"""
+        if not project_manager:
+            return {"projects": [], "total": 0}
+        projects = project_manager.list_projects(status=status)
+        return {
+            "projects": [p.to_dict() for p in projects],
+            "total": len(projects),
+        }
+
+    @router.get("/api/projects/{project_id}")
+    async def get_project(project_id: str):
+        """查询单个项目详情 (含预算状态)。"""
+        if not project_manager:
+            raise HTTPException(status_code=503, detail="项目管理器未初始化")
+        status_info = project_manager.get_project_status(project_id)
+        if not status_info:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        return status_info
+
+    @router.put("/api/projects/{project_id}")
+    async def update_project(project_id: str, payload: dict):
+        """更新项目字段 (预算/模型/策略/状态)。"""
+        if not project_manager:
+            raise HTTPException(status_code=503, detail="项目管理器未初始化")
+        project = project_manager.update_project(
+            project_id,
+            name=payload.get("name"),
+            description=payload.get("description"),
+            budget_limit_usd=payload.get("budget_limit_usd"),
+            allowed_models=payload.get("allowed_models"),
+            routing_strategy=payload.get("routing_strategy"),
+            status=payload.get("status"),
+        )
+        if not project:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        await broadcast_ws(state, "project_updated", project.to_dict())
+        return project.to_dict()
+
+    @router.delete("/api/projects/{project_id}")
+    async def archive_project(project_id: str):
+        """归档项目 (软删除)。"""
+        if not project_manager:
+            raise HTTPException(status_code=503, detail="项目管理器未初始化")
+        if not project_manager.archive_project(project_id):
+            raise HTTPException(status_code=404, detail="项目不存在")
+        await broadcast_ws(state, "project_archived", {"project_id": project_id})
+        return {"ok": True, "project_id": project_id}
+
+    @router.get("/api/projects/{project_id}/usage")
+    async def get_usage(project_id: str, limit: int = 100):
+        """查询项目消费记录。"""
+        if not project_manager:
+            return {"records": [], "total": 0}
+        records = db.get_usage_log(project_id, limit=limit)
+        return {
+            "records": records,
+            "total": len(records),
+            "project_id": project_id,
+        }
 
     # ── MCP 网关端点 ─────────────────────────────────────────
 

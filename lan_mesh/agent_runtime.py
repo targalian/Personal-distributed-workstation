@@ -65,7 +65,11 @@ class AgentRuntime:
 
         try:
             result = handler(subtask.get("input_data", {}))
-            return {"output": result, "status": "completed"}
+            # 提取 LLM 调用的 token 用量 (如果 handler 返回了 usage)
+            usage = {}
+            if isinstance(result, dict) and "usage" in result:
+                usage = result.pop("usage", {})
+            return {"output": result, "status": "completed", "usage": usage}
         except Exception as e:
             return {"output": {}, "status": "failed", "error": str(e)}
 
@@ -81,8 +85,8 @@ class AgentRuntime:
         if context:
             prompt += f"\n\n已有代码/上下文:\n{context}"
 
-        result = self._call_llm(prompt)
-        return {"code": result, "language": language}
+        resp = self._call_llm_full(prompt)
+        return {"code": resp["content"], "language": language, "usage": {"model": resp["model"], "input_tokens": resp["input_tokens"], "output_tokens": resp["output_tokens"]}}
 
     def _handle_code_review(self, input_data: dict) -> dict:
         """代码审查 — 调用 LLM API。"""
@@ -93,8 +97,8 @@ class AgentRuntime:
         if language:
             prompt = f"语言: {language}\n" + prompt
 
-        result = self._call_llm(prompt)
-        return {"review": result}
+        resp = self._call_llm_full(prompt)
+        return {"review": resp["content"], "usage": {"model": resp["model"], "input_tokens": resp["input_tokens"], "output_tokens": resp["output_tokens"]}}
 
     def _handle_document_summary(self, input_data: dict) -> dict:
         """文档摘要 — 调用 LLM API。"""
@@ -102,8 +106,8 @@ class AgentRuntime:
         max_length = input_data.get("max_length", 500)
 
         prompt = f"请将以下内容生成不超过 {max_length} 字的摘要:\n{text}"
-        result = self._call_llm(prompt)
-        return {"summary": result}
+        resp = self._call_llm_full(prompt)
+        return {"summary": resp["content"], "usage": {"model": resp["model"], "input_tokens": resp["input_tokens"], "output_tokens": resp["output_tokens"]}}
 
     def _handle_rag_search(self, input_data: dict) -> dict:
         """RAG 检索 — 预留接口,当前返回提示。"""
@@ -165,11 +169,11 @@ class AgentRuntime:
 
     # ── LLM API 调用 ────────────────────────────────────────────
 
-    def _call_llm(self, prompt: str) -> str:
-        """调用外部 LLM API 生成回复。
+    def _call_llm_full(self, prompt: str) -> dict:
+        """调用外部 LLM API,返回完整响应 (含 token 用量)。
 
+        返回: {"content": str, "model": str, "input_tokens": int, "output_tokens": int}
         优先使用 DeepSeek (成本低),其次 OpenAI。
-        如果没有配置 API Key,返回提示信息。
         """
         # DeepSeek API
         deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
@@ -181,10 +185,19 @@ class AgentRuntime:
         if openai_key:
             return self._call_openai(prompt, openai_key)
 
-        return "[未配置 LLM API Key] 请设置 DEEPSEEK_API_KEY 或 OPENAI_API_KEY 环境变量。"
+        return {
+            "content": "[未配置 LLM API Key] 请设置 DEEPSEEK_API_KEY 或 OPENAI_API_KEY 环境变量。",
+            "model": "none",
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
 
-    def _call_deepseek(self, prompt: str, api_key: str) -> str:
-        """调用 DeepSeek API。"""
+    def _call_llm(self, prompt: str) -> str:
+        """调用外部 LLM API 生成回复 (仅返回文本内容)。"""
+        return self._call_llm_full(prompt)["content"]
+
+    def _call_deepseek(self, prompt: str, api_key: str) -> dict:
+        """调用 DeepSeek API,返回含 token 用量的完整响应。"""
         resp = requests.post(
             "https://api.deepseek.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -196,10 +209,17 @@ class AgentRuntime:
             timeout=120,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        data = resp.json()
+        usage = data.get("usage", {})
+        return {
+            "content": data["choices"][0]["message"]["content"],
+            "model": "deepseek-chat",
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
+        }
 
-    def _call_openai(self, prompt: str, api_key: str) -> str:
-        """调用 OpenAI API。"""
+    def _call_openai(self, prompt: str, api_key: str) -> dict:
+        """调用 OpenAI API,返回含 token 用量的完整响应。"""
         resp = requests.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -211,4 +231,11 @@ class AgentRuntime:
             timeout=120,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        data = resp.json()
+        usage = data.get("usage", {})
+        return {
+            "content": data["choices"][0]["message"]["content"],
+            "model": "gpt-4o-mini",
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
+        }

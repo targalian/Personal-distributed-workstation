@@ -61,14 +61,18 @@ class Orchestrator:
     在 Master 端运行,负责任务分解、Agent 匹配、子任务分发与结果聚合。
     """
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, project_manager=None):
         self.db = db
+        self.project_manager = project_manager
         self._lock = threading.Lock()
         self._active_dags: dict[str, TaskDAG] = {}  # task_id → DAG
 
     def submit_task(self, name: str, description: str, input_data: dict = None,
-                    created_by: str = "user") -> Task:
-        """提交新任务,自动分解并开始调度。"""
+                    created_by: str = "user", project_id: str = "") -> Task:
+        """提交新任务,自动分解并开始调度。
+
+        如果指定了 project_id,任务将与项目关联,执行过程中记录消费。
+        """
         task = Task(
             task_id=str(uuid.uuid4()),
             name=name,
@@ -76,6 +80,7 @@ class Orchestrator:
             input_data=input_data or {},
             status="pending",
             created_by=created_by,
+            project_id=project_id,
         )
 
         # 分解为子任务
@@ -179,6 +184,20 @@ class Orchestrator:
                         output_data=result.get("output", {}),
                         completed_at=time.time(),
                     )
+                    # 记录模型调用消费 (如果关联了项目)
+                    if self.project_manager:
+                        task_obj = self.db.get_task(task_id)
+                        if task_obj and task_obj.project_id:
+                            usage = result.get("usage", {})
+                            if usage:
+                                self.project_manager.record_usage(
+                                    project_id=task_obj.project_id,
+                                    task_id=task_id,
+                                    subtask_id=subtask.subtask_id,
+                                    model=usage.get("model", ""),
+                                    input_tokens=usage.get("input_tokens", 0),
+                                    output_tokens=usage.get("output_tokens", 0),
+                                )
                     print(f"[Orchestrator] 子任务完成: {subtask.name} → {agent.agent_name}")
                 else:
                     dag.update_subtask(
