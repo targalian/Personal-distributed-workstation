@@ -23,7 +23,7 @@ def load_or_create_device_id(data_dir: Path, role: str = "worker") -> str:
 
     参考QuickLAN的 load_or_create_device_id,在数据目录下
     持久化一个 UUID 用于跨重启保持设备身份。
-    角色参数确保 Master/Worker 在同一台机器上有独立身份。
+    角色参数确保 Secretary/Worker 在同一台机器上有独立身份。
     """
     device_file = data_dir / f"device_id_{role}"
     if device_file.is_file():

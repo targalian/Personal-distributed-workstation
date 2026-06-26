@@ -62,7 +62,7 @@ def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
 class ProjectManager:
     """项目管理器 — 负责项目生命周期与预算控制。
 
-    部署在 Master 节点,与 Orchestrator 协同工作:
+    部署在 Secretary 节点,与 Orchestrator 协同工作:
     - 任务提交前: 检查项目预算是否充足
     - 任务完成后: 记录模型调用消费
     - 预算超支: 自动暂停项目或切换经济模型

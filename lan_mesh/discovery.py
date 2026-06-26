@@ -8,7 +8,7 @@ UDP 广播局域网设备发现 - 参考 QuickLAN 的 DiscoveryService
 
 设计要点 (与 QuickLAN 的异同):
 - 相同: UDP 广播发现、JSON 序列化、TTL 过期清理、子网广播地址计算
-- 不同: 采用 Master/Worker 架构而非纯 P2P;发现包携带硬件配置摘要
+- 不同: 采用 Secretary/Worker 架构而非纯 P2P;发现包携带硬件配置摘要
 """
 import json
 import socket

@@ -16,7 +16,7 @@ PROTOCOL_VERSION = 1
 
 DISCOVERY_PORT = 45454          # UDP 广播发现端口 (与 QuickLAN 一致)
 WORKER_API_PORT = 45460          # Worker HTTP API 起始端口
-MASTER_API_PORT = 45470          # Master HTTP API / Web UI 端口
+SECRETARY_API_PORT = 45470       # Secretary HTTP API / Web UI 端口
 
 PRESENCE_INTERVAL_SECS = 3      # UDP 存在广播间隔
 HEARTBEAT_INTERVAL_SECS = 5      # HTTP 心跳间隔
@@ -38,7 +38,7 @@ class DiscoveryPacket:
     packet_type: str = "presence"       # presence | register
     device_id: str = ""
     device_name: str = ""
-    role: str = "worker"                # master | worker
+    role: str = "worker"                # secretary | worker
     api_port: int = 0
     # ── 主机配置摘要 ──
     hostname: str = ""
@@ -110,11 +110,11 @@ class HostInfo:
         return cls(**valid)
 
 
-# ── 主机注册记录 (Master 端数据库) ──────────────────────────────
+# ── 主机注册记录 (Secretary 端数据库) ────────────────────────────
 
 @dataclass
 class HostRecord:
-    """Master 端维护的主机注册记录 — 含在线状态与最后心跳时间。"""
+    """Secretary 端维护的主机注册记录 — 含在线状态与最后心跳时间。"""
     device_id: str = ""
     device_name: str = ""
     role: str = "worker"
@@ -203,8 +203,8 @@ class AgentStatus(str, Enum):
 class AgentCard:
     """Agent 能力卡片 — 借鉴 A2A 协议的 Agent Card。
 
-    每个 Worker 启动时生成此卡片并注册到 Master,
-    Master 维护 Agent Registry 用于任务匹配与分发。
+    每个 Worker 启动时生成此卡片并注册到 Secretary,
+    Secretary 维护 Agent Registry 用于任务匹配与分发。
     """
     agent_id: str = ""
     agent_name: str = ""

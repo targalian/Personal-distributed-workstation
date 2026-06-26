@@ -116,7 +116,7 @@ STRATEGY_WEIGHTS = {
 class ModelRouter:
     """模型路由器 — 多目标优化决策引擎。
 
-    部署在 Master 节点, 与 Orchestrator 协同:
+    部署在 Secretary 节点, 与 Orchestrator 协同:
     - 任务提交时: 根据难度 + 项目策略选择最优模型
     - 失败降级: 首选模型不可用时沿 Fallback Chain 重试
     """

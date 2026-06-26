@@ -33,7 +33,7 @@ from .mcp_client import create_mcp_client, MCPStdioClient, MCPHttpClient
 class MCPGateway:
     """MCP 网关 — 统一工具调度中心。
 
-    部署在 Master 节点 (或任意稳定主机),所有 Agent 通过 HTTP 调用网关,
+    部署在 Secretary 节点 (或任意稳定主机),所有 Agent 通过 HTTP 调用网关,
     网关内部路由到具体的 MCP Server。
     """
 

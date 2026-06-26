@@ -13,9 +13,9 @@ worker:
   shared_folder: ~/lan_mesh_shared
   device_name: ""          # 留空则自动使用 hostname
 
-# Master 节点配置
-master:
+# Secretary 节点配置
+secretary:
   api_port: 45470          # HTTP API + Web UI 端口
   shared_folder: ~/lan_mesh_shared
-  device_name: ""          # 留空则自动使用 hostname-master
-  db_path: ~/.lan_mesh/master.sqlite3
+  device_name: ""          # 留空则自动使用 hostname-secretary
+  db_path: ~/.lan_mesh/secretary.sqlite3

@@ -1,5 +1,5 @@
 """
-SQLite 数据库存储层 - Master 端主机注册记录持久化
+SQLite 数据库存储层 - Secretary 端主机注册记录持久化
 
 参考 QuickLAN 的 SQLite 使用方式，用于存储主机信息与心跳历史。
 """

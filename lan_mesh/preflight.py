@@ -10,8 +10,8 @@
 6. 网络接口是否可用
 7. UDP 发现端口是否可绑定
 8. HTTP API 端口是否可用
-9. Master 专属: 数据库路径目录是否可写
-10. Master 专属: Web UI 模板是否存在
+9. Secretary 专属: 数据库路径目录是否可写
+10. Secretary 专属: Web UI 模板是否存在
 
 自检流程:
   run_preflight(role, cfg) → 打印检查报告 → 返回是否全部通过
@@ -110,11 +110,11 @@ def _write_default_config(path: Path):
             "shared_folder": "~/lan_mesh_shared",
             "device_name": "",
         },
-        "master": {
+        "secretary": {
             "api_port": 45470,
             "shared_folder": "~/lan_mesh_shared",
             "device_name": "",
-            "db_path": "~/.lan_mesh/master.sqlite3",
+            "db_path": "~/.lan_mesh/secretary.sqlite3",
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -199,7 +199,7 @@ def _check_api_port(port: int) -> CheckResult:
 
 
 def _check_db_path(cfg: AppConfig) -> Optional[CheckResult]:
-    """Master 专属: 检查数据库路径目录是否可写。"""
+    """Secretary 专属: 检查数据库路径目录是否可写。"""
     db_path = get_db_path(cfg)
     db_dir = db_path.parent
     try:
@@ -213,7 +213,7 @@ def _check_db_path(cfg: AppConfig) -> Optional[CheckResult]:
 
 
 def _check_web_template() -> Optional[CheckResult]:
-    """Master 专属: 检查 Web UI 模板是否存在。"""
+    """Secretary 专属: 检查 Web UI 模板是否存在。"""
     template = Path(__file__).parent / "web" / "templates" / "dashboard.html"
     if template.is_file():
         size = template.stat().st_size
@@ -243,15 +243,15 @@ def run_preflight(
         _check_udp_port(cfg.discovery.port),
     ]
 
-    api_port = cfg.master.api_port if role == "master" else cfg.worker.api_port
+    api_port = cfg.secretary.api_port if role == "secretary" else cfg.worker.api_port
     checks.append(_check_api_port(api_port))
 
-    if role == "master":
+    if role == "secretary":
         checks.append(_check_db_path(cfg))
         checks.append(_check_web_template())
 
     # 打印报告
-    role_label = "Master" if role == "master" else "Worker"
+    role_label = "Secretary" if role == "secretary" else "Worker"
     print()
     print("┌─────────────────────────────────────────────┐")
     print(f"│  LAN Mesh {role_label} 启动自检")

@@ -25,12 +25,12 @@ class WorkerConfig(BaseModel):
     device_name: str = ""           # 留空则自动使用 hostname
 
 
-class MasterConfig(BaseModel):
-    """Master 节点配置。"""
+class SecretaryConfig(BaseModel):
+    """Secretary 节点配置。"""
     api_port: int = 45470
     shared_folder: str = "~/lan_mesh_shared"
     device_name: str = ""
-    db_path: str = "~/.lan_mesh/master.sqlite3"
+    db_path: str = "~/.lan_mesh/secretary.sqlite3"
 
 
 # ── 模型池配置 (Phase 2: 模型路由器) ─────────────────────────────
@@ -61,7 +61,7 @@ class AppConfig(BaseModel):
     """应用顶层配置。"""
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
-    master: MasterConfig = Field(default_factory=MasterConfig)
+    secretary: SecretaryConfig = Field(default_factory=SecretaryConfig)
 
 
 def _expand(path_str: str) -> str:
@@ -98,13 +98,13 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
 
 def get_shared_folder(cfg: AppConfig, role: str) -> Path:
     """根据角色获取共享文件夹路径（展开 ~）。"""
-    folder = cfg.master.shared_folder if role == "master" else cfg.worker.shared_folder
+    folder = cfg.secretary.shared_folder if role == "secretary" else cfg.worker.shared_folder
     return Path(_expand(folder))
 
 
 def get_db_path(cfg: AppConfig) -> Path:
-    """获取 Master SQLite 数据库路径。"""
-    return Path(_expand(cfg.master.db_path))
+    """获取 Secretary SQLite 数据库路径。"""
+    return Path(_expand(cfg.secretary.db_path))
 
 
 def load_model_pool(config_path: Optional[str] = None) -> ModelPoolConfig:

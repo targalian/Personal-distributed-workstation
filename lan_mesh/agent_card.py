@@ -4,7 +4,7 @@ Agent Card 生成与管理 — 借鉴 A2A 协议的 Agent Card 机制
 每个 Worker 启动时根据自身配置生成能力卡片,
 包含技能声明、可用工具、模型偏好等信息。
 
-Master 通过 Agent Card 进行任务匹配与分发。
+Secretary 通过 Agent Card 进行任务匹配与分发。
 """
 import socket
 from pathlib import Path

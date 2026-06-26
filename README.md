@@ -6,15 +6,15 @@
 
 ```
 work_station/
-├── lan_mesh/          # Python/FastAPI 分布式 AI Agent 网格 (Master/Worker)
+├── lan_mesh/          # Python/FastAPI 分布式 AI Agent 网格 (Secretary/Worker)
 │   ├── web/           # Web UI 仪表盘 (深色主题, Tab 多面板)
-│   ├── master.py      # 中心控制节点
+│   ├── secretary.py   # 中心控制节点
 │   ├── worker.py      # 工作节点守护进程
 │   ├── orchestrator.py# 任务编排引擎 (DAG 拆解 + 调度)
 │   ├── model_router.py# 模型路由器 (L1-L4 难度分级 + 加权评分)
 │   ├── project.py     # 项目管理与预算控制
 │   ├── agent_runtime.py# Agent 运行时 (多 Provider LLM 调用)
-│   ├── api.py         # FastAPI 路由层 (Master/Worker API)
+│   ├── api.py         # FastAPI 路由层 (Secretary/Worker API)
 │   ├── mcp_gateway.py # MCP 工具网关
 │   └── protocol.py    # 数据模型与协议定义
 ├── quicklan-main/     # Tauri/React 局域网文件共享桌面应用
@@ -26,7 +26,7 @@ work_station/
 ## 核心能力
 
 ### 分布式任务编排
-- Master/Worker 架构，UDP 广播自动发现，HTTP 心跳注册
+- Secretary/Worker 架构，UDP 广播自动发现，HTTP 心跳注册
 - 任务自动拆解为子任务 DAG，按依赖顺序并行调度
 - Agent 能力声明（Agent Card），技能匹配分发
 
@@ -89,13 +89,13 @@ $env:OPENAI_API_KEY = "sk-xxx"
 $env:QWEN_API_KEY = "sk-xxx"
 ```
 
-### 启动 Master 节点
+### 启动 Secretary 节点
 
 ```powershell
-python main.py master
+python main.py secretary
 ```
 
-Master 启动后在 `http://localhost:45470` 提供 Web UI 仪表盘和 API。
+Secretary 启动后在 `http://localhost:45470` 提供 Web UI 仪表盘和 API。
 
 ### 启动 Worker 节点
 
@@ -103,7 +103,7 @@ Master 启动后在 `http://localhost:45470` 提供 Web UI 仪表盘和 API。
 python main.py worker
 ```
 
-Worker 自动发现 Master 并注册，等待任务分发。
+Worker 自动发现 Secretary 并注册，等待任务分发。
 
 ## 端口说明
 
@@ -111,7 +111,7 @@ Worker 自动发现 Master 并注册，等待任务分发。
 |------|------|------|
 | 45454 | UDP | 设备发现广播 |
 | 45460 | TCP | Worker HTTP API |
-| 45470 | TCP | Master HTTP API + Web UI |
+| 45470 | TCP | Secretary HTTP API + Web UI |
 
 ## API 概览
 

@@ -58,7 +58,7 @@ def _classify_task(task: Task) -> str:
 class Orchestrator:
     """任务编排器。
 
-    在 Master 端运行,负责任务分解、Agent 匹配、子任务分发与结果聚合。
+    在 Secretary 端运行,负责任务分解、Agent 匹配、子任务分发与结果聚合。
     """
 
     def __init__(self, db: Database, project_manager=None, model_router=None):

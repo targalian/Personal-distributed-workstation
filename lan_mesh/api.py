@@ -1,5 +1,5 @@
 """
-FastAPI 路由层 - Worker API 与 Master API
+FastAPI 路由层 - Worker API 与 Secretary API
 
 Worker API:
   GET  /info          - 返回本机完整配置
@@ -7,7 +7,7 @@ Worker API:
   GET  /shared/{path} - 下载共享文件
   POST /shared        - 上传文件到共享目录
 
-Master API:
+Secretary API:
   POST /api/register       - Worker 注册 (接收完整 HostInfo)
   POST /api/heartbeat      - Worker 心跳 (实时资源使用率)
   GET  /api/hosts          - 所有主机列表
@@ -53,7 +53,7 @@ def create_worker_router(
 
     @router.post("/tasks/execute")
     async def execute_task(payload: dict):
-        """接收 Master 分发的子任务并执行。"""
+        """接收 Secretary 分发的子任务并执行。"""
         if not agent_runtime:
             raise HTTPException(status_code=503, detail="Agent 运行时未初始化")
         result = agent_runtime.execute(payload)
@@ -98,20 +98,20 @@ def create_worker_router(
     return router
 
 
-# ── Master 路由 ────────────────────────────────────────────────
+# ── Secretary 路由 ────────────────────────────────────────────────
 
-def create_master_router(
+def create_secretary_router(
     db,                     # Database instance
     discovery,              # DiscoveryService instance
     collect_info_fn,        # Callable[[], HostInfo]
     shared_folder: SharedFolderManager,
-    state,                  # MasterState shared object
+    state,                  # SecretaryState shared object
     orchestrator=None,       # Orchestrator instance (optional)
     mcp_gateway=None,        # MCPGateway instance (optional)
     project_manager=None,    # ProjectManager instance (optional)
     model_router=None,       # ModelRouter instance (optional)
 ) -> APIRouter:
-    """创建 Master 节点的 API 路由。"""
+    """创建 Secretary 节点的 API 路由。"""
     router = APIRouter()
 
     @router.post("/api/register")
@@ -217,7 +217,7 @@ def create_master_router(
 
     @router.get("/api/network")
     async def get_network():
-        """返回 Master 本机网络状态。"""
+        """返回 Secretary 本机网络状态。"""
         ns = discovery.network_status()
         return {
             "udp_port": ns.udp_port,
@@ -245,19 +245,19 @@ def create_master_router(
         """健康检查。"""
         return {
             "status": "ok",
-            "role": "master",
+            "role": "secretary",
             "uptime": time.time() - state.start_time,
             "device_id": state.device_id,
         }
 
-    @router.get("/api/master-info")
-    async def master_info():
-        """返回 Master 自身的主机信息。"""
+    @router.get("/api/secretary-info")
+    async def secretary_info():
+        """返回 Secretary 自身的主机信息。"""
         return collect_info_fn().to_dict()
 
     @router.get("/api/shared")
     async def list_shared():
-        """列出 Master 共享文件夹内容。"""
+        """列出 Secretary 共享文件夹内容。"""
         return {
             "folder": str(shared_folder.path),
             "files": shared_folder.list_files(),

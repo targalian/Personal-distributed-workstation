@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# start_master.sh - 启动 LAN Mesh Master 节点
-# 用法: bash scripts/start_master.sh [--port 8080] [--name "控制中心"]
+# start_secretary.sh - 启动 LAN Mesh Secretary 节点
+# 用法: bash scripts/start_secretary.sh [--port 8080] [--name "控制中心"]
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -38,14 +38,14 @@ fi
 cd "$PROJECT_ROOT"
 
 # 构建启动命令
-CMD=(python3 main.py master --port "$PORT")
+CMD=(python3 main.py secretary --port "$PORT")
 [ -n "$NAME" ]   && CMD+=(--name "$NAME")
 [ -n "$CONFIG" ] && CMD+=(--config "$CONFIG")
 [ -n "$SHARED" ] && CMD+=(--shared "$SHARED")
 
 echo ""
 echo "========================================"
-echo " LAN Mesh Master Node"
+echo " LAN Mesh Secretary Node"
 echo " Port: $PORT"
 [ -n "$NAME" ] && echo " Name: $NAME"
 echo "========================================"

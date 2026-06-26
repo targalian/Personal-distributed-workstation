@@ -4,13 +4,13 @@ Worker Agent - 部署在各主机上的守护进程
 职责:
 1. 自动采集本机配置 (CPU/内存/磁盘/OS/网络)
 2. 自动创建并暴露共享文件夹
-3. UDP 广播发现 Master 节点
-4. 通过 HTTP 向 Master 注册并发送心跳
-5. 提供 HTTP API 供 Master 查询与文件下载
+3. UDP 广播发现 Secretary 节点
+4. 通过 HTTP 向 Secretary 注册并发送心跳
+5. 提供 HTTP API 供 Secretary 查询与文件下载
 
 启动流程:
   生成 device_id → 采集 host_info → 创建 shared_folder
-  → 启动 FastAPI → 启动 UDP 发现 → 发现 Master 后注册 → 心跳循环
+  → 启动 FastAPI → 启动 UDP 发现 → 发现 Secretary 后注册 → 心跳循环
 """
 import shutil
 import socket
@@ -53,8 +53,8 @@ class WorkerState:
     api_port: int = 0
     start_time: float = field(default_factory=time.time)
     shared_folder: SharedFolderManager = None
-    master_ip: Optional[str] = None
-    master_port: Optional[int] = None
+    secretary_ip: Optional[str] = None
+    secretary_port: Optional[int] = None
     agent_card: dict = None          # Agent Card 快照
     agent_runtime: AgentRuntime = None
 
@@ -65,9 +65,9 @@ class WorkerAgent:
     在各主机上部署后自动:
     - 创建共享文件夹
     - 采集主机配置
-    - 通过 UDP 发现 Master
+    - 通过 UDP 发现 Secretary
     - 通过 HTTP 注册并维持心跳
-    - 暴露 HTTP API 供 Master 查询
+    - 暴露 HTTP API 供 Secretary 查询
     """
 
     def __init__(self, cfg: AppConfig):
@@ -115,29 +115,29 @@ class WorkerAgent:
     def _on_device_seen(self, packet: DiscoveryPacket, ip: str):
         """UDP 发现到新设备时的回调。
 
-        如果对方是 Master,记录其地址并尝试注册。
+        如果对方是 Secretary,记录其地址并尝试注册。
         """
-        if packet.role == "master":
-            self.state.master_ip = ip
-            self.state.master_port = packet.api_port
+        if packet.role == "secretary":
+            self.state.secretary_ip = ip
+            self.state.secretary_port = packet.api_port
 
     # ── HTTP 注册与心跳 ─────────────────────────────────────────
 
-    def _register_with_master(self) -> bool:
-        """向 Master 发送 HTTP 注册请求 (主机信息 + Agent Card)。"""
-        if not self.state.master_ip or not self.state.master_port:
+    def _register_with_secretary(self) -> bool:
+        """向 Secretary 发送 HTTP 注册请求 (主机信息 + Agent Card)。"""
+        if not self.state.secretary_ip or not self.state.secretary_port:
             return False
 
         try:
             info = self._collect_info()
             # 1. 注册主机信息
             resp = requests.post(
-                f"http://{self.state.master_ip}:{self.state.master_port}/api/register",
+                f"http://{self.state.secretary_ip}:{self.state.secretary_port}/api/register",
                 json=info.to_dict(),
                 timeout=5,
             )
             if resp.status_code == 200:
-                print(f"[Worker] 主机信息已注册到 Master {self.state.master_ip}:{self.state.master_port}")
+                print(f"[Worker] 主机信息已注册到 Secretary {self.state.secretary_ip}:{self.state.secretary_port}")
                 # 2. 注册 Agent Card
                 self._register_agent_card()
                 return True
@@ -146,8 +146,8 @@ class WorkerAgent:
         return False
 
     def _register_agent_card(self):
-        """向 Master 注册 Agent Card (能力声明)。"""
-        if not self.state.master_ip or not self.state.master_port:
+        """向 Secretary 注册 Agent Card (能力声明)。"""
+        if not self.state.secretary_ip or not self.state.secretary_port:
             return
         try:
             ips = self._collect_info().ip_addresses
@@ -160,7 +160,7 @@ class WorkerAgent:
             )
             self.state.agent_card = card.to_dict()
             resp = requests.post(
-                f"http://{self.state.master_ip}:{self.state.master_port}/api/agents/register",
+                f"http://{self.state.secretary_ip}:{self.state.secretary_port}/api/agents/register",
                 json=card.to_dict(),
                 timeout=5,
             )
@@ -170,8 +170,8 @@ class WorkerAgent:
             print(f"[Worker] Agent Card 注册失败: {e}")
 
     def _send_heartbeat(self) -> bool:
-        """向 Master 发送心跳 (携带实时资源使用率)。"""
-        if not self.state.master_ip or not self.state.master_port:
+        """向 Secretary 发送心跳 (携带实时资源使用率)。"""
+        if not self.state.secretary_ip or not self.state.secretary_port:
             return False
 
         try:
@@ -179,7 +179,7 @@ class WorkerAgent:
             # 同步更新共享文件夹中的配置报告
             self.state.shared_folder.write_host_config(info)
             resp = requests.post(
-                f"http://{self.state.master_ip}:{self.state.master_port}/api/heartbeat",
+                f"http://{self.state.secretary_ip}:{self.state.secretary_port}/api/heartbeat",
                 json={
                     "device_id": self.state.device_id,
                     "cpu_percent": info.cpu_percent,
@@ -201,11 +201,11 @@ class WorkerAgent:
             shutil.copy2(script_src, script_dest)
 
     def _heartbeat_loop(self):
-        """心跳循环 - 定期向 Master 发送状态更新 + 刷新共享配置。"""
+        """心跳循环 - 定期向 Secretary 发送状态更新 + 刷新共享配置。"""
         registered = False
         while self._running:
             if not registered:
-                registered = self._register_with_master()
+                registered = self._register_with_secretary()
                 time.sleep(HEARTBEAT_INTERVAL_SECS)
                 continue
 
