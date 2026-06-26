@@ -22,23 +22,22 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# 检查 Python
-if ! command -v python3 &>/dev/null; then
-    echo "[ERROR] 未找到 python3, 请确认已安装 Python 3.11+"
-    exit 1
-fi
-
 # 检查虚拟环境
 VENV="$PROJECT_ROOT/.venv"
-if [ -f "$VENV/bin/activate" ]; then
-    echo "[INFO] 激活虚拟环境..."
-    source "$VENV/bin/activate"
+if [ -x "$VENV/bin/python3" ]; then
+    echo "[INFO] 使用虚拟环境 Python..."
+    PYTHON="$VENV/bin/python3"
+elif command -v python3 &>/dev/null; then
+    PYTHON="python3"
+else
+    echo "[ERROR] 未找到 python3, 请确认已安装 Python 3.11+"
+    exit 1
 fi
 
 cd "$PROJECT_ROOT"
 
 # 构建启动命令
-CMD=(python3 main.py worker --port "$PORT")
+CMD=($PYTHON main.py worker --port "$PORT")
 [ -n "$NAME" ]   && CMD+=(--name "$NAME")
 [ -n "$CONFIG" ] && CMD+=(--config "$CONFIG")
 [ -n "$SHARED" ] && CMD+=(--shared "$SHARED")
