@@ -51,6 +51,7 @@ echo    1. 编辑 lan_mesh\model_pool.yaml 配置 API Key
 echo    2. 设置环境变量 (可选^):
 echo       set DEEPSEEK_API_KEY=sk-xxx
 echo       set OPENAI_API_KEY=sk-xxx
+echo       set ALIYUN_TOKENPLAN_API_KEY=你的TokenPlan专属Key
 echo    3. 运行 scripts\start_secretary.bat 启动 Secretary
 echo    4. 运行 scripts\start_worker.bat 启动 Worker
 echo ========================================

@@ -136,3 +136,195 @@ models:
     rate_limit_rpm: 200
     max_context_tokens: 65536
     fallback: [deepseek-chat, gpt-4o-mini]
+
+  # ── 阿里云百炼 Token Plan (订阅制, 多品牌模型统一 Credits 计量) ──────
+  # 获取 API Key: 百炼控制台 → Token Plan → 成员管理 → 生成 API Key
+  # 环境变量: export ALIYUN_TOKENPLAN_API_KEY="你的TokenPlan专属Key"
+  # 注意: Token Plan Key 与普通百炼 API Key 不通用
+
+  # -- 千问系列 --
+  - id: qwen3.7-max
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0     # 订阅制, 按Credits计量
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.95
+    speed_score: 0.70
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [qwen3.7-plus, deepseek-v4-pro, kimi-k2.7-code]
+
+  - id: qwen3.7-plus
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, vision, long_context]
+    quality_score: 0.90
+    speed_score: 0.78
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [qwen3.6-plus, deepseek-v4-pro]
+
+  - id: qwen3.6-plus
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, vision, long_context]
+    quality_score: 0.85
+    speed_score: 0.82
+    rate_limit_rpm: 300
+    max_context_tokens: 131072
+    fallback: [qwen3.6-flash, deepseek-v4-flash]
+
+  - id: qwen3.6-flash
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, vision, lightweight]
+    quality_score: 0.78
+    speed_score: 0.92
+    rate_limit_rpm: 500
+    max_context_tokens: 131072
+    fallback: [qwen3.6-plus, deepseek-v4-flash]
+
+  # -- DeepSeek系列 (Token Plan) --
+  - id: deepseek-v4-pro
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.93
+    speed_score: 0.65
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [deepseek-v4-flash, qwen3.7-max]
+
+  - id: deepseek-v4-flash
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, lightweight]
+    quality_score: 0.80
+    speed_score: 0.90
+    rate_limit_rpm: 500
+    max_context_tokens: 131072
+    fallback: [qwen3.6-flash, deepseek-v3.2]
+
+  - id: deepseek-v3.2
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding]
+    quality_score: 0.85
+    speed_score: 0.75
+    rate_limit_rpm: 200
+    max_context_tokens: 65536
+    fallback: [deepseek-v4-flash, qwen3.6-plus]
+
+  # -- 月之暗面 Kimi系列 (Token Plan) --
+  - id: kimi-k2.7-code
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [coding, reasoning, vision, long_context]
+    quality_score: 0.92
+    speed_score: 0.72
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [kimi-k2.6, qwen3.7-max]
+
+  - id: kimi-k2.6
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, vision, long_context]
+    quality_score: 0.88
+    speed_score: 0.76
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [kimi-k2.5, qwen3.6-plus]
+
+  - id: kimi-k2.5
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, vision]
+    quality_score: 0.82
+    speed_score: 0.80
+    rate_limit_rpm: 300
+    max_context_tokens: 131072
+    fallback: [qwen3.6-plus, deepseek-v3.2]
+
+  # -- 智谱 GLM系列 (Token Plan) --
+  - id: glm-5.2
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.88
+    speed_score: 0.78
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [glm-5.1, qwen3.6-plus]
+
+  - id: glm-5.1
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding]
+    quality_score: 0.83
+    speed_score: 0.82
+    rate_limit_rpm: 300
+    max_context_tokens: 131072
+    fallback: [glm-5, qwen3.6-flash]
+
+  - id: glm-5
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [general, lightweight]
+    quality_score: 0.75
+    speed_score: 0.88
+    rate_limit_rpm: 500
+    max_context_tokens: 65536
+    fallback: [qwen3.6-flash, gpt-4o-mini]
+
+  # -- MiniMax (Token Plan) --
+  - id: MiniMax-M2.5
+    provider: aliyun-tokenplan
+    api_key_env: ALIYUN_TOKENPLAN_API_KEY
+    base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.87
+    speed_score: 0.76
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [qwen3.6-plus, deepseek-v3.2]

@@ -67,6 +67,7 @@ Write-Host "   1. 编辑 lan_mesh/model_pool.yaml 配置 API Key" -ForegroundCol
 Write-Host "   2. 设置环境变量 (可选):" -ForegroundColor White
 Write-Host '      $env:DEEPSEEK_API_KEY = "sk-xxx"' -ForegroundColor DarkGray
 Write-Host '      $env:OPENAI_API_KEY  = "sk-xxx"' -ForegroundColor DarkGray
+Write-Host '      $env:ALIYUN_TOKENPLAN_API_KEY = "你的TokenPlan专属Key"' -ForegroundColor DarkGray
 Write-Host "   3. 启动 Secretary: .\scripts\start_secretary.ps1" -ForegroundColor White
 Write-Host "   4. 启动 Worker: .\scripts\start_worker.ps1" -ForegroundColor White
 Write-Host "========================================" -ForegroundColor Green
