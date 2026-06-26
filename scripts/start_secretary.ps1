@@ -1,4 +1,4 @@
-# start_secretary.ps1 - 启动 LAN Mesh Secretary 节点
+﻿# start_secretary.ps1 - 启动 LAN Mesh Secretary 节点
 # 用法: .\scripts\start_secretary.ps1 [-Port 8080] [-Name "控制中心"]
 
 param(
@@ -20,9 +20,12 @@ if (-not $python) {
 
 # 检查虚拟环境
 $venv = Join-Path $ProjectRoot ".venv"
-if (Test-Path (Join-Path $venv "Scripts\Activate.ps1")) {
-    Write-Host "[INFO] 激活虚拟环境..." -ForegroundColor Cyan
-    & (Join-Path $venv "Scripts\Activate.ps1")
+$venvPython = Join-Path $venv "Scripts\python.exe"
+if (Test-Path $venvPython) {
+    Write-Host "[INFO] 使用虚拟环境 Python..." -ForegroundColor Cyan
+    $python = $venvPython
+} else {
+    $python = "python"
 }
 
 Set-Location $ProjectRoot
@@ -42,4 +45,4 @@ Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 
 # 启动
-python @args_list
+& $python @args_list

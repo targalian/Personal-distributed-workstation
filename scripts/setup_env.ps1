@@ -1,4 +1,4 @@
-# setup_env.ps1 - 初始化项目环境
+﻿# setup_env.ps1 - 初始化项目环境
 # 用法: .\scripts\setup_env.ps1
 # 功能: 创建虚拟环境、安装依赖、复制模型池配置模板
 
@@ -13,20 +13,36 @@ Write-Host ""
 
 # 1. 创建虚拟环境
 $venv = Join-Path $ProjectRoot ".venv"
-if (-not (Test-Path $venv)) {
+$venv_valid = $false
+if (Test-Path $venv) {
+    # 检查 venv 是否为当前平台创建 (Windows 需要 Scripts/ 目录)
+    $activate = Join-Path $venv "Scripts\Activate.ps1"
+    if (Test-Path $activate) {
+        $venv_valid = $true
+    } else {
+        Write-Host "[1/3] .venv/ 存在但不是 Windows 格式, 重建..." -ForegroundColor Yellow
+        Remove-Item $venv -Recurse -Force
+    }
+}
+if (-not $venv_valid -and -not (Test-Path $venv)) {
     Write-Host "[1/3] 创建虚拟环境..." -ForegroundColor Yellow
     python -m venv .venv
     Write-Host "      已创建 .venv/" -ForegroundColor Green
-} else {
+} elseif ($venv_valid) {
     Write-Host "[1/3] 虚拟环境已存在, 跳过" -ForegroundColor DarkGray
 }
 
-# 激活
-& (Join-Path $venv "Scripts\Activate.ps1")
+# 激活 (使用 venv 的 Python)
+$venvPython = Join-Path $venv "Scripts\python.exe"
+$venvPip = Join-Path $venv "Scripts\pip.exe"
+if (-not (Test-Path $venvPython)) {
+    Write-Host "错误: venv Python 不存在" -ForegroundColor Red
+    exit 1
+}
 
 # 2. 安装依赖
 Write-Host "[2/3] 安装 Python 依赖..." -ForegroundColor Yellow
-pip install -r requirements.txt -q
+& $venvPip install -r requirements.txt -q
 Write-Host "      依赖安装完成" -ForegroundColor Green
 
 # 3. 复制模型池模板
