@@ -15,9 +15,6 @@ venv/
 lan_mesh_shared/
 *.sqlite3
 
-# Qoder 自动生成知识库
-.qoder/
-
 # IDE
 .idea/
 .vscode/

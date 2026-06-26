@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: logging_system
+title: 日志与输出系统：基于标准输出的轻量级调试与状态反馈
+scope: []
+source_files:
+    - lan_mesh/master.py
+    - lan_mesh/worker.py
+    - lan_mesh/discovery.py
+    - quicklan-main/src-tauri/src/lib.rs
+    - quicklan-main/src-tauri/src/discovery.rs
+    - quicklan-main/src-tauri/src/transfer.rs
+depends_on: []
+related_to: []

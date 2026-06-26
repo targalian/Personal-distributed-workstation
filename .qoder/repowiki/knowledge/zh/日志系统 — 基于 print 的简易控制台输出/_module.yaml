@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: logging_system
+title: 日志系统 — 基于 print 的简易控制台输出
+scope: []
+source_files:
+    - lan_mesh/secretary.py
+    - lan_mesh/worker.py
+    - lan_mesh/discovery.py
+    - lan_mesh/orchestrator.py
+    - lan_mesh/agent_runtime.py
+    - lan_mesh/mcp_client.py
+depends_on: []
+related_to: []

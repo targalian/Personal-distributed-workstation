@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: configuration_system
+title: 配置系统：分层加载与强类型校验
+scope: []
+source_files:
+    - lan_mesh/config.py
+    - config.yaml
+    - main.py
+    - lan_mesh/model_pool.example.yaml
+    - quicklan-main/src-tauri/src/settings.rs
+    - quicklan-main/src-tauri/src/storage.rs
+depends_on: []
+related_to: []

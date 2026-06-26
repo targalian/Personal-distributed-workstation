@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: configuration_system
+title: 配置系统：分层加载、Pydantic 校验与多源合并
+scope: []
+source_files:
+    - config.yaml
+    - lan_mesh/config.py
+    - main.py
+    - lan_mesh/model_pool.example.yaml
+    - quicklan-main/src-tauri/tauri.conf.json
+    - quicklan-main/src-tauri/src/settings.rs
+depends_on: []
+related_to: []
