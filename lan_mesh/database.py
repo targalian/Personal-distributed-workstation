@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from .protocol import HostRecord, AgentCard, Task, SubTask
+from .protocol import HostRecord, HostEvent, AgentCard, Task, SubTask
 
 
 class Database:
@@ -134,12 +134,33 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_usage_project
                 ON usage_log(project_id, timestamp);
             CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
+
+            CREATE TABLE IF NOT EXISTS host_events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id   TEXT NOT NULL,
+                event_type  TEXT NOT NULL,
+                timestamp   REAL NOT NULL,
+                detail      TEXT DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_host_events_device
+                ON host_events(device_id, timestamp);
         """)
         # 兼容已有 tasks 表: 安全添加 project_id 列
         try:
             conn.execute("ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass  # 列已存在
+        # 兼容已有 hosts 表: 安全添加评级列
+        for col, dtype, default in [
+            ("rating_tier", "TEXT", "''"),
+            ("rating_score", "INTEGER", "0"),
+            ("rating_summary", "TEXT", "''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE hosts ADD COLUMN {col} {dtype} NOT NULL DEFAULT {default}")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
         conn.commit()
 
     # ── 主机记录 CRUD ───────────────────────────────────────────
@@ -153,10 +174,12 @@ class Database:
                 ip, api_port, cpu_count, memory_total_mb, disk_total_gb,
                 cpu_percent, memory_percent, disk_percent,
                 shared_folder, shared_file_count, online,
-                registered_at, last_seen, latency_ms
+                registered_at, last_seen, latency_ms,
+                rating_tier, rating_score, rating_summary
             ) VALUES (
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
+                ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?
@@ -178,7 +201,10 @@ class Database:
                 shared_file_count=excluded.shared_file_count,
                 online=excluded.online,
                 last_seen=excluded.last_seen,
-                latency_ms=excluded.latency_ms
+                latency_ms=excluded.latency_ms,
+                rating_tier=excluded.rating_tier,
+                rating_score=excluded.rating_score,
+                rating_summary=excluded.rating_summary
         """, (
             record.device_id, record.device_name, record.role,
             record.hostname, record.platform,
@@ -188,6 +214,7 @@ class Database:
             record.shared_folder, record.shared_file_count,
             1 if record.online else 0,
             record.registered_at, record.last_seen, record.latency_ms,
+            record.rating_tier, record.rating_score, record.rating_summary,
         ))
         conn.commit()
 
@@ -200,6 +227,34 @@ class Database:
         """, (device_id, time.time(), cpu, mem, disk))
         conn.commit()
 
+    @staticmethod
+    def _row_to_host(r) -> HostRecord:
+        """将数据库行转换为 HostRecord。"""
+        return HostRecord(
+            device_id=r["device_id"],
+            device_name=r["device_name"],
+            role=r["role"],
+            hostname=r["hostname"],
+            platform=r["platform"],
+            ip=r["ip"],
+            api_port=r["api_port"],
+            cpu_count=r["cpu_count"],
+            memory_total_mb=r["memory_total_mb"],
+            disk_total_gb=r["disk_total_gb"],
+            cpu_percent=r["cpu_percent"],
+            memory_percent=r["memory_percent"],
+            disk_percent=r["disk_percent"],
+            shared_folder=r["shared_folder"],
+            shared_file_count=r["shared_file_count"],
+            online=bool(r["online"]),
+            registered_at=r["registered_at"],
+            last_seen=r["last_seen"],
+            latency_ms=r["latency_ms"],
+            rating_tier=r["rating_tier"] if "rating_tier" in r.keys() else "",
+            rating_score=r["rating_score"] if "rating_score" in r.keys() else 0,
+            rating_summary=r["rating_summary"] if "rating_summary" in r.keys() else "",
+        )
+
     def get_host(self, device_id: str) -> Optional[HostRecord]:
         """查询单台主机记录。"""
         conn = self._get_conn()
@@ -207,27 +262,7 @@ class Database:
             "SELECT * FROM hosts WHERE device_id = ?", (device_id,)
         ).fetchone()
         if row:
-            return HostRecord(
-                device_id=row["device_id"],
-                device_name=row["device_name"],
-                role=row["role"],
-                hostname=row["hostname"],
-                platform=row["platform"],
-                ip=row["ip"],
-                api_port=row["api_port"],
-                cpu_count=row["cpu_count"],
-                memory_total_mb=row["memory_total_mb"],
-                disk_total_gb=row["disk_total_gb"],
-                cpu_percent=row["cpu_percent"],
-                memory_percent=row["memory_percent"],
-                disk_percent=row["disk_percent"],
-                shared_folder=row["shared_folder"],
-                shared_file_count=row["shared_file_count"],
-                online=bool(row["online"]),
-                registered_at=row["registered_at"],
-                last_seen=row["last_seen"],
-                latency_ms=row["latency_ms"],
-            )
+            return self._row_to_host(row)
         return None
 
     def list_hosts(self) -> list[HostRecord]:
@@ -236,30 +271,7 @@ class Database:
         rows = conn.execute(
             "SELECT * FROM hosts ORDER BY online DESC, device_name ASC"
         ).fetchall()
-        return [
-            HostRecord(
-                device_id=r["device_id"],
-                device_name=r["device_name"],
-                role=r["role"],
-                hostname=r["hostname"],
-                platform=r["platform"],
-                ip=r["ip"],
-                api_port=r["api_port"],
-                cpu_count=r["cpu_count"],
-                memory_total_mb=r["memory_total_mb"],
-                disk_total_gb=r["disk_total_gb"],
-                cpu_percent=r["cpu_percent"],
-                memory_percent=r["memory_percent"],
-                disk_percent=r["disk_percent"],
-                shared_folder=r["shared_folder"],
-                shared_file_count=r["shared_file_count"],
-                online=bool(r["online"]),
-                registered_at=r["registered_at"],
-                last_seen=r["last_seen"],
-                latency_ms=r["latency_ms"],
-            )
-            for r in rows
-        ]
+        return [self._row_to_host(r) for r in rows]
 
     def set_offline(self, device_id: str):
         """标记主机为离线。"""
@@ -269,15 +281,22 @@ class Database:
         )
         conn.commit()
 
-    def prune_offline(self, ttl: float):
-        """将超过 TTL 未活跃的主机标记为离线。"""
+    def prune_offline(self, ttl: float) -> list[str]:
+        """将超过 TTL 未活跃的主机标记为离线。返回新标记离线的主机 ID 列表。"""
         conn = self._get_conn()
         cutoff = time.time() - ttl
+        # 先查出即将离线的设备
+        rows = conn.execute(
+            "SELECT device_id FROM hosts WHERE last_seen < ? AND online = 1",
+            (cutoff,),
+        ).fetchall()
+        gone_ids = [r["device_id"] for r in rows]
         conn.execute(
             "UPDATE hosts SET online = 0 WHERE last_seen < ? AND online = 1",
             (cutoff,),
         )
         conn.commit()
+        return gone_ids
 
     def cleanup_old_heartbeats(self, max_age_hours: int = 24):
         """清理超过指定时长的心跳历史。"""
@@ -287,6 +306,67 @@ class Database:
             "DELETE FROM heartbeat_log WHERE timestamp < ?", (cutoff,)
         )
         conn.commit()
+
+    # ── 主机事件 & 评级 (Station Director) ──────────────────────────
+
+    def log_host_event(self, device_id: str, event_type: str, detail: str = ""):
+        """记录主机事件 (join/leave/register/rating_change)。"""
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT INTO host_events (device_id, event_type, timestamp, detail) VALUES (?, ?, ?, ?)",
+            (device_id, event_type, time.time(), detail),
+        )
+        conn.commit()
+
+    def get_host_events(self, device_id: str = None, limit: int = 50) -> list[dict]:
+        """查询主机事件历史。device_id=None 时返回全站事件。"""
+        conn = self._get_conn()
+        if device_id:
+            rows = conn.execute(
+                "SELECT * FROM host_events WHERE device_id = ? ORDER BY timestamp DESC LIMIT ?",
+                (device_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM host_events ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_host_rating(self, device_id: str, tier: str, score: int, summary: str):
+        """更新主机评级。"""
+        conn = self._get_conn()
+        old = conn.execute(
+            "SELECT rating_tier FROM hosts WHERE device_id = ?", (device_id,)
+        ).fetchone()
+        conn.execute(
+            "UPDATE hosts SET rating_tier = ?, rating_score = ?, rating_summary = ? WHERE device_id = ?",
+            (tier, score, summary, device_id),
+        )
+        conn.commit()
+        # 记录评级变更事件
+        old_tier = old["rating_tier"] if old else ""
+        if old_tier and old_tier != tier:
+            self.log_host_event(device_id, "rating_change", f"{old_tier}->{tier}")
+
+    def get_host_stats(self) -> dict:
+        """返回主机舰队统计摘要。"""
+        conn = self._get_conn()
+        total = conn.execute("SELECT COUNT(*) as c FROM hosts").fetchone()["c"]
+        online = conn.execute("SELECT COUNT(*) as c FROM hosts WHERE online = 1").fetchone()["c"]
+        offline = total - online
+        tiers = {}
+        for t in ("S", "A", "B", "C", "D"):
+            count = conn.execute(
+                "SELECT COUNT(*) as c FROM hosts WHERE rating_tier = ? AND online = 1", (t,)
+            ).fetchone()["c"]
+            tiers[t] = count
+        return {
+            "total": total,
+            "online": online,
+            "offline": offline,
+            "tiers": tiers,
+        }
 
     # ── Agent Card CRUD ──────────────────────────────────────────
 

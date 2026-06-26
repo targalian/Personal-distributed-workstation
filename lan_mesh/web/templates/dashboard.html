@@ -77,6 +77,35 @@
   .task-step{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px}
   .step-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
   .step-dot.pending{background:var(--dim)}.step-dot.assigned{background:var(--yellow)}.step-dot.completed{background:var(--green)}.step-dot.failed{background:var(--red)}
+  /* Station Director 样式 */
+  .stat-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;margin-bottom:18px}
+  .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;text-align:center}
+  .stat-card .num{font-size:24px;font-weight:700;color:var(--accent)}
+  .stat-card .lbl{font-size:11px;color:var(--dim);margin-top:2px;text-transform:uppercase}
+  .stat-card.online .num{color:var(--green)}.stat-card.offline .num{color:var(--red)}
+  .stat-card.tier-s .num{color:#ff6b6b}.stat-card.tier-a .num{color:#ffa94d}
+  .stat-card.tier-b .num{color:var(--accent)}.stat-card.tier-c .num{color:var(--dim)}
+  .fleet-table{width:100%;border-collapse:collapse;font-size:13px}
+  .fleet-table th{text-align:left;padding:10px 12px;color:var(--dim);font-weight:600;border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  .fleet-table td{padding:10px 12px;border-bottom:1px solid var(--border)}
+  .fleet-table tr:hover{background:var(--surface2)}
+  .fleet-table tr.offline-row{opacity:.5}
+  .badge-tier{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;min-width:24px;text-align:center}
+  .badge-tier.S{background:rgba(255,107,107,.15);color:#ff6b6b}
+  .badge-tier.A{background:rgba(255,169,77,.15);color:#ffa94d}
+  .badge-tier.B{background:rgba(91,140,255,.15);color:var(--accent)}
+  .badge-tier.C{background:rgba(139,144,160,.15);color:var(--dim)}
+  .badge-tier.D{background:rgba(139,144,160,.1);color:var(--dim)}
+  .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+  .status-dot.on{background:var(--green)}.status-dot.off{background:var(--red)}
+  .event-list{max-height:300px;overflow-y:auto;font-size:12px}
+  .event-item{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)}
+  .event-type{padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;text-transform:uppercase}
+  .event-type.join{background:rgba(74,222,128,.1);color:var(--green)}
+  .event-type.leave{background:rgba(248,113,113,.1);color:var(--red)}
+  .event-type.register{background:rgba(91,140,255,.1);color:var(--accent)}
+  .event-type.rating_change{background:rgba(251,191,36,.1);color:var(--yellow)}
+  .event-time{color:var(--dim);font-size:11px;margin-left:auto;white-space:nowrap}
   pre{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;font-size:12px;max-height:200px;overflow-y:auto}
   code{background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:12px}
   @media(max-width:640px){.topbar{flex-direction:column;gap:8px}.tabs{padding:0 12px}.panel{padding:16px}.grid{grid-template-columns:1fr}}
@@ -95,6 +124,7 @@
   <div class="tab" data-tab="agents">🤖 Agent状态</div>
   <div class="tab" data-tab="tools">🔧 MCP工具</div>
   <div class="tab" data-tab="projects">📁 项目管理</div>
+  <div class="tab" data-tab="station">🏢 Station</div>
 </div>
 
 <!-- 面板: 主机监控 -->
@@ -167,6 +197,26 @@
   <div class="grid" id="project-grid"><div class="empty"><div class="icon">📁</div><p>暂无项目</p><p class="hint">创建项目以启用预算控制与隔离</p></div></div>
 </div>
 
+<!-- 面板: Station Director -->
+<div class="panel" id="panel-station">
+  <div class="toolbar">
+    <button class="btn primary" onclick="refreshStation()">🔄 刷新</button>
+    <button class="btn" onclick="recomputeRatings()">⚡ 重新评级</button>
+    <span style="margin-left:auto;font-size:14px;color:var(--dim)">
+      在线 <b id="st-online" style="color:var(--green)">0</b> ·
+      离线 <b id="st-offline" style="color:var(--red)">0</b>
+    </span>
+  </div>
+  <div class="stat-cards" id="stat-cards"></div>
+  <div class="stitle">主机舰队</div>
+  <table class="fleet-table">
+    <thead><tr><th>状态</th><th>设备名</th><th>IP</th><th>平台</th><th>评级</th><th>最后心跳</th></tr></thead>
+    <tbody id="fleet-body"></tbody>
+  </table>
+  <div class="stitle" style="margin-top:24px">最近事件</div>
+  <div class="event-list" id="event-list"></div>
+</div>
+
 <!-- 通用详情弹窗 -->
 <div class="overlay" id="overlay" onclick="closeOverlay(event)">
   <div class="modal" id="modal"></div>
@@ -189,6 +239,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     if(tab==='agents')refreshAgents();
     if(tab==='tools')refreshTools();
     if(tab==='projects')refreshProjects();
+    if(tab==='station')refreshStation();
   });
 });
 
@@ -457,6 +508,64 @@ function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/<
 function fmtMem(mb){if(!mb)return'-';return mb>=1024?(mb/1024).toFixed(1)+' GB':mb+' MB';}
 function fmtSize(b){if(!b)return'0 B';const u=['B','KB','MB','GB','TB'];const i=Math.floor(Math.log(b)/Math.log(1024));return(b/Math.pow(1024,i)).toFixed(1)+' '+u[i];}
 function fmtTime(ts){if(!ts)return'-';return new Date(ts*1000).toLocaleString('zh-CN');}
+
+// ── Station面板 ──
+let stationHosts=[],stationEvents=[];
+async function refreshStation(){
+  try{
+    const [fleetR,eventsR]=await Promise.all([fetch('/api/station/fleet'),fetch('/api/station/events?limit=30')]);
+    const fleet=await fleetR.json();const evts=await eventsR.json();
+    stationHosts=fleet.hosts||[];stationEvents=evts.events||[];
+    renderStation();
+  }catch(e){console.error('刷新Station失败:',e);}
+}
+function renderStation(){
+  const online=stationHosts.filter(h=>h.online).length;
+  const offline=stationHosts.length-online;
+  document.getElementById('st-online').textContent=online;
+  document.getElementById('st-offline').textContent=offline;
+  const tiers={S:0,A:0,B:0,C:0,D:0};stationHosts.forEach(h=>{if(tiers[h.rating_tier]!==undefined)tiers[h.rating_tier]++;});
+  document.getElementById('stat-cards').innerHTML=`
+    <div class="stat-card online"><div class="num">${online}</div><div class="lbl">在线</div></div>
+    <div class="stat-card offline"><div class="num">${offline}</div><div class="lbl">离线</div></div>
+    <div class="stat-card tier-s"><div class="num">${tiers.S}</div><div class="lbl">S级</div></div>
+    <div class="stat-card tier-a"><div class="num">${tiers.A}</div><div class="lbl">A级</div></div>
+    <div class="stat-card tier-b"><div class="num">${tiers.B}</div><div class="lbl">B级</div></div>
+    <div class="stat-card tier-c"><div class="num">${tiers.C+tiers.D}</div><div class="lbl">C/D级</div></div>`;
+  const tbody=document.getElementById('fleet-body');
+  if(!stationHosts.length){tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--dim);padding:40px">暂无主机</td></tr>';}
+  else{tbody.innerHTML=stationHosts.map(h=>`<tr class="${h.online?'':'offline-row'}" onclick="showHostStationDetail('${h.device_id}')" style="cursor:pointer">
+    <td><span class="status-dot ${h.online?'on':'off'}"></span>${h.online?'在线':'离线'}</td>
+    <td>${esc(h.device_name||h.hostname||'未知')}</td>
+    <td>${esc(h.ip||'-')}</td>
+    <td>${esc(h.platform||'-')}</td>
+    <td><span class="badge-tier ${h.rating_tier||'D'}">${h.rating_tier||'-'}</span> ${h.rating_score||0}分</td>
+    <td>${fmtTime(h.last_seen)}</td>
+  </tr>`).join('');}
+  const el=document.getElementById('event-list');
+  if(!stationEvents.length){el.innerHTML='<p style="color:var(--dim);text-align:center;padding:20px">暂无事件</p>';}
+  else{el.innerHTML=stationEvents.map(e=>`<div class="event-item">
+    <span class="event-type ${e.event_type}">${e.event_type}</span>
+    <span>${esc(e.device_id||'').slice(0,8)} ${e.detail?'· '+esc(e.detail):''}</span>
+    <span class="event-time">${fmtTime(e.timestamp)}</span>
+  </div>`).join('');}
+}
+async function showHostStationDetail(id){
+  try{
+    const r=await fetch(`/api/station/hosts/${id}/events`);const d=await r.json();
+    const h=stationHosts.find(x=>x.device_id===id);
+    let eventsHtml=(d.events||[]).map(e=>`<div class="event-item"><span class="event-type ${e.event_type}">${e.event_type}</span><span>${esc(e.detail||'')}</span><span class="event-time">${fmtTime(e.timestamp)}</span></div>`).join('');
+    document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>${esc(h.device_name||h.hostname||'主机')}</h2><p style="color:var(--dim);font-size:13px">${h.online?'在线':'离线'} · <span class="badge-tier ${h.rating_tier||'D'}">${h.rating_tier||'-'}</span> ${h.rating_score||0}分</p>
+    <div class="modal-sec"><h3>评级信息</h3><div class="kv-grid"><span class="k">评级</span><span class="v">${h.rating_tier||'-'}级</span><span class="k">得分</span><span class="v">${h.rating_score||0}/100</span><span class="k">摘要</span><span class="v">${esc(h.rating_summary||'-')}</span></div></div>
+    <div class="modal-sec"><h3>硬件配置</h3><div class="kv-grid"><span class="k">CPU</span><span class="v">${h.cpu_count||0}核</span><span class="k">内存</span><span class="v">${fmtMem(h.memory_total_mb)}</span><span class="k">磁盘</span><span class="v">${h.disk_total_gb||0}GB</span></div></div>
+    <div class="modal-sec"><h3>事件历史 (${(d.events||[]).length})</h3><div class="event-list">${eventsHtml||'<p style="color:var(--dim)">无事件</p>'}</div></div>`;
+    document.getElementById('overlay').classList.add('show');
+  }catch(e){alert('失败:'+e.message);}
+}
+async function recomputeRatings(){
+  if(!confirm('确定要重新评级所有主机吗？'))return;
+  try{const r=await fetch('/api/station/rate',{method:'POST'});const d=await r.json();refreshStation();alert(`已重算 ${d.updated||0} 台主机评级`);}catch(e){alert('失败:'+e.message);}
+}
 
 // ── 初始化 ──
 document.addEventListener('DOMContentLoaded',()=>{refreshHosts();connectWS();setInterval(refreshHosts,5000);});

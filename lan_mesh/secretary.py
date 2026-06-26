@@ -44,6 +44,7 @@ from .orchestrator import Orchestrator
 from .mcp_gateway import MCPGateway
 from .project import ProjectManager
 from .model_router import ModelRouter
+from .station_director import StationDirector
 
 
 # ── Web UI 模板路径 ─────────────────────────────────────────────
@@ -108,6 +109,13 @@ class SecretaryController:
         self.model_router = ModelRouter(model_pool.models, self.project_manager) if model_pool.models else None
         if self.model_router:
             print(f"[Secretary] 模型路由器已加载: {self.model_router.pool_size} 个模型")
+
+        # 工作站主管 (Station Director) — 管理主机出入站/评级/资源池
+        self.station_director = StationDirector(
+            db=self.db,
+            discovery=None,  # 延迟绑定, discovery 在 start() 中创建
+            shared_folder=self.state.shared_folder,
+        )
 
         # 任务编排器
         self.orchestrator = Orchestrator(self.db, self.project_manager, self.model_router)
@@ -175,7 +183,7 @@ class SecretaryController:
         while self._running:
             time.sleep(PRUNE_INTERVAL_SECS)
             try:
-                self.db.prune_offline(self.cfg.discovery.device_ttl)
+                self.station_director.prune_offline(self.cfg.discovery.device_ttl)
             except Exception as e:
                 print(f"[Secretary] 清理离线主机异常: {e}")
 
@@ -206,6 +214,7 @@ class SecretaryController:
             mcp_gateway=self.mcp_gateway,
             project_manager=self.project_manager,
             model_router=self.model_router,
+            station_director=self.station_director,
         )
         app.include_router(secretary_router)
 
@@ -273,7 +282,8 @@ class SecretaryController:
             presence_interval=self.cfg.discovery.presence_interval,
             device_ttl=self.cfg.discovery.device_ttl,
         )
-        # 重新绑定 discovery 到 secretary_router (之前创建时 discovery 还是 None)
+        # 重新绑定 discovery 到 secretary_router 和 station_director
+        self.station_director.bind_discovery(self.discovery)
         self.discovery.start()
 
         # 部署采集脚本并生成初始配置报告

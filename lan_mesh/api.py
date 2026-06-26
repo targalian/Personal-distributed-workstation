@@ -110,6 +110,7 @@ def create_secretary_router(
     mcp_gateway=None,        # MCPGateway instance (optional)
     project_manager=None,    # ProjectManager instance (optional)
     model_router=None,       # ModelRouter instance (optional)
+    station_director=None,   # StationDirector instance (optional)
 ) -> APIRouter:
     """创建 Secretary 节点的 API 路由。"""
     router = APIRouter()
@@ -118,31 +119,24 @@ def create_secretary_router(
     async def register_worker(payload: dict):
         """接收 Worker 的注册请求 (完整 HostInfo)。"""
         info = HostInfo.from_dict(payload)
-        record = HostRecord(
-            device_id=info.device_id,
-            device_name=info.device_name,
-            role=info.role,
-            hostname=info.hostname,
-            platform=info.platform,
-            ip="",
-            api_port=info.api_port,
-            cpu_count=info.cpu_count,
-            memory_total_mb=info.memory_total_mb,
-            disk_total_gb=info.disk_total_gb,
-            cpu_percent=info.cpu_percent,
-            memory_percent=info.memory_percent,
-            disk_percent=info.disk_percent,
-            shared_folder=info.shared_folder,
-            shared_file_count=info.shared_file_count,
-            online=True,
-            registered_at=time.time(),
-            last_seen=time.time(),
-        )
-        # 尝试从 UDP 发现列表获取真实 IP
-        dev = discovery.find_device(info.device_id)
-        if dev:
-            record.ip = dev.get("ip", "")
-        db.upsert_host(record)
+        if station_director:
+            record = station_director.on_host_registered(info)
+        else:
+            record = HostRecord(
+                device_id=info.device_id, device_name=info.device_name,
+                role=info.role, hostname=info.hostname, platform=info.platform,
+                ip="", api_port=info.api_port,
+                cpu_count=info.cpu_count, memory_total_mb=info.memory_total_mb,
+                disk_total_gb=info.disk_total_gb,
+                cpu_percent=info.cpu_percent, memory_percent=info.memory_percent,
+                disk_percent=info.disk_percent,
+                shared_folder=info.shared_folder, shared_file_count=info.shared_file_count,
+                online=True, registered_at=time.time(), last_seen=time.time(),
+            )
+            dev = discovery.find_device(info.device_id)
+            if dev:
+                record.ip = dev.get("ip", "")
+            db.upsert_host(record)
         await broadcast_ws(state, "host_registered", record.to_dict())
         return {"ok": True, "device_id": info.device_id}
 
@@ -150,21 +144,30 @@ def create_secretary_router(
     async def heartbeat(payload: dict):
         """接收 Worker 心跳 (实时资源使用率)。"""
         device_id = payload.get("device_id", "")
-        record = db.get_host(device_id)
-        if not record:
-            raise HTTPException(status_code=404, detail="设备未注册")
-        record.cpu_percent = payload.get("cpu_percent", record.cpu_percent)
-        record.memory_percent = payload.get("memory_percent", record.memory_percent)
-        record.disk_percent = payload.get("disk_percent", record.disk_percent)
-        record.shared_file_count = payload.get("shared_file_count", record.shared_file_count)
-        record.online = True
-        record.last_seen = time.time()
-        # 更新 IP (从 UDP 发现列表)
-        dev = discovery.find_device(device_id)
-        if dev:
-            record.ip = dev.get("ip", record.ip)
-        db.upsert_host(record)
-        db.log_heartbeat(device_id, record.cpu_percent, record.memory_percent, record.disk_percent)
+        if station_director:
+            record = station_director.on_heartbeat(device_id, {
+                "cpu_percent": payload.get("cpu_percent"),
+                "memory_percent": payload.get("memory_percent"),
+                "disk_percent": payload.get("disk_percent"),
+                "shared_file_count": payload.get("shared_file_count"),
+            })
+            if not record:
+                raise HTTPException(status_code=404, detail="设备未注册")
+        else:
+            record = db.get_host(device_id)
+            if not record:
+                raise HTTPException(status_code=404, detail="设备未注册")
+            record.cpu_percent = payload.get("cpu_percent", record.cpu_percent)
+            record.memory_percent = payload.get("memory_percent", record.memory_percent)
+            record.disk_percent = payload.get("disk_percent", record.disk_percent)
+            record.shared_file_count = payload.get("shared_file_count", record.shared_file_count)
+            record.online = True
+            record.last_seen = time.time()
+            dev = discovery.find_device(device_id)
+            if dev:
+                record.ip = dev.get("ip", record.ip)
+            db.upsert_host(record)
+            db.log_heartbeat(device_id, record.cpu_percent, record.memory_percent, record.disk_percent)
         await broadcast_ws(state, "heartbeat", record.to_dict())
         return {"ok": True}
 
@@ -527,6 +530,53 @@ def create_secretary_router(
         if not model_router:
             return {"models": [], "message": "模型路由器未加载 (请配置 model_pool.yaml)"}
         return {"models": model_router.list_models()}
+
+    # ── Station Director API (工作站主管) ─────────────────────────
+
+    @router.get("/api/station/fleet")
+    async def get_fleet():
+        """舰队概览: 在线/离线/各评级分布。"""
+        if not station_director:
+            return {"error": "Station Director 未初始化"}
+        return station_director.get_fleet_summary()
+
+    @router.get("/api/station/hosts")
+    async def get_station_hosts(min_tier: str = "D", online_only: bool = False):
+        """所有主机列表 (含评级+状态), 可按评级筛选。"""
+        if not station_director:
+            return {"hosts": [], "error": "Station Director 未初始化"}
+        if online_only:
+            return {"hosts": station_director.get_hosts_by_tier(min_tier, online_only=True)}
+        return {"hosts": station_director.get_all_hosts()}
+
+    @router.get("/api/station/hosts/{device_id}/events")
+    async def get_host_events(device_id: str, limit: int = 20):
+        """单台主机出入站事件历史。"""
+        if not station_director:
+            return {"events": [], "error": "Station Director 未初始化"}
+        return {"events": station_director.get_host_events(device_id, limit)}
+
+    @router.get("/api/station/events")
+    async def get_station_events(limit: int = 50):
+        """最近全站事件流。"""
+        if not station_director:
+            return {"events": [], "error": "Station Director 未初始化"}
+        return {"events": station_director.get_host_events(None, limit)}
+
+    @router.post("/api/station/rate")
+    async def recompute_ratings():
+        """手动触发重新评级所有在线主机。"""
+        if not station_director:
+            raise HTTPException(status_code=503, detail="Station Director 未初始化")
+        updated = station_director.recompute_ratings()
+        return {"ok": True, "updated": updated}
+
+    @router.get("/api/station/stats")
+    async def get_station_stats():
+        """统计摘要。"""
+        if not station_director:
+            return {"error": "Station Director 未初始化"}
+        return station_director.get_fleet_summary()
 
     # WebSocket 实时推送
     @router.websocket("/ws")

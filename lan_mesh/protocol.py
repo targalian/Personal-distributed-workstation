@@ -137,12 +137,42 @@ class HostRecord:
     registered_at: float = field(default_factory=time.time)
     last_seen: float = field(default_factory=time.time)
     latency_ms: Optional[float] = None
+    # 主机评级 (Station Director)
+    rating_tier: str = ""       # S/A/B/C/D
+    rating_score: int = 0       # 综合得分 (0~100)
+    rating_summary: str = ""    # 人类可读摘要
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> "HostRecord":
+        valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**valid)
+
+
+# ── 主机事件记录 (出入站历史) ──────────────────────────────────────
+
+@dataclass
+class HostEvent:
+    """主机事件记录 — 记录主机出入站、评级变更等事件。
+
+    event_type:
+    - "join": 主机首次注册入站
+    - "leave": 主机离线
+    - "register": 主机重新注册 (已存在记录的再次入站)
+    - "rating_change": 评级变更
+    """
+    device_id: str = ""
+    event_type: str = ""       # "join" | "leave" | "register" | "rating_change"
+    timestamp: float = field(default_factory=time.time)
+    detail: str = ""           # 事件详情 (如 "A->S" 评级变更)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "HostEvent":
         valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
         return cls(**valid)
 
