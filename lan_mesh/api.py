@@ -40,6 +40,7 @@ def create_worker_router(
     collect_info_fn,        # Callable[[], HostInfo]
     shared_folder: SharedFolderManager,
     agent_runtime=None,     # AgentRuntime instance (optional, for task execution)
+    role_manager=None,      # WorkerAgent instance (optional, for remote role management)
 ) -> APIRouter:
     """创建 Worker 节点的 API 路由。"""
     router = APIRouter()
@@ -94,6 +95,34 @@ def create_worker_router(
             "path": str(dest),
             "size": len(data),
         }
+
+    # ── 角色管理端点 (远程 Secretary 分配) ──────────────────
+
+    @router.post("/role/start-secretary")
+    async def start_secretary(payload: dict = None):
+        """在本机启动 Secretary 子进程 (由 Station Director 远程调用)。"""
+        if not role_manager:
+            raise HTTPException(status_code=503, detail="角色管理未初始化")
+        port = (payload or {}).get("port")
+        result = role_manager.start_secretary(port)
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result.get("message", "启动失败"))
+        return result
+
+    @router.post("/role/stop-secretary")
+    async def stop_secretary():
+        """停止本机的 Secretary 子进程。"""
+        if not role_manager:
+            raise HTTPException(status_code=503, detail="角色管理未初始化")
+        result = role_manager.stop_secretary()
+        return result
+
+    @router.get("/role/status")
+    async def role_status():
+        """查询本机 Secretary 运行状态。"""
+        if not role_manager:
+            return {"running": False, "role_manager": "unavailable"}
+        return role_manager.get_secretary_status()
 
     return router
 

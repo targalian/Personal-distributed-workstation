@@ -120,6 +120,10 @@ class StationController:
         self.mcp_gateway = None
         self._mcp_config_path = str(self.data_dir / "mcp_servers.yaml")
 
+        # Secretary 主机分配追踪 (哪台主机在运行 Secretary)
+        self.secretary_host_id = None  # device_id of the host running Secretary
+        self.secretary_host_port = None  # Secretary HTTP port on that host
+
         self._running = False
         self._threads: list[threading.Thread] = []
 
@@ -220,10 +224,21 @@ class StationController:
             print(f"[Station] 配置报告刷新异常: {e}")
 
     def _config_refresh_loop(self):
-        """定期刷新共享文件夹中的配置报告。"""
+        """定期刷新共享文件夹中的配置报告 + 自身心跳。"""
         while self._running:
             time.sleep(HEARTBEAT_INTERVAL_SECS)
             self._refresh_host_config()
+            # 自身心跳: 保持 Station Director 在线状态
+            try:
+                info = self._collect_info()
+                self.station_director.on_heartbeat(self.state.device_id, {
+                    "cpu_percent": info.cpu_percent,
+                    "memory_percent": info.memory_percent,
+                    "disk_percent": info.disk_percent,
+                    "shared_file_count": info.shared_file_count,
+                })
+            except Exception:
+                pass
 
     def _prune_loop(self):
         """定期清理超时离线主机。"""

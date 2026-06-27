@@ -16,6 +16,8 @@ import json
 import time
 from typing import Optional
 
+import requests as http_requests
+
 from fastapi import (
     APIRouter, WebSocket, WebSocketDisconnect, HTTPException,
     UploadFile, File,
@@ -60,6 +62,13 @@ def create_station_router(controller) -> APIRouter:
     async def activate_secretary():
         """激活 Secretary 模式 (同进程加载项目管理组件)。"""
         result = controller.activate_secretary()
+        if result.get("ok"):
+            controller.secretary_host_id = controller.state.device_id
+            controller.secretary_host_port = controller.state.api_port
+            await _broadcast(state, "secretary_assigned", {
+                "device_id": controller.state.device_id,
+                "port": controller.state.api_port,
+            })
         await _broadcast(state, "secretary_activated", result)
         return result
 
@@ -67,6 +76,9 @@ def create_station_router(controller) -> APIRouter:
     async def deactivate_secretary():
         """停用 Secretary 模式。"""
         result = controller.deactivate_secretary()
+        controller.secretary_host_id = None
+        controller.secretary_host_port = None
+        await _broadcast(state, "secretary_revoked", {"device_id": controller.state.device_id})
         await _broadcast(state, "secretary_deactivated", result)
         return result
 
@@ -214,8 +226,10 @@ def create_station_router(controller) -> APIRouter:
 
     @router.get("/api/station/fleet")
     async def get_fleet():
-        """舰队概览: 在线/离线/各评级分布。"""
-        return station_director.get_fleet_summary()
+        """舰队概览: 在线/离线/各评级分布 + 主机列表。"""
+        summary = station_director.get_fleet_summary()
+        summary["hosts"] = station_director.get_all_hosts()
+        return summary
 
     @router.get("/api/station/hosts")
     async def get_station_hosts(min_tier: str = "D", online_only: bool = False):
@@ -244,6 +258,151 @@ def create_station_router(controller) -> APIRouter:
     async def get_station_stats():
         """统计摘要。"""
         return station_director.get_fleet_summary()
+
+    # ── 远程 Secretary 分配 (指定主机运行秘书) ───────────────────────
+
+    @router.post("/api/station/hosts/{device_id}/assign-secretary")
+    async def assign_secretary_to_host(device_id: str, payload: dict = None):
+        """指定主机运行 Secretary。
+
+        - 本机 (Station Director): 进程内激活
+        - 远程主机: 发送 HTTP 到 Worker, 启动 Secretary 子进程
+        """
+        host = db.get_host(device_id)
+        if not host:
+            raise HTTPException(status_code=404, detail="主机不存在")
+        if not host.online:
+            raise HTTPException(status_code=400, detail="主机离线,无法分配")
+
+        port = (payload or {}).get("port")
+
+        # 本机 → 进程内激活
+        if device_id == controller.state.device_id:
+            result = controller.activate_secretary()
+            if result.get("ok"):
+                controller.secretary_host_id = device_id
+                controller.secretary_host_port = controller.state.api_port
+            return result
+
+        # 远程主机 → HTTP 调用 Worker
+        if not host.ip:
+            raise HTTPException(status_code=400, detail="主机 IP 未知")
+
+        try:
+            resp = http_requests.post(
+                f"http://{host.ip}:{host.api_port}/role/start-secretary",
+                json={"port": port} if port else {},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                controller.secretary_host_id = device_id
+                controller.secretary_host_port = data.get("port")
+                await _broadcast(state, "secretary_assigned", {
+                    "device_id": device_id, "port": data.get("port")
+                })
+                return data
+            else:
+                detail = resp.json().get("detail", "远程启动失败")
+                raise HTTPException(status_code=resp.status_code, detail=detail)
+        except http_requests.RequestException as e:
+            raise HTTPException(status_code=502, detail=f"无法连接到主机 {host.ip}:{host.api_port}: {e}")
+
+    @router.post("/api/station/hosts/{device_id}/revoke-secretary")
+    async def revoke_secretary_from_host(device_id: str):
+        """撤销主机的 Secretary 角色。
+
+        - 本机: 进程内停用
+        - 远程主机: 发送 HTTP 到 Worker, 停止 Secretary 子进程
+        """
+        host = db.get_host(device_id)
+        if not host:
+            raise HTTPException(status_code=404, detail="主机不存在")
+
+        # 本机 → 进程内停用
+        if device_id == controller.state.device_id:
+            result = controller.deactivate_secretary()
+            controller.secretary_host_id = None
+            controller.secretary_host_port = None
+            await _broadcast(state, "secretary_revoked", {"device_id": device_id})
+            return result
+
+        # 远程主机 → HTTP 调用 Worker
+        try:
+            resp = http_requests.post(
+                f"http://{host.ip}:{host.api_port}/role/stop-secretary",
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                controller.secretary_host_id = None
+                controller.secretary_host_port = None
+                await _broadcast(state, "secretary_revoked", {"device_id": device_id})
+                return resp.json()
+            else:
+                return resp.json()
+        except http_requests.RequestException as e:
+            raise HTTPException(status_code=502, detail=f"无法连接到主机: {e}")
+
+    @router.get("/api/station/secretary-status")
+    async def get_secretary_status():
+        """查询当前 Secretary 分配状态。
+
+        返回哪台主机正在运行 Secretary, 以及其端口。
+        """
+        host_id = getattr(controller, 'secretary_host_id', None)
+        host_port = getattr(controller, 'secretary_host_port', None)
+        host_name = None
+        if host_id:
+            host = db.get_host(host_id)
+            if host:
+                host_name = host.device_name
+
+        return {
+            "secretary_host_id": host_id,
+            "secretary_host_name": host_name,
+            "secretary_port": host_port,
+            "active": host_id is not None,
+            "is_local": host_id == controller.state.device_id if host_id else False,
+        }
+
+    @router.get("/api/station/hosts/{device_id}/role")
+    async def get_host_role(device_id: str):
+        """查询指定主机的角色状态 (含远程 Secretary 子进程状态)。"""
+        host = db.get_host(device_id)
+        if not host:
+            raise HTTPException(status_code=404, detail="主机不存在")
+
+        # 本机
+        if device_id == controller.state.device_id:
+            return {
+                "device_id": device_id,
+                "is_station": True,
+                "secretary_active": controller.secretary_active,
+                "secretary_in_process": True,
+            }
+
+        # 远程主机 → 查询 Worker
+        secretary_assigned = (getattr(controller, 'secretary_host_id', None) == device_id)
+        remote_status = {"running": False}
+        if host.online and host.ip:
+            try:
+                resp = http_requests.get(
+                    f"http://{host.ip}:{host.api_port}/role/status",
+                    timeout=5,
+                )
+                if resp.status_code == 200:
+                    remote_status = resp.json()
+            except http_requests.RequestException:
+                pass
+
+        return {
+            "device_id": device_id,
+            "is_station": False,
+            "secretary_assigned": secretary_assigned,
+            "secretary_running": remote_status.get("running", False),
+            "secretary_port": remote_status.get("port"),
+            "secretary_pid": remote_status.get("pid"),
+        }
 
     # ════════════════════════════════════════════════════════════
     #  Secretary 路由 (激活后可用, 未激活返回 503)

@@ -217,7 +217,7 @@
   <div class="stat-cards" id="stat-cards"></div>
   <div class="stitle">主机舰队</div>
   <table class="fleet-table">
-    <thead><tr><th>状态</th><th>设备名</th><th>IP</th><th>平台</th><th>评级</th><th>最后心跳</th></tr></thead>
+    <thead><tr><th>状态</th><th>设备名</th><th>IP</th><th>平台</th><th>评级</th><th>角色</th><th>操作</th><th>最后心跳</th></tr></thead>
     <tbody id="fleet-body"></tbody>
   </table>
   <div class="stitle" style="margin-top:24px">最近事件</div>
@@ -313,6 +313,7 @@ function connectWS(){
     if(msg.type==='project_created'||msg.type==='project_updated'||msg.type==='project_archived')refreshProjects();
     if(msg.type==='secretary_activated'){secretaryActive=true;updateSecretaryUI();document.getElementById('role-badge').textContent='Station + Secretary';document.getElementById('role-badge').style.color='var(--green)';document.getElementById('role-badge').style.borderColor='var(--green)';}
     if(msg.type==='secretary_deactivated'){secretaryActive=false;updateSecretaryUI();document.getElementById('role-badge').textContent='Station';document.getElementById('role-badge').style.color='';document.getElementById('role-badge').style.borderColor='';}
+    if(msg.type==='secretary_assigned'||msg.type==='secretary_revoked')refreshStation();
   };
   ws.onclose=()=>{document.getElementById('ws-dot').classList.add('offline');document.getElementById('ws-label').textContent='重连中...';setTimeout(connectWS,3000);};
 }
@@ -570,11 +571,23 @@ function fmtTime(ts){if(!ts)return'-';return new Date(ts*1000).toLocaleString('z
 
 // ── Station面板 ──
 let stationHosts=[],stationEvents=[];
+let secretaryHostId=null,secretaryHostPort=null,secretaryIsLocal=false;
+
 async function refreshStation(){
   try{
-    const [fleetR,eventsR]=await Promise.all([fetch('/api/station/fleet'),fetch('/api/station/events?limit=30')]);
-    const fleet=await fleetR.json();const evts=await eventsR.json();
+    const [fleetR,eventsR,secR]=await Promise.all([
+      fetch('/api/station/fleet'),
+      fetch('/api/station/events?limit=30'),
+      fetch('/api/station/secretary-status')
+    ]);
+    const fleet=await fleetR.json();const evts=await eventsR.json();const sec=await secR.json();
     stationHosts=fleet.hosts||[];stationEvents=evts.events||[];
+    secretaryHostId=sec.secretary_host_id||null;
+    secretaryHostPort=sec.secretary_port||null;
+    secretaryIsLocal=sec.is_local||false;
+    // 同步 secretaryActive 状态
+    secretaryActive=sec.active||false;
+    updateSecretaryUI();
     renderStation();
   }catch(e){console.error('刷新Station失败:',e);}
 }
@@ -592,15 +605,32 @@ function renderStation(){
     <div class="stat-card tier-b"><div class="num">${tiers.B}</div><div class="lbl">B级</div></div>
     <div class="stat-card tier-c"><div class="num">${tiers.C+tiers.D}</div><div class="lbl">C/D级</div></div>`;
   const tbody=document.getElementById('fleet-body');
-  if(!stationHosts.length){tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--dim);padding:40px">暂无主机</td></tr>';}
-  else{tbody.innerHTML=stationHosts.map(h=>`<tr class="${h.online?'':'offline-row'}" onclick="showHostStationDetail('${h.device_id}')" style="cursor:pointer">
+  if(!stationHosts.length){tbody.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--dim);padding:40px">暂无主机</td></tr>';}
+  else{tbody.innerHTML=stationHosts.map(h=>{
+    const isStation=h.role==='station'||h.role==='secretary';
+    const hasSecretary=secretaryHostId===h.device_id;
+    let roleBadge;
+    if(hasSecretary){roleBadge='<span style="color:var(--green);font-weight:600">秘书</span>';}
+    else if(isStation){roleBadge='<span style="color:var(--accent)">Station</span>';}
+    else{roleBadge='<span style="color:var(--dim)">Worker</span>';}
+    let actionBtn='';
+    if(hasSecretary){
+      actionBtn=`<button class="btn sm danger" onclick="event.stopPropagation();revokeSecretary('${h.device_id}')">取消秘书</button>`;
+    }else if(h.online){
+      const label=isStation?'启动秘书':'指定为秘书';
+      actionBtn=`<button class="btn sm" onclick="event.stopPropagation();assignSecretary('${h.device_id}')">${label}</button>`;
+    }
+    return `<tr class="${h.online?'':'offline-row'}" onclick="showHostStationDetail('${h.device_id}')" style="cursor:pointer">
     <td><span class="status-dot ${h.online?'on':'off'}"></span>${h.online?'在线':'离线'}</td>
     <td>${esc(h.device_name||h.hostname||'未知')}</td>
     <td>${esc(h.ip||'-')}</td>
     <td>${esc(h.platform||'-')}</td>
     <td><span class="badge-tier ${h.rating_tier||'D'}">${h.rating_tier||'-'}</span> ${h.rating_score||0}分</td>
+    <td>${roleBadge}</td>
+    <td>${actionBtn}</td>
     <td>${fmtTime(h.last_seen)}</td>
-  </tr>`).join('');}
+  </tr>`;
+  }).join('');}
   const el=document.getElementById('event-list');
   if(!stationEvents.length){el.innerHTML='<p style="color:var(--dim);text-align:center;padding:20px">暂无事件</p>';}
   else{el.innerHTML=stationEvents.map(e=>`<div class="event-item">
@@ -608,6 +638,31 @@ function renderStation(){
     <span>${esc(e.device_id||'').slice(0,8)} ${e.detail?'· '+esc(e.detail):''}</span>
     <span class="event-time">${fmtTime(e.timestamp)}</span>
   </div>`).join('');}
+}
+
+// ── Secretary 远程分配 ──
+async function assignSecretary(deviceId){
+  if(secretaryHostId){alert('已有主机在运行 Secretary,请先取消');return;}
+  if(!confirm('确定要在此主机上启动 Secretary 吗？'))return;
+  try{
+    const r=await fetch(`/api/station/hosts/${deviceId}/assign-secretary`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+    const d=await r.json();
+    if(d.ok){
+      alert('Secretary 已分配!\n'+(d.message||'')+(d.port?'\n端口: '+d.port:''));
+      refreshStation();
+    }else{
+      alert('分配失败: '+(d.detail||d.message||'未知错误'));
+    }
+  }catch(e){alert('失败:'+e.message);}
+}
+async function revokeSecretary(deviceId){
+  if(!confirm('确定要取消此主机的 Secretary 角色吗？'))return;
+  try{
+    const r=await fetch(`/api/station/hosts/${deviceId}/revoke-secretary`,{method:'POST'});
+    const d=await r.json();
+    alert(d.message||'已取消');
+    refreshStation();
+  }catch(e){alert('失败:'+e.message);}
 }
 async function showHostStationDetail(id){
   try{

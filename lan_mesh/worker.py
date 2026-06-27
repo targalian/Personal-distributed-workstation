@@ -12,8 +12,11 @@ Worker Agent - 部署在各主机上的守护进程
   生成 device_id → 采集 host_info → 创建 shared_folder
   → 启动 FastAPI → 启动 UDP 发现 → 发现 Secretary 后注册 → 心跳循环
 """
+import os
 import shutil
+import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -95,6 +98,10 @@ class WorkerAgent:
         self._running = False
         self._threads: list[threading.Thread] = []
 
+        # Secretary 子进程管理 (远程角色分配)
+        self._secretary_process: Optional[subprocess.Popen] = None
+        self._secretary_port: Optional[int] = None
+
     def _collect_info(self) -> HostInfo:
         """采集当前主机信息快照。"""
         return collect_host_info(
@@ -115,9 +122,9 @@ class WorkerAgent:
     def _on_device_seen(self, packet: DiscoveryPacket, ip: str):
         """UDP 发现到新设备时的回调。
 
-        如果对方是 Secretary,记录其地址并尝试注册。
+        如果对方是 Secretary 或 Station Director, 记录其地址并尝试注册。
         """
-        if packet.role == "secretary":
+        if packet.role in ("secretary", "station"):
             self.state.secretary_ip = ip
             self.state.secretary_port = packet.api_port
 
@@ -214,6 +221,69 @@ class WorkerAgent:
                 registered = False
             time.sleep(HEARTBEAT_INTERVAL_SECS)
 
+    # ── Secretary 子进程管理 (远程角色分配) ─────────────────────────
+
+    def start_secretary(self, port: int = None) -> dict:
+        """在本机启动 Secretary 子进程。
+
+        Args:
+            port: Secretary HTTP 端口 (默认自动查找)
+
+        Returns:
+            {ok, pid, port} 或 {ok: False, message}
+        """
+        if self._secretary_process and self._secretary_process.poll() is None:
+            return {"ok": False, "message": "Secretary 已在运行", "port": self._secretary_port}
+
+        if port is None:
+            port = self._find_available_port(45470)
+
+        python_exe = sys.executable
+        project_root = str(Path(__file__).parent.parent)
+        cmd = [python_exe, "main.py", "secretary", "--port", str(port)]
+
+        try:
+            self._secretary_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=project_root,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            self._secretary_port = port
+            print(f"[Worker] Secretary 子进程已启动: PID={self._secretary_process.pid}, port={port}")
+            return {"ok": True, "pid": self._secretary_process.pid, "port": port}
+        except Exception as e:
+            print(f"[Worker] 启动 Secretary 失败: {e}")
+            return {"ok": False, "message": str(e)}
+
+    def stop_secretary(self) -> dict:
+        """停止本机的 Secretary 子进程。"""
+        if not self._secretary_process or self._secretary_process.poll() is not None:
+            self._secretary_process = None
+            self._secretary_port = None
+            return {"ok": False, "message": "Secretary 未在运行"}
+
+        try:
+            self._secretary_process.terminate()
+            self._secretary_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._secretary_process.kill()
+            self._secretary_process.wait(timeout=3)
+        except Exception:
+            pass
+
+        print(f"[Worker] Secretary 子进程已停止")
+        self._secretary_process = None
+        self._secretary_port = None
+        return {"ok": True, "message": "Secretary 已停止"}
+
+    def get_secretary_status(self) -> dict:
+        """查询本机 Secretary 运行状态。"""
+        if self._secretary_process and self._secretary_process.poll() is None:
+            return {"running": True, "pid": self._secretary_process.pid, "port": self._secretary_port}
+        return {"running": False}
+
     # ── FastAPI 应用 ─────────────────────────────────────────────
 
     def _create_app(self) -> FastAPI:
@@ -223,6 +293,7 @@ class WorkerAgent:
             collect_info_fn=self._collect_info,
             shared_folder=self.state.shared_folder,
             agent_runtime=self.state.agent_runtime,
+            role_manager=self,
         )
         app.include_router(router)
 
