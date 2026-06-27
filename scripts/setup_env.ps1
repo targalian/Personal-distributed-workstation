@@ -68,6 +68,8 @@ Write-Host "   2. 设置环境变量 (可选):" -ForegroundColor White
 Write-Host '      $env:DEEPSEEK_API_KEY = "sk-xxx"' -ForegroundColor DarkGray
 Write-Host '      $env:OPENAI_API_KEY  = "sk-xxx"' -ForegroundColor DarkGray
 Write-Host '      $env:ALIYUN_TOKENPLAN_API_KEY = "你的TokenPlan专属Key"' -ForegroundColor DarkGray
-Write-Host "   3. 启动 Secretary: .\scripts\start_secretary.ps1" -ForegroundColor White
+Write-Host "   3. 启动 Station Director: .\scripts\start_station.ps1" -ForegroundColor White
+Write-Host "      → 在 Web UI 中点击「启动秘书」激活 Secretary" -ForegroundColor DarkGray
 Write-Host "   4. 启动 Worker: .\scripts\start_worker.ps1" -ForegroundColor White
+Write-Host "      (或向后兼容: .\scripts\start_secretary.ps1 直接启动 Secretary)" -ForegroundColor DarkGray
 Write-Host "========================================" -ForegroundColor Green

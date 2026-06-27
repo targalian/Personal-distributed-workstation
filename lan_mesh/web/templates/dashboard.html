@@ -31,6 +31,9 @@
   .btn.primary{background:var(--accent);border-color:var(--accent)}
   .btn.primary:hover{filter:brightness(1.1)}
   .btn.sm{padding:4px 10px;font-size:12px}
+  .btn.danger{background:rgba(248,113,113,.15);border-color:var(--red);color:var(--red)}
+  .btn.danger:hover{background:rgba(248,113,113,.25)}
+  .btn:disabled{opacity:.6;cursor:wait}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;transition:all .2s;cursor:pointer;position:relative;overflow:hidden}
   .card:hover{border-color:var(--accent);transform:translateY(-2px)}
@@ -114,21 +117,24 @@
 <body>
 
 <div class="topbar">
-  <h1><span class="logo">🕸️</span> LAN Mesh 分布式AI工作站</h1>
-  <div class="ws-status"><span class="ws-dot" id="ws-dot"></span><span id="ws-label">连接中...</span></div>
+  <h1><span class="logo">🏢</span> LAN Mesh Station Director</h1>
+  <div class="ws-status">
+    <span id="role-badge" style="font-size:12px;padding:2px 10px;border-radius:12px;background:var(--surface2);border:1px solid var(--border);margin-right:8px">Station</span>
+    <span class="ws-dot" id="ws-dot"></span><span id="ws-label">连接中...</span>
+  </div>
 </div>
 
 <div class="tabs" id="tabs">
-  <div class="tab active" data-tab="hosts">🖥️ 主机监控</div>
-  <div class="tab" data-tab="tasks">📋 任务管理</div>
-  <div class="tab" data-tab="agents">🤖 Agent状态</div>
-  <div class="tab" data-tab="tools">🔧 MCP工具</div>
-  <div class="tab" data-tab="projects">📁 项目管理</div>
-  <div class="tab" data-tab="station">🏢 Station</div>
+  <div class="tab active" data-tab="station">🏢 Station</div>
+  <div class="tab secretary-tab" data-tab="hosts" style="display:none">🖥️ 主机监控</div>
+  <div class="tab secretary-tab" data-tab="tasks" style="display:none">📋 任务管理</div>
+  <div class="tab secretary-tab" data-tab="agents" style="display:none">🤖 Agent状态</div>
+  <div class="tab secretary-tab" data-tab="tools" style="display:none">🔧 MCP工具</div>
+  <div class="tab secretary-tab" data-tab="projects" style="display:none">📁 项目管理</div>
 </div>
 
 <!-- 面板: 主机监控 -->
-<div class="panel active" id="panel-hosts">
+<div class="panel" id="panel-hosts">
   <div class="toolbar">
     <input type="text" id="host-search" placeholder="搜索主机名/IP/平台...">
     <button class="btn primary" onclick="refreshHosts()">🔄 刷新</button>
@@ -197,11 +203,12 @@
   <div class="grid" id="project-grid"><div class="empty"><div class="icon">📁</div><p>暂无项目</p><p class="hint">创建项目以启用预算控制与隔离</p></div></div>
 </div>
 
-<!-- 面板: Station Director -->
-<div class="panel" id="panel-station">
+<!-- 面板: Station Director (默认显示) -->
+<div class="panel active" id="panel-station">
   <div class="toolbar">
     <button class="btn primary" onclick="refreshStation()">🔄 刷新</button>
     <button class="btn" onclick="recomputeRatings()">⚡ 重新评级</button>
+    <button class="btn" id="secretary-btn" onclick="toggleSecretary()">启动秘书</button>
     <span style="margin-left:auto;font-size:14px;color:var(--dim)">
       在线 <b id="st-online" style="color:var(--green)">0</b> ·
       离线 <b id="st-offline" style="color:var(--red)">0</b>
@@ -225,6 +232,56 @@
 <script>
 let allHosts=[],allTasks=[],allAgents=[],allProjects=[];
 let ws=null;
+let secretaryActive=false;
+
+// ── Secretary 激活/停用 ──
+async function checkSecretaryState(){
+  try{
+    const r=await fetch('/api/station/roles');const d=await r.json();
+    secretaryActive=(d.secretary==='active');
+    updateSecretaryUI();
+  }catch(e){console.error('查询 Secretary 状态失败:',e);}
+}
+function updateSecretaryUI(){
+  const btn=document.getElementById('secretary-btn');
+  const tabs=document.querySelectorAll('.secretary-tab');
+  const badge=document.getElementById('role-badge');
+  if(secretaryActive){
+    btn.textContent='停止秘书';btn.classList.add('danger');
+    tabs.forEach(t=>t.style.display='');
+    if(badge){badge.textContent='Station + Secretary';badge.style.color='var(--green)';badge.style.borderColor='var(--green)';}
+  }else{
+    btn.textContent='启动秘书';btn.classList.remove('danger');
+    tabs.forEach(t=>t.style.display='none');
+    if(badge){badge.textContent='Station';badge.style.color='';badge.style.borderColor='';}
+    // 如果当前在 Secretary tab, 切回 Station
+    const activeTab=document.querySelector('.tab.active');
+    if(activeTab&&activeTab.classList.contains('secretary-tab')){
+      document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+      document.querySelector('[data-tab="station"]').classList.add('active');
+      document.getElementById('panel-station').classList.add('active');
+      refreshStation();
+    }
+  }
+}
+async function toggleSecretary(){
+  const btn=document.getElementById('secretary-btn');
+  if(secretaryActive){
+    if(!confirm('确定要停用 Secretary 模式吗？\n停用后将无法使用任务/项目/Agent 功能。'))return;
+    btn.disabled=true;btn.textContent='停用中...';
+    try{const r=await fetch('/api/station/deactivate-secretary',{method:'POST'});const d=await r.json();
+      secretaryActive=false;updateSecretaryUI();
+      alert(d.message||'Secretary 已停用');
+    }catch(e){alert('失败:'+e.message);}finally{btn.disabled=false;}
+  }else{
+    btn.disabled=true;btn.textContent='启动中...';
+    try{const r=await fetch('/api/station/activate-secretary',{method:'POST'});const d=await r.json();
+      if(d.ok){secretaryActive=true;updateSecretaryUI();alert('Secretary 已激活!\n任务管理/项目/Agent/MCP工具 已就绪');}
+      else{alert('激活失败: '+(d.detail||d.message||'未知错误'));}
+    }catch(e){alert('失败:'+e.message);}finally{btn.disabled=false;}
+  }
+}
 
 // ── Tab切换 ──
 document.querySelectorAll('.tab').forEach(t=>{
@@ -254,6 +311,8 @@ function connectWS(){
     if(msg.type==='task_submitted')refreshTasks();
     if(msg.type==='agent_registered')refreshAgents();
     if(msg.type==='project_created'||msg.type==='project_updated'||msg.type==='project_archived')refreshProjects();
+    if(msg.type==='secretary_activated'){secretaryActive=true;updateSecretaryUI();document.getElementById('role-badge').textContent='Station + Secretary';document.getElementById('role-badge').style.color='var(--green)';document.getElementById('role-badge').style.borderColor='var(--green)';}
+    if(msg.type==='secretary_deactivated'){secretaryActive=false;updateSecretaryUI();document.getElementById('role-badge').textContent='Station';document.getElementById('role-badge').style.color='';document.getElementById('role-badge').style.borderColor='';}
   };
   ws.onclose=()=>{document.getElementById('ws-dot').classList.add('offline');document.getElementById('ws-label').textContent='重连中...';setTimeout(connectWS,3000);};
 }
@@ -568,7 +627,12 @@ async function recomputeRatings(){
 }
 
 // ── 初始化 ──
-document.addEventListener('DOMContentLoaded',()=>{refreshHosts();connectWS();setInterval(refreshHosts,5000);});
+document.addEventListener('DOMContentLoaded',()=>{
+  checkSecretaryState();
+  refreshStation();
+  connectWS();
+  setInterval(refreshHosts,5000);
+});
 </script>
 </body>
 </html>

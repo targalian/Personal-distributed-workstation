@@ -3,13 +3,14 @@
 LAN Mesh - 统一入口
 
 用法:
-  python main.py secretary           # 启动 Secretary 节点 (含 Web UI)
+  python main.py station             # 启动 Station Director (推荐, 含 Web UI)
+  python main.py secretary           # 启动 Secretary 节点 (向后兼容)
   python main.py worker              # 启动 Worker 节点
-  python main.py secretary --port 8080  # 指定端口
+  python main.py station --port 8080 # 指定端口
   python main.py --config config.yaml worker
 
 参数:
-  role              secretary | worker
+  role              station | secretary | worker
   --port, -p        指定 API 端口
   --name, -n        指定设备名称
   --shared          指定共享文件夹路径
@@ -29,21 +30,24 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  # 在主控主机上启动 Secretary (默认端口 45470)
-  python main.py secretary
+  # 在主控主机上启动 Station Director (推荐入口)
+  python main.py station
 
   # 在各工作主机上启动 Worker
   python main.py worker
 
   # 自定义配置
-  python main.py secretary --port 8080 --name "控制中心"
+  python main.py station --port 8080 --name "控制中心"
   python main.py worker --shared /data/shared --name "计算节点-01"
+
+  # 向后兼容: 直接启动 Secretary
+  python main.py secretary
 """,
     )
     parser.add_argument(
         "role",
-        choices=["secretary", "worker"],
-        help="节点角色: secretary 或 worker",
+        choices=["station", "secretary", "worker"],
+        help="节点角色: station (推荐) | secretary | worker",
     )
     parser.add_argument("--port", "-p", type=int, default=None, help="HTTP API 端口")
     parser.add_argument("--name", "-n", type=str, default=None, help="设备名称")
@@ -59,23 +63,27 @@ def main():
 
     # 命令行参数覆盖配置
     if args.name:
-        if args.role == "secretary":
+        if args.role in ("station", "secretary"):
             cfg.secretary.device_name = args.name
         else:
             cfg.worker.device_name = args.name
     if args.port:
-        if args.role == "secretary":
+        if args.role in ("station", "secretary"):
             cfg.secretary.api_port = args.port
         else:
             cfg.worker.api_port = args.port
     if args.shared:
-        if args.role == "secretary":
+        if args.role in ("station", "secretary"):
             cfg.secretary.shared_folder = args.shared
         else:
             cfg.worker.shared_folder = args.shared
 
     # 启动对应角色
-    if args.role == "secretary":
+    if args.role == "station":
+        from lan_mesh.station_controller import StationController
+        controller = StationController(cfg)
+        controller.start()
+    elif args.role == "secretary":
         from lan_mesh.secretary import SecretaryController
         controller = SecretaryController(cfg)
         controller.start()
