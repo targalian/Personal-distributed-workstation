@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: error_handling
+title: 错误处理与异常管理策略
+scope: []
+source_files:
+    - lan_mesh/api.py
+    - lan_mesh/agent_runtime.py
+    - lan_mesh/preflight.py
+    - lan_mesh/database.py
+    - quicklan-main/src-tauri/src/commands.rs
+    - quicklan-main/src-tauri/src/transfer.rs
+depends_on: []
+related_to: []

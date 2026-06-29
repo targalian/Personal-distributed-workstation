@@ -1,0 +1,17 @@
+{
+  "name": "LAN Mesh 分布式AI工作站",
+  "short_name": "LAN Mesh",
+  "description": "分布式个人AI工作站管理面板",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1117",
+  "theme_color": "#0f1117",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='32' fill='%230f1117'/%3E%3Ctext x='96' y='120' font-size='100' text-anchor='middle'%3E%F0%9F%8F%A2%3C/text%3E%3C/svg%3E",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}

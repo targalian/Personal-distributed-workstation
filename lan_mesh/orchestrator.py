@@ -12,7 +12,7 @@
 import time
 import uuid
 import threading
-from typing import Optional
+from typing import Optional, Callable
 
 import requests
 
@@ -62,11 +62,12 @@ class Orchestrator:
     """
 
     def __init__(self, db: Database, project_manager=None, model_router=None,
-                 skill_registry=None):
+                 skill_registry=None, on_event: Callable = None):
         self.db = db
         self.project_manager = project_manager
         self.model_router = model_router
         self.skill_registry = skill_registry
+        self.on_event = on_event  # 事件回调: on_event(event_type: str, data: dict)
         self._lock = threading.Lock()
         self._active_dags: dict[str, TaskDAG] = {}  # task_id → DAG
 
@@ -272,6 +273,11 @@ class Orchestrator:
             self.db.save_task(task)
             self._active_dags.pop(task_id, None)
             print(f"[Orchestrator] 任务完成: {task_id}")
+            if self.on_event:
+                self.on_event("task_completed", {
+                    "task_id": task_id,
+                    "name": task.name,
+                })
 
     def _fail_task(self, task_id: str, reason: str):
         """标记任务失败。"""
@@ -282,6 +288,12 @@ class Orchestrator:
             self.db.save_task(task)
             self._active_dags.pop(task_id, None)
             print(f"[Orchestrator] 任务失败: {task_id} ({reason})")
+            if self.on_event:
+                self.on_event("task_failed", {
+                    "task_id": task_id,
+                    "name": task.name,
+                    "reason": reason,
+                })
 
     def get_task_status(self, task_id: str) -> Optional[Task]:
         """查询任务状态。"""

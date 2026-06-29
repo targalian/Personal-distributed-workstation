@@ -2,7 +2,11 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0f1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/static/manifest.json">
 <title>LAN Mesh - 分布式AI工作站</title>
 <style>
   :root{--bg:#0f1117;--surface:#1a1d27;--surface2:#242836;--border:#2e3344;--text:#e4e7ef;--dim:#8b90a0;--accent:#5b8cff;--green:#4ade80;--yellow:#fbbf24;--red:#f87171;--radius:12px}
@@ -111,7 +115,52 @@
   .event-time{color:var(--dim);font-size:11px;margin-left:auto;white-space:nowrap}
   pre{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;font-size:12px;max-height:200px;overflow-y:auto}
   code{background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:12px}
-  @media(max-width:640px){.topbar{flex-direction:column;gap:8px}.tabs{padding:0 12px}.panel{padding:16px}.grid{grid-template-columns:1fr}}
+  /* ── 移动端响应式 ── */
+  @media(max-width:640px){
+    .topbar{padding:10px 14px;gap:6px}
+    .topbar h1{font-size:16px}
+    .topbar h1 .logo{font-size:20px}
+    .ws-status{font-size:11px}
+    /* 隐藏顶部 tab 栏，改用底部导航 */
+    .tabs{display:none}
+    .panel{padding:14px 12px 80px}
+    .grid{grid-template-columns:1fr}
+    .toolbar{flex-wrap:wrap;gap:8px}
+    .toolbar input{width:100%}
+    .toolbar input[style*="width:300px"]{width:100%}
+    /* 底部导航栏 */
+    .mobile-nav{display:flex;position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);z-index:100;padding:4px 0;max-height:env(safe-area-inset-bottom)}
+    .mobile-nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 2px;font-size:10px;color:var(--dim);cursor:pointer;transition:all .15s}
+    .mobile-nav-item.active{color:var(--accent)}
+    .mobile-nav-item .nav-icon{font-size:18px}
+    /* 表格横向滚动 */
+    .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+    .fleet-table{min-width:600px}
+    /* 模态框全屏 */
+    .modal{width:100%;max-width:100%;border-radius:0;min-height:100vh;max-height:100vh;padding:16px 14px}
+    .overlay{align-items:flex-start}
+    /* 统计卡片更紧凑 */
+    .stat-cards{grid-template-columns:repeat(3,1fr)}
+    .stat-card{padding:10px 6px}
+    .stat-card .num{font-size:18px}
+    /* 表单输入更大触摸区 */
+    .btn{padding:10px 16px;font-size:14px;min-height:40px}
+    .btn.sm{padding:6px 12px;min-height:32px}
+    .form-row input,.form-row select,.form-row textarea{padding:10px 12px;font-size:15px}
+    /* kv 网格单列 */
+    .kv-grid{grid-template-columns:1fr}
+    .kv-grid .v{text-align:left}
+    /* 事件列表更紧凑 */
+    .event-item{padding:4px 0}
+    /* 技能标签换行 */
+    .skill-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  }
+  /* 桌面端隐藏底部导航 */
+  @media(min-width:641px){.mobile-nav{display:none}}
+  /* 底部导航默认隐藏（仅移动端显示） */
+  .mobile-nav{display:none}
+  /* 表格包装器 */
+  .table-wrap{width:100%}
 </style>
 </head>
 <body>
@@ -132,6 +181,16 @@
   <div class="tab secretary-tab" data-tab="agents" style="display:none">🤖 Agent状态</div>
   <div class="tab secretary-tab" data-tab="tools" style="display:none">🔧 MCP工具</div>
   <div class="tab secretary-tab" data-tab="projects" style="display:none">📁 项目管理</div>
+  <div class="tab" data-tab="bot">📱 手机通道</div>
+</div>
+
+<!-- 移动端底部导航 -->
+<div class="mobile-nav" id="mobile-nav">
+  <div class="mobile-nav-item active" data-tab="station"><span class="nav-icon">🏢</span><span>Station</span></div>
+  <div class="mobile-nav-item" data-tab="skills"><span class="nav-icon">📚</span><span>技能</span></div>
+  <div class="mobile-nav-item secretary-tab" data-tab="tasks" style="display:none"><span class="nav-icon">📋</span><span>任务</span></div>
+  <div class="mobile-nav-item secretary-tab" data-tab="hosts" style="display:none"><span class="nav-icon">🖥️</span><span>主机</span></div>
+  <div class="mobile-nav-item" data-tab="bot"><span class="nav-icon">📱</span><span>手机</span></div>
 </div>
 
 <!-- 面板: 主机监控 -->
@@ -217,10 +276,12 @@
   </div>
   <div class="stat-cards" id="stat-cards"></div>
   <div class="stitle">主机舰队</div>
+  <div class="table-wrap">
   <table class="fleet-table">
     <thead><tr><th>状态</th><th>设备名</th><th>IP</th><th>平台</th><th>评级</th><th>角色</th><th>操作</th><th>最后心跳</th></tr></thead>
     <tbody id="fleet-body"></tbody>
   </table>
+  </div>
   <div class="stitle" style="margin-top:24px">最近事件</div>
   <div class="event-list" id="event-list"></div>
 </div>
@@ -243,10 +304,35 @@
       分配 <b id="skill-assign-count" style="color:var(--text)">0</b>
     </span>
   </div>
+  <div class="table-wrap">
   <table class="fleet-table">
     <thead><tr><th>技能名称</th><th>分类</th><th>标签</th><th>默认权限</th><th>版本</th><th>操作</th></tr></thead>
     <tbody id="skill-body"><tr><td colspan="6" style="text-align:center;color:var(--dim);padding:30px">点击刷新加载技能列表</td></tr></tbody>
   </table>
+  </div>
+</div>
+
+<!-- 面板: 手机通道 -->
+<div class="panel" id="panel-bot">
+  <div class="toolbar">
+    <button class="btn primary" onclick="refreshBotChannels()">🔄 刷新</button>
+    <button class="btn" onclick="showAddBotChannel()">➕ 添加通道</button>
+    <span style="margin-left:auto;font-size:14px;color:var(--dim)" id="bot-channel-count"></span>
+  </div>
+  <div class="stitle">📱 消息通道</div>
+  <div id="bot-channel-list"><div class="empty"><div class="icon">📱</div><p>暂无通道配置</p><p class="hint">添加企业微信群机器人或 Telegram Bot 以接收推送通知</p></div></div>
+  <div class="stitle">📋 命令帮助</div>
+  <div style="font-size:13px;color:var(--dim);line-height:1.8">
+    <p><b style="color:var(--accent)">Telegram Bot 命令:</b></p>
+    <p><code>/status</code> — 工作站状态概览</p>
+    <p><code>/hosts</code> — 在线主机列表</p>
+    <p><code>/tasks</code> — 最近任务</p>
+    <p><code>/help</code> — 显示帮助</p>
+  </div>
+  <div class="stitle">📡 推送事件</div>
+  <div style="font-size:13px;color:var(--dim);line-height:1.8">
+    <p>✅ 任务完成/失败 · 🖥️ 主机上线/离线 · 🔑 Secretary 激活/停用 · 📋 新任务提交</p>
+  </div>
 </div>
 
 <!-- 通用详情弹窗 -->
@@ -270,20 +356,24 @@ async function checkSecretaryState(){
 function updateSecretaryUI(){
   const btn=document.getElementById('secretary-btn');
   const tabs=document.querySelectorAll('.secretary-tab');
+  const mobileTabs=document.querySelectorAll('.mobile-nav-item.secretary-tab');
   const badge=document.getElementById('role-badge');
   if(secretaryActive){
     btn.textContent='停止秘书';btn.classList.add('danger');
     tabs.forEach(t=>t.style.display='');
+    mobileTabs.forEach(t=>t.style.display='');
     if(badge){badge.textContent='Station + Secretary';badge.style.color='var(--green)';badge.style.borderColor='var(--green)';}
   }else{
     btn.textContent='启动秘书';btn.classList.remove('danger');
     tabs.forEach(t=>t.style.display='none');
+    mobileTabs.forEach(t=>t.style.display='none');
     if(badge){badge.textContent='Station';badge.style.color='';badge.style.borderColor='';}
     // 如果当前在 Secretary tab, 切回 Station
     const activeTab=document.querySelector('.tab.active');
     if(activeTab&&activeTab.classList.contains('secretary-tab')){
       document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
       document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.mobile-nav-item').forEach(x=>x.classList.remove('active'));
       document.querySelector('[data-tab="station"]').classList.add('active');
       document.getElementById('panel-station').classList.add('active');
       refreshStation();
@@ -308,22 +398,27 @@ async function toggleSecretary(){
   }
 }
 
-// ── Tab切换 ──
+// ── Tab切换（桌面端 + 移动端） ──
+function switchTab(tab){
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.mobile-nav-item').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('[data-tab="'+tab+'"]').forEach(x=>x.classList.add('active'));
+  document.getElementById('panel-'+tab).classList.add('active');
+  if(tab==='hosts')refreshHosts();
+  if(tab==='tasks')refreshTasks();
+  if(tab==='agents')refreshAgents();
+  if(tab==='tools')refreshTools();
+  if(tab==='projects')refreshProjects();
+  if(tab==='station')refreshStation();
+  if(tab==='skills')refreshSkills();
+  if(tab==='bot')refreshBotChannels();
+}
 document.querySelectorAll('.tab').forEach(t=>{
-  t.addEventListener('click',()=>{
-    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-    document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
-    t.classList.add('active');
-    document.getElementById('panel-'+t.dataset.tab).classList.add('active');
-    let tab=t.dataset.tab;
-    if(tab==='hosts')refreshHosts();
-    if(tab==='tasks')refreshTasks();
-    if(tab==='agents')refreshAgents();
-    if(tab==='tools')refreshTools();
-    if(tab==='projects')refreshProjects();
-    if(tab==='station')refreshStation();
-    if(tab==='skills')refreshSkills();
-  });
+  t.addEventListener('click',()=>switchTab(t.dataset.tab));
+});
+document.querySelectorAll('.mobile-nav-item').forEach(t=>{
+  t.addEventListener('click',()=>switchTab(t.dataset.tab));
 });
 
 // ── WebSocket ──
@@ -778,6 +873,102 @@ async function scanSkills(){
     const r=await fetch('/api/station/skills/scan');const d=await r.json();
     refreshSkills();
     alert(`扫描完成: ${d.scanned||0} 个技能已注册/更新`);
+  }catch(e){alert('失败:'+e.message);}
+}
+
+// ── 手机通道 (Bot) ──
+let botChannels=[];
+async function refreshBotChannels(){
+  try{
+    const r=await fetch('/api/station/bot/channels');botChannels=await r.json();
+    const list=document.getElementById('bot-channel-list');
+    document.getElementById('bot-channel-count').textContent=`共 ${botChannels.length} 个通道`;
+    if(!botChannels.length){list.innerHTML='<div class="empty"><div class="icon">📱</div><p>暂无通道配置</p><p class="hint">添加企业微信群机器人或 Telegram Bot</p></div>';return;}
+    list.innerHTML=botChannels.map(c=>{
+      const typeName=c.channel_type==='wechat_webhook'?'企业微信群机器人':'Telegram Bot';
+      const icon=c.channel_type==='wechat_webhook'?'💬':'✈️';
+      const statusBadge=c.enabled?'<span class="badge active">启用</span>':'<span class="badge suspended">禁用</span>';
+      const detail=c.channel_type==='wechat_webhook'?`Webhook: ${c.webhook_url}`:`Token: ${c.bot_token} | Chat: ${c.chat_id}`;
+      return `<div class="card" style="cursor:default">
+        <div class="card-head"><div class="card-title">${icon} ${typeName} ${statusBadge}</div></div>
+        <div class="card-meta">${esc(detail)}<br>最低优先级: <span style="color:var(--accent)">${esc(c.min_priority)}</span></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn sm primary" onclick="testBotChannel('${c.channel_type}')">📤 测试</button>
+          <button class="btn sm" onclick="editBotChannel('${c.channel_type}')">✏️ 编辑</button>
+          <button class="btn sm danger" onclick="removeBotChannel('${c.channel_type}')">🗑️ 删除</button>
+        </div>
+      </div>`;
+    }).join('');
+  }catch(e){console.error('Bot通道加载失败:',e);}
+}
+function showAddBotChannel(){
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>添加 Bot 通道</h2>
+  <div class="modal-sec">
+    <div class="form-row"><label>通道类型</label>
+      <select id="bot-type" onchange="toggleBotFields()">
+        <option value="wechat_webhook">企业微信群机器人</option>
+        <option value="telegram">Telegram Bot</option>
+      </select>
+    </div>
+    <div class="form-row" id="field-webhook"><label>Webhook URL</label><input id="bot-webhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx"></div>
+    <div class="form-row" id="field-token" style="display:none"><label>Bot Token</label><input id="bot-token" placeholder="123456789:ABCdefGHI..."></div>
+    <div class="form-row" id="field-chatid" style="display:none"><label>Chat ID</label><input id="bot-chatid" placeholder="你的 Telegram Chat ID"></div>
+    <div class="form-row"><label>最低推送优先级</label>
+      <select id="bot-priority"><option value="low">全部 (含低)</option><option value="normal" selected>常规及以上</option><option value="high">仅重要</option></select>
+    </div>
+    <div class="form-row"><label><input type="checkbox" id="bot-enabled" checked> 启用此通道</label></div>
+  </div>
+  <div class="modal-sec"><button class="btn primary" onclick="saveBotChannel()">💾 保存</button></div>`;
+  document.getElementById('overlay').classList.add('show');
+}
+function toggleBotFields(){
+  const type=document.getElementById('bot-type').value;
+  document.getElementById('field-webhook').style.display=type==='wechat_webhook'?'':'none';
+  document.getElementById('field-token').style.display=type==='telegram'?'':'none';
+  document.getElementById('field-chatid').style.display=type==='telegram'?'':'none';
+}
+function editBotChannel(type){
+  const c=botChannels.find(x=>x.channel_type===type);if(!c)return;
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>编辑 ${type==='wechat_webhook'?'企业微信':'Telegram'} Bot</h2>
+  <div class="modal-sec">
+    <div class="form-row" id="field-webhook" style="${type==='wechat_webhook'?'':'display:none'}"><label>Webhook URL</label><input id="bot-webhook" value="${esc(c.webhook_url||'')}" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx"></div>
+    <div class="form-row" id="field-token" style="${type==='telegram'?'':'display:none'}"><label>Bot Token</label><input id="bot-token" placeholder="保持不变" ></div>
+    <div class="form-row" id="field-chatid" style="${type==='telegram'?'':'display:none'}"><label>Chat ID</label><input id="bot-chatid" value="${esc(c.chat_id||'')}" placeholder="Chat ID"></div>
+    <div class="form-row"><label>最低推送优先级</label>
+      <select id="bot-priority"><option value="low" ${c.min_priority==='low'?'selected':''}>全部 (含低)</option><option value="normal" ${c.min_priority==='normal'?'selected':''}>常规及以上</option><option value="high" ${c.min_priority==='high'?'selected':''}>仅重要</option></select>
+    </div>
+    <div class="form-row"><label><input type="checkbox" id="bot-enabled" ${c.enabled?'checked':''}> 启用此通道</label></div>
+  </div>
+  <div class="modal-sec"><button class="btn primary" onclick="saveBotChannel('${type}')">💾 保存</button></div>`;
+  document.getElementById('overlay').classList.add('show');
+}
+async function saveBotChannel(existingType){
+  const type=existingType||document.getElementById('bot-type').value;
+  const payload={
+    channel_type:type,
+    enabled:document.getElementById('bot-enabled').checked,
+    webhook_url:document.getElementById('bot-webhook')?.value||'',
+    bot_token:document.getElementById('bot-token')?.value||'',
+    chat_id:document.getElementById('bot-chatid')?.value||'',
+    min_priority:document.getElementById('bot-priority').value,
+  };
+  try{
+    const r=await fetch('/api/station/bot/channels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const d=await r.json();if(d.ok){closeOverlayForce();refreshBotChannels();alert(d.message||'已保存');}else{alert('失败: '+(d.detail||'未知错误'));}
+  }catch(e){alert('失败:'+e.message);}
+}
+async function removeBotChannel(type){
+  if(!confirm(`确定要删除 ${type} 通道吗？`))return;
+  try{
+    const r=await fetch(`/api/station/bot/channels/${type}`,{method:'DELETE'});
+    const d=await r.json();if(d.ok){refreshBotChannels();}else{alert('失败: '+(d.detail||'未知错误'));}
+  }catch(e){alert('失败:'+e.message);}
+}
+async function testBotChannel(type){
+  try{
+    const r=await fetch(`/api/station/bot/test/${type}`,{method:'POST'});
+    const d=await r.json();
+    alert(d.ok?d.message||'测试成功':d.detail||'测试失败');
   }catch(e){alert('失败:'+e.message);}
 }
 

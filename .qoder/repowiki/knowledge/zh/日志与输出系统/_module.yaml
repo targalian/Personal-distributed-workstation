@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: logging_system
+title: 日志与输出系统
+scope: []
+source_files:
+    - lan_mesh/secretary.py
+    - lan_mesh/worker.py
+    - lan_mesh/orchestrator.py
+    - lan_mesh/preflight.py
+    - lan_mesh/discovery.py
+depends_on: []
+related_to: []

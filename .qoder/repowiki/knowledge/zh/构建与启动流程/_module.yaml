@@ -1,0 +1,15 @@
+schema_version: 1
+module_path: build_system
+title: 构建与启动流程
+scope: []
+source_files:
+    - requirements.txt
+    - main.py
+    - scripts/setup_env.sh
+    - scripts/start_station.sh
+    - scripts/start_worker.sh
+    - quicklan-main/package.json
+    - quicklan-main/src-tauri/Cargo.toml
+    - quicklan-main/src-tauri/tauri.conf.json
+depends_on: []
+related_to: []

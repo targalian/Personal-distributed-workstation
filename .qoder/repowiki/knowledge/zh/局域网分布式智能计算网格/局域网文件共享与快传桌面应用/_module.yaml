@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: quicklan
-title: 局域网文件共享与快传桌面应用
-scope:
-    - quicklan-main/
-source_files: []
-depends_on: []
-related_to: []

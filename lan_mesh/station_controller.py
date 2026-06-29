@@ -46,6 +46,7 @@ from .station_director import StationDirector
 from .station_api import create_station_router
 from .api import create_worker_router
 from .skill_registry import SkillRegistry
+from .bot_gateway import BotGateway, BotChannel
 
 
 # ── Web UI 模板路径 ─────────────────────────────────────────────
@@ -118,6 +119,10 @@ class StationController:
         self.skill_registry = SkillRegistry(self.db, skills_dir)
         self.skill_registry.scan_and_register()
 
+        # Bot 通道 (手机消息推送)
+        self.bot_gateway = BotGateway()
+        self._load_bot_config()
+
         # Secretary 组件 (初始未加载, activate_secretary() 时创建)
         self.secretary_active = False
         self.project_manager = None
@@ -162,6 +167,7 @@ class StationController:
         self.orchestrator = Orchestrator(
             self.db, self.project_manager, self.model_router,
             skill_registry=self.skill_registry,
+            on_event=self._on_orchestrator_event,
         )
 
         # MCP 工具网关
@@ -189,6 +195,67 @@ class StationController:
 
         print("[Station] Secretary 模式已停用 — 回到纯基础设施管理")
         return {"ok": True, "message": "Secretary 已停用"}
+
+    # ── Bot 通道管理 ───────────────────────────────────────────────
+
+    def _load_bot_config(self):
+        """从 AppConfig 加载 Bot 通道配置。"""
+        bot_cfg = self.cfg.bot
+        for ch_cfg in bot_cfg.channels:
+            channel = BotChannel(
+                channel_type=ch_cfg.channel_type,
+                enabled=ch_cfg.enabled,
+                webhook_url=ch_cfg.webhook_url,
+                bot_token=ch_cfg.bot_token,
+                chat_id=ch_cfg.chat_id,
+                webhook_url_base=ch_cfg.webhook_url_base,
+                min_priority=ch_cfg.min_priority,
+            )
+            self.bot_gateway.add_channel(channel)
+        # 设置命令处理回调
+        self.bot_gateway.set_command_handler(self._on_bot_command)
+        enabled_count = sum(1 for c in bot_cfg.channels if c.enabled)
+        if enabled_count:
+            print(f"[Station] Bot 通道已加载: {enabled_count} 个启用")
+
+    def _on_orchestrator_event(self, event_type: str, data: dict):
+        """Orchestrator 事件回调 → 转发到 Bot 通道。"""
+        try:
+            self.bot_gateway.notify(event_type, data)
+        except Exception as e:
+            print(f"[Station] Bot 事件转发失败: {e}")
+
+    def _on_bot_command(self, command: str, args: str, chat_id: str) -> str:
+        """处理来自 Telegram 的命令。"""
+        if command == "status":
+            hosts = self.db.list_hosts()
+            online = [h for h in hosts if h.online]
+            tasks = self.db.list_tasks(limit=5) if self.secretary_active else []
+            return (
+                f"📊 工作站状态\n"
+                f"在线主机: {len(online)}/{len(hosts)}\n"
+                f"Secretary: {'激活' if self.secretary_active else '未激活'}\n"
+                f"最近任务: {len(tasks)} 个"
+            )
+        if command == "hosts":
+            hosts = self.db.list_hosts()
+            lines = ["🖥️ 主机列表:"]
+            for h in hosts:
+                status = "✅" if h.online else "❌"
+                lines.append(f"{status} {h.device_name or h.hostname or '未知'} ({h.ip or '-'})")
+            return "\n".join(lines) if len(lines) > 1 else "暂无主机"
+        if command == "tasks":
+            if not self.secretary_active:
+                return "Secretary 未激活"
+            tasks = self.db.list_tasks(limit=5)
+            if not tasks:
+                return "暂无任务"
+            lines = ["📋 最近任务:"]
+            for t in tasks:
+                icon = {"completed": "✅", "failed": "❌", "running": "🔄", "pending": "⏳"}.get(t.status, "❓")
+                lines.append(f"{icon} {t.name} [{t.status}]")
+            return "\n".join(lines)
+        return f"未知命令: /{command}\n可用: /status /hosts /tasks /help"
 
     # ── 主机信息采集 ───────────────────────────────────────────────
 

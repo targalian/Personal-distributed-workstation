@@ -57,11 +57,31 @@ class ModelPoolConfig(BaseModel):
     models: list = Field(default_factory=list)  # List[ModelEntryConfig]
 
 
+# ── Bot 通道配置 (Phase: 手机交互) ─────────────────────────────
+
+
+class BotChannelConfig(BaseModel):
+    """单个 Bot 通道配置。"""
+    channel_type: str = "wechat_webhook"   # wechat_webhook | telegram
+    enabled: bool = False
+    webhook_url: str = ""                 # 企业微信群机器人 webhook URL
+    bot_token: str = ""                   # Telegram bot token
+    chat_id: str = ""                     # Telegram chat_id
+    webhook_url_base: str = ""           # Telegram webhook 公网回调地址 (可选)
+    min_priority: str = "normal"          # low | normal | high
+
+
+class BotConfig(BaseModel):
+    """Bot 通道总配置。"""
+    channels: list = Field(default_factory=list)  # List[BotChannelConfig]
+
+
 class AppConfig(BaseModel):
     """应用顶层配置。"""
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     secretary: SecretaryConfig = Field(default_factory=SecretaryConfig)
+    bot: BotConfig = Field(default_factory=BotConfig)
 
 
 def _expand(path_str: str) -> str:

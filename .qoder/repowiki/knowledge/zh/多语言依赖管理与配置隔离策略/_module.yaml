@@ -1,0 +1,14 @@
+schema_version: 1
+module_path: dependency_management
+title: 多语言依赖管理与配置隔离策略
+scope: []
+source_files:
+    - requirements.txt
+    - quicklan-main/package.json
+    - quicklan-main/package-lock.json
+    - quicklan-main/src-tauri/Cargo.toml
+    - quicklan-main/src-tauri/Cargo.lock
+    - lan_mesh/model_pool.example.yaml
+    - .gitignore
+depends_on: []
+related_to: []

@@ -18,22 +18,23 @@
 - [station_api.py](file://lan_mesh/station_api.py)
 - [station_controller.py](file://lan_mesh/station_controller.py)
 - [secretary.py](file://lan_mesh/secretary.py)
+- [skill_registry.py](file://lan_mesh/skill_registry.py)
 - [config.yaml](file://config.yaml)
 - [api.ts](file://quicklan-main/src/api.ts)
 - [types.ts](file://quicklan-main/src/types.ts)
 - [lan_api.rs](file://quicklan-main/src-tauri/src/lan_api.rs)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
 - [main.py](file://main.py)
+- [SKILL.md](file://skills/multi-agent-architect/SKILL.md)
 </cite>
 
 ## 更新摘要
 **变更内容**
-- 新增 `/api/station/` 命名空间下的完整角色管理API
-- 新增 Secretary 远程主机管理功能，支持远程启动/停止 Secretary
-- 新增角色激活/停用端点，支持动态切换工作模式
-- 新增远程主机角色查询和状态监控
-- 增强了 Web UI 仪表盘的角色管理能力
-- 完善了事件历史和实时监控功能
+- 新增完整的技能管理API端点，包括技能列表、统计、扫描、下载、角色查询、详细信息、CRUD操作等200+行新API端点
+- 集成到现有的FastAPI路由系统，提供技能库的完整生命周期管理
+- 新增技能注册表（SkillRegistry）和数据库表结构支持
+- 增强了Web UI仪表盘的技能管理能力
+- 完善了技能权限分配和内容分发机制
 
 ## 目录
 1. [简介](#简介)
@@ -51,7 +52,7 @@
 
 Work Station 项目是一个基于局域网的分布式任务执行平台，采用 Master/Worker 架构设计。该项目提供了完整的 Web API 接口，支持设备管理、文件传输、任务执行、工具调度和项目管理等功能。系统通过 UDP 广播发现机制实现设备自动发现，通过 HTTP API 提供 RESTful 接口，通过 WebSocket 实现实时状态推送。
 
-**更新** 新增了 `/api/station/` 命名空间，提供全面的舰队管理能力和角色管理系统，包括主机评级、事件历史、统计摘要、远程 Secretary 分配等功能。
+**更新** 新增了完整的技能管理API端点，提供技能库的注册、权限分配、内容分发和生命周期管理功能，包括技能列表查询、统计信息、手动扫描、下载包构建、角色权限查询、详细信息展示和CRUD操作等200+行新API端点。
 
 ## 项目结构
 
@@ -72,12 +73,14 @@ MCPGateway[MCP 工具网关]
 StationDirector[工作站主管]
 HostRating[主机评级系统]
 RoleManager[角色管理器]
+SkillRegistry[技能注册表]
 end
 subgraph "API 层"
 MasterAPI[Master API]
 WorkerAPI[Worker API]
 StationAPI[Station API]
 SecretaryAPI[Secretary API]
+SkillAPI[技能管理 API]
 end
 subgraph "前端集成"
 QuickLAN[QuickLAN 前端]
@@ -91,11 +94,14 @@ StationAPI --> RoleManager
 StationAPI --> Database
 StationAPI --> HostRating
 StationAPI --> Discovery
+SkillAPI --> SkillRegistry
+SkillAPI --> Database
 SecretaryAPI --> ProjectManager
 SecretaryAPI --> Orchestrator
 SecretaryAPI --> ModelRouter
 SecretaryAPI --> MCPGateway
 QuickLAN --> MasterAPI
+QuickLAN --> SkillAPI
 TauriApp --> LANAPI
 ```
 
@@ -107,6 +113,7 @@ TauriApp --> LANAPI
 - [host_rating.py:13-115](file://lan_mesh/host_rating.py#L13-L115)
 - [station_api.py:42-127](file://lan_mesh/station_api.py#L42-L127)
 - [station_controller.py:69-182](file://lan_mesh/station_controller.py#L69-L182)
+- [skill_registry.py:43-48](file://lan_mesh/skill_registry.py#L43-L48)
 
 **章节来源**
 - [master.py:1-332](file://lan_mesh/master.py#L1-L332)
@@ -114,8 +121,9 @@ TauriApp --> LANAPI
 - [api.py:1-570](file://lan_mesh/api.py#L1-L570)
 - [station_director.py:1-224](file://lan_mesh/station_director.py#L1-L224)
 - [host_rating.py:1-115](file://lan_mesh/host_rating.py#L1-L115)
-- [station_api.py:1-650](file://lan_mesh/station_api.py#L1-L650)
+- [station_api.py:1-714](file://lan_mesh/station_api.py#L1-L714)
 - [station_controller.py:1-404](file://lan_mesh/station_controller.py#L1-L404)
+- [skill_registry.py:1-388](file://lan_mesh/skill_registry.py#L1-L388)
 
 ## 核心组件
 
@@ -136,6 +144,7 @@ Worker 守护进程部署在各个主机上，负责：
 - 任务执行
 - Agent 能力注册
 - **新增** Secretary 子进程管理（远程角色分配）
+- **新增** 技能包下载和缓存管理
 
 ### 发现服务
 基于 UDP 广播的设备发现机制，实现设备自动发现和状态同步。
@@ -163,6 +172,7 @@ Worker 守护进程部署在各个主机上，负责：
 - 舰队管理（主机列表、统计、事件历史）
 - 资源池查询（按评级筛选在线主机）
 - 手动评级重算功能
+- **新增** 技能库管理（扫描、注册、权限分配）
 
 ### 角色管理器 (Role Manager)
 **新增** 角色管理器负责：
@@ -178,6 +188,16 @@ Worker 守护进程部署在各个主机上，负责：
 - 生成人类可读的评级摘要
 - 支持手动重算和评级变更事件记录
 
+### 技能注册表 (Skill Registry)
+**新增** 技能注册表负责：
+- 技能文件扫描和注册（skills/ 目录）
+- 技能元数据管理（名称、描述、分类、标签、默认访问权限）
+- 技能内容解析（SKILL.md front matter）
+- 技能权限分配（角色、Agent、主机）
+- 技能包构建和分发
+- 技能系统提示构建
+- 技能统计和查询
+
 **章节来源**
 - [master.py:66-170](file://lan_mesh/master.py#L66-L170)
 - [worker.py:62-120](file://lan_mesh/worker.py#L62-L120)
@@ -187,6 +207,7 @@ Worker 守护进程部署在各个主机上，负责：
 - [station_director.py:28-224](file://lan_mesh/station_director.py#L28-L224)
 - [host_rating.py:13-115](file://lan_mesh/host_rating.py#L13-L115)
 - [worker.py:225-285](file://lan_mesh/worker.py#L225-L285)
+- [skill_registry.py:43-388](file://lan_mesh/skill_registry.py#L43-L388)
 
 ## 架构概览
 
@@ -203,6 +224,7 @@ REST[RESTful API]
 WebSocket[WebSocket 推送]
 StationAPI[Station API]
 SecretaryAPI[Secretary API]
+SkillAPI[技能管理 API]
 RoleAPI[角色管理 API]
 end
 subgraph "业务逻辑层"
@@ -214,6 +236,7 @@ ModelRouter[模型路由器]
 StationDirector[工作站主管]
 HostRating[主机评级系统]
 RoleManager[角色管理器]
+SkillRegistry[技能注册表]
 end
 subgraph "数据访问层"
 Database[SQLite 数据库]
@@ -234,6 +257,8 @@ REST --> ModelRouter
 StationAPI --> StationDirector
 StationAPI --> RoleManager
 StationAPI --> HostRating
+SkillAPI --> SkillRegistry
+SkillAPI --> Database
 SecretaryAPI --> ProjectManager
 SecretaryAPI --> Orchestrator
 SecretaryAPI --> ModelRouter
@@ -260,6 +285,7 @@ MCPGateway --> TCP
 - [host_rating.py:13-115](file://lan_mesh/host_rating.py#L13-L115)
 - [station_api.py:42-127](file://lan_mesh/station_api.py#L42-L127)
 - [station_controller.py:69-182](file://lan_mesh/station_controller.py#L69-L182)
+- [skill_registry.py:43-48](file://lan_mesh/skill_registry.py#L43-L48)
 
 ## 详细接口规范
 
@@ -536,12 +562,74 @@ MCPGateway --> TCP
 - 功能：实时推送主机状态变更和事件
 - 消息类型：hosts、heartbeat、agent_registered、project_created、project_updated、project_archived、station_events、secretary_assigned、secretary_revoked 等
 
+### 技能管理 API 接口
+
+**新增** 技能管理 API 提供完整的技能库生命周期管理：
+
+#### 技能查询接口
+
+**技能列表**
+- 方法：GET `/api/station/skills`
+- 功能：列出所有已注册技能，可按分类过滤
+- 参数：category（可选，技能分类）
+- 响应：技能列表（包含技能ID、名称、描述、分类、标签、版本等）
+
+**技能统计**
+- 方法：GET `/api/station/skills/stats`
+- 功能：返回技能库统计信息
+- 响应：包含总技能数、分类分布、分配总数等统计信息
+
+**技能扫描**
+- 方法：GET `/api/station/skills/scan`
+- 功能：手动触发扫描注册新技能
+- 响应：扫描结果（包含扫描数量和详细信息）
+
+**技能包下载**
+- 方法：GET `/api/station/skills/download`
+- 功能：Worker 拉取已授权的技能包
+- 参数：role（必需，角色名称），agent_id（可选，Agent ID）
+- 响应：技能包列表（包含技能ID、名称、分类、描述、标签、内容、参考、版本等）
+
+**角色技能查询**
+- 方法：GET `/api/station/skills/role/{role}`
+- 功能：获取角色可用的技能列表
+- 参数：role（路径参数，角色名称）
+- 响应：技能列表（包含默认权限和直接分配的技能）
+
+#### 技能详情接口
+
+**技能详情**
+- 方法：GET `/api/station/skills/{skill_id}`
+- 功能：获取技能详情及完整内容
+- 参数：skill_id（路径参数，技能ID）
+- 响应：技能详情（包含元数据和完整内容、参考文档、分配记录）
+
+#### 技能权限管理接口
+
+**技能分配**
+- 方法：POST `/api/station/skills/{skill_id}/assign`
+- 功能：分配技能给角色/Agent/主机
+- 参数：skill_id（路径参数，技能ID），payload（请求体）
+- 请求体：assignee_type（分配对象类型，role/agent/host），assignee_id（分配对象ID）
+- 响应：分配结果
+
+**撤销技能分配**
+- 方法：DELETE `/api/station/skills/{skill_id}/assign`
+- 功能：撤销技能分配
+- 参数：skill_id（路径参数，技能ID），assignee_type（分配对象类型），assignee_id（分配对象ID）
+- 响应：撤销结果
+
+#### WebSocket 事件推送
+
+**技能管理事件**
+- 方法：WS `/ws`
+- 功能：实时推送技能管理相关事件
+- 消息类型：skills_scanned（技能扫描完成）、skill_assigned（技能分配）、skill_revoked（技能撤销）
+
 **章节来源**
-- [station_api.py:42-127](file://lan_mesh/station_api.py#L42-L127)
-- [station_api.py:227-405](file://lan_mesh/station_api.py#L227-L405)
-- [station_api.py:264-405](file://lan_mesh/station_api.py#L264-L405)
-- [station_controller.py:132-182](file://lan_mesh/station_controller.py#L132-L182)
-- [worker.py:225-285](file://lan_mesh/worker.py#L225-L285)
+- [station_api.py:625-684](file://lan_mesh/station_api.py#L625-L684)
+- [skill_registry.py:128-388](file://lan_mesh/skill_registry.py#L128-L388)
+- [database.py:717-835](file://lan_mesh/database.py#L717-L835)
 
 ### Worker API 接口
 
@@ -596,6 +684,20 @@ MCPGateway --> TCP
 - 方法：GET `/role/status`
 - 功能：查询本机 Secretary 运行状态
 - 响应：运行状态和进程信息
+
+#### 技能管理接口
+
+**技能包下载**
+- 方法：GET `/skills/download`
+- 功能：下载已授权的技能包
+- 参数：role（必需，角色名称），agent_id（可选，Agent ID）
+- 响应：技能包列表
+
+**技能内容获取**
+- 方法：GET `/skills/content/{skill_id}`
+- 功能：获取技能内容
+- 参数：skill_id（路径参数，技能ID）
+- 响应：技能内容和参考文档
 
 #### 实时通信接口
 
@@ -739,9 +841,6 @@ MCPGateway --> TCP
 - 功能：实时推送设备状态变化
 - 消息类型：hosts、heartbeat、agent_registered、project_created、project_updated、project_archived 等
 
-**章节来源**
-- [station_api.py:419-649](file://lan_mesh/station_api.py#L419-L649)
-
 ### 前端集成接口
 
 #### QuickLAN 前端接口
@@ -784,9 +883,20 @@ MCPGateway --> TCP
 - `revokeSecretaryFromHost(deviceId)`: 撤销主机的 Secretary 角色
 - `getSecretaryStatus()`: 查询 Secretary 分配状态
 
+**技能管理**（新增）
+- `listSkills(category)`: 获取技能列表
+- `getSkillStats()`: 获取技能统计
+- `scanSkills()`: 扫描技能
+- `downloadSkillPackage(role, agentId)`: 下载技能包
+- `getSkillsForRole(role)`: 获取角色技能
+- `getSkillDetail(skillId)`: 获取技能详情
+- `assignSkill(skillId, assigneeType, assigneeId)`: 分配技能
+- `revokeSkill(skillId, assigneeType, assigneeId)`: 撤销技能分配
+
 **章节来源**
 - [api.ts:13-130](file://quicklan-main/src/api.ts#L13-L130)
 - [dashboard.html:244-270](file://lan_mesh/web/templates/dashboard.html#L244-L270)
+- [dashboard.html:731-748](file://lan_mesh/web/templates/dashboard.html#L731-L748)
 
 ## 数据模型
 
@@ -953,6 +1063,29 @@ class RoleAssignment {
 +to_dict() dict
 +from_dict(dict) RoleAssignment
 }
+class SkillRecord {
++string skill_id
++string name
++string description
++string category
++list tags
++list default_access
++string content_path
++string version
++float created_at
++float updated_at
++to_dict() dict
++from_dict(dict) SkillRecord
+}
+class SkillAssignment {
++int id
++string skill_id
++string assignee_type
++string assignee_id
++float assigned_at
++to_dict() dict
++from_dict(dict) SkillAssignment
+}
 HostInfo --> HostRecord : "持久化"
 HostRecord --> HostRating : "包含"
 AgentCard --> Task : "执行"
@@ -961,6 +1094,7 @@ Project --> UsageRecord : "产生"
 ModelRouter --> RoutingResult : "产生"
 HostRecord --> EventLog : "产生"
 HostRecord --> RoleAssignment : "包含"
+SkillRecord --> SkillAssignment : "分配"
 ```
 
 **图表来源**
@@ -968,6 +1102,8 @@ HostRecord --> RoleAssignment : "包含"
 - [host_rating.py:30-43](file://lan_mesh/host_rating.py#L30-L43)
 - [database.py:312-334](file://lan_mesh/database.py#L312-L334)
 - [station_api.py:346-366](file://lan_mesh/station_api.py#L346-L366)
+- [protocol.py:420-448](file://lan_mesh/protocol.py#L420-L448)
+- [database.py:149-172](file://lan_mesh/database.py#L149-L172)
 
 ### 端口和服务配置
 
@@ -1001,12 +1137,14 @@ ModelRouter[ModelRouter]
 StationDirector[StationDirector]
 HostRating[HostRating]
 RoleManager[RoleManager]
+SkillRegistry[SkillRegistry]
 end
 subgraph "Worker 侧"
 WorkerAPI[Worker API]
 AgentRuntime[AgentRuntime]
 SharedFolderW[SharedFolderManager]
 RoleManagerW[RoleManager]
+SkillRegistryW[SkillRegistry]
 end
 subgraph "公共组件"
 Protocol[Protocol]
@@ -1022,9 +1160,12 @@ MasterAPI --> ModelRouter
 WorkerAPI --> SharedFolderW
 WorkerAPI --> AgentRuntime
 WorkerAPI --> RoleManagerW
+WorkerAPI --> SkillRegistryW
 StationDirector --> Database
 StationDirector --> Discovery
 StationDirector --> HostRating
+SkillRegistry --> Database
+SkillRegistry --> Protocol
 RoleManager --> RoleManagerW
 HostRating --> Database
 MasterAPI --> Protocol
@@ -1040,6 +1181,7 @@ WorkerAPI --> Config
 - [station_director.py:31-36](file://lan_mesh/station_director.py#L31-L36)
 - [host_rating.py:13-25](file://lan_mesh/host_rating.py#L13-L25)
 - [worker.py:225-285](file://lan_mesh/worker.py#L225-L285)
+- [skill_registry.py:39-40](file://lan_mesh/skill_registry.py#L39-L40)
 
 ### 错误处理机制
 
@@ -1061,7 +1203,9 @@ ProcessError --> PaymentRequired[402 预算不足]
 ProcessError --> StationNotInitialized[503 Station Director 未初始化]
 ProcessError --> RoleNotActive[503 Secretary 未激活]
 ProcessError --> RemoteConnection[502 远程连接失败]
-ValidationError --> Response
+ProcessError --> SkillNotFound[404 技能不存在]
+ProcessError --> InvalidAssignee[400 分配对象ID为空]
+ProcessError --> ValidationError --> Response
 NotFound --> Response
 Forbidden --> Response
 ServiceUnavailable --> Response
@@ -1069,6 +1213,8 @@ PaymentRequired --> Response
 StationNotInitialized --> Response
 RoleNotActive --> Response
 RemoteConnection --> Response
+SkillNotFound --> Response
+InvalidAssignee --> Response
 ```
 
 **章节来源**
@@ -1076,6 +1222,8 @@ RemoteConnection --> Response
 - [api.py:152-153](file://lan_mesh/api.py#L152-L153)
 - [api.py:569](file://lan_mesh/api.py#L569)
 - [station_api.py:411-418](file://lan_mesh/station_api.py#L411-L418)
+- [station_api.py:657-658](file://lan_mesh/station_api.py#L657-L658)
+- [station_api.py:669-670](file://lan_mesh/station_api.py#L669-L670)
 
 ## 性能考虑
 
@@ -1094,6 +1242,9 @@ RemoteConnection --> Response
 | **新增** 舰队统计缓存 | 3 秒 | 减少数据库查询频率 |
 | **新增** 角色状态缓存 | 1 秒 | 减少远程查询频率 |
 | **新增** 远程主机分配缓存 | 5 秒 | 减少重复分配检查 |
+| **新增** 技能内容缓存 | 10 分钟 | 减少文件系统读取 |
+| **新增** 技能包构建缓存 | 5 分钟 | 减少重复构建 |
+| **新增** 技能权限检查缓存 | 30 秒 | 减少数据库查询 |
 
 ### 缓存策略
 
@@ -1106,6 +1257,9 @@ RemoteConnection --> Response
 - **事件历史缓存**：最近事件的内存缓存，提高查询性能
 - **角色状态缓存**：Secretary 分配状态的短期缓存
 - **远程主机缓存**：远程主机信息的短期缓存
+- **技能内容缓存**：技能内容的内存缓存，提高访问性能
+- **技能包缓存**：已构建技能包的缓存，减少重复构建
+- **权限检查缓存**：技能权限检查结果的短期缓存
 
 ### 网络优化
 
@@ -1116,6 +1270,8 @@ RemoteConnection --> Response
 - **心跳去抖**：避免频繁的心跳请求
 - **事件流推送**：通过 WebSocket 实时推送舰队事件
 - **远程角色分配**：优化远程主机连接和状态查询
+- **技能包增量更新**：支持技能包的增量更新和缓存失效
+- **权限变更通知**：通过 WebSocket 实时推送技能权限变更
 
 ## 故障排除指南
 
@@ -1171,28 +1327,29 @@ RemoteConnection --> Response
 3. 查看服务器日志获取连接错误信息
 4. 确认事件推送机制正常工作
 
-### 日志和监控
+**技能管理异常**
+1. 检查技能注册表是否正确初始化
+2. 验证数据库连接和技能表结构
+3. 确认技能文件格式和权限设置
+4. 查看技能扫描和注册的日志
+5. 验证技能权限分配和撤销的权限控制
+6. 检查技能包构建和分发的缓存机制
+7. 确认技能内容解析和缓存的有效性
 
-系统提供详细的日志输出：
-- 启动和停止日志
-- 设备发现和状态变更日志
-- API 请求和响应日志
-- 错误和异常日志
-- 项目创建、更新、归档的日志记录
-- 项目预算超支和状态变更的告警日志
-- **新增** 模型路由决策日志
-- **新增** 任务执行和消费记录日志
-- **新增** 舰队管理操作日志（主机注册、评级变更、事件记录）
-- **新增** 主机离线检测和清理日志
-- **新增** WebSocket 连接和事件推送日志
-- **新增** 角色管理操作日志（Secretary 激活、停用、分配、撤销）
-- **新增** 远程主机管理日志（远程连接、状态查询、进程控制）
+**技能权限异常**
+1. 检查技能默认访问权限配置
+2. 验证角色权限和直接分配权限
+3. 确认 Agent 级权限的继承关系
+4. 查看权限检查的日志和缓存状态
+5. 验证权限变更的通知机制
 
 **章节来源**
 - [master.py:300-313](file://lan_mesh/master.py#L300-L313)
 - [worker.py:314-318](file://lan_mesh/worker.py#L314-L318)
 - [station_director.py:92-150](file://lan_mesh/station_director.py#L92-L150)
 - [station_api.py:411-418](file://lan_mesh/station_api.py#L411-L418)
+- [skill_registry.py:57-100](file://lan_mesh/skill_registry.py#L57-L100)
+- [database.py:717-835](file://lan_mesh/database.py#L717-L835)
 
 ## 结论
 
@@ -1211,6 +1368,10 @@ Work Station 项目提供了完整的 Web API 接口体系，支持高效的局�
 - **角色管理系统**：支持 Secretary 的动态激活/停用和远程主机管理
 - **远程主机控制**：支持远程启动/停止 Secretary 子进程
 - **实时监控**：通过 WebSocket 实时推送舰队状态和事件
+- **技能管理能力**：提供完整的技能库生命周期管理，包括注册、权限分配、内容分发和统计分析
+- **权限控制机制**：支持角色、Agent、主机三级权限控制和继承关系
+- **内容缓存优化**：技能内容和包的缓存机制提高访问性能
+- **实时事件推送**：WebSocket 实时推送技能管理相关事件
 
 **建议在生产环境中**：
 1. 根据实际网络环境调整心跳间隔和 TTL 设置
@@ -1228,3 +1389,8 @@ Work Station 项目提供了完整的 Web API 接口体系，支持高效的局�
 13. **新增** 定期检查角色管理功能的权限和安全配置
 14. **新增** 监控远程主机连接的稳定性和安全性
 15. **新增** 配置角色状态缓存，提高远程查询性能
+16. **新增** 监控技能管理功能的性能和缓存效果
+17. **新增** 定期验证技能文件的完整性和权限设置
+18. **新增** 监控技能权限分配的准确性和时效性
+19. **新增** 配置技能内容缓存的失效策略和清理机制
+20. **新增** 监控技能包构建和分发的性能和成功率

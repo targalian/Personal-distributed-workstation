@@ -70,6 +70,7 @@ def create_station_router(controller) -> APIRouter:
                 "port": controller.state.api_port,
             })
         await _broadcast(state, "secretary_activated", result)
+        controller.bot_gateway.notify("secretary_activated", {"port": controller.state.api_port})
         return result
 
     @router.post("/api/station/deactivate-secretary")
@@ -80,6 +81,7 @@ def create_station_router(controller) -> APIRouter:
         controller.secretary_host_port = None
         await _broadcast(state, "secretary_revoked", {"device_id": controller.state.device_id})
         await _broadcast(state, "secretary_deactivated", result)
+        controller.bot_gateway.notify("secretary_deactivated", {})
         return result
 
     @router.get("/api/station/roles")
@@ -106,6 +108,7 @@ def create_station_router(controller) -> APIRouter:
         info = HostInfo.from_dict(payload)
         record = station_director.on_host_registered(info)
         await _broadcast(state, "host_registered", record.to_dict())
+        controller.bot_gateway.notify("host_online", {"device_name": record.device_name or record.hostname or "未知", "ip": record.ip or ""})
         return {"ok": True, "device_id": info.device_id}
 
     @router.post("/api/heartbeat")
@@ -468,6 +471,7 @@ def create_station_router(controller) -> APIRouter:
             project_id=project_id,
         )
         await _broadcast(state, "task_submitted", task.to_dict())
+        controller.bot_gateway.notify("task_submitted", {"name": task.name, "description": task.description, "task_id": task.task_id[:8]})
         return task.to_dict()
 
     @router.get("/api/tasks")
@@ -682,6 +686,45 @@ def create_station_router(controller) -> APIRouter:
             "skill_id": skill_id, "assignee_type": assignee_type, "assignee_id": assignee_id
         })
         return {"ok": True}
+
+    # ════════════════════════════════════════════════════════════
+    #  Bot 通道管理 (手机消息通道)
+    # ════════════════════════════════════════════════════════════
+
+    @router.get("/api/station/bot/channels")
+    async def list_bot_channels():
+        """列出所有 Bot 通道配置（脱敏）。"""
+        return controller.bot_gateway.list_channels()
+
+    @router.post("/api/station/bot/channels")
+    async def add_bot_channel(payload: dict):
+        """添加或更新 Bot 通道。"""
+        from .bot_gateway import BotChannel
+        channel = BotChannel(
+            channel_type=payload.get("channel_type", "wechat_webhook"),
+            enabled=payload.get("enabled", False),
+            webhook_url=payload.get("webhook_url", ""),
+            bot_token=payload.get("bot_token", ""),
+            chat_id=payload.get("chat_id", ""),
+            webhook_url_base=payload.get("webhook_url_base", ""),
+            min_priority=payload.get("min_priority", "normal"),
+        )
+        controller.bot_gateway.add_channel(channel)
+        return {"ok": True, "message": f"通道 {channel.channel_type} 已配置"}
+
+    @router.delete("/api/station/bot/channels/{channel_type}")
+    async def remove_bot_channel(channel_type: str):
+        """移除 Bot 通道。"""
+        controller.bot_gateway.remove_channel(channel_type)
+        return {"ok": True, "message": f"通道 {channel_type} 已移除"}
+
+    @router.post("/api/station/bot/test/{channel_type}")
+    async def test_bot_channel(channel_type: str):
+        """发送测试消息到指定通道。"""
+        result = controller.bot_gateway.test_channel(channel_type)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "测试失败"))
+        return result
 
     # ════════════════════════════════════════════════════════════
     #  WebSocket 实时推送

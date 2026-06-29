@@ -1,0 +1,15 @@
+schema_version: 1
+module_path: build_system
+title: 双模构建与发布体系：Python 脚本化运行与 Tauri 原生打包
+scope: []
+source_files:
+    - main.py
+    - requirements.txt
+    - scripts/setup_env.sh
+    - scripts/start_station.sh
+    - quicklan-main/package.json
+    - quicklan-main/src-tauri/Cargo.toml
+    - quicklan-main/src-tauri/tauri.conf.json
+    - quicklan-main/src-tauri/build.rs
+depends_on: []
+related_to: []

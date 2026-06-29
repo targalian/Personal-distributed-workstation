@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: lan_mesh
-title: 局域网分布式智能计算网格
-scope:
-    - lan_mesh/
-source_files: []
-depends_on: []
-related_to: []

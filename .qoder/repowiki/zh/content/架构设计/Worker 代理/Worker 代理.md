@@ -16,6 +16,8 @@
 - [mcp_client.py](file://lan_mesh/mcp_client.py)
 - [tool_registry.py](file://lan_mesh/tool_registry.py)
 - [preflight.py](file://lan_mesh/preflight.py)
+- [skill_registry.py](file://lan_mesh/skill_registry.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 </cite>
 
 ## 目录
@@ -31,7 +33,7 @@
 10. [附录](#附录)
 
 ## 简介
-本文件为 Worker 代理的架构文档，聚焦 Worker 作为分布式节点的核心职责：自动采集主机信息、创建共享文件夹、通过 UDP 发现 Master、通过 HTTP 注册与心跳、暴露 HTTP API 供 Master 查询与文件下载，并在具备 Agent 运行时的情况下执行子任务。文档深入解析 WorkerAgent 类的设计模式、状态管理与错误处理；阐述 AgentCard 能力声明系统、主机信息采集流程与与 Master 的通信协议；并提供 Worker 启动序列图与通信流程图，帮助读者全面理解 Worker 如何参与分布式系统的协调。
+本文件为 Worker 代理的架构文档，聚焦 Worker 作为分布式节点的核心职责：自动采集主机信息、创建共享文件夹、通过 UDP 发现 Master、通过 HTTP 注册与心跳、暴露 HTTP API 供 Master 查询与文件下载，并在具备 Agent 运行时的情况下执行子任务。**新增功能**：Worker 在成功注册后会自动请求授权技能并缓存到本地，包含完整的HTTP通信、文件系统管理和错误恢复机制。文档深入解析 WorkerAgent 类的设计模式、状态管理与错误处理；阐述 AgentCard 能力声明系统、主机信息采集流程与与 Master 的通信协议；并提供 Worker 启动序列图与通信流程图，帮助读者全面理解 Worker 如何参与分布式系统的协调。
 
 ## 项目结构
 - 代码组织采用按功能域划分的模块化结构，核心模块包括：
@@ -47,6 +49,7 @@
   - 任务编排与分发：orchestrator.py
   - MCP 客户端与工具注册表：mcp_client.py、tool_registry.py
   - 启动前自检：preflight.py
+  - **技能管理系统**：skill_registry.py、station_api.py
 
 ```mermaid
 graph TB
@@ -57,64 +60,75 @@ HI["HostInfo<br/>主机信息采集"]
 DS["DiscoveryService<br/>UDP 发现"]
 SF["SharedFolderManager<br/>共享文件夹"]
 AR["AgentRuntime<br/>任务执行引擎"]
+SC["SkillsCache<br/>技能缓存管理"]
 end
 subgraph "Master 节点"
 MC["MasterController<br/>注册/心跳/编排/存储"]
 DB["Database<br/>持久化"]
 ORCH["Orchestrator<br/>任务编排"]
+SD["StationDirector<br/>技能管理"]
 end
 W -- "HTTP /api/register" --> MC
-W -- "HTTP /api/heartbeat" --> MC
 W -- "HTTP /api/agents/register" --> MC
-W -- "HTTP /tasks/execute" --> MC
+W -- "HTTP /api/station/skills/download" --> SD
+W -- "HTTP /api/heartbeat" --> MC
 MC -- "HTTP /tasks/execute" --> W
+SD -- "技能授权" --> W
+SC -- "~/.lan_mesh/skills_cache/" --> AR
 W -- "UDP presence" --> MC
 MC -- "UDP presence" --> W
 MC -- "DB" --> DB
 ORCH -- "分发子任务" --> W
 ```
 
+**更新** 新增技能缓存和技能管理相关组件
+
 图表来源
-- [worker.py:253-325](file://lan_mesh/worker.py#L253-L325)
-- [api.py:116-168](file://lan_mesh/api.py#L116-L168)
-- [discovery.py:71-94](file://lan_mesh/discovery.py#L71-L94)
-- [database.py:147-231](file://lan_mesh/database.py#L147-L231)
-- [orchestrator.py:157-226](file://lan_mesh/orchestrator.py#L157-L226)
+- [worker.py:181-207](file://lan_mesh/worker.py#L181-L207)
+- [agent_runtime.py:47-48](file://lan_mesh/agent_runtime.py#L47-L48)
+- [skill_registry.py:43-48](file://lan_mesh/skill_registry.py#L43-L48)
+- [station_api.py:643-646](file://lan_mesh/station_api.py#L643-L646)
 
 章节来源
-- [worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
-- [api.py:1-539](file://lan_mesh/api.py#L1-L539)
+- [worker.py:1-426](file://lan_mesh/worker.py#L1-L426)
+- [api.py:1-649](file://lan_mesh/api.py#L1-L649)
 - [discovery.py:1-259](file://lan_mesh/discovery.py#L1-L259)
 - [protocol.py:1-356](file://lan_mesh/protocol.py#L1-L356)
 - [config.py:1-84](file://lan_mesh/config.py#L1-L84)
 
 ## 核心组件
-- WorkerAgent：Worker 的核心控制器，负责生命周期管理、注册与心跳、HTTP API 暴露、共享文件夹与 Agent 运行时集成。
+- WorkerAgent：Worker 的核心控制器，负责生命周期管理、注册与心跳、HTTP API 暴露、共享文件夹与 Agent 运行时集成。**新增**：自动技能拉取功能。
 - AgentCard：能力声明系统，描述 Worker 的技能、工具、模型偏好与并发能力，用于 Master 进行任务匹配与分发。
 - HostInfo/DiscoveryPacket：协议层的数据模型，承载主机硬件画像与发现包摘要。
 - DiscoveryService：UDP 广播发现服务，负责周期性广播 presence、监听其他设备、TTL 清理。
 - SharedFolderManager：共享文件夹管理，提供文件列表、下载、上传与主机配置报告生成。
-- AgentRuntime：Worker 端任务执行引擎，根据技能类型路由到对应处理器。
+- AgentRuntime：Worker 端任务执行引擎，根据技能类型路由到对应处理器。**新增**：技能缓存读取和系统提示构建。
 - Database：Master 端持久化层，存储主机记录、心跳日志、Agent 注册、任务与项目信息。
 - Orchestrator：Master 端任务编排器，负责任务分解、构建 DAG、匹配 Agent、分发子任务与聚合结果。
 - MCP 客户端与工具注册表：提供 MCP 工具的发现与调用能力，支撑 Agent 的工具链扩展。
 - Preflight：启动前自检，确保环境满足运行条件。
+- **SkillRegistry**：技能注册表，管理技能注册、权限分配与内容分发。**新增**：Worker 通过 HTTP API 拉取已授权技能。
+- **StationDirector**：技能管理控制器，提供技能扫描、分配和下载接口。**新增**：技能授权和分发。
+
+**更新** 新增技能管理系统相关组件
 
 章节来源
-- [worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
+- [worker.py:62-426](file://lan_mesh/worker.py#L62-L426)
 - [agent_card.py:167-228](file://lan_mesh/agent_card.py#L167-L228)
 - [host_info.py:129-212](file://lan_mesh/host_info.py#L129-L212)
 - [discovery.py:33-259](file://lan_mesh/discovery.py#L33-L259)
 - [shared_folder.py:16-219](file://lan_mesh/shared_folder.py#L16-L219)
-- [agent_runtime.py:28-242](file://lan_mesh/agent_runtime.py#L28-L242)
+- [agent_runtime.py:28-357](file://lan_mesh/agent_runtime.py#L28-L357)
 - [database.py:16-611](file://lan_mesh/database.py#L16-L611)
 - [orchestrator.py:58-262](file://lan_mesh/orchestrator.py#L58-L262)
 - [mcp_client.py:22-252](file://lan_mesh/mcp_client.py#L22-L252)
 - [tool_registry.py:217-338](file://lan_mesh/tool_registry.py#L217-L338)
 - [preflight.py:226-290](file://lan_mesh/preflight.py#L226-L290)
+- [skill_registry.py:43-388](file://lan_mesh/skill_registry.py#L43-L388)
+- [station_api.py:625-714](file://lan_mesh/station_api.py#L625-L714)
 
 ## 架构总览
-Worker 代理在分布式系统中扮演“受控节点”角色，通过 UDP 发现感知 Master，随后通过 HTTP 完成注册与心跳，持续上报资源使用率与共享文件状态。Master 侧负责注册记录、心跳日志、Agent 注册与任务编排，最终将子任务分发至 Worker 执行并收集结果。
+Worker 代理在分布式系统中扮演"受控节点"角色，通过 UDP 发现感知 Master，随后通过 HTTP 完成注册与心跳，持续上报资源使用率与共享文件状态。**新增功能**：注册成功后自动拉取已授权技能并缓存到本地，为后续任务执行提供技能知识库。Master 侧负责注册记录、心跳日志、Agent 注册、任务编排和技能管理，最终将子任务分发至 Worker 执行并收集结果。
 
 ```mermaid
 sequenceDiagram
@@ -122,22 +136,28 @@ participant Worker as "WorkerAgent"
 participant Discovery as "DiscoveryService"
 participant Master as "MasterController"
 participant DB as "Database"
+participant SD as "StationDirector"
 Worker->>Discovery : "启动 UDP 广播/监听"
 Discovery-->>Worker : "on_device_seen 回调(若发现 Master)"
 Worker->>Master : "POST /api/register (HostInfo)"
 Master->>DB : "upsert_host(注册记录)"
 Worker->>Master : "POST /api/agents/register (AgentCard)"
 Master->>DB : "upsert_agent(Agent 注册)"
+Worker->>SD : "GET /api/station/skills/download (role=worker, agent_id)"
+SD-->>Worker : "返回已授权技能包"
+Worker->>Worker : "缓存技能到 ~/.lan_mesh/skills_cache/"
 loop "心跳循环"
 Worker->>Master : "POST /api/heartbeat (CPU/Mem/Disk/共享文件数)"
 Master->>DB : "upsert_host + log_heartbeat"
 end
 ```
 
+**更新** 新增技能拉取和缓存流程
+
 图表来源
-- [worker.py:126-194](file://lan_mesh/worker.py#L126-L194)
-- [api.py:116-168](file://lan_mesh/api.py#L116-L168)
-- [database.py:147-201](file://lan_mesh/database.py#L147-L201)
+- [worker.py:181-207](file://lan_mesh/worker.py#L181-L207)
+- [worker.py:133-155](file://lan_mesh/worker.py#L133-L155)
+- [station_api.py:643-646](file://lan_mesh/station_api.py#L643-L646)
 
 ## 详细组件分析
 
@@ -153,6 +173,7 @@ end
   - HTTP 请求异常捕获与重试策略：心跳失败时尝试重新注册；注册失败打印错误并继续重试。
   - 端口冲突：HTTP 端口采用递增策略寻找可用端口；UDP 端口绑定失败直接报错。
   - 文件系统异常：共享文件夹写入与路径解析进行边界检查与异常捕获。
+  - **新增**：技能拉取异常处理：网络请求失败时记录错误但不影响 Worker 正常运行。
 
 ```mermaid
 classDiagram
@@ -163,8 +184,8 @@ class WorkerState {
 +int api_port
 +float start_time
 +SharedFolderManager shared_folder
-+string master_ip
-+int master_port
++string secretary_ip
++int secretary_port
 +dict agent_card
 +AgentRuntime agent_runtime
 }
@@ -179,6 +200,7 @@ class WorkerAgent {
 +stop()
 -_register_with_master() bool
 -_register_agent_card()
+-_pull_skills() void
 -_send_heartbeat() bool
 -_heartbeat_loop()
 -_create_app() FastAPI
@@ -190,12 +212,14 @@ WorkerAgent --> SharedFolderManager : "使用"
 WorkerAgent --> AgentRuntime : "创建"
 ```
 
+**更新** 新增 `_pull_skills()` 方法
+
 图表来源
 - [worker.py:47-96](file://lan_mesh/worker.py#L47-L96)
-- [worker.py:253-325](file://lan_mesh/worker.py#L253-L325)
+- [worker.py:181-207](file://lan_mesh/worker.py#L181-L207)
 
 章节来源
-- [worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
+- [worker.py:62-426](file://lan_mesh/worker.py#L62-L426)
 
 ### AgentCard 能力声明系统
 - 能力构成
@@ -220,11 +244,11 @@ Register --> Done(["完成注册"])
 
 图表来源
 - [agent_card.py:167-217](file://lan_mesh/agent_card.py#L167-L217)
-- [api.py:268-279](file://lan_mesh/api.py#L268-L279)
+- [api.py:171-175](file://lan_mesh/api.py#L171-L175)
 
 章节来源
 - [agent_card.py:16-228](file://lan_mesh/agent_card.py#L16-L228)
-- [api.py:268-299](file://lan_mesh/api.py#L268-L299)
+- [api.py:157-178](file://lan_mesh/api.py#L157-L178)
 
 ### 主机信息采集与发现机制
 - 主机信息采集
@@ -262,6 +286,7 @@ H --> I["prune_loop: 清理超时设备"]
 - 注册流程
   - Worker 通过 /api/register 发送 HostInfo，Master 写入数据库并广播注册事件。
   - 随后发送 /api/agents/register，携带 AgentCard，Master 写入 Agent 注册表。
+  - **新增**：注册成功后自动请求 /api/station/skills/download 获取已授权技能。
 - 心跳流程
   - Worker 每 HEARTBEAT_INTERVAL_SECS 向 /api/heartbeat 发送 CPU/Mem/Disk/共享文件数。
   - Master 更新在线状态与最后心跳时间，并记录心跳日志。
@@ -274,10 +299,14 @@ sequenceDiagram
 participant Worker as "WorkerAgent"
 participant Master as "MasterController"
 participant DB as "Database"
+participant SD as "StationDirector"
 Worker->>Master : "POST /api/register (HostInfo)"
 Master->>DB : "upsert_host"
 Worker->>Master : "POST /api/agents/register (AgentCard)"
 Master->>DB : "upsert_agent"
+Worker->>SD : "GET /api/station/skills/download"
+SD-->>Worker : "返回技能包"
+Worker->>Worker : "缓存技能到本地"
 loop "心跳循环"
 Worker->>Master : "POST /api/heartbeat"
 Master->>DB : "upsert_host + log_heartbeat"
@@ -286,19 +315,25 @@ Master->>Worker : "POST /tasks/execute (子任务)"
 Worker-->>Master : "执行结果"
 ```
 
+**更新** 新增技能拉取流程
+
 图表来源
-- [api.py:116-168](file://lan_mesh/api.py#L116-L168)
-- [api.py:302-326](file://lan_mesh/api.py#L302-L326)
-- [database.py:147-201](file://lan_mesh/database.py#L147-L201)
+- [worker.py:133-155](file://lan_mesh/worker.py#L133-L155)
+- [worker.py:181-207](file://lan_mesh/worker.py#L181-L207)
+- [station_api.py:643-646](file://lan_mesh/station_api.py#L643-L646)
 
 章节来源
-- [api.py:116-344](file://lan_mesh/api.py#L116-L344)
+- [api.py:147-200](file://lan_mesh/api.py#L147-L200)
 - [database.py:147-231](file://lan_mesh/database.py#L147-L231)
 
 ### Agent 运行时与任务执行
 - 执行策略
   - 根据 required_skill 路由到对应处理器：代码生成/审查、文档摘要、RAG 检索、Shell 执行、文件操作、系统监控。
   - LLM API 调用优先使用 DeepSeek，其次 OpenAI，支持环境变量配置。
+- **新增**：技能缓存系统
+  - AgentRuntime 在启动时创建技能缓存目录 `~/.lan_mesh/skills_cache/`。
+  - 从本地缓存读取技能内容，构建系统提示，为 LLM 提供上下文知识。
+  - 支持 YAML front matter 解析，自动去除头部元数据。
 - 错误处理
   - 捕获子进程超时、文件系统异常与网络请求异常，返回结构化错误信息。
   - 任务执行结果包含输出、状态与可选的 token 用量统计。
@@ -313,27 +348,75 @@ Route --> RS["RAG 检索(预留)"]
 Route --> SE["Shell 执行"]
 Route --> FO["文件操作"]
 Route --> MON["系统监控"]
-CG --> Ret["返回结果(含 usage)"]
-CR --> Ret
-DS --> Ret
+CG --> Cache["读取技能缓存"]
+CR --> Cache
+DS --> Cache
+Cache --> Prompt["构建系统提示"]
+Prompt --> LLM["调用 LLM API"]
+LLM --> Ret["返回结果(含 usage)"]
 RS --> Ret
 SE --> Ret
 FO --> Ret
 MON --> Ret
 ```
 
+**更新** 新增技能缓存和系统提示构建流程
+
 图表来源
-- [agent_runtime.py:47-75](file://lan_mesh/agent_runtime.py#L47-L75)
-- [agent_runtime.py:78-168](file://lan_mesh/agent_runtime.py#L78-L168)
+- [agent_runtime.py:47-48](file://lan_mesh/agent_runtime.py#L47-L48)
+- [agent_runtime.py:193-226](file://lan_mesh/agent_runtime.py#L193-L226)
+- [agent_runtime.py:49-57](file://lan_mesh/agent_runtime.py#L49-L57)
 
 章节来源
-- [agent_runtime.py:28-242](file://lan_mesh/agent_runtime.py#L28-L242)
+- [agent_runtime.py:28-357](file://lan_mesh/agent_runtime.py#L28-L357)
+
+### 技能管理系统
+- **SkillRegistry**：中央技能注册表，管理技能注册、权限分配与内容分发。
+  - 扫描 skills/ 目录，解析 YAML front matter 元数据。
+  - 管理技能权限分配，支持角色、Agent、主机级别的授权。
+  - 构建技能包，供 Worker 拉取已授权技能。
+- **StationDirector API**：提供技能管理接口。
+  - `/api/station/skills/download`：Worker 拉取已授权技能包。
+  - `/api/station/skills/scan`：手动扫描注册新技能。
+  - `/api/station/skills/{skill_id}/assign`：分配技能给目标实体。
+- **Worker 自动技能拉取**：
+  - 注册成功后自动请求授权技能。
+  - 缓存到 `~/.lan_mesh/skills_cache/{skill_id}/SKILL.md`。
+  - 支持参考文档缓存 `reference.md`。
+  - 错误恢复：网络失败时记录错误但不影响 Worker 正常运行。
+
+```mermaid
+flowchart TD
+SD["StationDirector"] --> SR["SkillRegistry"]
+SR --> Scan["扫描 skills/ 目录"]
+Scan --> Register["注册技能到数据库"]
+SD --> API["/api/station/skills/*"]
+API --> Download["/download (role, agent_id)"]
+Download --> Package["构建技能包"]
+Package --> Worker["WorkerAgent"]
+Worker --> Pull["_pull_skills()"]
+Pull --> Cache["缓存到 ~/.lan_mesh/skills_cache/"]
+Cache --> AgentRuntime["AgentRuntime 读取缓存"]
+```
+
+**新增** 技能管理系统架构图
+
+图表来源
+- [skill_registry.py:57-100](file://lan_mesh/skill_registry.py#L57-L100)
+- [station_api.py:643-646](file://lan_mesh/station_api.py#L643-L646)
+- [worker.py:181-207](file://lan_mesh/worker.py#L181-L207)
+
+章节来源
+- [skill_registry.py:43-388](file://lan_mesh/skill_registry.py#L43-L388)
+- [station_api.py:625-714](file://lan_mesh/station_api.py#L625-L714)
+- [worker.py:181-207](file://lan_mesh/worker.py#L181-L207)
 
 ### 启动序列图与通信流程图
 - Worker 启动序列
   - 自检通过后，创建共享文件夹、生成设备 ID、部署采集脚本并写入初始配置报告。
   - 启动 DiscoveryService、AgentRuntime，启动心跳线程与 FastAPI 服务器。
-  - 发现 Master 后注册 HostInfo 与 AgentCard，进入心跳循环。
+  - 发现 Master 后注册 HostInfo 与 AgentCard，**新增**：自动拉取已授权技能并缓存到本地。
+  - 进入心跳循环，持续上报状态。
 
 ```mermaid
 sequenceDiagram
@@ -347,23 +430,26 @@ Preflight-->>Worker : "run_preflight 成功"
 Worker->>SF : "ensure() 创建共享目录"
 Worker->>SF : "write_host_config(初始配置)"
 Worker->>DS : "start()"
-Worker->>AR : "创建 AgentRuntime"
+Worker->>AR : "创建 AgentRuntime (含技能缓存)"
 Worker->>API : "启动 Uvicorn"
 DS-->>Worker : "on_device_seen(Master)"
 Worker->>Worker : "_register_with_master()"
 Worker->>Worker : "_register_agent_card()"
+Worker->>Worker : "_pull_skills() (新增)"
 Worker->>Worker : "_heartbeat_loop()"
 ```
 
+**更新** 新增技能拉取流程
+
 图表来源
 - [preflight.py:226-290](file://lan_mesh/preflight.py#L226-L290)
-- [worker.py:253-325](file://lan_mesh/worker.py#L253-L325)
-- [shared_folder.py:122-144](file://lan_mesh/shared_folder.py#L122-L144)
-- [discovery.py:71-94](file://lan_mesh/discovery.py#L71-L94)
+- [worker.py:392-396](file://lan_mesh/worker.py#L392-L396)
+- [worker.py:181-207](file://lan_mesh/worker.py#L181-L207)
 
 - Worker 与 Master 通信流程
   - UDP 发现：Worker 广播 presence，Master 回送 presence 并记录。
   - HTTP 注册：Worker 发送 HostInfo，Master 写入数据库并广播。
+  - **新增**：技能拉取：Worker 请求已授权技能，Master 返回技能包并缓存到本地。
   - 心跳：Worker 发送实时资源使用率，Master 更新在线状态。
   - 任务：Master 分发子任务，Worker 执行并返回结果。
 
@@ -373,12 +459,16 @@ participant W as "Worker"
 participant D as "Discovery"
 participant M as "Master"
 participant DB as "Database"
+participant SD as "StationDirector"
 W->>D : "广播 presence"
 D-->>W : "收到 Master presence"
 W->>M : "POST /api/register"
 M->>DB : "upsert_host"
 W->>M : "POST /api/agents/register"
 M->>DB : "upsert_agent"
+W->>SD : "GET /api/station/skills/download"
+SD-->>W : "技能包"
+W->>W : "缓存技能到本地"
 loop "心跳"
 W->>M : "POST /api/heartbeat"
 M->>DB : "log_heartbeat"
@@ -387,21 +477,25 @@ M->>W : "POST /tasks/execute"
 W-->>M : "执行结果"
 ```
 
+**更新** 新增技能拉取通信流程
+
 图表来源
 - [discovery.py:147-214](file://lan_mesh/discovery.py#L147-L214)
-- [api.py:116-168](file://lan_mesh/api.py#L116-L168)
-- [database.py:194-201](file://lan_mesh/database.py#L194-L201)
+- [worker.py:181-207](file://lan_mesh/worker.py#L181-L207)
+- [station_api.py:643-646](file://lan_mesh/station_api.py#L643-L646)
 
 ## 依赖分析
 - 组件耦合
   - WorkerAgent 与 DiscoveryService、SharedFolderManager、AgentRuntime 强耦合，通过回调与共享状态协作。
   - MasterController 与 Database、DiscoveryService、Orchestrator 强耦合，负责注册、心跳、编排与存储。
+  - **新增**：Worker 与 StationDirector 通过 HTTP API 通信，实现技能授权和分发。
 - 外部依赖
   - psutil：主机信息采集。
   - fastapi/uvicorn：HTTP API 与服务器。
   - requests：HTTP 客户端。
   - sqlite3：Master 端持久化。
   - yaml/pydantic：配置解析与校验。
+  - **新增**：pathlib：文件系统路径管理。
 - 循环依赖
   - 未发现直接循环依赖；模块间通过协议层数据模型与 API 路由解耦。
 
@@ -411,21 +505,24 @@ WorkerAgent --> DiscoveryService
 WorkerAgent --> SharedFolderManager
 WorkerAgent --> AgentRuntime
 WorkerAgent --> FastAPI
+WorkerAgent --> StationDirector
 MasterController --> Database
 MasterController --> DiscoveryService
 MasterController --> Orchestrator
-Orchestrator --> Database
-AgentRuntime --> LLM_API["OpenAI/DeepSeek"]
+AgentRuntime --> SkillsCache[".lan_mesh/skills_cache/"]
+StationDirector --> SkillRegistry
+SkillRegistry --> Database
 ```
 
+**更新** 新增技能管理相关依赖关系
+
 图表来源
-- [worker.py:253-325](file://lan_mesh/worker.py#L253-L325)
-- [master.py:238-324](file://lan_mesh/master.py#L238-L324)
-- [orchestrator.py:58-108](file://lan_mesh/orchestrator.py#L58-L108)
-- [agent_runtime.py:172-242](file://lan_mesh/agent_runtime.py#L172-L242)
+- [worker.py:392-396](file://lan_mesh/worker.py#L392-L396)
+- [agent_runtime.py:47-48](file://lan_mesh/agent_runtime.py#L47-L48)
+- [skill_registry.py:43-48](file://lan_mesh/skill_registry.py#L43-L48)
 
 章节来源
-- [worker.py:253-325](file://lan_mesh/worker.py#L253-L325)
+- [worker.py:392-426](file://lan_mesh/worker.py#L392-L426)
 - [master.py:67-114](file://lan_mesh/master.py#L67-L114)
 - [orchestrator.py:58-108](file://lan_mesh/orchestrator.py#L58-L108)
 
@@ -436,8 +533,10 @@ AgentRuntime --> LLM_API["OpenAI/DeepSeek"]
   - 心跳与发现均在独立线程运行，避免阻塞 API 服务器；注意线程安全与异常恢复。
 - I/O 与存储
   - 共享文件夹写入与主机配置报告生成为磁盘 I/O 密集操作，建议合理规划存储位置与容量。
+  - **新增**：技能缓存写入为磁盘 I/O 操作，建议合理规划存储位置与容量。
 - 网络绑定
   - UDP 端口绑定失败需及时反馈；HTTP 端口冲突采用递增策略，减少人工干预。
+  - **新增**：技能拉取网络请求设置超时，避免阻塞 Worker 启动流程。
 
 ## 故障排查指南
 - 启动失败
@@ -449,15 +548,19 @@ AgentRuntime --> LLM_API["OpenAI/DeepSeek"]
   - 检查网络延迟与丢包；确认 Master 端 /api/heartbeat 路由正常；查看数据库心跳日志。
 - 任务执行失败
   - 检查 AgentCard 技能是否匹配；确认 Worker 端 AgentRuntime 可用；查看 LLM API Key 配置与网络访问。
+- **新增**：技能拉取失败
+  - 检查 StationDirector 是否正常运行；确认 /api/station/skills/download 路由可用；查看技能授权配置。
+  - 检查本地缓存目录 `~/.lan_mesh/skills_cache/` 权限；确认网络连接稳定。
 
 章节来源
 - [preflight.py:226-290](file://lan_mesh/preflight.py#L226-L290)
-- [api.py:116-168](file://lan_mesh/api.py#L116-L168)
+- [api.py:147-200](file://lan_mesh/api.py#L147-L200)
 - [database.py:194-201](file://lan_mesh/database.py#L194-L201)
-- [agent_runtime.py:172-242](file://lan_mesh/agent_runtime.py#L172-L242)
+- [agent_runtime.py:172-357](file://lan_mesh/agent_runtime.py#L172-L357)
+- [worker.py:181-207](file://lan_mesh/worker.py#L181-L207)
 
 ## 结论
-Worker 代理通过清晰的模块化设计与稳健的错误处理，在分布式系统中承担了“自注册、保活、上报、执行”的关键职责。其基于 UDP 的发现机制与 HTTP 的注册/心跳协议，配合 Master 的编排与存储，实现了高效的节点协同。AgentCard 能力声明系统进一步提升了任务匹配的准确性与可扩展性。建议在生产环境中关注心跳频率、网络稳定性与存储性能，并完善监控与告警体系。
+Worker 代理通过清晰的模块化设计与稳健的错误处理，在分布式系统中承担了"自注册、保活、上报、执行"的关键职责。**新增的技能管理系统**使其能够自动获取和缓存已授权技能，为任务执行提供丰富的知识库支持。其基于 UDP 的发现机制与 HTTP 的注册/心跳协议，配合 Master 的编排与存储，实现了高效的节点协同。AgentCard 能力声明系统进一步提升了任务匹配的准确性与可扩展性。建议在生产环境中关注心跳频率、网络稳定性与存储性能，并完善监控与告警体系。
 
 ## 附录
 - 配置与端口
@@ -467,7 +570,11 @@ Worker 代理通过清晰的模块化设计与稳健的错误处理，在分布�
   - 心跳间隔：5 秒
   - 发现存在间隔：3 秒
   - 设备 TTL：12 秒
+- **新增**：技能缓存目录
+  - 默认缓存路径：`~/.lan_mesh/skills_cache/`
+  - 技能文件格式：`{skill_id}/SKILL.md` 和 `{skill_id}/reference.md`
 
 章节来源
 - [protocol.py:17-25](file://lan_mesh/protocol.py#L17-L25)
 - [config.py:14-41](file://lan_mesh/config.py#L14-L41)
+- [agent_runtime.py:47-48](file://lan_mesh/agent_runtime.py#L47-L48)
