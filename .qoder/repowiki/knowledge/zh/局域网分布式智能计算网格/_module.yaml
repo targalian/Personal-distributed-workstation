@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: ""
+title: 局域网分布式智能计算网格
+scope:
+    - .gitignore
+    - main.py
+    - config.yaml
+    - requirements.txt
+    - scripts/
+source_files: []
+depends_on: []
+related_to: []

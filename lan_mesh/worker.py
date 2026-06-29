@@ -147,6 +147,8 @@ class WorkerAgent:
                 print(f"[Worker] 主机信息已注册到 Secretary {self.state.secretary_ip}:{self.state.secretary_port}")
                 # 2. 注册 Agent Card
                 self._register_agent_card()
+                # 3. 拉取已授权技能到本地缓存
+                self._pull_skills()
                 return True
         except requests.RequestException as e:
             print(f"[Worker] 注册失败: {e}")
@@ -175,6 +177,34 @@ class WorkerAgent:
                 print(f"[Worker] Agent Card 已注册: {len(card.skills)} 技能, {len(card.tools)} 工具")
         except requests.RequestException as e:
             print(f"[Worker] Agent Card 注册失败: {e}")
+
+    def _pull_skills(self):
+        """向 Station Director 拉取已授权技能并缓存到本地。"""
+        if not self.state.secretary_ip or not self.state.secretary_port:
+            return
+        try:
+            resp = requests.get(
+                f"http://{self.state.secretary_ip}:{self.state.secretary_port}/api/station/skills/download",
+                params={"role": "worker", "agent_id": self.state.device_id},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                skills = resp.json()
+                cache_dir = Path.home() / ".lan_mesh" / "skills_cache"
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                for skill in skills:
+                    skill_dir = cache_dir / skill.get("skill_id", "unknown")
+                    skill_dir.mkdir(parents=True, exist_ok=True)
+                    (skill_dir / "SKILL.md").write_text(
+                        skill.get("content", ""), encoding="utf-8"
+                    )
+                    if skill.get("reference"):
+                        (skill_dir / "reference.md").write_text(
+                            skill["reference"], encoding="utf-8"
+                        )
+                print(f"[Worker] 已拉取 {len(skills)} 个技能到本地缓存")
+        except Exception as e:
+            print(f"[Worker] 技能拉取失败: {e}")
 
     def _send_heartbeat(self) -> bool:
         """向 Secretary 发送心跳 (携带实时资源使用率)。"""

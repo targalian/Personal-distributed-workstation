@@ -126,6 +126,7 @@
 
 <div class="tabs" id="tabs">
   <div class="tab active" data-tab="station">🏢 Station</div>
+  <div class="tab" data-tab="skills">📚 技能库</div>
   <div class="tab secretary-tab" data-tab="hosts" style="display:none">🖥️ 主机监控</div>
   <div class="tab secretary-tab" data-tab="tasks" style="display:none">📋 任务管理</div>
   <div class="tab secretary-tab" data-tab="agents" style="display:none">🤖 Agent状态</div>
@@ -224,6 +225,30 @@
   <div class="event-list" id="event-list"></div>
 </div>
 
+<!-- 面板: 技能库 -->
+<div class="panel" id="panel-skills">
+  <div class="toolbar">
+    <button class="btn primary" onclick="refreshSkills()">🔄 刷新</button>
+    <button class="btn" onclick="scanSkills()">🔍 扫描新技能</button>
+    <select id="skill-role-filter" onchange="refreshSkills()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px">
+      <option value="">全部技能</option>
+      <option value="architecture">架构</option>
+      <option value="coding">代码</option>
+      <option value="ops">运维</option>
+      <option value="management">管理</option>
+      <option value="general">通用</option>
+    </select>
+    <span style="margin-left:auto;font-size:14px;color:var(--dim)">
+      技能 <b id="skill-total" style="color:var(--accent)">0</b> ·
+      分配 <b id="skill-assign-count" style="color:var(--text)">0</b>
+    </span>
+  </div>
+  <table class="fleet-table">
+    <thead><tr><th>技能名称</th><th>分类</th><th>标签</th><th>默认权限</th><th>版本</th><th>操作</th></tr></thead>
+    <tbody id="skill-body"><tr><td colspan="6" style="text-align:center;color:var(--dim);padding:30px">点击刷新加载技能列表</td></tr></tbody>
+  </table>
+</div>
+
 <!-- 通用详情弹窗 -->
 <div class="overlay" id="overlay" onclick="closeOverlay(event)">
   <div class="modal" id="modal"></div>
@@ -297,6 +322,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     if(tab==='tools')refreshTools();
     if(tab==='projects')refreshProjects();
     if(tab==='station')refreshStation();
+    if(tab==='skills')refreshSkills();
   });
 });
 
@@ -314,6 +340,7 @@ function connectWS(){
     if(msg.type==='secretary_activated'){secretaryActive=true;updateSecretaryUI();document.getElementById('role-badge').textContent='Station + Secretary';document.getElementById('role-badge').style.color='var(--green)';document.getElementById('role-badge').style.borderColor='var(--green)';}
     if(msg.type==='secretary_deactivated'){secretaryActive=false;updateSecretaryUI();document.getElementById('role-badge').textContent='Station';document.getElementById('role-badge').style.color='';document.getElementById('role-badge').style.borderColor='';}
     if(msg.type==='secretary_assigned'||msg.type==='secretary_revoked')refreshStation();
+    if(msg.type==='skill_assigned'||msg.type==='skill_revoked'||msg.type==='skills_scanned')refreshSkills();
   };
   ws.onclose=()=>{document.getElementById('ws-dot').classList.add('offline');document.getElementById('ws-label').textContent='重连中...';setTimeout(connectWS,3000);};
 }
@@ -679,6 +706,79 @@ async function showHostStationDetail(id){
 async function recomputeRatings(){
   if(!confirm('确定要重新评级所有主机吗？'))return;
   try{const r=await fetch('/api/station/rate',{method:'POST'});const d=await r.json();refreshStation();alert(`已重算 ${d.updated||0} 台主机评级`);}catch(e){alert('失败:'+e.message);}
+}
+
+// ── 技能库管理 ──
+let allSkills=[];
+async function refreshSkills(){
+  const filter=document.getElementById('skill-role-filter');
+  const cat=filter?filter.value:'';
+  try{
+    const url=cat?`/api/station/skills?category=${cat}`:'/api/station/skills';
+    const r=await fetch(url);const skills=await r.json();
+    allSkills=skills;
+    const body=document.getElementById('skill-body');
+    document.getElementById('skill-total').textContent=skills.length;
+    let totalAssign=0;
+    if(!skills.length){body.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--dim);padding:30px">暂无技能，点击「扫描新技能」从 skills/ 目录加载</td></tr>';return;}
+    body.innerHTML=skills.map(s=>{
+      const assignCount=(s.assignments||0);
+      totalAssign+=assignCount;
+      const tagsHtml=(s.tags||[]).map(t=>`<span style="display:inline-block;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-size:11px;margin:1px">${esc(t)}</span>`).join('');
+      const accessHtml=(s.default_access||[]).map(a=>`<span style="color:${a==='all'?'var(--green)':'var(--accent)'};font-size:12px">${esc(a)}</span>`).join(', ');
+      return `<tr style="cursor:pointer" onclick="viewSkill('${s.skill_id}')">
+        <td><b>${esc(s.name||s.skill_id)}</b><br><span style="font-size:11px;color:var(--dim)">${esc(s.description||'').substring(0,60)}${s.description&&s.description.length>60?'...':''}</span></td>
+        <td><span style="color:var(--accent);font-size:12px">${esc(s.category||'general')}</span></td>
+        <td>${tagsHtml||'<span style="color:var(--dim)">-</span>'}</td>
+        <td>${accessHtml}</td>
+        <td><span style="color:var(--dim);font-size:12px">v${esc(s.version||'1.0')}</span></td>
+        <td><button class="btn sm" onclick="event.stopPropagation();assignSkill('${s.skill_id}')">分配</button></td>
+      </tr>`;
+    }).join('');
+    document.getElementById('skill-assign-count').textContent=totalAssign;
+  }catch(e){console.error('技能列表加载失败:',e);}
+}
+async function viewSkill(skillId){
+  try{
+    const r=await fetch(`/api/station/skills/${skillId}`);const d=await r.json();
+    const assignsHtml=(d.assignments||[]).map(a=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)"><span style="font-size:12px;color:var(--accent)">${esc(a.assignee_type)}</span><span>${esc(a.assignee_id)}</span><button class="btn sm danger" onclick="revokeSkill('${skillId}','${a.assignee_type}','${a.assignee_id}')">撤销</button></div>`).join('');
+    document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span>
+      <h2>${esc(d.name||skillId)}</h2>
+      <p style="color:var(--dim);font-size:13px">${esc(d.description||'')}</p>
+      <div class="kv-grid" style="margin:12px 0">
+        <span class="k">分类</span><span class="v">${esc(d.category||'general')}</span>
+        <span class="k">版本</span><span class="v">v${esc(d.version||'1.0')}</span>
+        <span class="k">默认权限</span><span class="v">${(d.default_access||[]).join(', ')}</span>
+      </div>
+      <div class="modal-sec"><h3>技能内容</h3><pre style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;overflow:auto;max-height:300px;font-size:12px;line-height:1.5;white-space:pre-wrap">${esc(d.content||'(无内容)')}</pre></div>
+      ${d.reference?`<div class="modal-sec"><h3>扩展参考</h3><pre style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;overflow:auto;max-height:200px;font-size:12px;line-height:1.5;white-space:pre-wrap">${esc(d.reference)}</pre></div>`:''}
+      <div class="modal-sec"><h3>权限分配 (${(d.assignments||[]).length})</h3>${assignsHtml||'<p style="color:var(--dim)">无分配记录</p>'}
+        <div style="margin-top:12px"><button class="btn sm primary" onclick="assignSkill('${skillId}')">+ 添加分配</button></div>
+      </div>`;
+    document.getElementById('overlay').classList.add('show');
+  }catch(e){alert('失败:'+e.message);}
+}
+async function assignSkill(skillId){
+  const type=prompt('分配类型 (role/agent/host):','role');if(!type)return;
+  const id=prompt('分配目标 ID (如: worker, secretary, agent_id, device_id):');if(!id)return;
+  try{
+    const r=await fetch(`/api/station/skills/${skillId}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({assignee_type:type,assignee_id:id})});
+    const d=await r.json();if(d.ok){refreshSkills();viewSkill(skillId);}else{alert('失败: '+(d.detail||'未知错误'));}
+  }catch(e){alert('失败:'+e.message);}
+}
+async function revokeSkill(skillId,assigneeType,assigneeId){
+  if(!confirm(`确定要撤销 ${assigneeType}:${assigneeId} 对技能 ${skillId} 的访问权限吗？`))return;
+  try{
+    const r=await fetch(`/api/station/skills/${skillId}/assign?assignee_type=${assigneeType}&assignee_id=${assigneeId}`,{method:'DELETE'});
+    const d=await r.json();if(d.ok){refreshSkills();viewSkill(skillId);}else{alert('失败: '+(d.detail||'未知错误'));}
+  }catch(e){alert('失败:'+e.message);}
+}
+async function scanSkills(){
+  try{
+    const r=await fetch('/api/station/skills/scan');const d=await r.json();
+    refreshSkills();
+    alert(`扫描完成: ${d.scanned||0} 个技能已注册/更新`);
+  }catch(e){alert('失败:'+e.message);}
 }
 
 // ── 初始化 ──

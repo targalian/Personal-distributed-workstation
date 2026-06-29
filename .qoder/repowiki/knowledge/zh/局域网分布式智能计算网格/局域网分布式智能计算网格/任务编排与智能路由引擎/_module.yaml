@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: lan_mesh/task_orchestration_and_routing
+title: 任务编排与智能路由引擎
+scope:
+    - lan_mesh/orchestrator.py
+    - lan_mesh/task.py
+    - lan_mesh/model_router.py
+    - lan_mesh/project.py
+source_files: []
+depends_on: []
+related_to: []

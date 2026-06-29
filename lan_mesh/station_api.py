@@ -620,6 +620,70 @@ def create_station_router(controller) -> APIRouter:
         return {"models": controller.model_router.list_models()}
 
     # ════════════════════════════════════════════════════════════
+    #  技能库管理 (Skill Registry)
+    # ════════════════════════════════════════════════════════════
+
+    @router.get("/api/station/skills")
+    async def list_skills(category: str = None):
+        """列出所有已注册技能，可按分类过滤。"""
+        return [s.to_dict() for s in controller.skill_registry.list_skills(category)]
+
+    @router.get("/api/station/skills/stats")
+    async def skill_stats():
+        """返回技能库统计信息。"""
+        return controller.skill_registry.stats()
+
+    @router.get("/api/station/skills/scan")
+    async def scan_skills():
+        """手动触发扫描注册新技能。"""
+        result = controller.skill_registry.scan_and_register()
+        await _broadcast(state, "skills_scanned", {"scanned": len(result), "details": result})
+        return {"ok": True, "scanned": len(result), "details": result}
+
+    @router.get("/api/station/skills/download")
+    async def download_skill_package(role: str, agent_id: str = None):
+        """Worker 拉取已授权的技能包。"""
+        return controller.skill_registry.build_skill_package(role, agent_id)
+
+    @router.get("/api/station/skills/role/{role}")
+    async def get_skills_for_role(role: str):
+        """获取角色可用的技能列表。"""
+        return [s.to_dict() for s in controller.skill_registry.get_skills_for_role(role)]
+
+    @router.get("/api/station/skills/{skill_id}")
+    async def get_skill_detail(skill_id: str):
+        """获取技能详情及完整内容。"""
+        skill = controller.skill_registry.get_skill(skill_id)
+        if not skill:
+            raise HTTPException(status_code=404, detail="技能不存在")
+        content = controller.skill_registry.get_skill_content(skill_id)
+        assignments = controller.skill_registry.get_skill_assignments(skill_id)
+        return {**skill.to_dict(), "content": content.get("content", ""),
+                "reference": content.get("reference", ""), "assignments": assignments}
+
+    @router.post("/api/station/skills/{skill_id}/assign")
+    async def assign_skill(skill_id: str, payload: dict):
+        """分配技能给角色/Agent/主机。"""
+        assignee_type = payload.get("assignee_type", "role")
+        assignee_id = payload.get("assignee_id", "")
+        if not assignee_id:
+            raise HTTPException(status_code=400, detail="assignee_id 不能为空")
+        controller.skill_registry.assign_skill(skill_id, assignee_type, assignee_id)
+        await _broadcast(state, "skill_assigned", {
+            "skill_id": skill_id, "assignee_type": assignee_type, "assignee_id": assignee_id
+        })
+        return {"ok": True}
+
+    @router.delete("/api/station/skills/{skill_id}/assign")
+    async def revoke_skill(skill_id: str, assignee_type: str, assignee_id: str):
+        """撤销技能分配。"""
+        controller.skill_registry.revoke_skill(skill_id, assignee_type, assignee_id)
+        await _broadcast(state, "skill_revoked", {
+            "skill_id": skill_id, "assignee_type": assignee_type, "assignee_id": assignee_id
+        })
+        return {"ok": True}
+
+    # ════════════════════════════════════════════════════════════
     #  WebSocket 实时推送
     # ════════════════════════════════════════════════════════════
 

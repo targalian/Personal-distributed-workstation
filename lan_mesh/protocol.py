@@ -415,3 +415,33 @@ class UsageRecord:
     def from_dict(cls, d: dict) -> "UsageRecord":
         valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
         return cls(**valid)
+
+
+# ── 技能库记录 (Skill Registry) ─────────────────────────────────
+
+
+@dataclass
+class SkillRecord:
+    """技能库记录 — 描述一个可分发的能力/知识包。
+
+    每个技能对应 skills/ 目录下的一个子目录,
+    包含 SKILL.md (主内容 + YAML front matter) 和可选的 reference.md。
+    """
+    skill_id: str = ""               # 唯一标识 (如 "multi-agent-architect")
+    name: str = ""                   # 显示名称
+    description: str = ""            # 简短描述
+    category: str = "general"        # 分类: architecture | coding | ops | management | general
+    tags: list = field(default_factory=list)  # 能力标签
+    default_access: list = field(default_factory=lambda: ["all"])  # 默认可访问的角色列表
+    content_path: str = ""           # 相对于 skills_dir 的路径
+    version: str = "1.0"
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SkillRecord":
+        valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**valid)

@@ -15,20 +15,24 @@
 - [model_router.py](file://lan_mesh/model_router.py)
 - [station_director.py](file://lan_mesh/station_director.py)
 - [host_rating.py](file://lan_mesh/host_rating.py)
+- [station_api.py](file://lan_mesh/station_api.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
+- [secretary.py](file://lan_mesh/secretary.py)
 - [config.yaml](file://config.yaml)
 - [api.ts](file://quicklan-main/src/api.ts)
 - [types.ts](file://quicklan-main/src/types.ts)
 - [lan_api.rs](file://quicklan-main/src-tauri/src/lan_api.rs)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
-- [secretary.py](file://lan_mesh/secretary.py)
 - [main.py](file://main.py)
 </cite>
 
 ## 更新摘要
 **变更内容**
-- 新增 `/api/station/` 命名空间下的六个舰队管理端点
-- 新增主机评级和舰队统计功能
-- 增强了 Web UI 仪表盘的舰队管理能力
+- 新增 `/api/station/` 命名空间下的完整角色管理API
+- 新增 Secretary 远程主机管理功能，支持远程启动/停止 Secretary
+- 新增角色激活/停用端点，支持动态切换工作模式
+- 新增远程主机角色查询和状态监控
+- 增强了 Web UI 仪表盘的角色管理能力
 - 完善了事件历史和实时监控功能
 
 ## 目录
@@ -47,7 +51,7 @@
 
 Work Station 项目是一个基于局域网的分布式任务执行平台，采用 Master/Worker 架构设计。该项目提供了完整的 Web API 接口，支持设备管理、文件传输、任务执行、工具调度和项目管理等功能。系统通过 UDP 广播发现机制实现设备自动发现，通过 HTTP API 提供 RESTful 接口，通过 WebSocket 实现实时状态推送。
 
-**更新** 新增了 `/api/station/` 命名空间，提供全面的舰队管理能力，包括主机评级、事件历史、统计摘要等功能。
+**更新** 新增了 `/api/station/` 命名空间，提供全面的舰队管理能力和角色管理系统，包括主机评级、事件历史、统计摘要、远程 Secretary 分配等功能。
 
 ## 项目结构
 
@@ -67,11 +71,13 @@ Orchestrator[任务编排器]
 MCPGateway[MCP 工具网关]
 StationDirector[工作站主管]
 HostRating[主机评级系统]
+RoleManager[角色管理器]
 end
 subgraph "API 层"
 MasterAPI[Master API]
 WorkerAPI[Worker API]
 StationAPI[Station API]
+SecretaryAPI[Secretary API]
 end
 subgraph "前端集成"
 QuickLAN[QuickLAN 前端]
@@ -81,17 +87,14 @@ end
 Master --> MasterAPI
 Worker --> WorkerAPI
 StationDirector --> StationAPI
+StationAPI --> RoleManager
 StationAPI --> Database
 StationAPI --> HostRating
 StationAPI --> Discovery
-MasterAPI --> Database
-WorkerAPI --> SharedFolder
-MasterAPI --> Discovery
-MasterAPI --> Orchestrator
-MasterAPI --> ProjectManager
-MasterAPI --> ModelRouter
-MasterAPI --> MCPGateway
-Orchestrator --> MCPGateway
+SecretaryAPI --> ProjectManager
+SecretaryAPI --> Orchestrator
+SecretaryAPI --> ModelRouter
+SecretaryAPI --> MCPGateway
 QuickLAN --> MasterAPI
 TauriApp --> LANAPI
 ```
@@ -102,6 +105,8 @@ TauriApp --> LANAPI
 - [api.py:37-570](file://lan_mesh/api.py#L37-L570)
 - [station_director.py:28-224](file://lan_mesh/station_director.py#L28-L224)
 - [host_rating.py:13-115](file://lan_mesh/host_rating.py#L13-L115)
+- [station_api.py:42-127](file://lan_mesh/station_api.py#L42-L127)
+- [station_controller.py:69-182](file://lan_mesh/station_controller.py#L69-L182)
 
 **章节来源**
 - [master.py:1-332](file://lan_mesh/master.py#L1-L332)
@@ -109,6 +114,8 @@ TauriApp --> LANAPI
 - [api.py:1-570](file://lan_mesh/api.py#L1-L570)
 - [station_director.py:1-224](file://lan_mesh/station_director.py#L1-L224)
 - [host_rating.py:1-115](file://lan_mesh/host_rating.py#L1-L115)
+- [station_api.py:1-650](file://lan_mesh/station_api.py#L1-L650)
+- [station_controller.py:1-404](file://lan_mesh/station_controller.py#L1-L404)
 
 ## 核心组件
 
@@ -128,6 +135,7 @@ Worker 守护进程部署在各个主机上，负责：
 - 文件共享服务
 - 任务执行
 - Agent 能力注册
+- **新增** Secretary 子进程管理（远程角色分配）
 
 ### 发现服务
 基于 UDP 广播的设备发现机制，实现设备自动发现和状态同步。
@@ -156,6 +164,13 @@ Worker 守护进程部署在各个主机上，负责：
 - 资源池查询（按评级筛选在线主机）
 - 手动评级重算功能
 
+### 角色管理器 (Role Manager)
+**新增** 角色管理器负责：
+- Secretary 子进程的启动和停止
+- 远程主机角色分配管理
+- 角色状态查询和监控
+- 动态角色切换支持
+
 ### 主机评级系统
 **新增** 主机评级系统负责：
 - 基于硬件配置（CPU、内存、磁盘）自动计算综合得分
@@ -171,6 +186,7 @@ Worker 守护进程部署在各个主机上，负责：
 - [model_router.py:116-327](file://lan_mesh/model_router.py#L116-L327)
 - [station_director.py:28-224](file://lan_mesh/station_director.py#L28-L224)
 - [host_rating.py:13-115](file://lan_mesh/host_rating.py#L13-L115)
+- [worker.py:225-285](file://lan_mesh/worker.py#L225-L285)
 
 ## 架构概览
 
@@ -186,6 +202,8 @@ subgraph "API 层"
 REST[RESTful API]
 WebSocket[WebSocket 推送]
 StationAPI[Station API]
+SecretaryAPI[Secretary API]
+RoleAPI[角色管理 API]
 end
 subgraph "业务逻辑层"
 Orchestrator[任务编排器]
@@ -195,6 +213,7 @@ ProjectManager[项目管理器]
 ModelRouter[模型路由器]
 StationDirector[工作站主管]
 HostRating[主机评级系统]
+RoleManager[角色管理器]
 end
 subgraph "数据访问层"
 Database[SQLite 数据库]
@@ -213,7 +232,14 @@ REST --> AgentRuntime
 REST --> ProjectManager
 REST --> ModelRouter
 StationAPI --> StationDirector
+StationAPI --> RoleManager
 StationAPI --> HostRating
+SecretaryAPI --> ProjectManager
+SecretaryAPI --> Orchestrator
+SecretaryAPI --> ModelRouter
+SecretaryAPI --> MCPGateway
+RoleAPI --> RoleManager
+RoleAPI --> Worker
 StationDirector --> Database
 StationDirector --> DiscoveryService
 HostRating --> Database
@@ -232,6 +258,8 @@ MCPGateway --> TCP
 - [api.py:37-570](file://lan_mesh/api.py#L37-L570)
 - [station_director.py:28-224](file://lan_mesh/station_director.py#L28-L224)
 - [host_rating.py:13-115](file://lan_mesh/host_rating.py#L13-L115)
+- [station_api.py:42-127](file://lan_mesh/station_api.py#L42-L127)
+- [station_controller.py:69-182](file://lan_mesh/station_controller.py#L69-L182)
 
 ## 详细接口规范
 
@@ -421,7 +449,24 @@ MCPGateway --> TCP
 
 ### Station API 接口
 
-**新增** 工作站 API 提供舰队管理能力：
+**新增** 工作站 API 提供舰队管理能力和角色管理系统：
+
+#### 角色管理接口
+
+**激活 Secretary**
+- 方法：POST `/api/station/activate-secretary`
+- 功能：激活 Secretary 模式（同进程加载项目管理组件）
+- 响应：激活结果和组件状态
+
+**停用 Secretary**
+- 方法：POST `/api/station/deactivate-secretary`
+- 功能：停用 Secretary 模式
+- 响应：停用结果
+
+**查询角色状态**
+- 方法：GET `/api/station/roles`
+- 功能：查询当前激活的角色
+- 响应：角色状态和组件可用性
 
 #### 舰队概览统计
 
@@ -458,17 +503,45 @@ MCPGateway --> TCP
 - 功能：获取统计摘要
 - 响应：与 `/api/station/fleet` 相同的统计信息
 
+#### 远程主机管理接口
+
+**分配 Secretary 到主机**
+- 方法：POST `/api/station/hosts/{device_id}/assign-secretary`
+- 功能：指定主机运行 Secretary
+- 参数：device_id（路径参数），payload（可选端口配置）
+- 响应：分配结果和端口信息
+- **新增** 支持本机激活和远程主机分配
+
+**撤销主机的 Secretary 角色**
+- 方法：POST `/api/station/hosts/{device_id}/revoke-secretary`
+- 功能：撤销主机的 Secretary 角色
+- 参数：device_id（路径参数）
+- 响应：撤销结果
+
+**查询 Secretary 分配状态**
+- 方法：GET `/api/station/secretary-status`
+- 功能：查询当前 Secretary 分配状态
+- 响应：包含主机ID、名称、端口和活动状态的信息
+
+**查询主机角色状态**
+- 方法：GET `/api/station/hosts/{device_id}/role`
+- 功能：查询指定主机的角色状态（含远程 Secretary 子进程状态）
+- 参数：device_id（路径参数）
+- 响应：主机角色状态和远程状态信息
+
 #### 实时事件推送
 
 **WebSocket 事件推送**
 - 方法：WS `/ws`
 - 功能：实时推送主机状态变更和事件
-- 消息类型：hosts、heartbeat、agent_registered、project_created、project_updated、project_archived、station_events 等
+- 消息类型：hosts、heartbeat、agent_registered、project_created、project_updated、project_archived、station_events、secretary_assigned、secretary_revoked 等
 
 **章节来源**
-- [api.py:543-579](file://lan_mesh/api.py#L543-L579)
-- [station_director.py:154-219](file://lan_mesh/station_director.py#L154-L219)
-- [host_rating.py:45-83](file://lan_mesh/host_rating.py#L45-L83)
+- [station_api.py:42-127](file://lan_mesh/station_api.py#L42-L127)
+- [station_api.py:227-405](file://lan_mesh/station_api.py#L227-L405)
+- [station_api.py:264-405](file://lan_mesh/station_api.py#L264-L405)
+- [station_controller.py:132-182](file://lan_mesh/station_controller.py#L132-L182)
+- [worker.py:225-285](file://lan_mesh/worker.py#L225-L285)
 
 ### Worker API 接口
 
@@ -506,6 +579,24 @@ MCPGateway --> TCP
 - 请求体：multipart/form-data
 - 响应：上传结果
 
+#### 角色管理接口
+
+**启动 Secretary 子进程**
+- 方法：POST `/role/start-secretary`
+- 功能：在本机启动 Secretary 子进程
+- 请求体：可选端口配置
+- 响应：启动结果和进程信息
+
+**停止 Secretary 子进程**
+- 方法：POST `/role/stop-secretary`
+- 功能：停止本机的 Secretary 子进程
+- 响应：停止结果
+
+**查询 Secretary 状态**
+- 方法：GET `/role/status`
+- 功能：查询本机 Secretary 运行状态
+- 响应：运行状态和进程信息
+
 #### 实时通信接口
 
 **WebSocket 连接**
@@ -514,7 +605,142 @@ MCPGateway --> TCP
 - 消息类型：hosts、heartbeat、agent_registered、project_created、project_updated、project_archived 等
 
 **章节来源**
+- [api.py:103-126](file://lan_mesh/api.py#L103-L126)
 - [api.py:39-98](file://lan_mesh/api.py#L39-L98)
+- [worker.py:225-285](file://lan_mesh/worker.py#L225-L285)
+
+### Secretary API 接口
+
+**新增** Secretary API 提供完整的项目管理功能：
+
+#### Agent 管理接口
+
+**Agent 注册**
+- 方法：POST `/api/agents/register`
+- 功能：注册 Agent Card
+- 请求体：AgentCard 对象
+- 响应：注册结果
+
+**Agent 列表**
+- 方法：GET `/api/agents`
+- 功能：获取所有 Agent 列表
+- 参数：status（可选）
+- 响应：Agent 列表和统计信息
+
+**单 Agent 查询**
+- 方法：GET `/api/agents/{agent_id}`
+- 功能：查询指定 Agent 详情
+- 响应：Agent 信息
+
+#### 任务管理接口
+
+**任务提交**
+- 方法：POST `/api/tasks`
+- 功能：提交新任务
+- 请求体：任务描述和输入数据
+- 响应：Task 对象
+- **更新** 支持关联项目进行预算控制
+
+**任务列表**
+- 方法：GET `/api/tasks`
+- 功能：获取任务列表
+- 参数：status（可选）、limit（默认50）
+- 响应：任务列表
+
+**任务查询**
+- 方法：GET `/api/tasks/{task_id}`
+- 功能：查询指定任务状态
+- 响应：Task 对象
+
+#### 项目管理接口
+
+**项目创建**
+- 方法：POST `/api/projects`
+- 功能：创建新项目
+- 请求体：项目配置（名称、描述、预算、模型限制、路由策略等）
+- 响应：Project 对象
+- **新增** 支持独立工作空间、预算控制和模型白名单
+
+**项目列表**
+- 方法：GET `/api/projects`
+- 功能：获取项目列表
+- 参数：status（可选，按状态过滤）
+- 响应：项目列表和统计信息
+
+**单项目查询**
+- 方法：GET `/api/projects/{project_id}`
+- 功能：查询项目详情（含预算状态）
+- 响应：项目状态信息（包含预算使用率、剩余预算、消费统计等）
+
+**项目更新**
+- 方法：PUT `/api/projects/{project_id}`
+- 功能：更新项目配置
+- 请求体：可更新字段（名称、描述、预算、模型、路由策略、状态等）
+- 响应：更新后的项目对象
+
+**项目归档**
+- 方法：DELETE `/api/projects/{project_id}`
+- 功能：归档项目（软删除）
+- 响应：归档结果
+
+**项目消费记录**
+- 方法：GET `/api/projects/{project_id}/usage`
+- 功能：查询项目消费记录
+- 参数：limit（默认100，限制返回记录数）
+- 响应：消费记录列表和统计信息
+
+#### 模型路由接口
+
+**路由决策预览**
+- 方法：POST `/api/route/dry-run`
+- 功能：模型路由决策预览（dry-run）
+- 请求体：包含任务描述、技能类型、项目ID
+- 响应：RoutingResult 对象
+
+**模型列表**
+- 方法：GET `/api/models`
+- 功能：返回模型池列表（含可用状态）
+- 响应：模型列表
+
+#### MCP 工具接口
+
+**工具列表**
+- 方法：GET `/tools/list`
+- 功能：获取所有可用工具
+- 参数：model（可选，模型类型）
+- 响应：工具列表和服务器信息
+
+**工具调用**
+- 方法：POST `/tools/call`
+- 功能：调用指定工具
+- 请求体：包含工具名称和参数
+- 响应：工具执行结果
+
+**MCP 服务器列表**
+- 方法：GET `/tools/servers`
+- 功能：获取所有 MCP 服务器
+- 响应：服务器列表和统计信息
+
+**MCP 服务器注册**
+- 方法：POST `/tools/servers`
+- 功能：动态注册 MCP 服务器
+- 请求体：服务器配置
+- 响应：注册结果
+
+**MCP 服务器注销**
+- 方法：DELETE `/tools/servers/{name}`
+- 功能：注销 MCP 服务器
+- 响应：注销结果
+
+#### 实时通信接口
+
+**WebSocket 连接**
+- 方法：WS `/ws`
+- 功能：实时推送设备状态变化
+- 消息类型：hosts、heartbeat、agent_registered、project_created、project_updated、project_archived 等
+
+**章节来源**
+- [station_api.py:419-649](file://lan_mesh/station_api.py#L419-L649)
 
 ### 前端集成接口
 
@@ -551,8 +777,16 @@ MCPGateway --> TCP
 - `getStationEvents(limit)`: 获取全站事件流
 - `recomputeRatings()`: 重新计算评级
 
+**角色管理**（新增）
+- `activateSecretary()`: 激活 Secretary 模式
+- `deactivateSecretary()`: 停用 Secretary 模式
+- `assignSecretaryToHost(deviceId, port)`: 分配 Secretary 到主机
+- `revokeSecretaryFromHost(deviceId)`: 撤销主机的 Secretary 角色
+- `getSecretaryStatus()`: 查询 Secretary 分配状态
+
 **章节来源**
 - [api.ts:13-130](file://quicklan-main/src/api.ts#L13-L130)
+- [dashboard.html:244-270](file://lan_mesh/web/templates/dashboard.html#L244-L270)
 
 ## 数据模型
 
@@ -710,6 +944,15 @@ class EventLog {
 +to_dict() dict
 +from_dict(dict) EventLog
 }
+class RoleAssignment {
++string device_id
++string role
++int port
++bool active
++float assigned_at
++to_dict() dict
++from_dict(dict) RoleAssignment
+}
 HostInfo --> HostRecord : "持久化"
 HostRecord --> HostRating : "包含"
 AgentCard --> Task : "执行"
@@ -717,12 +960,14 @@ Task --> SubTask : "包含"
 Project --> UsageRecord : "产生"
 ModelRouter --> RoutingResult : "产生"
 HostRecord --> EventLog : "产生"
+HostRecord --> RoleAssignment : "包含"
 ```
 
 **图表来源**
 - [protocol.py:69-388](file://lan_mesh/protocol.py#L69-L388)
 - [host_rating.py:30-43](file://lan_mesh/host_rating.py#L30-L43)
 - [database.py:312-334](file://lan_mesh/database.py#L312-L334)
+- [station_api.py:346-366](file://lan_mesh/station_api.py#L346-L366)
 
 ### 端口和服务配置
 
@@ -731,6 +976,7 @@ HostRecord --> EventLog : "产生"
 | UDP 发现 | 45454 | 设备发现和状态广播 |
 | Worker API | 45460 | Worker HTTP API |
 | Master API | 45470 | Master HTTP API + Web UI |
+| Station API | 45470 | Station Director + Secretary API |
 | LAN API | 45480 | QuickLAN LAN API |
 
 **章节来源**
@@ -754,11 +1000,13 @@ ProjectManager[ProjectManager]
 ModelRouter[ModelRouter]
 StationDirector[StationDirector]
 HostRating[HostRating]
+RoleManager[RoleManager]
 end
 subgraph "Worker 侧"
 WorkerAPI[Worker API]
 AgentRuntime[AgentRuntime]
 SharedFolderW[SharedFolderManager]
+RoleManagerW[RoleManager]
 end
 subgraph "公共组件"
 Protocol[Protocol]
@@ -773,9 +1021,11 @@ MasterAPI --> ProjectManager
 MasterAPI --> ModelRouter
 WorkerAPI --> SharedFolderW
 WorkerAPI --> AgentRuntime
+WorkerAPI --> RoleManagerW
 StationDirector --> Database
 StationDirector --> Discovery
 StationDirector --> HostRating
+RoleManager --> RoleManagerW
 HostRating --> Database
 MasterAPI --> Protocol
 WorkerAPI --> Protocol
@@ -789,6 +1039,7 @@ WorkerAPI --> Config
 - [api.py:33-34](file://lan_mesh/api.py#L33-L34)
 - [station_director.py:31-36](file://lan_mesh/station_director.py#L31-L36)
 - [host_rating.py:13-25](file://lan_mesh/host_rating.py#L13-L25)
+- [worker.py:225-285](file://lan_mesh/worker.py#L225-L285)
 
 ### 错误处理机制
 
@@ -808,18 +1059,23 @@ ProcessError --> Forbidden[403 权限不足]
 ProcessError --> ServiceUnavailable[503 服务不可用]
 ProcessError --> PaymentRequired[402 预算不足]
 ProcessError --> StationNotInitialized[503 Station Director 未初始化]
+ProcessError --> RoleNotActive[503 Secretary 未激活]
+ProcessError --> RemoteConnection[502 远程连接失败]
 ValidationError --> Response
 NotFound --> Response
 Forbidden --> Response
 ServiceUnavailable --> Response
 PaymentRequired --> Response
 StationNotInitialized --> Response
+RoleNotActive --> Response
+RemoteConnection --> Response
 ```
 
 **章节来源**
 - [api.py:81-84](file://lan_mesh/api.py#L81-L84)
 - [api.py:152-153](file://lan_mesh/api.py#L152-L153)
 - [api.py:569](file://lan_mesh/api.py#L569)
+- [station_api.py:411-418](file://lan_mesh/station_api.py#L411-L418)
 
 ## 性能考虑
 
@@ -836,6 +1092,8 @@ StationNotInitialized --> Response
 | 模型路由候选数量 | 10 个 | 根据性能调整 |
 | **新增** 事件历史保留 | 50 条 | 可根据需求调整 |
 | **新增** 舰队统计缓存 | 3 秒 | 减少数据库查询频率 |
+| **新增** 角色状态缓存 | 1 秒 | 减少远程查询频率 |
+| **新增** 远程主机分配缓存 | 5 秒 | 减少重复分配检查 |
 
 ### 缓存策略
 
@@ -844,8 +1102,10 @@ StationNotInitialized --> Response
 - **Agent 状态缓存**：数据库中维护 Agent 状态，避免重复查询
 - **项目状态缓存**：项目预算和消费信息的内存缓存，提高查询性能
 - **模型路由缓存**：路由决策结果的短期缓存，减少重复计算
-- ****新增** 舰队统计缓存**：主机评级和统计信息的短期缓存
-- ****新增** 事件历史缓存**：最近事件的内存缓存，提高查询性能
+- **主机评级缓存**：主机评级和统计信息的短期缓存
+- **事件历史缓存**：最近事件的内存缓存，提高查询性能
+- **角色状态缓存**：Secretary 分配状态的短期缓存
+- **远程主机缓存**：远程主机信息的短期缓存
 
 ### 网络优化
 
@@ -854,7 +1114,8 @@ StationNotInitialized --> Response
 - **批量操作**：支持批量文件传输和设备查询
 - **项目状态推送**：通过 WebSocket 实时推送项目状态变更
 - **心跳去抖**：避免频繁的心跳请求
-- ****新增** 事件流推送**：通过 WebSocket 实时推送舰队事件
+- **事件流推送**：通过 WebSocket 实时推送舰队事件
+- **远程角色分配**：优化远程主机连接和状态查询
 
 ## 故障排除指南
 
@@ -890,14 +1151,21 @@ StationNotInitialized --> Response
 2. 验证项目模型白名单配置
 3. 查看路由决策日志
 
-****新增** 舰队管理异常**
-1. 检查 Station Director 是否正确初始化
-2. 验证数据库连接和主机表结构
-3. 确认主机评级配置和阈值设置
-4. 查看事件日志和评级变更记录
-5. 验证 Discovery 服务是否正常工作
+**角色管理异常**
+1. 检查角色管理器是否正确初始化
+2. 验证数据库连接和角色表结构
+3. 确认 Secretary 子进程配置和端口设置
+4. 查看远程主机连接状态和认证信息
+5. 验证角色分配和撤销的权限控制
 
-****新增** WebSocket 连接问题**
+**远程主机管理异常**
+1. 检查远程主机的网络连通性和端口可达性
+2. 验证 Worker 的角色管理功能是否启用
+3. 确认远程主机的 Secretary 子进程状态
+4. 查看远程连接的超时和重试机制
+5. 验证防火墙和安全策略配置
+
+**WebSocket 连接问题**
 1. 检查 WebSocket 端口配置
 2. 验证客户端连接状态
 3. 查看服务器日志获取连接错误信息
@@ -917,11 +1185,14 @@ StationNotInitialized --> Response
 - **新增** 舰队管理操作日志（主机注册、评级变更、事件记录）
 - **新增** 主机离线检测和清理日志
 - **新增** WebSocket 连接和事件推送日志
+- **新增** 角色管理操作日志（Secretary 激活、停用、分配、撤销）
+- **新增** 远程主机管理日志（远程连接、状态查询、进程控制）
 
 **章节来源**
 - [master.py:300-313](file://lan_mesh/master.py#L300-L313)
 - [worker.py:314-318](file://lan_mesh/worker.py#L314-L318)
 - [station_director.py:92-150](file://lan_mesh/station_director.py#L92-L150)
+- [station_api.py:411-418](file://lan_mesh/station_api.py#L411-L418)
 
 ## 结论
 
@@ -936,8 +1207,10 @@ Work Station 项目提供了完整的 Web API 接口体系，支持高效的局�
 - **项目管理功能**：提供完整的项目生命周期管理和预算控制
 - **智能路由**：基于难度分级和加权评分的模型路由决策
 - **成本控制**：实时预算跟踪和自动暂停机制
-- ****新增** 舰队管理能力**：提供全面的主机评级、事件历史和统计功能
-- ****新增** 实时监控**：通过 WebSocket 实时推送舰队状态和事件
+- **舰队管理能力**：提供全面的主机评级、事件历史和统计功能
+- **角色管理系统**：支持 Secretary 的动态激活/停用和远程主机管理
+- **远程主机控制**：支持远程启动/停止 Secretary 子进程
+- **实时监控**：通过 WebSocket 实时推送舰队状态和事件
 
 **建议在生产环境中**：
 1. 根据实际网络环境调整心跳间隔和 TTL 设置
@@ -952,3 +1225,6 @@ Work Station 项目提供了完整的 Web API 接口体系，支持高效的局�
 10. **新增** 监控主机评级准确性，必要时手动重算
 11. **新增** 配置合适的事件推送频率，避免过度推送
 12. **新增** 监控 WebSocket 连接状态，确保实时通信正常
+13. **新增** 定期检查角色管理功能的权限和安全配置
+14. **新增** 监控远程主机连接的稳定性和安全性
+15. **新增** 配置角色状态缓存，提高远程查询性能

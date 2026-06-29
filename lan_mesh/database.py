@@ -145,6 +145,31 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_host_events_device
                 ON host_events(device_id, timestamp);
+
+            CREATE TABLE IF NOT EXISTS skills (
+                skill_id       TEXT PRIMARY KEY,
+                name           TEXT NOT NULL DEFAULT '',
+                description    TEXT NOT NULL DEFAULT '',
+                category       TEXT NOT NULL DEFAULT 'general',
+                tags           TEXT NOT NULL DEFAULT '[]',
+                default_access TEXT NOT NULL DEFAULT '["all"]',
+                content_path   TEXT NOT NULL DEFAULT '',
+                version        TEXT NOT NULL DEFAULT '1.0',
+                created_at     REAL NOT NULL DEFAULT 0,
+                updated_at     REAL NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS skill_assignments (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                skill_id      TEXT NOT NULL,
+                assignee_type TEXT NOT NULL,
+                assignee_id   TEXT NOT NULL,
+                assigned_at   REAL NOT NULL DEFAULT 0,
+                UNIQUE(skill_id, assignee_type, assignee_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_skill_assignments
+                ON skill_assignments(assignee_type, assignee_id);
         """)
         # 兼容已有 tasks 表: 安全添加 project_id 列
         try:
@@ -688,3 +713,122 @@ class Database:
             (project_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Skill Registry CRUD ──────────────────────────────────────
+
+    def upsert_skill(self, skill_id: str, name: str, description: str,
+                      category: str, tags: list, default_access: list,
+                      content_path: str, version: str = "1.0"):
+        """插入或更新技能记录。"""
+        conn = self._get_conn()
+        now = time.time()
+        conn.execute("""
+            INSERT INTO skills (
+                skill_id, name, description, category, tags,
+                default_access, content_path, version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(skill_id) DO UPDATE SET
+                name=excluded.name,
+                description=excluded.description,
+                category=excluded.category,
+                tags=excluded.tags,
+                default_access=excluded.default_access,
+                content_path=excluded.content_path,
+                version=excluded.version,
+                updated_at=excluded.updated_at
+        """, (
+            skill_id, name, description, category,
+            json.dumps(tags, ensure_ascii=False),
+            json.dumps(default_access, ensure_ascii=False),
+            content_path, version, now, now,
+        ))
+        conn.commit()
+
+    def get_skill(self, skill_id: str) -> Optional[dict]:
+        """查询单个技能记录。"""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM skills WHERE skill_id = ?", (skill_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return self._row_to_skill(row)
+
+    def list_skills(self, category: str = None) -> list[dict]:
+        """列出所有技能,可按分类过滤。"""
+        conn = self._get_conn()
+        if category:
+            rows = conn.execute(
+                "SELECT * FROM skills WHERE category = ? ORDER BY updated_at DESC",
+                (category,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM skills ORDER BY updated_at DESC"
+            ).fetchall()
+        return [self._row_to_skill(r) for r in rows]
+
+    def delete_skill(self, skill_id: str):
+        """删除技能及其所有分配记录。"""
+        conn = self._get_conn()
+        conn.execute("DELETE FROM skills WHERE skill_id = ?", (skill_id,))
+        conn.execute("DELETE FROM skill_assignments WHERE skill_id = ?", (skill_id,))
+        conn.commit()
+
+    @staticmethod
+    def _row_to_skill(row) -> dict:
+        """将数据库行转换为技能字典。"""
+        return {
+            "skill_id": row["skill_id"],
+            "name": row["name"],
+            "description": row["description"],
+            "category": row["category"],
+            "tags": json.loads(row["tags"]) if row["tags"] else [],
+            "default_access": json.loads(row["default_access"]) if row["default_access"] else ["all"],
+            "content_path": row["content_path"],
+            "version": row["version"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    # ── Skill Assignment CRUD ────────────────────────────────────
+
+    def assign_skill(self, skill_id: str, assignee_type: str, assignee_id: str):
+        """分配技能给角色/Agent/主机。"""
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT OR IGNORE INTO skill_assignments
+               (skill_id, assignee_type, assignee_id, assigned_at)
+               VALUES (?, ?, ?, ?)""",
+            (skill_id, assignee_type, assignee_id, time.time()),
+        )
+        conn.commit()
+
+    def revoke_skill(self, skill_id: str, assignee_type: str, assignee_id: str):
+        """撤销技能分配。"""
+        conn = self._get_conn()
+        conn.execute(
+            """DELETE FROM skill_assignments
+               WHERE skill_id = ? AND assignee_type = ? AND assignee_id = ?""",
+            (skill_id, assignee_type, assignee_id),
+        )
+        conn.commit()
+
+    def get_skill_assignments(self, skill_id: str) -> list[dict]:
+        """查询技能的所有分配记录。"""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM skill_assignments WHERE skill_id = ? ORDER BY assigned_at DESC",
+            (skill_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_skills_for_assignee(self, assignee_type: str, assignee_id: str) -> list[str]:
+        """查询指定角色/Agent/主机被分配的技能 ID 列表。"""
+        conn = self._get_conn()
+        rows = conn.execute(
+            """SELECT skill_id FROM skill_assignments
+               WHERE assignee_type = ? AND assignee_id = ?""",
+            (assignee_type, assignee_id),
+        ).fetchall()
+        return [r["skill_id"] for r in rows]

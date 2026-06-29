@@ -45,6 +45,7 @@ from .shared_folder import SharedFolderManager
 from .station_director import StationDirector
 from .station_api import create_station_router
 from .api import create_worker_router
+from .skill_registry import SkillRegistry
 
 
 # ── Web UI 模板路径 ─────────────────────────────────────────────
@@ -112,6 +113,11 @@ class StationController:
             shared_folder=self.state.shared_folder,
         )
 
+        # 技能库 (项目根目录下的 skills/ 文件夹)
+        skills_dir = str(Path(__file__).parent.parent / "skills")
+        self.skill_registry = SkillRegistry(self.db, skills_dir)
+        self.skill_registry.scan_and_register()
+
         # Secretary 组件 (初始未加载, activate_secretary() 时创建)
         self.secretary_active = False
         self.project_manager = None
@@ -153,7 +159,10 @@ class StationController:
             print(f"[Station] 模型路由器已加载: {self.model_router.pool_size} 个模型")
 
         # 任务编排器
-        self.orchestrator = Orchestrator(self.db, self.project_manager, self.model_router)
+        self.orchestrator = Orchestrator(
+            self.db, self.project_manager, self.model_router,
+            skill_registry=self.skill_registry,
+        )
 
         # MCP 工具网关
         self.mcp_gateway = MCPGateway()

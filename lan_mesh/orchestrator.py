@@ -61,10 +61,12 @@ class Orchestrator:
     在 Secretary 端运行,负责任务分解、Agent 匹配、子任务分发与结果聚合。
     """
 
-    def __init__(self, db: Database, project_manager=None, model_router=None):
+    def __init__(self, db: Database, project_manager=None, model_router=None,
+                 skill_registry=None):
         self.db = db
         self.project_manager = project_manager
         self.model_router = model_router
+        self.skill_registry = skill_registry
         self._lock = threading.Lock()
         self._active_dags: dict[str, TaskDAG] = {}  # task_id → DAG
 

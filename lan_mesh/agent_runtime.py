@@ -20,6 +20,7 @@ LLM API 调用通过环境变量配置 (OPENAI_API_KEY / DEEPSEEK_API_KEY 等)�
 import os
 import subprocess
 import time
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -44,6 +45,7 @@ class AgentRuntime:
     def __init__(self, agent_id: str, shared_folder_path: str):
         self.agent_id = agent_id
         self.shared_folder = shared_folder_path
+        self._skills_cache_dir = Path.home() / ".lan_mesh" / "skills_cache"
         self._handlers = {
             "code_generation": self._handle_code_generation,
             "code_review": self._handle_code_review,
@@ -188,6 +190,41 @@ class AgentRuntime:
 
     # ── LLM API 调用 (支持多 Provider + 降级链重试) ──────────────────
 
+    def _build_system_prompt(self, task_context: str = "") -> str:
+        """从本地技能缓存构建 system prompt。
+
+        读取 ~/.lan_mesh/skills_cache/ 下的所有技能文件,
+        去掉 YAML front matter 后拼接为知识库 prompt。
+        """
+        if not self._skills_cache_dir.is_dir():
+            return ""
+
+        prompts = []
+        for skill_dir in sorted(self._skills_cache_dir.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.is_file():
+                continue
+            try:
+                content = skill_md.read_text(encoding="utf-8")
+                # 去掉 YAML front matter
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        content = parts[2].strip()
+                if content:
+                    prompts.append(content)
+            except Exception:
+                continue
+
+        if not prompts:
+            return ""
+        return (
+            "以下是你的能力参考知识库，请在执行任务时参考:\n\n"
+            + "\n\n---\n\n".join(prompts)
+        )
+
     def _call_llm_with_routing(self, prompt: str, input_data: dict) -> dict:
         """带路由决策的 LLM 调用, 支持降级链重试。
 
@@ -202,6 +239,10 @@ class AgentRuntime:
             # 构建完整重试链: [preferred] + fallbacks
             chain = [model_pref] + [m for m in fallbacks if m != model_pref]
             last_error = None
+            # 从本地技能缓存构建 system prompt
+            system_prompt = self._build_system_prompt(
+                input_data.get("description", input_data.get("requirement", ""))
+            )
 
             for model_id in chain:
                 provider_cfg = self._resolve_provider(model_id)
@@ -212,6 +253,7 @@ class AgentRuntime:
                         prompt, model_id,
                         provider_cfg["base_url"],
                         provider_cfg["api_key"],
+                        system_prompt=system_prompt,
                     )
                 except Exception as e:
                     last_error = e
@@ -227,7 +269,10 @@ class AgentRuntime:
             }
 
         # 无路由器信息, 回退旧逻辑
-        return self._call_llm_full(prompt)
+        system_prompt = self._build_system_prompt(
+            input_data.get("description", input_data.get("requirement", ""))
+        )
+        return self._call_llm_full(prompt, system_prompt=system_prompt)
 
     def _resolve_provider(self, model_id: str) -> Optional[dict]:
         """根据模型 ID 解析 provider 配置, 返回 {base_url, api_key} 或 None。"""
@@ -246,10 +291,15 @@ class AgentRuntime:
         return None
 
     def _call_openai_compatible(
-        self, prompt: str, model_id: str, base_url: str, api_key: str
+        self, prompt: str, model_id: str, base_url: str, api_key: str,
+        system_prompt: str = "",
     ) -> dict:
         """通用 OpenAI 兼容 API 调用 — 支持所有厂商 (DeepSeek/OpenAI/Qwen/...)。"""
         url = f"{base_url.rstrip('/')}/chat/completions"
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
         resp = requests.post(
             url,
             headers={
@@ -258,7 +308,7 @@ class AgentRuntime:
             },
             json={
                 "model": model_id,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": messages,
                 "max_tokens": 4096,
             },
             timeout=120,
@@ -273,7 +323,7 @@ class AgentRuntime:
             "output_tokens": usage.get("completion_tokens", 0),
         }
 
-    def _call_llm_full(self, prompt: str) -> dict:
+    def _call_llm_full(self, prompt: str, system_prompt: str = "") -> dict:
         """调用外部 LLM API (回退逻辑, 无路由器时使用)。
 
         优先使用 DeepSeek (成本低), 其次 OpenAI。
@@ -283,6 +333,7 @@ class AgentRuntime:
             return self._call_openai_compatible(
                 prompt, "deepseek-chat",
                 PROVIDER_CONFIG["deepseek"]["base_url"], deepseek_key,
+                system_prompt=system_prompt,
             )
 
         openai_key = os.environ.get("OPENAI_API_KEY")
@@ -290,6 +341,7 @@ class AgentRuntime:
             return self._call_openai_compatible(
                 prompt, "gpt-4o-mini",
                 PROVIDER_CONFIG["openai"]["base_url"], openai_key,
+                system_prompt=system_prompt,
             )
 
         return {

@@ -5,9 +5,10 @@ scope: []
 source_files:
     - lan_mesh/config.py
     - config.yaml
-    - lan_mesh/model_pool.example.yaml
+    - lan_mesh/model_pool.yaml
+    - main.py
+    - quicklan-main/src-tauri/tauri.conf.json
     - quicklan-main/src-tauri/src/settings.rs
     - quicklan-main/src-tauri/src/storage.rs
-    - quicklan-main/src-tauri/tauri.conf.json
 depends_on: []
 related_to: []

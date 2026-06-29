@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: lan_mesh/roles_and_controllers
+title: 工作站主管与角色控制器
+scope:
+    - lan_mesh/station_controller.py
+    - lan_mesh/station_director.py
+    - lan_mesh/station_api.py
+    - lan_mesh/secretary.py
+    - lan_mesh/worker.py
+    - lan_mesh/api.py
+source_files: []
+depends_on: []
+related_to: []
