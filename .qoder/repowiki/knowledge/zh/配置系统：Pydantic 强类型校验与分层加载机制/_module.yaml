@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: configuration_system
+title: 配置系统：Pydantic 强类型校验与分层加载机制
+scope: []
+source_files:
+    - lan_mesh/config.py
+    - config.yaml
+    - lan_mesh/model_pool.yaml
+    - main.py
+    - quicklan-main/src-tauri/src/settings.rs
+    - quicklan-main/src-tauri/tauri.conf.json
+depends_on: []
+related_to: []

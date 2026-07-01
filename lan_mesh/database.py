@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from .protocol import HostRecord, HostEvent, AgentCard, Task, SubTask
+from .protocol import HostRecord, HostEvent, AgentCard, Task, SubTask, PMAgent, AgentTeam, ProgressReport
 
 
 class Database:
@@ -186,6 +186,62 @@ class Database:
                 conn.execute(f"ALTER TABLE hosts ADD COLUMN {col} {dtype} NOT NULL DEFAULT {default}")
             except sqlite3.OperationalError:
                 pass  # 列已存在
+        # 兼容已有 tasks 表: 安全添加 pm_agent_id 列
+        try:
+            conn.execute("ALTER TABLE tasks ADD COLUMN pm_agent_id TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+        # PM Agent 架构演进: 新增表
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS pm_agents (
+                pm_id              TEXT PRIMARY KEY,
+                agent_name         TEXT NOT NULL DEFAULT '',
+                task_id            TEXT NOT NULL DEFAULT '',
+                project_id         TEXT NOT NULL DEFAULT '',
+                device_id          TEXT NOT NULL DEFAULT '',
+                hostname           TEXT NOT NULL DEFAULT '',
+                ip                 TEXT NOT NULL DEFAULT '',
+                api_port           INTEGER NOT NULL DEFAULT 0,
+                status             TEXT NOT NULL DEFAULT 'starting',
+                team_structure      TEXT NOT NULL DEFAULT '{}',
+                task_list           TEXT NOT NULL DEFAULT '[]',
+                collaboration_mode TEXT NOT NULL DEFAULT '',
+                created_at         REAL NOT NULL DEFAULT 0,
+                updated_at         REAL NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_pm_agents_status ON pm_agents(status);
+            CREATE INDEX IF NOT EXISTS idx_pm_agents_task ON pm_agents(task_id);
+
+            CREATE TABLE IF NOT EXISTS agent_teams (
+                team_id        TEXT PRIMARY KEY,
+                pm_id          TEXT NOT NULL DEFAULT '',
+                team_name      TEXT NOT NULL DEFAULT '',
+                team_type      TEXT NOT NULL DEFAULT '',
+                device_id      TEXT NOT NULL DEFAULT '',
+                parent_team_id TEXT NOT NULL DEFAULT '',
+                members        TEXT NOT NULL DEFAULT '[]',
+                status         TEXT NOT NULL DEFAULT 'pending',
+                current_task   TEXT NOT NULL DEFAULT '',
+                created_at     REAL NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_teams_pm ON agent_teams(pm_id);
+
+            CREATE TABLE IF NOT EXISTS progress_reports (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                pm_id         TEXT NOT NULL DEFAULT '',
+                reporter_id   TEXT NOT NULL DEFAULT '',
+                reporter_type TEXT NOT NULL DEFAULT '',
+                task_name     TEXT NOT NULL DEFAULT '',
+                progress      REAL NOT NULL DEFAULT 0,
+                status        TEXT NOT NULL DEFAULT 'in_progress',
+                message       TEXT NOT NULL DEFAULT '',
+                timestamp     REAL NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_progress_pm ON progress_reports(pm_id, timestamp);
+        """)
         conn.commit()
 
     # ── 主机记录 CRUD ───────────────────────────────────────────
@@ -529,19 +585,20 @@ class Database:
         conn = self._get_conn()
         conn.execute("""
             INSERT INTO tasks (task_id, name, description, input_data, output_data,
-                              status, subtasks, created_at, completed_at, created_by, project_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              status, subtasks, created_at, completed_at, created_by, project_id, pm_agent_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_id) DO UPDATE SET
                 name=excluded.name, description=excluded.description,
                 input_data=excluded.input_data, output_data=excluded.output_data,
                 status=excluded.status, subtasks=excluded.subtasks,
-                completed_at=excluded.completed_at, project_id=excluded.project_id
+                completed_at=excluded.completed_at, project_id=excluded.project_id,
+                pm_agent_id=excluded.pm_agent_id
         """, (
             task.task_id, task.name, task.description,
             json.dumps(task.input_data), json.dumps(task.output_data),
             task.status, json.dumps(task.subtasks),
             task.created_at, task.completed_at, task.created_by,
-            task.project_id,
+            task.project_id, task.pm_agent_id,
         ))
         conn.commit()
 
@@ -563,6 +620,7 @@ class Database:
             created_at=row["created_at"], completed_at=row["completed_at"],
             created_by=row["created_by"],
             project_id=row["project_id"] if "project_id" in row.keys() else "",
+            pm_agent_id=row["pm_agent_id"] if "pm_agent_id" in row.keys() else "",
         )
 
     def list_tasks(self, status: str = None, limit: int = 50) -> list[Task]:
@@ -588,6 +646,7 @@ class Database:
                 created_at=r["created_at"], completed_at=r["completed_at"],
                 created_by=r["created_by"],
                 project_id=r["project_id"] if "project_id" in r.keys() else "",
+                pm_agent_id=r["pm_agent_id"] if "pm_agent_id" in r.keys() else "",
             )
             for r in rows
         ]
@@ -832,3 +891,215 @@ class Database:
             (assignee_type, assignee_id),
         ).fetchall()
         return [r["skill_id"] for r in rows]
+
+    # ── PM Agent CRUD (架构演进) ──────────────────────────────────
+
+    def upsert_pm_agent(self, pm: PMAgent):
+        """插入或更新 PM Agent 记录。"""
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO pm_agents (
+                pm_id, agent_name, task_id, project_id, device_id,
+                hostname, ip, api_port, status, team_structure,
+                task_list, collaboration_mode, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(pm_id) DO UPDATE SET
+                agent_name=excluded.agent_name,
+                task_id=excluded.task_id,
+                project_id=excluded.project_id,
+                device_id=excluded.device_id,
+                hostname=excluded.hostname,
+                ip=excluded.ip,
+                api_port=excluded.api_port,
+                status=excluded.status,
+                team_structure=excluded.team_structure,
+                task_list=excluded.task_list,
+                collaboration_mode=excluded.collaboration_mode,
+                updated_at=excluded.updated_at
+        """, (
+            pm.pm_id, pm.agent_name, pm.task_id, pm.project_id,
+            pm.device_id, pm.hostname, pm.ip, pm.api_port,
+            pm.status, json.dumps(pm.team_structure),
+            json.dumps(pm.task_list), pm.collaboration_mode,
+            pm.created_at, pm.updated_at,
+        ))
+        conn.commit()
+
+    def get_pm_agent(self, pm_id: str) -> Optional[PMAgent]:
+        """查询单个 PM Agent。"""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM pm_agents WHERE pm_id = ?", (pm_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return PMAgent(
+            pm_id=row["pm_id"], agent_name=row["agent_name"],
+            task_id=row["task_id"], project_id=row["project_id"],
+            device_id=row["device_id"], hostname=row["hostname"],
+            ip=row["ip"], api_port=row["api_port"],
+            status=row["status"],
+            team_structure=json.loads(row["team_structure"]) if row["team_structure"] else {},
+            task_list=json.loads(row["task_list"]) if row["task_list"] else [],
+            collaboration_mode=row["collaboration_mode"],
+            created_at=row["created_at"], updated_at=row["updated_at"],
+        )
+
+    def list_pm_agents(self, status: str = None) -> list[PMAgent]:
+        """列出所有 PM Agent, 可按状态过滤。"""
+        conn = self._get_conn()
+        if status:
+            rows = conn.execute(
+                "SELECT * FROM pm_agents WHERE status = ? ORDER BY created_at DESC",
+                (status,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM pm_agents ORDER BY created_at DESC"
+            ).fetchall()
+        return [
+            PMAgent(
+                pm_id=r["pm_id"], agent_name=r["agent_name"],
+                task_id=r["task_id"], project_id=r["project_id"],
+                device_id=r["device_id"], hostname=r["hostname"],
+                ip=r["ip"], api_port=r["api_port"],
+                status=r["status"],
+                team_structure=json.loads(r["team_structure"]) if r["team_structure"] else {},
+                task_list=json.loads(r["task_list"]) if r["task_list"] else [],
+                collaboration_mode=r["collaboration_mode"],
+                created_at=r["created_at"], updated_at=r["updated_at"],
+            )
+            for r in rows
+        ]
+
+    def update_pm_status(self, pm_id: str, status: str,
+                         team_structure: dict = None, task_list: list = None,
+                         collaboration_mode: str = None):
+        """更新 PM Agent 状态 (由 Worker 上报)。"""
+        conn = self._get_conn()
+        sets = ["status = ?", "updated_at = ?"]
+        params = [status, time.time()]
+        if team_structure is not None:
+            sets.append("team_structure = ?")
+            params.append(json.dumps(team_structure))
+        if task_list is not None:
+            sets.append("task_list = ?")
+            params.append(json.dumps(task_list))
+        if collaboration_mode is not None:
+            sets.append("collaboration_mode = ?")
+            params.append(collaboration_mode)
+        params.append(pm_id)
+        conn.execute(
+            f"UPDATE pm_agents SET {', '.join(sets)} WHERE pm_id = ?",
+            params,
+        )
+        conn.commit()
+
+    # ── Agent Team CRUD ──────────────────────────────────────────
+
+    def upsert_team(self, team: AgentTeam):
+        """插入或更新团队记录。"""
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO agent_teams (
+                team_id, pm_id, team_name, team_type, device_id,
+                parent_team_id, members, status, current_task, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(team_id) DO UPDATE SET
+                pm_id=excluded.pm_id,
+                team_name=excluded.team_name,
+                team_type=excluded.team_type,
+                device_id=excluded.device_id,
+                parent_team_id=excluded.parent_team_id,
+                members=excluded.members,
+                status=excluded.status,
+                current_task=excluded.current_task
+        """, (
+            team.team_id, team.pm_id, team.team_name, team.team_type,
+            team.device_id, team.parent_team_id,
+            json.dumps(team.members), team.status,
+            team.current_task, team.created_at,
+        ))
+        conn.commit()
+
+    def get_team(self, team_id: str) -> Optional[AgentTeam]:
+        """查询单个团队。"""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM agent_teams WHERE team_id = ?", (team_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return AgentTeam(
+            team_id=row["team_id"], pm_id=row["pm_id"],
+            team_name=row["team_name"], team_type=row["team_type"],
+            device_id=row["device_id"], parent_team_id=row["parent_team_id"],
+            members=json.loads(row["members"]) if row["members"] else [],
+            status=row["status"], current_task=row["current_task"],
+            created_at=row["created_at"],
+        )
+
+    def get_teams_by_pm(self, pm_id: str) -> list[AgentTeam]:
+        """查询 PM 下属的所有团队。"""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM agent_teams WHERE pm_id = ? ORDER BY created_at",
+            (pm_id,),
+        ).fetchall()
+        return [
+            AgentTeam(
+                team_id=r["team_id"], pm_id=r["pm_id"],
+                team_name=r["team_name"], team_type=r["team_type"],
+                device_id=r["device_id"], parent_team_id=r["parent_team_id"],
+                members=json.loads(r["members"]) if r["members"] else [],
+                status=r["status"], current_task=r["current_task"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    def list_teams(self, pm_id: str = None) -> list[AgentTeam]:
+        """列出所有团队, 可按 PM 过滤。"""
+        if pm_id:
+            return self.get_teams_by_pm(pm_id)
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM agent_teams ORDER BY created_at DESC"
+        ).fetchall()
+        return [
+            AgentTeam(
+                team_id=r["team_id"], pm_id=r["pm_id"],
+                team_name=r["team_name"], team_type=r["team_type"],
+                device_id=r["device_id"], parent_team_id=r["parent_team_id"],
+                members=json.loads(r["members"]) if r["members"] else [],
+                status=r["status"], current_task=r["current_task"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    # ── Progress Report CRUD ─────────────────────────────────────
+
+    def save_progress_report(self, report: ProgressReport):
+        """保存进度报告。"""
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO progress_reports (
+                pm_id, reporter_id, reporter_type, task_name,
+                progress, status, message, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            report.pm_id, report.reporter_id, report.reporter_type,
+            report.task_name, report.progress, report.status,
+            report.message, report.timestamp,
+        ))
+        conn.commit()
+
+    def get_progress_reports(self, pm_id: str, limit: int = 50) -> list[dict]:
+        """查询 PM 的进度报告列表。"""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM progress_reports WHERE pm_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (pm_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]

@@ -19,7 +19,8 @@
 - [station_controller.py](file://lan_mesh/station_controller.py)
 - [secretary.py](file://lan_mesh/secretary.py)
 - [skill_registry.py](file://lan_mesh/skill_registry.py)
-- [config.yaml](file://config.yaml)
+- [bot_gateway.py](file://lan_mesh/bot_gateway.py)
+- [config.py](file://lan_mesh/config.py)
 - [api.ts](file://quicklan-main/src/api.ts)
 - [types.ts](file://quicklan-main/src/types.ts)
 - [lan_api.rs](file://quicklan-main/src-tauri/src/lan_api.rs)
@@ -30,11 +31,11 @@
 
 ## 更新摘要
 **变更内容**
-- 新增完整的技能管理API端点，包括技能列表、统计、扫描、下载、角色查询、详细信息、CRUD操作等200+行新API端点
-- 集成到现有的FastAPI路由系统，提供技能库的完整生命周期管理
-- 新增技能注册表（SkillRegistry）和数据库表结构支持
-- 增强了Web UI仪表盘的技能管理能力
-- 完善了技能权限分配和内容分发机制
+- 新增完整的Bot管理API端点：添加Bot通道配置、测试和管理相关的REST API端点，包括通道列表、添加/删除通道、测试消息发送等功能
+- 集成Bot Gateway组件，支持企业微信群机器人和Telegram Bot两种通道类型
+- 新增Bot通道优先级控制和脱敏显示功能
+- 完善了Web UI仪表盘的Bot管理能力
+- 新增Bot事件推送和命令处理机制
 
 ## 目录
 1. [简介](#简介)
@@ -50,9 +51,9 @@
 
 ## 简介
 
-Work Station 项目是一个基于局域网的分布式任务执行平台，采用 Master/Worker 架构设计。该项目提供了完整的 Web API 接口，支持设备管理、文件传输、任务执行、工具调度和项目管理等功能。系统通过 UDP 广播发现机制实现设备自动发现，通过 HTTP API 提供 RESTful 接口，通过 WebSocket 实现实时状态推送。
+Work Station 项目是一个基于局域网的分布式任务执行平台，采用 Master/Worker 架构设计。该项目提供了完整的 Web API 接口，支持设备管理、文件传输、任务执行、工具调度、项目管理、**新增**Bot消息通道管理和技能管理等功能。系统通过 UDP 广播发现机制实现设备自动发现，通过 HTTP API 提供 RESTful 接口，通过 WebSocket 实现实时状态推送。
 
-**更新** 新增了完整的技能管理API端点，提供技能库的注册、权限分配、内容分发和生命周期管理功能，包括技能列表查询、统计信息、手动扫描、下载包构建、角色权限查询、详细信息展示和CRUD操作等200+行新API端点。
+**更新** 新增了完整的Bot管理API端点，提供Bot通道的配置、测试和管理功能，包括企业微信群机器人和Telegram Bot两种通道类型的支持，以及事件推送和命令处理机制。
 
 ## 项目结构
 
@@ -74,6 +75,7 @@ StationDirector[工作站主管]
 HostRating[主机评级系统]
 RoleManager[角色管理器]
 SkillRegistry[技能注册表]
+BotGateway[Bot 网关]
 end
 subgraph "API 层"
 MasterAPI[Master API]
@@ -81,6 +83,7 @@ WorkerAPI[Worker API]
 StationAPI[Station API]
 SecretaryAPI[Secretary API]
 SkillAPI[技能管理 API]
+BotAPI[Bot 管理 API]
 end
 subgraph "前端集成"
 QuickLAN[QuickLAN 前端]
@@ -100,8 +103,11 @@ SecretaryAPI --> ProjectManager
 SecretaryAPI --> Orchestrator
 SecretaryAPI --> ModelRouter
 SecretaryAPI --> MCPGateway
+BotAPI --> BotGateway
+BotAPI --> Database
 QuickLAN --> MasterAPI
 QuickLAN --> SkillAPI
+QuickLAN --> BotAPI
 TauriApp --> LANAPI
 ```
 
@@ -114,6 +120,7 @@ TauriApp --> LANAPI
 - [station_api.py:42-127](file://lan_mesh/station_api.py#L42-L127)
 - [station_controller.py:69-182](file://lan_mesh/station_controller.py#L69-L182)
 - [skill_registry.py:43-48](file://lan_mesh/skill_registry.py#L43-L48)
+- [bot_gateway.py:1-354](file://lan_mesh/bot_gateway.py#L1-L354)
 
 **章节来源**
 - [master.py:1-332](file://lan_mesh/master.py#L1-L332)
@@ -121,9 +128,10 @@ TauriApp --> LANAPI
 - [api.py:1-570](file://lan_mesh/api.py#L1-L570)
 - [station_director.py:1-224](file://lan_mesh/station_director.py#L1-L224)
 - [host_rating.py:1-115](file://lan_mesh/host_rating.py#L1-L115)
-- [station_api.py:1-714](file://lan_mesh/station_api.py#L1-L714)
-- [station_controller.py:1-404](file://lan_mesh/station_controller.py#L1-L404)
+- [station_api.py:1-757](file://lan_mesh/station_api.py#L1-L757)
+- [station_controller.py:1-480](file://lan_mesh/station_controller.py#L1-L480)
 - [skill_registry.py:1-388](file://lan_mesh/skill_registry.py#L1-L388)
+- [bot_gateway.py:1-354](file://lan_mesh/bot_gateway.py#L1-L354)
 
 ## 核心组件
 
@@ -173,6 +181,7 @@ Worker 守护进程部署在各个主机上，负责：
 - 资源池查询（按评级筛选在线主机）
 - 手动评级重算功能
 - **新增** 技能库管理（扫描、注册、权限分配）
+- **新增** Bot 通道管理（配置、测试、事件推送）
 
 ### 角色管理器 (Role Manager)
 **新增** 角色管理器负责：
@@ -198,6 +207,15 @@ Worker 守护进程部署在各个主机上，负责：
 - 技能系统提示构建
 - 技能统计和查询
 
+### Bot 网关 (Bot Gateway)
+**新增** Bot 网关负责：
+- Bot 通道配置管理（企业微信群机器人、Telegram Bot）
+- 事件推送（任务状态、主机状态、技能分配、预算告警等）
+- 命令处理（Telegram Bot 命令交互）
+- 通道优先级控制（低、常规、高）
+- 通道脱敏显示（敏感信息保护）
+- 异步消息发送（避免阻塞调用方）
+
 **章节来源**
 - [master.py:66-170](file://lan_mesh/master.py#L66-L170)
 - [worker.py:62-120](file://lan_mesh/worker.py#L62-L120)
@@ -208,6 +226,7 @@ Worker 守护进程部署在各个主机上，负责：
 - [host_rating.py:13-115](file://lan_mesh/host_rating.py#L13-L115)
 - [worker.py:225-285](file://lan_mesh/worker.py#L225-L285)
 - [skill_registry.py:43-388](file://lan_mesh/skill_registry.py#L43-L388)
+- [bot_gateway.py:1-354](file://lan_mesh/bot_gateway.py#L1-L354)
 
 ## 架构概览
 
@@ -225,6 +244,7 @@ WebSocket[WebSocket 推送]
 StationAPI[Station API]
 SecretaryAPI[Secretary API]
 SkillAPI[技能管理 API]
+BotAPI[Bot 管理 API]
 RoleAPI[角色管理 API]
 end
 subgraph "业务逻辑层"
@@ -237,6 +257,7 @@ StationDirector[工作站主管]
 HostRating[主机评级系统]
 RoleManager[角色管理器]
 SkillRegistry[技能注册表]
+BotGateway[Bot 网关]
 end
 subgraph "数据访问层"
 Database[SQLite 数据库]
@@ -263,6 +284,8 @@ SecretaryAPI --> ProjectManager
 SecretaryAPI --> Orchestrator
 SecretaryAPI --> ModelRouter
 SecretaryAPI --> MCPGateway
+BotAPI --> BotGateway
+BotAPI --> Database
 RoleAPI --> RoleManager
 RoleAPI --> Worker
 StationDirector --> Database
@@ -286,6 +309,7 @@ MCPGateway --> TCP
 - [station_api.py:42-127](file://lan_mesh/station_api.py#L42-L127)
 - [station_controller.py:69-182](file://lan_mesh/station_controller.py#L69-L182)
 - [skill_registry.py:43-48](file://lan_mesh/skill_registry.py#L43-L48)
+- [bot_gateway.py:1-354](file://lan_mesh/bot_gateway.py#L1-L354)
 
 ## 详细接口规范
 
@@ -555,7 +579,34 @@ MCPGateway --> TCP
 - 参数：device_id（路径参数）
 - 响应：主机角色状态和远程状态信息
 
-#### 实时事件推送
+#### Bot 通道管理接口
+
+**新增** Bot 管理 API 提供完整的Bot通道生命周期管理：
+
+**列出 Bot 通道**
+- 方法：GET `/api/station/bot/channels`
+- 功能：列出所有 Bot 通道配置（脱敏）
+- 响应：通道列表（包含类型、启用状态、最低优先级、脱敏后的凭证信息）
+
+**添加/更新 Bot 通道**
+- 方法：POST `/api/station/bot/channels`
+- 功能：添加或更新 Bot 通道配置
+- 请求体：BotChannel 对象（channel_type、enabled、webhook_url、bot_token、chat_id、webhook_url_base、min_priority）
+- 响应：操作结果和消息
+
+**删除 Bot 通道**
+- 方法：DELETE `/api/station/bot/channels/{channel_type}`
+- 功能：移除指定类型的 Bot 通道
+- 参数：channel_type（路径参数，wechat_webhook 或 telegram）
+- 响应：操作结果和消息
+
+**测试 Bot 通道**
+- 方法：POST `/api/station/bot/test/{channel_type}`
+- 功能：发送测试消息到指定通道
+- 参数：channel_type（路径参数）
+- 响应：测试结果（成功或错误信息）
+
+**实时事件推送**
 
 **WebSocket 事件推送**
 - 方法：WS `/ws`
@@ -630,6 +681,9 @@ MCPGateway --> TCP
 - [station_api.py:625-684](file://lan_mesh/station_api.py#L625-L684)
 - [skill_registry.py:128-388](file://lan_mesh/skill_registry.py#L128-L388)
 - [database.py:717-835](file://lan_mesh/database.py#L717-L835)
+- [station_api.py:693-727](file://lan_mesh/station_api.py#L693-L727)
+- [bot_gateway.py:116-130](file://lan_mesh/bot_gateway.py#L116-L130)
+- [bot_gateway.py:325-336](file://lan_mesh/bot_gateway.py#L325-L336)
 
 ### Worker API 接口
 
@@ -723,17 +777,6 @@ MCPGateway --> TCP
 - 请求体：AgentCard 对象
 - 响应：注册结果
 
-**Agent 列表**
-- 方法：GET `/api/agents`
-- 功能：获取所有 Agent 列表
-- 参数：status（可选）
-- 响应：Agent 列表和统计信息
-
-**单 Agent 查询**
-- 方法：GET `/api/agents/{agent_id}`
-- 功能：查询指定 Agent 详情
-- 响应：Agent 信息
-
 #### 任务管理接口
 
 **任务提交**
@@ -742,17 +785,6 @@ MCPGateway --> TCP
 - 请求体：任务描述和输入数据
 - 响应：Task 对象
 - **更新** 支持关联项目进行预算控制
-
-**任务列表**
-- 方法：GET `/api/tasks`
-- 功能：获取任务列表
-- 参数：status（可选）、limit（默认50）
-- 响应：任务列表
-
-**任务查询**
-- 方法：GET `/api/tasks/{task_id}`
-- 功能：查询指定任务状态
-- 响应：Task 对象
 
 #### 项目管理接口
 
@@ -883,6 +915,13 @@ MCPGateway --> TCP
 - `revokeSecretaryFromHost(deviceId)`: 撤销主机的 Secretary 角色
 - `getSecretaryStatus()`: 查询 Secretary 分配状态
 
+**Bot 管理**（新增）
+- `listBotChannels()`: 获取 Bot 通道列表
+- `addBotChannel(channelData)`: 添加或更新 Bot 通道
+- `removeBotChannel(channelType)`: 删除 Bot 通道
+- `testBotChannel(channelType)`: 测试 Bot 通道
+- `refreshBotChannels()`: 刷新 Bot 通道列表
+
 **技能管理**（新增）
 - `listSkills(category)`: 获取技能列表
 - `getSkillStats()`: 获取技能统计
@@ -897,6 +936,7 @@ MCPGateway --> TCP
 - [api.ts:13-130](file://quicklan-main/src/api.ts#L13-L130)
 - [dashboard.html:244-270](file://lan_mesh/web/templates/dashboard.html#L244-L270)
 - [dashboard.html:731-748](file://lan_mesh/web/templates/dashboard.html#L731-L748)
+- [dashboard.html:880-985](file://lan_mesh/web/templates/dashboard.html#L880-L985)
 
 ## 数据模型
 
@@ -1086,6 +1126,30 @@ class SkillAssignment {
 +to_dict() dict
 +from_dict(dict) SkillAssignment
 }
+class BotChannel {
++string channel_type
++string webhook_url
++string bot_token
++string chat_id
++bool enabled
++string min_priority
++string webhook_url_base
++to_dict() dict
++from_dict(dict) BotChannel
+}
+class BotEventTemplate {
++string task_submitted
++string task_completed
++string task_failed
++string host_online
++string host_offline
++string secretary_activated
++string secretary_deactivated
++string skill_assigned
++string skill_revoked
++string budget_warning
++string bot_test
+}
 HostInfo --> HostRecord : "持久化"
 HostRecord --> HostRating : "包含"
 AgentCard --> Task : "执行"
@@ -1095,6 +1159,7 @@ ModelRouter --> RoutingResult : "产生"
 HostRecord --> EventLog : "产生"
 HostRecord --> RoleAssignment : "包含"
 SkillRecord --> SkillAssignment : "分配"
+BotChannel --> BotEventTemplate : "配置"
 ```
 
 **图表来源**
@@ -1104,6 +1169,8 @@ SkillRecord --> SkillAssignment : "分配"
 - [station_api.py:346-366](file://lan_mesh/station_api.py#L346-L366)
 - [protocol.py:420-448](file://lan_mesh/protocol.py#L420-L448)
 - [database.py:149-172](file://lan_mesh/database.py#L149-L172)
+- [bot_gateway.py:65-76](file://lan_mesh/bot_gateway.py#L65-L76)
+- [bot_gateway.py:35-47](file://lan_mesh/bot_gateway.py#L35-L47)
 
 ### 端口和服务配置
 
@@ -1117,7 +1184,7 @@ SkillRecord --> SkillAssignment : "分配"
 
 **章节来源**
 - [protocol.py:17-24](file://lan_mesh/protocol.py#L17-L24)
-- [config.yaml:5-22](file://config.yaml#L5-L22)
+- [config.py:5-22](file://config.yaml#L5-L22)
 
 ## 依赖关系分析
 
@@ -1138,6 +1205,7 @@ StationDirector[StationDirector]
 HostRating[HostRating]
 RoleManager[RoleManager]
 SkillRegistry[SkillRegistry]
+BotGateway[BotGateway]
 end
 subgraph "Worker 侧"
 WorkerAPI[Worker API]
@@ -1172,6 +1240,8 @@ MasterAPI --> Protocol
 WorkerAPI --> Protocol
 MasterAPI --> Config
 WorkerAPI --> Config
+BotGateway --> Database
+BotGateway --> Config
 ```
 
 **图表来源**
@@ -1182,6 +1252,7 @@ WorkerAPI --> Config
 - [host_rating.py:13-25](file://lan_mesh/host_rating.py#L13-L25)
 - [worker.py:225-285](file://lan_mesh/worker.py#L225-L285)
 - [skill_registry.py:39-40](file://lan_mesh/skill_registry.py#L39-L40)
+- [bot_gateway.py:1-354](file://lan_mesh/bot_gateway.py#L1-L354)
 
 ### 错误处理机制
 
@@ -1205,6 +1276,8 @@ ProcessError --> RoleNotActive[503 Secretary 未激活]
 ProcessError --> RemoteConnection[502 远程连接失败]
 ProcessError --> SkillNotFound[404 技能不存在]
 ProcessError --> InvalidAssignee[400 分配对象ID为空]
+ProcessError --> BotChannelNotFound[404 Bot 通道不存在]
+ProcessError --> BotChannelDisabled[400 Bot 通道未启用]
 ProcessError --> ValidationError --> Response
 NotFound --> Response
 Forbidden --> Response
@@ -1215,6 +1288,8 @@ RoleNotActive --> Response
 RemoteConnection --> Response
 SkillNotFound --> Response
 InvalidAssignee --> Response
+BotChannelNotFound --> Response
+BotChannelDisabled --> Response
 ```
 
 **章节来源**
@@ -1224,6 +1299,7 @@ InvalidAssignee --> Response
 - [station_api.py:411-418](file://lan_mesh/station_api.py#L411-L418)
 - [station_api.py:657-658](file://lan_mesh/station_api.py#L657-L658)
 - [station_api.py:669-670](file://lan_mesh/station_api.py#L669-L670)
+- [bot_gateway.py:325-336](file://lan_mesh/bot_gateway.py#L325-L336)
 
 ## 性能考虑
 
@@ -1245,6 +1321,10 @@ InvalidAssignee --> Response
 | **新增** 技能内容缓存 | 10 分钟 | 减少文件系统读取 |
 | **新增** 技能包构建缓存 | 5 分钟 | 减少重复构建 |
 | **新增** 技能权限检查缓存 | 30 秒 | 减少数据库查询 |
+| **新增** Bot 通道优先级缓存 | 1 秒 | 减少优先级计算频率 |
+| **新增** Bot 通道脱敏缓存 | 5 分钟 | 减少敏感信息处理开销 |
+| **新增** Bot 事件推送缓存 | 1 秒 | 减少重复推送 |
+| **新增** Bot 命令处理缓存 | 30 秒 | 减少命令解析频率 |
 
 ### 缓存策略
 
@@ -1260,6 +1340,10 @@ InvalidAssignee --> Response
 - **技能内容缓存**：技能内容的内存缓存，提高访问性能
 - **技能包缓存**：已构建技能包的缓存，减少重复构建
 - **权限检查缓存**：技能权限检查结果的短期缓存
+- **Bot 通道配置缓存**：Bot 通道配置的内存缓存，提高访问性能
+- **Bot 事件模板缓存**：事件模板的内存缓存，减少字符串处理
+- **Bot 优先级比较缓存**：优先级比较结果的短期缓存
+- **Bot 命令处理缓存**：命令处理结果的短期缓存
 
 ### 网络优化
 
@@ -1272,6 +1356,10 @@ InvalidAssignee --> Response
 - **远程角色分配**：优化远程主机连接和状态查询
 - **技能包增量更新**：支持技能包的增量更新和缓存失效
 - **权限变更通知**：通过 WebSocket 实时推送技能权限变更
+- **Bot 事件异步推送**：使用线程池异步发送消息，避免阻塞
+- **Bot 通道优先级过滤**：在推送前进行优先级过滤，减少无效推送
+- **Bot 命令长轮询**：Telegram Bot 使用长轮询，降低 API 调用频率
+- **Bot 通道脱敏显示**：敏感信息脱敏处理，保护隐私安全
 
 ## 故障排除指南
 
@@ -1343,6 +1431,43 @@ InvalidAssignee --> Response
 4. 查看权限检查的日志和缓存状态
 5. 验证权限变更的通知机制
 
+**Bot 管理异常**
+1. 检查 Bot 网关是否正确初始化
+2. 验证数据库连接和 Bot 表结构
+3. 确认 Bot 通道配置的完整性
+4. 查看 Bot 通道的启用状态和凭证信息
+5. 验证 Bot 事件推送的优先级过滤机制
+6. 检查 Bot 命令处理的回调函数设置
+7. 确认 Telegram Bot 的长轮询状态
+8. 查看 Bot 通道的脱敏显示功能
+9. 验证 Bot 通道的测试功能
+10. 检查 Bot 事件的异步推送机制
+
+**Bot 通道配置异常**
+1. 检查 Bot 通道类型配置（wechat_webhook 或 telegram）
+2. 验证企业微信群机器人的 Webhook URL 格式
+3. 确认 Telegram Bot 的 Token 和 Chat ID 配置
+4. 查看 Bot 通道的启用状态设置
+5. 验证 Bot 通道的最低优先级配置
+6. 确认 Bot 通道的脱敏显示功能正常
+7. 检查 Bot 通道的内存缓存状态
+
+**Bot 事件推送异常**
+1. 检查 Bot 事件模板的配置和格式
+2. 验证 Bot 事件的优先级设置
+3. 确认 Bot 通道的优先级过滤逻辑
+4. 查看 Bot 事件的异步推送线程状态
+5. 验证 Bot 事件的 HTML 格式处理
+6. 检查 Bot 事件的异常处理机制
+
+**Bot 命令处理异常**
+1. 检查 Bot 命令处理回调函数的设置
+2. 验证内置命令的处理逻辑（/start、/help、/ping）
+3. 确认外部命令处理的参数传递
+4. 查看 Bot 命令的长轮询状态
+5. 验证 Telegram Bot 的消息解析
+6. 检查 Bot 命令的回复机制
+
 **章节来源**
 - [master.py:300-313](file://lan_mesh/master.py#L300-L313)
 - [worker.py:314-318](file://lan_mesh/worker.py#L314-L318)
@@ -1350,6 +1475,7 @@ InvalidAssignee --> Response
 - [station_api.py:411-418](file://lan_mesh/station_api.py#L411-L418)
 - [skill_registry.py:57-100](file://lan_mesh/skill_registry.py#L57-L100)
 - [database.py:717-835](file://lan_mesh/database.py#L717-L835)
+- [bot_gateway.py:1-354](file://lan_mesh/bot_gateway.py#L1-L354)
 
 ## 结论
 
@@ -1372,6 +1498,12 @@ Work Station 项目提供了完整的 Web API 接口体系，支持高效的局�
 - **权限控制机制**：支持角色、Agent、主机三级权限控制和继承关系
 - **内容缓存优化**：技能内容和包的缓存机制提高访问性能
 - **实时事件推送**：WebSocket 实时推送技能管理相关事件
+- **Bot 消息通道**：提供企业微信群机器人和 Telegram Bot 两种通道类型
+- **事件推送和命令处理**：支持任务状态、主机状态、技能分配、预算告警等事件推送
+- **通道优先级控制**：支持低、常规、高三种优先级的消息推送
+- **脱敏显示保护**：敏感信息脱敏处理，保护隐私安全
+- **异步消息发送**：避免阻塞调用方，提高系统响应性能
+- **命令处理机制**：支持 Telegram Bot 的命令交互和状态查询
 
 **建议在生产环境中**：
 1. 根据实际网络环境调整心跳间隔和 TTL 设置
@@ -1394,3 +1526,13 @@ Work Station 项目提供了完整的 Web API 接口体系，支持高效的局�
 18. **新增** 监控技能权限分配的准确性和时效性
 19. **新增** 配置技能内容缓存的失效策略和清理机制
 20. **新增** 监控技能包构建和分发的性能和成功率
+21. **新增** 定期检查 Bot 通道配置的完整性和有效性
+22. **新增** 监控 Bot 事件推送的性能和成功率
+23. **新增** 配置 Bot 通道优先级缓存，提高推送效率
+24. **新增** 监控 Bot 命令处理的响应时间和成功率
+25. **新增** 定期验证 Bot 通道的脱敏显示功能
+26. **新增** 监控 Bot 事件的异步推送线程状态
+27. **新增** 配置 Bot 命令长轮询的超时和重试机制
+28. **新增** 监控 Bot 通道的内存缓存状态和性能指标
+29. **新增** 定期检查 Bot 事件模板的完整性和格式正确性
+30. **新增** 监控 Bot 命令处理回调函数的执行状态

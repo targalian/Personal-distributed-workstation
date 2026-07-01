@@ -14,6 +14,7 @@ Station Director API 路由层
 import asyncio
 import json
 import time
+import uuid as _uuid
 from typing import Optional
 
 import requests as http_requests
@@ -24,7 +25,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 
-from .protocol import HostInfo, HostRecord, AgentCard
+from .protocol import HostInfo, HostRecord, AgentCard, Task
 
 
 async def _broadcast(state, msg_type: str, data):
@@ -92,7 +93,7 @@ def create_station_router(controller) -> APIRouter:
             "secretary": "active" if controller.secretary_active else "inactive",
             "components": {
                 "project_manager": controller.project_manager is not None,
-                "orchestrator": controller.orchestrator is not None,
+                "chat_handler": controller.chat_handler is not None,
                 "model_router": controller.model_router is not None,
                 "mcp_gateway": controller.mcp_gateway is not None,
             },
@@ -456,22 +457,120 @@ def create_station_router(controller) -> APIRouter:
 
     @router.post("/api/tasks")
     async def submit_task(payload: dict):
+        """提交新任务 — 创建 Task 记录并分配 PM Agent。
+
+        新流程 (PM Agent 架构):
+        1. 创建 Task 记录 (status=pending, pm_agent_id="")
+        2. 选择合适 work_station (按评级/在线状态)
+        3. POST 到目标 Worker /role/start-pm (携带 task_id, secretary_url)
+        4. 更新 Task.pm_agent_id, status=running
+        5. WebSocket 广播 task_submitted + pm_registered
+        """
         _check_secretary()
-        orchestrator = controller.orchestrator
         project_manager = controller.project_manager
         project_id = payload.get("project_id", "")
         if project_id and project_manager:
             if not project_manager.check_budget(project_id):
                 raise HTTPException(status_code=402, detail="项目预算已起支或已暂停,无法提交任务")
-        task = orchestrator.submit_task(
+
+        # 1. 创建 Task 记录
+        task = Task(
+            task_id=f"task-{_uuid.uuid4().hex[:12]}",
             name=payload.get("name", ""),
             description=payload.get("description", ""),
             input_data=payload.get("input_data", {}),
             created_by=payload.get("created_by", "user"),
             project_id=project_id,
+            status="pending",
         )
+        db.save_task(task)
         await _broadcast(state, "task_submitted", task.to_dict())
-        controller.bot_gateway.notify("task_submitted", {"name": task.name, "description": task.description, "task_id": task.task_id[:8]})
+        controller.bot_gateway.notify("task_submitted", {
+            "name": task.name, "task_id": task.task_id[:8],
+        })
+
+        # 2. 选择合适的 work_station (按评级排序, 取在线最高评级)
+        from .protocol import PMAgent
+        hosts = db.list_hosts()
+        online_hosts = [h for h in hosts if h.online and h.device_id != state.device_id]
+        # 如果没有在线 Worker, 使用本机
+        if not online_hosts:
+            online_hosts = [h for h in hosts if h.online]
+
+        if not online_hosts:
+            task.status = "failed"
+            task.output_data = {"error": "无可用 work_station"}
+            db.save_task(task)
+            return task.to_dict()
+
+        # 按评级排序 (S > A > B > C > D)
+        tier_order = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "": 0}
+        online_hosts.sort(
+            key=lambda h: tier_order.get(h.rating_tier, 0),
+            reverse=True,
+        )
+        target_host = online_hosts[0]
+
+        # 3. 构造 Secretary URL
+        secretary_url = f"http://{state.device_id}:{state.api_port}"
+        # 使用本机 IP 更准确
+        local_ips = controller._collect_info().ip_addresses
+        if local_ips:
+            secretary_url = f"http://{local_ips[0]}:{state.api_port}"
+
+        # 4. POST 到目标 Worker 启动 PM Agent
+        try:
+            resp = http_requests.post(
+                f"http://{target_host.ip}:{target_host.api_port}/role/start-pm",
+                json={
+                    "task_id": task.task_id,
+                    "secretary_url": secretary_url,
+                    "task_data": task.to_dict(),
+                },
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                pm_data = resp.json()
+                pm_id = pm_data.get("pm_id", "")
+                # 5. 更新 Task
+                task.pm_agent_id = pm_id
+                task.status = "running"
+                db.save_task(task)
+
+                # 在 DB 中创建 PM Agent 记录
+                pm_agent = PMAgent(
+                    pm_id=pm_id,
+                    agent_name=f"PM-{pm_id[:8]}",
+                    task_id=task.task_id,
+                    project_id=project_id,
+                    device_id=target_host.device_id,
+                    hostname=target_host.hostname or target_host.device_name,
+                    ip=target_host.ip,
+                    api_port=target_host.api_port,
+                    status="starting",
+                )
+                db.upsert_pm_agent(pm_agent)
+
+                await _broadcast(state, "pm_registered", {
+                    "pm_id": pm_id,
+                    "task_id": task.task_id,
+                    "device_id": target_host.device_id,
+                    "device_name": target_host.device_name,
+                })
+                controller.bot_gateway.notify("pm_registered", {
+                    "pm_id": pm_id[:12], "task": task.name,
+                    "station": target_host.device_name or target_host.hostname,
+                })
+            else:
+                task.status = "failed"
+                task.output_data = {"error": f"PM 启动失败: {resp.text}"}
+                db.save_task(task)
+        except Exception as e:
+            task.status = "failed"
+            task.output_data = {"error": f"PM 启动异常: {e}"}
+            db.save_task(task)
+
+        await _broadcast(state, "task_updated", task.to_dict())
         return task.to_dict()
 
     @router.get("/api/tasks")
@@ -487,6 +586,150 @@ def create_station_router(controller) -> APIRouter:
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
         return task.to_dict()
+
+    # ── PM Agent 管理 ──
+
+    @router.get("/api/pm")
+    async def list_pm_agents(status: str = None):
+        """列出所有 PM Agent 及其状态。"""
+        _check_secretary()
+        agents = db.list_pm_agents(status=status)
+        return {
+            "pm_agents": [a.to_dict() if hasattr(a, 'to_dict') else a for a in agents],
+            "total": len(agents),
+        }
+
+    @router.get("/api/pm/{pm_id}")
+    async def get_pm_agent(pm_id: str):
+        """PM Agent 详情 (含 team_structure)。"""
+        _check_secretary()
+        pm = db.get_pm_agent(pm_id)
+        if not pm:
+            raise HTTPException(status_code=404, detail="PM Agent 不存在")
+        result = pm.to_dict() if hasattr(pm, 'to_dict') else pm
+        # 附加团队信息
+        teams = db.get_teams_by_pm(pm_id)
+        result["teams"] = [t.to_dict() if hasattr(t, 'to_dict') else t for t in teams]
+        return result
+
+    @router.get("/api/pm/{pm_id}/teams")
+    async def get_pm_teams(pm_id: str):
+        """PM 下属团队列表。"""
+        _check_secretary()
+        teams = db.get_teams_by_pm(pm_id)
+        return {
+            "teams": [t.to_dict() if hasattr(t, 'to_dict') else t for t in teams],
+            "total": len(teams),
+        }
+
+    @router.get("/api/pm/{pm_id}/progress")
+    async def get_pm_progress(pm_id: str, limit: int = 50):
+        """PM 进度报告列表。"""
+        _check_secretary()
+        reports = db.get_progress_reports(pm_id, limit=limit)
+        return {"reports": reports, "total": len(reports)}
+
+    @router.post("/api/pm/{pm_id}/status")
+    async def update_pm_status(pm_id: str, payload: dict):
+        """PM 上报状态变更 (Worker 调用)。"""
+        _check_secretary()
+        pm = db.get_pm_agent(pm_id)
+        if not pm:
+            raise HTTPException(status_code=404, detail="PM Agent 不存在")
+
+        status = payload.get("status", "")
+        team_structure = payload.get("team_structure")
+        task_list = payload.get("task_list")
+        collaboration_mode = payload.get("collaboration_mode")
+
+        db.update_pm_status(
+            pm_id, status,
+            team_structure=team_structure,
+            task_list=task_list,
+            collaboration_mode=collaboration_mode,
+        )
+
+        await _broadcast(state, "pm_status_change", {
+            "pm_id": pm_id, "status": status,
+            "collaboration_mode": collaboration_mode or "",
+        })
+        return {"ok": True, "pm_id": pm_id, "status": status}
+
+    @router.post("/api/pm/{pm_id}/progress")
+    async def receive_pm_progress(pm_id: str, payload: dict):
+        """PM 上报进度 (Worker 调用)。"""
+        _check_secretary()
+        from .protocol import ProgressReport
+        report = ProgressReport(
+            report_id=f"rpt-{_uuid.uuid4().hex[:8]}",
+            pm_id=pm_id,
+            reporter_id=payload.get("reporter_id", ""),
+            reporter_type=payload.get("reporter_type", "pm"),
+            task_name=payload.get("task_name", ""),
+            progress=payload.get("progress", 0.0),
+            status=payload.get("status", "in_progress"),
+            message=payload.get("message", ""),
+            timestamp=payload.get("timestamp", time.time()),
+        )
+        db.save_progress_report(report)
+
+        await _broadcast(state, "progress_report", {
+            "pm_id": pm_id,
+            "reporter_id": report.reporter_id,
+            "progress": report.progress,
+            "status": report.status,
+            "message": report.message,
+            "task_name": report.task_name,
+        })
+        return {"ok": True, "report_id": report.report_id}
+
+    # ── 团队管理 ──
+
+    @router.get("/api/teams")
+    async def list_teams(pm_id: str = None):
+        """所有团队 (支持按 pm_id 过滤)。"""
+        _check_secretary()
+        teams = db.list_teams(pm_id=pm_id)
+        return {
+            "teams": [t.to_dict() if hasattr(t, 'to_dict') else t for t in teams],
+            "total": len(teams),
+        }
+
+    @router.get("/api/teams/{team_id}")
+    async def get_team(team_id: str):
+        """团队详情 (含 members 嵌套)。"""
+        _check_secretary()
+        team = db.get_team(team_id)
+        if not team:
+            raise HTTPException(status_code=404, detail="团队不存在")
+        return team.to_dict() if hasattr(team, 'to_dict') else team
+
+    # ── 秘书聊天 ──
+
+    @router.post("/api/secretary/chat")
+    async def secretary_chat(payload: dict):
+        """与秘书对话 — 处理用户消息并返回回复。"""
+        _check_secretary()
+        chat_handler = getattr(controller, 'chat_handler', None)
+        if not chat_handler:
+            raise HTTPException(status_code=503, detail="聊天处理器未初始化")
+        message = payload.get("message", "")
+        if not message:
+            raise HTTPException(status_code=400, detail="消息不能为空")
+        history = payload.get("history")
+        result = chat_handler.chat(message, history)
+        await _broadcast(state, "chat_reply", result)
+        return result
+
+    @router.get("/api/secretary/chat/history")
+    async def secretary_chat_history(limit: int = 50):
+        """返回最近的聊天历史。"""
+        _check_secretary()
+        chat_handler = getattr(controller, 'chat_handler', None)
+        if not chat_handler:
+            return {"history": [], "total": 0}
+        history = chat_handler.get_history(limit)
+        return {"history": history, "total": len(history)}
 
     # ── 项目管理 ──
 

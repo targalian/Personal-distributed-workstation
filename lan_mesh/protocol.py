@@ -317,6 +317,7 @@ class Task:
     completed_at: float = 0.0
     created_by: str = "user"
     project_id: str = ""               # 关联的项目 ID (项目隔离)
+    pm_agent_id: str = ""              # 接管此任务的 PM Agent ID
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -443,5 +444,118 @@ class SkillRecord:
 
     @classmethod
     def from_dict(cls, d: dict) -> "SkillRecord":
+        valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**valid)
+
+
+# ── 项目经理 Agent 模型 (PM Agent 架构演进) ───────────────────────
+
+
+class PMAgentStatus(str, Enum):
+    """项目经理 Agent 运行状态。"""
+    STARTING = "starting"        # 刚注册，尚未开始规划
+    PLANNING = "planning"        # 正在用 skill 分析任务、决策团队架构
+    EXECUTING = "executing"      # 团队已创建，正在执行任务
+    MONITORING = "monitoring"    # 任务已分发，正在监控进度
+    COMPLETED = "completed"      # 任务完成
+    FAILED = "failed"            # 任务失败
+
+
+@dataclass
+class TeamMember:
+    """团队成员 — PM 创建的子 Agent。"""
+    member_id: str = ""
+    team_id: str = ""
+    agent_id: str = ""               # 对应的 AgentCard.agent_id
+    agent_name: str = ""
+    device_id: str = ""              # 所在 work_station
+    role: str = "worker"             # worker | reviewer | lead
+    skills: list = field(default_factory=list)
+    current_task: str = ""
+    status: str = "idle"             # idle | busy | offline
+    progress: float = 0.0            # 0.0 ~ 1.0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TeamMember":
+        valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**valid)
+
+
+@dataclass
+class AgentTeam:
+    """Agent 团队 — PM 创建的子 Agent 团队。"""
+    team_id: str = ""
+    pm_id: str = ""                  # 所属 PM
+    team_name: str = ""
+    team_type: str = ""              # single | parallel | pipeline | nested
+    device_id: str = ""              # 所在 work_station
+    parent_team_id: str = ""         # 父团队 ID (嵌套时)
+    members: list = field(default_factory=list)  # List[TeamMember.to_dict()]
+    status: str = "pending"          # pending | active | completed | failed
+    current_task: str = ""
+    created_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AgentTeam":
+        valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**valid)
+
+
+@dataclass
+class PMAgent:
+    """项目经理 Agent — 接管任务开发的管理型 Agent。
+
+    由 Secretary 注册到合适的 work_station 上运行，
+    使用 multi-agent-architect skill 自主决策团队架构、
+    分解任务、创建子 Agent / 团队、管理进度反馈。
+    """
+    pm_id: str = ""
+    agent_name: str = ""
+    task_id: str = ""                # 接管的任务 ID
+    project_id: str = ""
+    device_id: str = ""              # 所在 work_station
+    hostname: str = ""
+    ip: str = ""
+    api_port: int = 0
+    status: str = "starting"         # starting | planning | executing | monitoring | completed | failed
+    team_structure: dict = field(default_factory=dict)   # 团队架构 JSON
+    task_list: list = field(default_factory=list)         # 分解的任务列表
+    collaboration_mode: str = ""     # single | orchestrator | teams | bus | shared_state
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PMAgent":
+        valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**valid)
+
+
+@dataclass
+class ProgressReport:
+    """进度报告 — 子 Agent / 团队向 PM 报告。"""
+    report_id: str = ""
+    pm_id: str = ""
+    reporter_id: str = ""            # member_id 或 team_id
+    reporter_type: str = ""          # member | team
+    task_name: str = ""
+    progress: float = 0.0            # 0.0 ~ 1.0
+    status: str = "in_progress"      # in_progress | completed | blocked | failed
+    message: str = ""
+    timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ProgressReport":
         valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
         return cls(**valid)

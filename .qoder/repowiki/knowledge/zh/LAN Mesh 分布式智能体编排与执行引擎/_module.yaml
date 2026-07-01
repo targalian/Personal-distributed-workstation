@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: ""
-title: 局域网分布式智能体编排平台
+title: LAN Mesh 分布式智能体编排与执行引擎
 scope: []
 source_files: []
 depends_on: []

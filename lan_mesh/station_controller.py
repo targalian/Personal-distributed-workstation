@@ -78,8 +78,9 @@ class StationController:
     - 提供 Web UI (Station Tab 为默认)
 
     激活 Secretary 后 (同进程):
-    - 加载 ProjectManager / Orchestrator / ModelRouter / MCPGateway
-    - Web UI 显示 Secretary Tabs (任务/Agent/工具/项目)
+    - 加载 ChatHandler / ProjectManager / ModelRouter / MCPGateway
+    - 任务由 PM Agent 接管 (在 Worker 上运行, 替代 Orchestrator)
+    - Web UI 显示 Secretary Tabs (对话/任务/团队/Agent/工具/项目)
     """
 
     def __init__(self, cfg: AppConfig):
@@ -126,9 +127,11 @@ class StationController:
         # Secretary 组件 (初始未加载, activate_secretary() 时创建)
         self.secretary_active = False
         self.project_manager = None
-        self.orchestrator = None
+        self.orchestrator = None  # 保留属性以兼容旧引用, 但不再使用
         self.model_router = None
         self.mcp_gateway = None
+        self.chat_handler = None    # 秘书聊天处理器
+        self.chat_runtime = None    # 聊天专用 AgentRuntime
         self._mcp_config_path = str(self.data_dir / "mcp_servers.yaml")
 
         # Secretary 主机分配追踪 (哪台主机在运行 Secretary)
@@ -143,16 +146,20 @@ class StationController:
     def activate_secretary(self) -> dict:
         """同进程激活 Secretary 模式。
 
-        加载项目管理组件: ProjectManager / Orchestrator / ModelRouter / MCPGateway
-        激活后 API 路由自动可用 (无需重启)。
+        PM Agent 架构演进后:
+        - 不再创建 Orchestrator (由 PM Agent 接管任务分解/调度/分发)
+        - 创建 ChatHandler (Web 端聊天窗口)
+        - 保留 ModelRouter 和 MCPGateway (PM 需要)
+        - 创建聊天专用 AgentRuntime (LLM 调用)
         """
         if self.secretary_active:
             return {"ok": True, "message": "Secretary 已激活", "already_active": True}
 
         from .project import ProjectManager
-        from .orchestrator import Orchestrator
         from .model_router import ModelRouter
         from .mcp_gateway import MCPGateway
+        from .agent_runtime import AgentRuntime
+        from .chat_handler import ChatHandler
 
         # 项目管理器
         self.project_manager = ProjectManager(self.db)
@@ -163,18 +170,23 @@ class StationController:
         if self.model_router:
             print(f"[Station] 模型路由器已加载: {self.model_router.pool_size} 个模型")
 
-        # 任务编排器
-        self.orchestrator = Orchestrator(
-            self.db, self.project_manager, self.model_router,
-            skill_registry=self.skill_registry,
-            on_event=self._on_orchestrator_event,
-        )
-
         # MCP 工具网关
         self.mcp_gateway = MCPGateway()
 
+        # 聊天专用 AgentRuntime (用于秘书对话的 LLM 调用)
+        self.chat_runtime = AgentRuntime(
+            agent_id=f"secretary-{self.state.device_id[:8]}",
+            shared_folder_path=str(self.state.shared_folder.path),
+        )
+
+        # 秘书聊天处理器
+        self.chat_handler = ChatHandler(
+            runtime=self.chat_runtime,
+            controller=self,
+        )
+
         self.secretary_active = True
-        print("[Station] Secretary 模式已激活 — 项目管理/任务分发/模型路由/MCP工具 已就绪")
+        print("[Station] Secretary 模式已激活 — 聊天处理器/模型路由/MCP工具 已就绪 (PM Agent 架构)")
 
         return {
             "ok": True,
@@ -192,6 +204,8 @@ class StationController:
         self.orchestrator = None
         self.model_router = None
         self.mcp_gateway = None
+        self.chat_handler = None
+        self.chat_runtime = None
 
         print("[Station] Secretary 模式已停用 — 回到纯基础设施管理")
         return {"ok": True, "message": "Secretary 已停用"}

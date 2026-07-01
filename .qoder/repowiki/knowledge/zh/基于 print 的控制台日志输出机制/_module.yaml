@@ -3,10 +3,12 @@ module_path: logging_system
 title: 基于 print 的控制台日志输出机制
 scope: []
 source_files:
-    - lan_mesh/master.py
     - lan_mesh/worker.py
+    - lan_mesh/station_director.py
+    - lan_mesh/station_controller.py
+    - lan_mesh/secretary.py
     - lan_mesh/discovery.py
-    - lan_mesh/preflight.py
-    - lan_mesh/agent_runtime.py
+    - lan_mesh/orchestrator.py
+    - lan_mesh/mcp_client.py
 depends_on: []
 related_to: []

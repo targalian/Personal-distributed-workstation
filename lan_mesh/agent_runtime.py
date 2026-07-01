@@ -42,9 +42,12 @@ class AgentRuntime:
     接收子任务,根据 required_skill 路由到对应的执行处理器。
     """
 
-    def __init__(self, agent_id: str, shared_folder_path: str):
+    def __init__(self, agent_id: str, shared_folder_path: str,
+                 custom_system_prompt: str = ""):
         self.agent_id = agent_id
         self.shared_folder = shared_folder_path
+        self._custom_system_prompt = custom_system_prompt  # PM 注入的定制 prompt
+        self._current_skill = ""  # 优化3: 当前执行的技能类型 (供选择性加载)
         self._skills_cache_dir = Path.home() / ".lan_mesh" / "skills_cache"
         self._handlers = {
             "code_generation": self._handle_code_generation,
@@ -78,6 +81,9 @@ class AgentRuntime:
                 "status": "failed",
                 "error": f"未知的技能类型: {skill}",
             }
+
+        # 优化3: 记录当前技能类型, 供 _build_system_prompt 选择性加载
+        self._current_skill = skill
 
         # 提取路由器注入的模型偏好 (由 orchestrator 写入 payload)
         input_data = dict(subtask.get("input_data", {}))
@@ -190,33 +196,66 @@ class AgentRuntime:
 
     # ── LLM API 调用 (支持多 Provider + 降级链重试) ──────────────────
 
-    def _build_system_prompt(self, task_context: str = "") -> str:
-        """从本地技能缓存构建 system prompt。
+    def set_custom_prompt(self, prompt: str):
+        """设置/更新自定义 system prompt (PM 注入)。
 
-        读取 ~/.lan_mesh/skills_cache/ 下的所有技能文件,
-        去掉 YAML front matter 后拼接为知识库 prompt。
+        设置后, _build_system_prompt 将优先使用此 prompt,
+        不再从技能缓存拼装。传入空字符串则恢复默认行为。
         """
+        self._custom_system_prompt = prompt
+
+    def _build_system_prompt(self, task_context: str = "") -> str:
+        """构建 system prompt。
+
+        优先使用 PM 注入的 custom_system_prompt (含角色、团队、依赖等定制信息)。
+        若未设置, 则回退到从本地技能缓存拼装知识库 prompt。
+        """
+        # 优先使用 PM 注入的定制 prompt
+        if self._custom_system_prompt:
+            return self._custom_system_prompt
+
+        # 回退: 从技能缓存拼装 (优化3: 按当前技能选择性加载)
         if not self._skills_cache_dir.is_dir():
             return ""
 
+        # 优化3: 如果有当前技能, 只加载匹配的技能文件; 否则加载全部
+        target_skill_dir = None
+        if self._current_skill:
+            target_skill_dir = self._skills_cache_dir / self._current_skill
+
         prompts = []
-        for skill_dir in sorted(self._skills_cache_dir.iterdir()):
-            if not skill_dir.is_dir():
-                continue
-            skill_md = skill_dir / "SKILL.md"
-            if not skill_md.is_file():
-                continue
-            try:
-                content = skill_md.read_text(encoding="utf-8")
-                # 去掉 YAML front matter
-                if content.startswith("---"):
-                    parts = content.split("---", 2)
-                    if len(parts) >= 3:
-                        content = parts[2].strip()
-                if content:
-                    prompts.append(content)
-            except Exception:
-                continue
+        if target_skill_dir and target_skill_dir.is_dir():
+            # 只加载当前技能
+            skill_md = target_skill_dir / "SKILL.md"
+            if skill_md.is_file():
+                try:
+                    content = skill_md.read_text(encoding="utf-8")
+                    if content.startswith("---"):
+                        parts = content.split("---", 2)
+                        if len(parts) >= 3:
+                            content = parts[2].strip()
+                    if content:
+                        prompts.append(content)
+                except Exception:
+                    pass
+        else:
+            # 无指定技能, 加载全部 (兼容旧逻辑)
+            for skill_dir in sorted(self._skills_cache_dir.iterdir()):
+                if not skill_dir.is_dir():
+                    continue
+                skill_md = skill_dir / "SKILL.md"
+                if not skill_md.is_file():
+                    continue
+                try:
+                    content = skill_md.read_text(encoding="utf-8")
+                    if content.startswith("---"):
+                        parts = content.split("---", 2)
+                        if len(parts) >= 3:
+                            content = parts[2].strip()
+                    if content:
+                        prompts.append(content)
+                except Exception:
+                    continue
 
         if not prompts:
             return ""

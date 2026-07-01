@@ -45,6 +45,7 @@ from .shared_folder import SharedFolderManager
 from .api import create_worker_router
 from .agent_card import generate_agent_card
 from .agent_runtime import AgentRuntime
+from .pm_agent import ProjectManagerAgent
 
 
 @dataclass
@@ -60,6 +61,8 @@ class WorkerState:
     secretary_port: Optional[int] = None
     agent_card: dict = None          # Agent Card 快照
     agent_runtime: AgentRuntime = None
+    pm_agent: ProjectManagerAgent = None  # 内嵌 PM Agent
+    sub_agents: dict = field(default_factory=dict)  # PM 创建的子 Agent Runtime 实例
 
 
 class WorkerAgent:
@@ -314,6 +317,166 @@ class WorkerAgent:
             return {"running": True, "pid": self._secretary_process.pid, "port": self._secretary_port}
         return {"running": False}
 
+    # ── PM Agent 管理 (内嵌模块) ───────────────────────────────────
+
+    def start_pm(self, task_id: str, secretary_url: str, task_data: dict = None) -> dict:
+        """在本 Worker 上启动 PM Agent 接管指定任务。
+
+        Args:
+            task_id: 任务 ID
+            secretary_url: Secretary API 地址 (用于上报状态/进度)
+            task_data: 任务详情 (可选, 由 Secretary 传入)
+
+        Returns:
+            {ok, pm_id} 或 {ok: False, message}
+        """
+        if self.state.pm_agent and self.state.pm_agent._running:
+            return {"ok": False, "message": "PM Agent 已在运行"}
+
+        if not self.state.agent_runtime:
+            return {"ok": False, "message": "Agent 运行时未初始化"}
+
+        import uuid as _uuid
+        pm_id = f"pm-{_uuid.uuid4().hex[:12]}"
+
+        # 如果未提供 task_data, 从 Secretary 获取
+        if not task_data:
+            try:
+                import requests as _req
+                resp = _req.get(f"{secretary_url.rstrip('/')}/api/tasks/{task_id}", timeout=5)
+                if resp.status_code == 200:
+                    task_data = resp.json()
+            except Exception as e:
+                return {"ok": False, "message": f"获取任务详情失败: {e}"}
+
+        if not task_data:
+            return {"ok": False, "message": "无法获取任务详情"}
+
+        # 创建 PM Agent 实例
+        self.state.pm_agent = ProjectManagerAgent(
+            pm_id=pm_id,
+            agent_runtime=self.state.agent_runtime,
+            secretary_url=secretary_url,
+            device_id=self.state.device_id,
+            device_name=self.state.device_name,
+        )
+
+        # 启动任务 (异步)
+        self.state.pm_agent.start_task(task_data)
+        print(f"[Worker] PM Agent 已启动: {pm_id}, 任务: {task_id}")
+
+        return {"ok": True, "pm_id": pm_id, "device_id": self.state.device_id}
+
+    def stop_pm(self) -> dict:
+        """停止本 Worker 上的 PM Agent。"""
+        if not self.state.pm_agent:
+            return {"ok": False, "message": "PM Agent 未运行"}
+
+        self.state.pm_agent.stop()
+        pm_id = self.state.pm_agent.pm_id
+        self.state.pm_agent = None
+        # 清理子 Agent
+        self.state.sub_agents.clear()
+        print(f"[Worker] PM Agent 已停止: {pm_id}")
+        return {"ok": True, "pm_id": pm_id}
+
+    def get_pm_status(self) -> dict:
+        """查询本 Worker 上的 PM Agent 运行状态。"""
+        if not self.state.pm_agent:
+            return {"running": False}
+        return self.state.pm_agent.get_status()
+
+    def create_subagent(self, agent_name: str, skills: list, task_description: str = "",
+                        system_prompt: str = "", preferred_agent_id: str = "") -> dict:
+        """在本 Worker 上为 PM 创建子 Agent (新 AgentRuntime 实例)。
+
+        Args:
+            agent_name: 子 Agent 名称
+            skills: 技能列表
+            task_description: 任务描述
+            system_prompt: PM 生成的定制 system prompt (角色/团队/依赖/质量要求)
+            preferred_agent_id: PM 预先生成的 agent_id (用于 prompt 中引用)
+
+        Returns:
+            {agent_id, agent_name} 或 {ok: False, message}
+        """
+        import uuid as _uuid
+        # 优先使用 PM 预先生成的 agent_id (已在 prompt 中引用)
+        agent_id = preferred_agent_id or f"sub-{_uuid.uuid4().hex[:10]}"
+
+        # 创建新的 AgentRuntime 实例, 注入 PM 定制的 system prompt
+        sub_runtime = AgentRuntime(
+            agent_id=agent_id,
+            shared_folder_path=str(self.state.shared_folder.path),
+            custom_system_prompt=system_prompt,
+        )
+
+        self.state.sub_agents[agent_id] = {
+            "agent_id": agent_id,
+            "agent_name": agent_name,
+            "runtime": sub_runtime,
+            "skills": skills,
+            "current_task": task_description,
+            "status": "idle",
+            "progress": 0.0,
+            "has_custom_prompt": bool(system_prompt),
+        }
+
+        print(f"[Worker] 子 Agent 已创建: {agent_id} ({agent_name})")
+        return {"agent_id": agent_id, "agent_name": agent_name}
+
+    def forward_progress_report(self, report: dict) -> dict:
+        """将子 Agent 的进度报告转发给 PM Agent。
+
+        Args:
+            report: 进度报告字典
+
+        Returns:
+            {ok: True} 或 {ok: False, message}
+        """
+        if not self.state.pm_agent:
+            return {"ok": False, "message": "PM Agent 未运行"}
+
+        self.state.pm_agent.receive_progress_report(report)
+        return {"ok": True}
+
+    def get_subagent_status(self) -> dict:
+        """返回本 Worker 上所有子 Agent 的状态。"""
+        result = []
+        for agent_id, info in self.state.sub_agents.items():
+            result.append({
+                "agent_id": agent_id,
+                "agent_name": info.get("agent_name", ""),
+                "current_task": info.get("current_task", ""),
+                "status": info.get("status", "idle"),
+                "progress": info.get("progress", 0.0),
+            })
+        return {"sub_agents": result, "total": len(result)}
+
+    def update_subagent_prompt(self, agent_id: str, new_prompt: str) -> dict:
+        """动态更新子 Agent 的 system prompt (优化2)。
+
+        PM 可在任务执行中途调用此方法, 更新子 Agent 的定制 prompt,
+        用于纠偏、补充上下文、调整策略。
+
+        Args:
+            agent_id: 子 Agent ID
+            new_prompt: 新的 system prompt
+
+        Returns:
+            {ok: True} 或 {ok: False, message}
+        """
+        info = self.state.sub_agents.get(agent_id)
+        if not info:
+            return {"ok": False, "message": f"子 Agent {agent_id} 不存在"}
+        runtime = info.get("runtime")
+        if not runtime:
+            return {"ok": False, "message": "子 Agent runtime 不可用"}
+        runtime.set_custom_prompt(new_prompt)
+        info["has_custom_prompt"] = bool(new_prompt)
+        print(f"[Worker] 子 Agent {agent_id} prompt 已更新 ({len(new_prompt)} 字符)")
+        return {"ok": True, "agent_id": agent_id}
+
     # ── FastAPI 应用 ─────────────────────────────────────────────
 
     def _create_app(self) -> FastAPI:
@@ -421,5 +584,9 @@ class WorkerAgent:
     def stop(self):
         """停止 Worker。"""
         self._running = False
+        # 停止 PM Agent
+        if self.state.pm_agent:
+            self.state.pm_agent.stop()
+            print("[Worker] PM Agent 已停止")
         if self.discovery:
             self.discovery.stop()
