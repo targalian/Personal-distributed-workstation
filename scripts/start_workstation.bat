@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul 2>&1
 cd /d "%~dp0.."
 
@@ -13,7 +13,7 @@ echo  LAN Mesh Work Station - One-Click Start
 echo ========================================
 echo.
 
-REM ── Step 1: 检查 Python ──
+REM -- Step 1: 检查 Python --
 echo [step] 1/5 检查 Python...
 python --version >nul 2>&1
 if errorlevel 1 (
@@ -25,7 +25,7 @@ if errorlevel 1 (
 for /f "tokens=*" %%v in ('python --version 2^>^&1') do set PYVER=%%v
 echo   -^> %PYVER%
 
-REM ── Step 2: 虚拟环境 ──
+REM -- Step 2: 虚拟环境 --
 echo [step] 2/5 检查虚拟环境...
 if not exist ".venv\Scripts\python.exe" (
     if exist ".venv" (
@@ -46,7 +46,7 @@ if not exist ".venv\Scripts\python.exe" (
 set PYTHON=.venv\Scripts\python.exe
 set PIP=.venv\Scripts\pip.exe
 
-REM ── Step 3: 依赖安装 ──
+REM -- Step 3: 依赖安装 --
 echo [step] 3/5 检查依赖...
 %PIP% show fastapi >nul 2>&1
 if errorlevel 1 (
@@ -62,7 +62,7 @@ if errorlevel 1 (
     echo   -^> 依赖已安装 (skip)
 )
 
-REM ── Step 4: 配置文件 ──
+REM -- Step 4: 配置文件 --
 echo [step] 4/5 检查配置...
 if exist "lan_mesh\model_pool.example.yaml" (
     if not exist "lan_mesh\model_pool.yaml" (
@@ -75,7 +75,7 @@ if exist "lan_mesh\model_pool.example.yaml" (
     echo   -^> model_pool.example.yaml 不存在 (skip)
 )
 
-REM ── Step 5: 启动 ──
+REM -- Step 5: 启动 --
 echo [step] 5/5 启动 Station Director...
 echo.
 echo ========================================
