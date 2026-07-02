@@ -19,3 +19,18 @@ secretary:
   shared_folder: ~/lan_mesh_shared
   device_name: ""          # 留空则自动使用 hostname-secretary
   db_path: ~/.lan_mesh/secretary.sqlite3
+
+# 云存储配置 (跨主机共享文件夹同步)
+# 支持 S3 兼容服务: 阿里云 OSS、MinIO、AWS S3 等
+# 密钥建议通过环境变量配置: CLOUD_STORAGE_ACCESS_KEY / CLOUD_STORAGE_SECRET_KEY
+cloud_storage:
+  enabled: false
+  endpoint: ""             # S3 端点 (如 oss-cn-hangzhou.aliyuncs.com)
+  bucket: "lan-mesh"       # 存储桶名称
+  prefix: "shared/"        # 桶内路径前缀
+  access_key: ""           # 访问密钥 (优先使用环境变量 CLOUD_STORAGE_ACCESS_KEY)
+  secret_key: ""           # 密钥 (优先使用环境变量 CLOUD_STORAGE_SECRET_KEY)
+  region: ""               # 区域 (如 us-east-1, 部分服务可留空)
+  secure: true             # 是否使用 HTTPS
+  auto_sync: true          # 启动时自动同步
+  sync_interval: 300       # 自动同步间隔 (秒), 0 表示仅启动时同步一次

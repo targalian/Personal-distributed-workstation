@@ -46,6 +46,7 @@ from .api import create_worker_router
 from .agent_card import generate_agent_card
 from .agent_runtime import AgentRuntime
 from .pm_agent import ProjectManagerAgent
+from .cloud_sync import CloudSyncManager
 
 
 @dataclass
@@ -63,6 +64,7 @@ class WorkerState:
     agent_runtime: AgentRuntime = None
     pm_agent: ProjectManagerAgent = None  # 内嵌 PM Agent
     sub_agents: dict = field(default_factory=dict)  # PM 创建的子 Agent Runtime 实例
+    cloud_sync: CloudSyncManager = None  # 云存储同步管理器
 
 
 class WorkerAgent:
@@ -546,6 +548,25 @@ class WorkerAgent:
         )
         self.discovery.start()
 
+        # 云存储同步 (如果启用)
+        cloud_cfg = self.cfg.cloud_storage
+        if cloud_cfg.enabled and cloud_cfg.endpoint:
+            self.state.cloud_sync = CloudSyncManager(
+                local_path=str(self.state.shared_folder.path),
+                device_id=self.state.device_id,
+                endpoint=cloud_cfg.endpoint,
+                bucket=cloud_cfg.bucket,
+                prefix=cloud_cfg.prefix,
+                access_key=cloud_cfg.access_key,
+                secret_key=cloud_cfg.secret_key,
+                region=cloud_cfg.region,
+                secure=cloud_cfg.secure,
+                auto_sync=cloud_cfg.auto_sync,
+                sync_interval=cloud_cfg.sync_interval,
+            )
+            self.state.cloud_sync.start_auto_sync()
+            print(f"[Worker] 云存储同步已启动: {cloud_cfg.endpoint}/{cloud_cfg.bucket}")
+
         # 部署采集脚本并生成初始配置报告
         self._deploy_config_script()
         initial_info = self._collect_info()
@@ -584,6 +605,9 @@ class WorkerAgent:
     def stop(self):
         """停止 Worker。"""
         self._running = False
+        # 停止云同步
+        if self.state.cloud_sync:
+            self.state.cloud_sync.stop()
         # 停止 PM Agent
         if self.state.pm_agent:
             self.state.pm_agent.stop()

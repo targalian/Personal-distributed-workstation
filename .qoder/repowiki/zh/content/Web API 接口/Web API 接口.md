@@ -30,10 +30,10 @@
 
 ## 更新摘要
 **变更内容**
-- LAN Mesh API层重构：提取 `_merge_db_and_udp_hosts()` 公共函数用于统一合并数据库和UDP发现的主机列表
-- `/api/hosts` 端点简化：使用新的合并函数减少代码重复并确保一致性
-- `/api/station/fleet` 端点增强：返回包含完整主机列表的详细舰队概览信息
-- Bot管理API完善：支持企业微信群机器人和Telegram Bot通道的完整生命周期管理
+- **新增 P2P 通信 API 端点**：实现了主机间点对点消息发送、接收、历史查询和文件传输功能
+- **增强 WebSocket 事件推送**：新增 `p2p_chat` 事件类型支持实时聊天消息推送
+- **完善 Station API 和 Worker API**：在两个层面都实现了 P2P 消息处理机制
+- **前端集成支持**：Dashboard 界面集成了完整的 P2P 聊天和文件传输功能
 
 ## 目录
 1. [简介](#简介)
@@ -51,7 +51,7 @@
 
 Work Station 项目是一个基于局域网的分布式任务执行平台，采用 Master/Worker 架构设计。该项目提供了完整的 Web API 接口，支持设备管理、文件传输、任务执行、工具调度、项目管理、Bot消息通道管理和技能管理等功能。系统通过 UDP 广播发现机制实现设备自动发现，通过 HTTP API 提供 RESTful 接口，通过 WebSocket 实现实时状态推送。
 
-**更新** LAN Mesh API层进行了重要重构，提取了 `_merge_db_and_udp_hosts()` 公共函数用于合并数据库和UDP发现的主机列表，减少了代码重复并确保了所有API端点的一致性；同时增强了 `/api/station/fleet` 端点的舰队概览信息，提供更详细的主机统计和列表数据。
+**更新** 新增了完整的 P2P（点对点）通信功能，支持主机间的直接消息发送、接收、历史查询和文件传输。Station API 和 Worker API 都实现了 P2P 消息处理机制，并通过 WebSocket 事件推送支持实时聊天消息的实时更新。
 
 ## 项目结构
 
@@ -83,11 +83,13 @@ SecretaryAPI[Secretary API]
 SkillAPI[技能管理 API]
 BotAPI[Bot 管理 API]
 RoleAPI[角色管理 API]
+P2PAPI[P2P 通信 API]
 end
 subgraph "前端集成"
 QuickLAN[QuickLAN 前端]
 TauriApp[Tauri 应用]
 LANAPI[LAN API]
+Dashboard[Dashboard 界面]
 end
 Master --> MasterAPI
 Worker --> WorkerAPI
@@ -96,6 +98,7 @@ StationAPI --> RoleManager
 StationAPI --> Database
 StationAPI --> HostRating
 StationAPI --> Discovery
+StationAPI --> P2PAPI
 SkillAPI --> SkillRegistry
 SkillAPI --> Database
 SecretaryAPI --> ProjectManager
@@ -108,6 +111,9 @@ QuickLAN --> MasterAPI
 QuickLAN --> SkillAPI
 QuickLAN --> BotAPI
 TauriApp --> LANAPI
+Dashboard --> P2PAPI
+Dashboard --> StationAPI
+P2PAPI --> WorkerAPI
 ```
 
 **图表来源**
@@ -125,11 +131,11 @@ TauriApp --> LANAPI
 **章节来源**
 - [master.py:1-332](file://lan_mesh/master.py#L1-L332)
 - [worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
-- [api.py:1-757](file://lan_mesh/api.py#L1-L757)
-- [station_api.py:1-1031](file://lan_mesh/station_api.py#L1-L1031)
+- [api.py:1-793](file://lan_mesh/api.py#L1-L793)
+- [station_api.py:1-1230](file://lan_mesh/station_api.py#L1-L1230)
 - [station_director.py:1-232](file://lan_mesh/station_director.py#L1-L232)
 - [host_rating.py:1-115](file://lan_mesh/host_rating.py#L1-L115)
-- [station_api.py:1-757](file://lan_mesh/station_api.py#L1-L757)
+- [station_api.py:1-1230](file://lan_mesh/station_api.py#L1-L1230)
 - [station_controller.py:1-480](file://lan_mesh/station_controller.py#L1-L480)
 - [skill_registry.py:1-388](file://lan_mesh/skill_registry.py#L1-L388)
 - [bot_gateway.py:1-354](file://lan_mesh/bot_gateway.py#L1-L354)
@@ -154,6 +160,7 @@ Worker 守护进程部署在各个主机上，负责：
 - Agent 能力注册
 - Secretary 子进程管理（远程角色分配）
 - 技能包下载和缓存管理
+- **新增** P2P 消息接收和处理
 
 ### 发现服务
 基于 UDP 广播的设备发现机制，实现设备自动发现和状态同步。
@@ -183,6 +190,7 @@ Worker 守护进程部署在各个主机上，负责：
 - 手动评级重算功能
 - 技能库管理（扫描、注册、权限分配）
 - Bot 通道管理（配置、测试、事件推送）
+- **新增** P2P 消息转发和 WebSocket 广播
 
 ### 角色管理器 (Role Manager)
 角色管理器负责：
@@ -238,6 +246,7 @@ graph TB
 subgraph "应用层"
 Frontend[前端应用]
 CLI[命令行工具]
+Dashboard[Dashboard 界面]
 end
 subgraph "API 层"
 REST[RESTful API]
@@ -247,6 +256,7 @@ SecretaryAPI[Secretary API]
 SkillAPI[技能管理 API]
 BotAPI[Bot 管理 API]
 RoleAPI[角色管理 API]
+P2PAPI[P2P 通信 API]
 end
 subgraph "业务逻辑层"
 Orchestrator[任务编排器]
@@ -259,18 +269,23 @@ HostRating[主机评级系统]
 RoleManager[角色管理器]
 SkillRegistry[技能注册表]
 BotGateway[Bot 网关]
+P2PHandler[P2P 消息处理器]
 end
 subgraph "数据访问层"
 Database[SQLite 数据库]
 SharedFolder[共享文件夹]
+MemoryStore[内存消息存储]
 end
 subgraph "基础设施层"
 UDP[UDP 广播]
 HTTP[HTTP 服务器]
 TCP[TCP 服务]
+WS[WebSocket 服务器]
 end
 Frontend --> REST
 CLI --> REST
+Dashboard --> P2PAPI
+Dashboard --> StationAPI
 REST --> Orchestrator
 REST --> MCPGateway
 REST --> AgentRuntime
@@ -279,6 +294,7 @@ REST --> ModelRouter
 StationAPI --> StationDirector
 StationAPI --> RoleManager
 StationAPI --> HostRating
+StationAPI --> P2PHandler
 SkillAPI --> SkillRegistry
 SkillAPI --> Database
 SecretaryAPI --> ProjectManager
@@ -289,6 +305,9 @@ BotAPI --> BotGateway
 BotAPI --> Database
 RoleAPI --> RoleManager
 RoleAPI --> Worker
+P2PAPI --> P2PHandler
+P2PHandler --> MemoryStore
+P2PHandler --> WS
 StationDirector --> Database
 StationDirector --> DiscoveryService
 HostRating --> Database
@@ -335,7 +354,6 @@ MCPGateway --> TCP
 - 方法：GET `/api/hosts`
 - 功能：获取所有注册设备（DB + UDP 合并）
 - 响应：设备列表和统计信息
-- **更新** 使用统一的合并函数确保数据一致性
 
 **单设备查询**
 - 方法：GET `/api/hosts/{device_id}`
@@ -400,7 +418,6 @@ MCPGateway --> TCP
 - 功能：提交新任务
 - 请求体：任务描述和输入数据
 - 响应：Task 对象
-- **更新** 支持关联项目进行预算控制
 
 **任务列表**
 - 方法：GET `/api/tasks`
@@ -420,7 +437,6 @@ MCPGateway --> TCP
 - 功能：创建新项目
 - 请求体：项目配置（名称、描述、预算、模型限制、路由策略等）
 - 响应：Project 对象
-- **新增** 支持独立工作空间、预算控制和模型白名单
 
 **项目列表**
 - 方法：GET `/api/projects`
@@ -502,8 +518,6 @@ MCPGateway --> TCP
 
 ### Station API 接口
 
-**更新** 工作站 API 提供舰队管理能力和角色管理系统，经过重构后具有更好的性能和一致性：
-
 #### 角色管理接口
 
 **激活 Secretary**
@@ -525,9 +539,8 @@ MCPGateway --> TCP
 
 **舰队概览**
 - 方法：GET `/api/station/fleet`
-- 功能：获取舰队概览统计信息（**增强**）
+- 功能：获取舰队概览统计信息
 - 响应：包含总主机数、在线/离线主机数、各评级分布的统计摘要，以及完整的主机列表
-- **更新** 现在返回包含所有主机的详细信息，便于前端直接展示
 
 **主机列表**
 - 方法：GET `/api/station/hosts`
@@ -564,7 +577,6 @@ MCPGateway --> TCP
 - 功能：指定主机运行 Secretary
 - 参数：device_id（路径参数），payload（可选端口配置）
 - 响应：分配结果和端口信息
-- **新增** 支持本机激活和远程主机分配
 
 **撤销主机的 Secretary 角色**
 - 方法：POST `/api/station/hosts/{device_id}/revoke-secretary`
@@ -584,8 +596,6 @@ MCPGateway --> TCP
 - 响应：主机角色状态和远程状态信息
 
 #### Bot 通道管理接口
-
-**新增** Bot 管理 API 提供完整的Bot通道生命周期管理：
 
 **列出 Bot 通道**
 - 方法：GET `/api/station/bot/channels`
@@ -610,16 +620,44 @@ MCPGateway --> TCP
 - 参数：channel_type（路径参数）
 - 响应：测试结果（成功或错误信息）
 
-**实时事件推送**
+#### **新增** P2P 通信接口
+
+**发送 P2P 消息**
+- 方法：POST `/api/p2p/send`
+- 功能：向目标主机发送聊天消息
+- 请求体：包含 target_device_id 和 message 字段
+- 响应：包含 ok 标志和 message_id
+- **说明**：消息会存储在本地并通过 HTTP 转发到目标主机的 /api/p2p/receive 端点，同时通过 WebSocket 广播给本机 Dashboard
+
+**接收 P2P 消息**
+- 方法：POST `/api/p2p/receive`
+- 功能：接收来自远程主机的消息
+- 请求体：包含 from_device_id、from_name、message、timestamp 字段
+- 响应：包含 ok 标志
+- **说明**：其他主机通过 HTTP POST 调用此端点发送消息给本机
+
+**查询 P2P 消息历史**
+- 方法：GET `/api/p2p/messages/{device_id}`
+- 功能：获取与指定主机的聊天历史
+- 参数：device_id（路径参数）
+- 响应：包含 messages 数组和 total 计数
+
+**P2P 文件传输**
+- 方法：POST `/api/p2p/transfer`
+- 功能：向目标主机传输文件
+- 请求体：multipart/form-data，包含 file 文件和 target_device_id 表单字段
+- 响应：包含 ok 标志、filename、size 和 remote_path
+- **说明**：文件通过 HTTP 上传到目标主机的 /shared 端点
+
+#### WebSocket 事件推送
 
 **WebSocket 事件推送**
 - 方法：WS `/ws`
 - 功能：实时推送主机状态变更和事件
-- 消息类型：hosts、heartbeat、agent_registered、project_created、project_updated、project_archived、station_events、secretary_assigned、secretary_revoked 等
+- 消息类型：hosts、heartbeat、agent_registered、project_created、project_updated、project_archived、station_events、secretary_assigned、secretary_revoked、**p2p_chat** 等
+- **新增** p2p_chat 事件类型用于实时推送 P2P 聊天消息
 
 ### 技能管理 API 接口
-
-**新增** 技能管理 API 提供完整的技能库生命周期管理：
 
 #### 技能查询接口
 
@@ -680,16 +718,6 @@ MCPGateway --> TCP
 - 方法：WS `/ws`
 - 功能：实时推送技能管理相关事件
 - 消息类型：skills_scanned（技能扫描完成）、skill_assigned（技能分配）、skill_revoked（技能撤销）
-
-**章节来源**
-- [station_api.py:251-295](file://lan_mesh/station_api.py#L251-L295)
-- [station_api.py:311-345](file://lan_mesh/station_api.py#L311-L345)
-- [station_api.py:904-962](file://lan_mesh/station_api.py#L904-L962)
-- [station_api.py:968-1001](file://lan_mesh/station_api.py#L968-L1001)
-- [skill_registry.py:128-388](file://lan_mesh/skill_registry.py#L128-L388)
-- [database.py:717-835](file://lan_mesh/database.py#L717-L835)
-- [bot_gateway.py:116-130](file://lan_mesh/bot_gateway.py#L116-L130)
-- [bot_gateway.py:325-336](file://lan_mesh/bot_gateway.py#L325-L336)
 
 ### Worker API 接口
 
@@ -759,6 +787,347 @@ MCPGateway --> TCP
 - 参数：skill_id（路径参数，技能ID）
 - 响应：技能内容和参考文档
 
+#### **新增** P2P 消息接收接口
+
+**接收 P2P 消息**
+- 方法：POST `/api/p2p/receive`
+- 功能：接收来自远程主机的 P2P 消息
+- 请求体：包含 from_device_id、from_name、message、timestamp 字段
+- 响应：包含 ok 标志
+- **说明**：Worker 端存储并打印消息，不做 WebSocket 广播
+
+#### 实时通信接口
+
+**WebSocket 连接**
+- 方法：WS `/ws`
+- 功能：实时推送设备状态变化
+- 消息类型：hosts、heartbeat、agent_registered、project_created、project_updated、project_archived 等
+
+### Secretary API 接口
+
+#### Agent 管理接口
+
+**Agent 注册**
+- 方法：POST `/api/agents/register`
+- 功能：注册 Agent Card
+- 请求体：AgentCard 对象
+- 响应：注册结果
+
+#### 任务管理接口
+
+**任务提交**
+- 方法：POST `/api/tasks`
+- 功能：提交新任务
+- 请求体：任务描述和输入数据
+- 响应：Task 对象
+
+#### 项目管理接口
+
+**项目创建**
+- 方法：POST `/api/projects`
+- 功能：创建新项目
+- 请求体：项目配置（名称、描述、预算、模型限制、路由策略等）
+- 响应：Project 对象
+
+**项目列表**
+- 方法：GET `/api/projects`
+- 功能：获取项目列表
+- 参数：status（可选，按状态过滤）
+- 响应：项目列表和统计信息
+
+**单项目查询**
+- 方法：GET `/api/projects/{project_id}`
+- 功能：查询项目详情（含预算状态）
+- 响应：项目状态信息（包含预算使用率、剩余预算、消费统计等）
+
+**项目更新**
+- 方法：PUT `/api/projects/{project_id}`
+- 功能：更新项目配置
+- 请求体：可更新字段（名称、描述、预算、模型、路由策略、状态等）
+- 响应：更新后的项目对象
+
+**项目归档**
+- 方法：DELETE `/api/projects/{project_id}`
+- 功能：归档项目（软删除）
+- 响应：归档结果
+
+**项目消费记录**
+- 方法：GET `/api/projects/{project_id}/usage`
+- 功能：查询项目消费记录
+- 参数：limit（默认100，限制返回记录数）
+- 响应：消费记录列表和统计信息
+
+#### 模型路由接口
+
+**路由决策预览**
+- 方法：POST `/api/route/dry-run`
+- 功能：模型路由决策预览（dry-run）
+- 请求体：包含任务描述、技能类型、项目ID
+- 响应：RoutingResult 对象
+
+**模型列表**
+- 方法：GET `/api/models`
+- 功能：返回模型池列表（含可用状态）
+- 响应：模型列表
+
+#### MCP 工具接口
+
+**工具列表**
+- 方法：GET `/tools/list`
+- 功能：获取所有可用工具
+- 参数：model（可选，模型类型）
+- 响应：工具列表和服务器信息
+
+**工具调用**
+- 方法：POST `/tools/call`
+- 功能：调用指定工具
+- 请求体：包含工具名称和参数
+- 响应：工具执行结果
+
+**MCP 服务器列表**
+- 方法：GET `/tools/servers`
+- 功能：获取所有 MCP 服务器
+- 响应：服务器列表和统计信息
+
+**MCP 服务器注册**
+- 方法：POST `/tools/servers`
+- 功能：动态注册 MCP 服务器
+- 请求体：服务器配置
+- 响应：注册结果
+
+**MCP 服务器注销**
+- 方法：DELETE `/tools/servers/{name}`
+- 功能：注销 MCP 服务器
+- 响应：注销结果
+
+#### 实时通信接口
+
+**WebSocket 连接**
+- 方法：WS `/ws`
+- 功能：实时推送设备状态变化
+- 消息类型：hosts、heartbeat、agent_registered、project_created、project_updated、project_archived 等
+
+### 前端集成接口
+
+#### QuickLAN 前端接口
+
+**设备管理**
+- `listDevices()`: 获取设备列表
+- `updateDeviceNote(deviceId, note)`: 更新设备备注
+- `discoverIp(ip)`: 发现指定 IP
+
+**文件传输**
+- `sendFiles(targetId, filePaths)`: 发送文件
+- `acceptTransfer(transferId)`: 接受传输
+- `rejectTransfer(transferId)`: 拒绝传输
+- `getTransfers()`: 获取传输列表
+
+**共享管理**
+- `listSharedResources()`: 列出共享资源
+- `listMyShares()`: 列出我的分享
+- `downloadShare(shareId, password)`: 下载共享
+
+**项目管理**
+- `createProject(projectData)`: 创建新项目
+- `listProjects(status)`: 获取项目列表
+- `getProjectStatus(projectId)`: 查询项目状态
+- `updateProject(projectId, projectData)`: 更新项目配置
+- `archiveProject(projectId)`: 归档项目
+- `getProjectUsage(projectId, limit)`: 获取项目消费记录
+
+**舰队管理**
+- `getFleetStats()`: 获取舰队统计
+- `getHosts(minTier, onlineOnly)`: 获取主机列表
+- `getHostEvents(deviceId, limit)`: 获取主机事件历史
+- `getStationEvents(limit)`: 获取全站事件流
+- `recomputeRatings()`: 重新计算评级
+
+**角色管理**
+- `activateSecretary()`: 激活 Secretary 模式
+- `deactivateSecretary()`: 停用 Secretary 模式
+- `assignSecretaryToHost(deviceId, port)`: 分配 Secretary 到主机
+- `revokeSecretaryFromHost(deviceId)`: 撤销主机的 Secretary 角色
+- `getSecretaryStatus()`: 查询 Secretary 分配状态
+
+**Bot 管理**
+- `listBotChannels()`: 获取 Bot 通道列表
+- `addBotChannel(channelData)`: 添加或更新 Bot 通道
+- `removeBotChannel(channelType)`: 删除 Bot 通道
+- `testBotChannel(channelType)`: 测试 Bot 通道
+- `refreshBotChannels()`: 刷新 Bot 通道列表
+
+**技能管理**
+- `listSkills(category)`: 获取技能列表
+- `getSkillStats()`: 获取技能统计
+- `scanSkills()`: 扫描技能
+- `downloadSkillPackage(role, agentId)`: 下载技能包
+- `getSkillsForRole(role)`: 获取角色技能
+- `getSkillDetail(skillId)`: 获取技能详情
+- `assignSkill(skillId, assigneeType, assigneeId)`: 分配技能
+- `revokeSkill(skillId, assigneeType, assigneeId)`: 撤销技能分配
+
+#### **新增** P2P 通信前端接口
+
+**P2P 主机通讯**
+- `refreshP2PHosts()`: 刷新 P2P 主机列表
+- `loadP2PMessages()`: 加载与指定主机的 P2P 消息历史
+- `sendP2PMessage()`: 发送 P2P 文本消息
+- `sendP2PFile()`: 发送 P2P 文件
+- `onP2PChatMessage(data)`: 处理 P2P 聊天消息事件
+
+**WebSocket 事件处理**
+- `connectWS()`: 建立 WebSocket 连接
+- 监听 `p2p_chat` 事件类型进行实时消息推送
+
+### 前端集成接口
+
+#### QuickLAN 前端接口
+
+**设备管理**
+- `listDevices()`: 获取设备列表
+- `updateDeviceNote(deviceId, note)`: 更新设备备注
+- `discoverIp(ip)`: 发现指定 IP
+
+**文件传输**
+- `sendFiles(targetId, filePaths)`: 发送文件
+- `acceptTransfer(transferId)`: 接受传输
+- `rejectTransfer(transferId)`: 拒绝传输
+- `getTransfers()`: 获取传输列表
+
+**共享管理**
+- `listSharedResources()`: 列出共享资源
+- `listMyShares()`: 列出我的分享
+- `downloadShare(shareId, password)`: 下载共享
+
+**项目管理**
+- `createProject(projectData)`: 创建新项目
+- `listProjects(status)`: 获取项目列表
+- `getProjectStatus(projectId)`: 查询项目状态
+- `updateProject(projectId, projectData)`: 更新项目配置
+- `archiveProject(projectId)`: 归档项目
+- `getProjectUsage(projectId, limit)`: 获取项目消费记录
+
+**舰队管理**（增强）
+- `getFleetStats()`: 获取舰队统计（**更新** 现在包含完整主机列表）
+- `getHosts(minTier, onlineOnly)`: 获取主机列表
+- `getHostEvents(deviceId, limit)`: 获取主机事件历史
+- `getStationEvents(limit)`: 获取全站事件流
+- `recomputeRatings()`: 重新计算评级
+
+**角色管理**
+- `activateSecretary()`: 激活 Secretary 模式
+- `deactivateSecretary()`: 停用 Secretary 模式
+- `assignSecretaryToHost(deviceId, port)`: 分配 Secretary 到主机
+- `revokeSecretaryFromHost(deviceId)`: 撤销主机的 Secretary 角色
+- `getSecretaryStatus()`: 查询 Secretary 分配状态
+
+**Bot 管理**
+- `listBotChannels()`: 获取 Bot 通道列表
+- `addBotChannel(channelData)`: 添加或更新 Bot 通道
+- `removeBotChannel(channelType)`: 删除 Bot 通道
+- `testBotChannel(channelType)`: 测试 Bot 通道
+- `refreshBotChannels()`: 刷新 Bot 通道列表
+
+**技能管理**
+- `listSkills(category)`: 获取技能列表
+- `getSkillStats()`: 获取技能统计
+- `scanSkills()`: 扫描技能
+- `downloadSkillPackage(role, agentId)`: 下载技能包
+- `getSkillsForRole(role)`: 获取角色技能
+- `getSkillDetail(skillId)`: 获取技能详情
+- `assignSkill(skillId, assigneeType, assigneeId)`: 分配技能
+- `revokeSkill(skillId, assigneeType, assigneeId)`: 撤销技能分配
+
+**章节来源**
+- [station_api.py:251-295](file://lan_mesh/station_api.py#L251-L295)
+- [station_api.py:311-345](file://lan_mesh/station_api.py#L311-345)
+- [station_api.py:904-962](file://lan_mesh/station_api.py#L904-L962)
+- [station_api.py:968-1001](file://lan_mesh/station_api.py#L968-L1001)
+- [station_api.py:1029-1200](file://lan_mesh/station_api.py#L1029-L1200)
+- [api.py:234-270](file://lan_mesh/api.py#L234-L270)
+- [skill_registry.py:128-388](file://lan_mesh/skill_registry.py#L128-L388)
+- [database.py:717-835](file://lan_mesh/database.py#L717-L835)
+- [bot_gateway.py:116-130](file://lan_mesh/bot_gateway.py#L116-L130)
+- [bot_gateway.py:325-336](file://lan_mesh/bot_gateway.py#L325-L336)
+- [dashboard.html:1221-1345](file://lan_mesh/web/templates/dashboard.html#L1221-L1345)
+
+### Worker API 接口
+
+#### 设备信息接口
+
+**设备信息**
+- 方法：GET `/info`
+- 功能：获取本机完整配置信息
+- 响应：HostInfo 对象
+
+#### 任务执行接口
+
+**任务执行**
+- 方法：POST `/tasks/execute`
+- 功能：执行 Master 分发的任务
+- 请求体：任务执行参数
+- 响应：执行结果
+
+#### 文件共享接口
+
+**共享文件列表**
+- 方法：GET `/shared`
+- 功能：列出共享文件
+- 响应：文件列表和统计信息
+
+**文件下载**
+- 方法：GET `/shared/{path}`
+- 功能：下载共享文件
+- 参数：文件路径
+- 响应：文件流
+
+**文件上传**
+- 方法：POST `/shared`
+- 功能：上传文件到共享目录
+- 请求体：multipart/form-data
+- 响应：上传结果
+
+#### 角色管理接口
+
+**启动 Secretary 子进程**
+- 方法：POST `/role/start-secretary`
+- 功能：在本机启动 Secretary 子进程
+- 请求体：可选端口配置
+- 响应：启动结果和进程信息
+
+**停止 Secretary 子进程**
+- 方法：POST `/role/stop-secretary`
+- 功能：停止本机的 Secretary 子进程
+- 响应：停止结果
+
+**查询 Secretary 状态**
+- 方法：GET `/role/status`
+- 功能：查询本机 Secretary 运行状态
+- 响应：运行状态和进程信息
+
+#### 技能管理接口
+
+**技能包下载**
+- 方法：GET `/skills/download`
+- 功能：下载已授权的技能包
+- 参数：role（必需，角色名称），agent_id（可选，Agent ID）
+- 响应：技能包列表
+
+**技能内容获取**
+- 方法：GET `/skills/content/{skill_id}`
+- 功能：获取技能内容
+- 参数：skill_id（路径参数，技能ID）
+- 响应：技能内容和参考文档
+
+#### **新增** P2P 消息接收接口
+
+**接收 P2P 消息**
+- 方法：POST `/api/p2p/receive`
+- 功能：接收来自远程主机的 P2P 消息
+- 请求体：包含 from_device_id、from_name、message、timestamp 字段
+- 响应：包含 ok 标志
+- **说明**：Worker 端存储并打印消息，不做 WebSocket 广播
+
 #### 实时通信接口
 
 **WebSocket 连接**
@@ -769,6 +1138,7 @@ MCPGateway --> TCP
 **章节来源**
 - [api.py:103-126](file://lan_mesh/api.py#L103-L126)
 - [api.py:39-98](file://lan_mesh/api.py#L39-L98)
+- [api.py:234-270](file://lan_mesh/api.py#L234-L270)
 - [worker.py:225-285](file://lan_mesh/worker.py#L225-L285)
 
 ### Secretary API 接口
@@ -790,7 +1160,6 @@ MCPGateway --> TCP
 - 功能：提交新任务
 - 请求体：任务描述和输入数据
 - 响应：Task 对象
-- **更新** 支持关联项目进行预算控制
 
 #### 项目管理接口
 
@@ -799,7 +1168,6 @@ MCPGateway --> TCP
 - 功能：创建新项目
 - 请求体：项目配置（名称、描述、预算、模型限制、路由策略等）
 - 响应：Project 对象
-- **新增** 支持独立工作空间、预算控制和模型白名单
 
 **项目列表**
 - 方法：GET `/api/projects`
@@ -1156,6 +1524,24 @@ class BotEventTemplate {
 +string budget_warning
 +string bot_test
 }
+class P2PMessage {
++string id
++string direction
++string type
++string content
++string filename
++int size
++string status
++string error
++string remote_path
++float timestamp
++string from_device_id
++string from_name
++string to_device_id
++string to_name
++to_dict() dict
++from_dict(dict) P2PMessage
+}
 HostInfo --> HostRecord : "持久化"
 HostRecord --> HostRating : "包含"
 AgentCard --> Task : "执行"
@@ -1166,6 +1552,7 @@ HostRecord --> EventLog : "产生"
 HostRecord --> RoleAssignment : "包含"
 SkillRecord --> SkillAssignment : "分配"
 BotChannel --> BotEventTemplate : "配置"
+P2PMessage --> HostRecord : "关联"
 ```
 
 **图表来源**
@@ -1212,6 +1599,7 @@ HostRating[HostRating]
 RoleManager[RoleManager]
 SkillRegistry[SkillRegistry]
 BotGateway[BotGateway]
+P2PHandler[P2P Handler]
 end
 subgraph "Worker 侧"
 WorkerAPI[Worker API]
@@ -1219,11 +1607,13 @@ AgentRuntime[AgentRuntime]
 SharedFolderW[SharedFolderManager]
 RoleManagerW[RoleManager]
 SkillRegistryW[SkillRegistry]
+P2PReceiver[P2P Receiver]
 end
 subgraph "公共组件"
 Protocol[Protocol]
 Config[Config]
 MergeFunction[_merge_db_and_udp_hosts]
+WebSocket[WebSocket Server]
 end
 MasterAPI --> Database
 MasterAPI --> Discovery
@@ -1239,6 +1629,7 @@ WorkerAPI --> SkillRegistryW
 StationDirector --> Database
 StationDirector --> Discovery
 StationDirector --> HostRating
+StationDirector --> P2PHandler
 SkillRegistry --> Database
 SkillRegistry --> Protocol
 RoleManager --> RoleManagerW
@@ -1252,6 +1643,9 @@ BotGateway --> Config
 MergeFunction --> Database
 MergeFunction --> Discovery
 MergeFunction --> HostRating
+P2PHandler --> WebSocket
+P2PReceiver --> WorkerAPI
+P2PHandler --> P2PReceiver
 ```
 
 **图表来源**
@@ -1289,6 +1683,10 @@ ProcessError --> SkillNotFound[404 技能不存在]
 ProcessError --> InvalidAssignee[400 分配对象ID为空]
 ProcessError --> BotChannelNotFound[404 Bot 通道不存在]
 ProcessError --> BotChannelDisabled[400 Bot 通道未启用]
+ProcessError --> P2PTargetNotFound[404 P2P 目标主机不存在]
+ProcessError --> P2PTargetInvalid[400 P2P 目标主机信息不完整]
+ProcessError --> P2PSendFailed[500 P2P 消息发送失败]
+ProcessError --> P2PTransferFailed[500 P2P 文件传输失败]
 ProcessError --> ValidationError --> Response
 NotFound --> Response
 Forbidden --> Response
@@ -1301,6 +1699,10 @@ SkillNotFound --> Response
 InvalidAssignee --> Response
 BotChannelNotFound --> Response
 BotChannelDisabled --> Response
+P2PTargetNotFound --> Response
+P2PTargetInvalid --> Response
+P2PSendFailed --> Response
+P2PTransferFailed --> Response
 ```
 
 **章节来源**
@@ -1310,6 +1712,10 @@ BotChannelDisabled --> Response
 - [station_api.py:411-418](file://lan_mesh/station_api.py#L411-L418)
 - [station_api.py:657-658](file://lan_mesh/station_api.py#L657-L658)
 - [station_api.py:669-670](file://lan_mesh/station_api.py#L669-L670)
+- [station_api.py:1013](file://lan_mesh/station_api.py#L1013)
+- [station_api.py:1022](file://lan_mesh/station_api.py#L1022)
+- [station_api.py:1112](file://lan_mesh/station_api.py#L1112)
+- [station_api.py:1200](file://lan_mesh/station_api.py#L1200)
 - [bot_gateway.py:325-336](file://lan_mesh/bot_gateway.py#L325-L336)
 
 ## 性能考虑
@@ -1336,6 +1742,10 @@ BotChannelDisabled --> Response
 | Bot 通道脱敏缓存 | 5 分钟 | 减少敏感信息处理开销 |
 | Bot 事件推送缓存 | 1 秒 | 减少重复推送 |
 | Bot 命令处理缓存 | 30 秒 | 减少命令解析频率 |
+| **P2P 消息内存缓存** | **进程内存储** | **重启后丢失，适合临时会话** |
+| **P2P 文件传输超时** | **120 秒** | **根据文件大小和网络状况调整** |
+| **P2P 消息转发超时** | **10 秒** | **根据网络延迟调整** |
+| **WebSocket 广播缓存** | **1 秒** | **减少重复广播频率** |
 
 ### 缓存策略
 
@@ -1356,6 +1766,8 @@ BotChannelDisabled --> Response
 - **Bot 优先级比较缓存**：优先级比较结果的短期缓存
 - **Bot 命令处理缓存**：命令处理结果的短期缓存
 - **主机列表合并缓存**：DB和UDP主机列表合并结果的短期缓存
+- **P2P 消息缓存**：P2P 聊天消息的内存缓存，按设备ID分组存储
+- **P2P 目标解析缓存**：P2P 目标主机网络信息的短期缓存
 
 ### 网络优化
 
@@ -1373,6 +1785,10 @@ BotChannelDisabled --> Response
 - **Bot 命令长轮询**：Telegram Bot 使用长轮询，降低 API 调用频率
 - **Bot 通道脱敏显示**：敏感信息脱敏处理，保护隐私安全
 - **主机列表合并优化**：使用统一的合并函数减少重复计算
+- **P2P 消息异步转发**：P2P 消息通过 HTTP 异步转发到目标主机
+- **P2P 文件流式传输**：大文件通过流式传输减少内存占用
+- **P2P 连接复用**：HTTP 连接池复用，减少连接建立开销
+- **P2P 错误重试机制**：网络异常时的自动重试和错误恢复
 
 ## 故障排除指南
 
@@ -1488,13 +1904,48 @@ BotChannelDisabled --> Response
 4. 确认合并逻辑的正确性
 5. 检查主机列表缓存的状态
 
+**P2P 通信异常**
+1. 检查 P2P 目标主机的网络连通性和端口可达性
+2. 验证目标主机的 `/api/p2p/receive` 端点是否正常响应
+3. 查看 P2P 消息转发失败的错误日志
+4. 确认 WebSocket 广播功能正常工作
+5. 检查 P2P 消息存储的内存使用情况
+6. 验证 P2P 文件传输的超时设置和重试机制
+7. 查看 P2P 聊天界面的 WebSocket 连接状态
+8. 确认 P2P 消息的历史记录和实时推送功能
+
+**P2P 消息发送失败**
+1. 检查目标设备ID是否存在且在线
+2. 验证目标主机的 API 端口可达性
+3. 查看 HTTP 转发请求的错误响应
+4. 确认 WebSocket 广播功能正常
+5. 检查 P2P 消息的格式和字段完整性
+
+**P2P 文件传输失败**
+1. 检查目标主机的 `/shared` 端点是否正常
+2. 验证文件上传的大小限制和权限设置
+3. 查看文件传输超时的错误日志
+4. 确认目标主机的磁盘空间充足
+5. 检查文件路径的安全性和有效性
+
+**WebSocket 事件推送异常**
+1. 检查 WebSocket 服务器的连接状态
+2. 验证事件类型的正确性（如 p2p_chat）
+3. 查看客户端的事件监听器是否正确注册
+4. 确认消息格式的序列化和反序列化
+5. 检查网络连接的中断和重连机制
+
 **章节来源**
 - [master.py:300-313](file://lan_mesh/master.py#L300-L313)
 - [worker.py:314-318](file://lan_mesh/worker.py#L314-L318)
 - [station_director.py:92-150](file://lan_mesh/station_director.py#L92-L150)
 - [station_api.py:411-418](file://lan_mesh/station_api.py#L411-L418)
+- [station_api.py:1013](file://lan_mesh/station_api.py#L1013)
+- [station_api.py:1022](file://lan_mesh/station_api.py#L1022)
+- [station_api.py:1112](file://lan_mesh/station_api.py#L1112)
+- [station_api.py:1200](file://lan_mesh/station_api.py#L1200)
 - [skill_registry.py:57-100](file://lan_mesh/skill_registry.py#L57-L100)
-- [database.py:717-835](file://lan_mesh/database.py#L717-835)
+- [database.py:717-835](file://lan_mesh/database.py#L717-L835)
 - [bot_gateway.py:1-354](file://lan_mesh/bot_gateway.py#L1-L354)
 - [station_api.py:31-70](file://lan_mesh/station_api.py#L31-L70)
 
@@ -1526,6 +1977,9 @@ Work Station 项目提供了完整的 Web API 接口体系，支持高效的局�
 - **异步消息发送**：避免阻塞调用方，提高系统响应性能
 - **命令处理机制**：支持 Telegram Bot 的命令交互和状态查询
 - **API层重构优化**：统一的 `_merge_db_and_udp_hosts()` 函数确保数据一致性和性能优化
+- **P2P 通信功能**：**新增** 支持主机间的点对点消息发送、接收、历史查询和文件传输
+- **实时聊天支持**：**新增** 通过 WebSocket 事件推送实现 P2P 聊天消息的实时更新
+- **前端集成完善**：**新增** Dashboard 界面集成了完整的 P2P 聊天和文件传输功能
 
 **建议在生产环境中**：
 1. 根据实际网络环境调整心跳间隔和 TTL 设置
@@ -1561,3 +2015,9 @@ Work Station 项目提供了完整的 Web API 接口体系，支持高效的局�
 31. **新增** 监控主机列表合并函数的性能和数据一致性
 32. **新增** 验证 `/api/station/fleet` 端点的响应时间和数据完整性
 33. **新增** 定期检查 `_merge_db_and_udp_hosts()` 函数的合并逻辑正确性
+34. **新增** 监控 P2P 消息转发成功率和延迟
+35. **新增** 监控 P2P 文件传输的性能和成功率
+36. **新增** 监控 WebSocket p2p_chat 事件的推送频率和性能
+37. **新增** 监控 P2P 消息存储的内存使用情况
+38. **新增** 验证 P2P 目标主机解析和网络连通性
+39. **新增** 监控 P2P 聊天界面的用户交互和错误处理

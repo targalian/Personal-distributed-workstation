@@ -47,6 +47,7 @@ from .station_api import create_station_router
 from .api import create_worker_router
 from .skill_registry import SkillRegistry
 from .bot_gateway import BotGateway, BotChannel
+from .cloud_sync import CloudSyncManager
 
 
 # ── Web UI 模板路径 ─────────────────────────────────────────────
@@ -67,6 +68,7 @@ class StationState:
     shared_folder: SharedFolderManager = None
     ws_clients: Set = field(default_factory=set)
     p2p_messages: dict = field(default_factory=dict)  # 主机间 P2P 聊天消息存储
+    cloud_sync: CloudSyncManager = None  # 云存储同步管理器
 
 
 class StationController:
@@ -499,6 +501,25 @@ class StationController:
         except Exception as e:
             print(f"[Station] [WARNING] 自注册失败: {e} (服务器仍将启动)")
 
+        # 云存储同步 (如果启用)
+        cloud_cfg = self.cfg.cloud_storage
+        if cloud_cfg.enabled and cloud_cfg.endpoint:
+            self.state.cloud_sync = CloudSyncManager(
+                local_path=str(self.state.shared_folder.path),
+                device_id=self.state.device_id,
+                endpoint=cloud_cfg.endpoint,
+                bucket=cloud_cfg.bucket,
+                prefix=cloud_cfg.prefix,
+                access_key=cloud_cfg.access_key,
+                secret_key=cloud_cfg.secret_key,
+                region=cloud_cfg.region,
+                secure=cloud_cfg.secure,
+                auto_sync=cloud_cfg.auto_sync,
+                sync_interval=cloud_cfg.sync_interval,
+            )
+            self.state.cloud_sync.start_auto_sync()
+            print(f"[Station] 云存储同步已启动: {cloud_cfg.endpoint}/{cloud_cfg.bucket}")
+
         # 部署采集脚本并生成初始配置报告
         self._deploy_config_script()
         self._refresh_host_config()
@@ -551,5 +572,7 @@ class StationController:
     def stop(self):
         """停止 Station Director。"""
         self._running = False
+        if self.state.cloud_sync:
+            self.state.cloud_sync.stop()
         if self.discovery:
             self.discovery.stop()

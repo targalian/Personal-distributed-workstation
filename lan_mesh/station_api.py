@@ -1203,6 +1203,42 @@ def create_station_router(controller) -> APIRouter:
     #  WebSocket 实时推送
     # ════════════════════════════════════════════════════════════
 
+    # ════════════════════════════════════════════════════════════
+    #  云存储同步 (Cloud Sync)
+    # ════════════════════════════════════════════════════════════
+
+    @router.get("/api/cloud-sync/status")
+    async def cloud_sync_status():
+        """查询云存储同步状态。"""
+        cloud_sync = getattr(controller.state, 'cloud_sync', None)
+        if not cloud_sync:
+            cfg = controller.cfg.cloud_storage
+            return {
+                "enabled": cfg.enabled,
+                "configured": bool(cfg.endpoint),
+                "running": False,
+                "message": "云存储同步未启动" if not cfg.enabled else "未配置 endpoint",
+            }
+        return cloud_sync.get_status()
+
+    @router.post("/api/cloud-sync/sync")
+    async def cloud_sync_now():
+        """手动触发一次云存储同步。"""
+        cloud_sync = getattr(controller.state, 'cloud_sync', None)
+        if not cloud_sync:
+            raise HTTPException(status_code=503, detail="云存储同步未启动")
+        result = cloud_sync.sync()
+        await _broadcast(state, "cloud_sync", result)
+        return result
+
+    @router.post("/api/cloud-sync/test")
+    async def cloud_sync_test():
+        """测试云存储连接。"""
+        cloud_sync = getattr(controller.state, 'cloud_sync', None)
+        if not cloud_sync:
+            raise HTTPException(status_code=503, detail="云存储同步未启动")
+        return cloud_sync.test_connection()
+
     @router.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         """WebSocket 实时推送主机状态变更。"""

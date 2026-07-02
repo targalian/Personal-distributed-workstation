@@ -71,6 +71,27 @@ class BotChannelConfig(BaseModel):
     min_priority: str = "normal"          # low | normal | high
 
 
+# ── 云存储配置 (跨主机共享文件夹同步) ────────────────────────────
+
+
+class CloudStorageConfig(BaseModel):
+    """云存储配置 — S3 兼容服务 (阿里云 OSS / MinIO / AWS S3)。
+
+    密钥优先从环境变量读取:
+      CLOUD_STORAGE_ACCESS_KEY  /  CLOUD_STORAGE_SECRET_KEY
+    """
+    enabled: bool = False
+    endpoint: str = ""                 # S3 端点 (如 oss-cn-hangzhou.aliyuncs.com)
+    bucket: str = "lan-mesh"           # 存储桶名称
+    prefix: str = "shared/"            # 桶内路径前缀
+    access_key: str = ""               # 访问密钥
+    secret_key: str = ""               # 密钥
+    region: str = ""                   # 区域 (如 us-east-1)
+    secure: bool = True                # 是否使用 HTTPS
+    auto_sync: bool = True             # 启动时自动同步
+    sync_interval: int = 300           # 自动同步间隔 (秒), 0 = 仅启动时同步一次
+
+
 class BotConfig(BaseModel):
     """Bot 通道总配置。"""
     channels: list = Field(default_factory=list)  # List[BotChannelConfig]
@@ -82,6 +103,7 @@ class AppConfig(BaseModel):
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     secretary: SecretaryConfig = Field(default_factory=SecretaryConfig)
     bot: BotConfig = Field(default_factory=BotConfig)
+    cloud_storage: CloudStorageConfig = Field(default_factory=CloudStorageConfig)
 
 
 def _expand(path_str: str) -> str:
