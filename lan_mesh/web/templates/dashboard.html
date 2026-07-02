@@ -190,9 +190,18 @@
   .progress-bar{height:6px;background:var(--surface2);border-radius:3px;overflow:hidden;margin-top:6px}
   .progress-fill{height:100%;background:var(--green);border-radius:3px;transition:width .5s ease}
   .progress-fill.low{background:var(--red)}.progress-fill.mid{background:var(--yellow)}
+  /* ── Toast 通知 ── */
+  #toast-container{position:fixed;top:60px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+  .toast{padding:10px 18px;border-radius:8px;font-size:14px;color:#fff;opacity:0;transform:translateX(20px);transition:all .3s ease;pointer-events:auto;max-width:360px}
+  .toast.show{opacity:1;transform:translateX(0)}
+  .toast.ok{background:var(--green)}
+  .toast.err{background:var(--red)}
+  .toast.info{background:var(--accent)}
 </style>
 </head>
 <body>
+
+<div id="toast-container"></div>
 
 <div class="topbar">
   <h1><span class="logo">🏢</span> LAN Mesh Station Director</h1>
@@ -230,7 +239,7 @@
 <div class="panel" id="panel-chat">
   <div class="toolbar">
     <button class="btn primary" onclick="clearChat()">🗑️ 清空对话</button>
-    <button class="btn" onclick="loadChatHistory()">🔄 加载历史</button>
+    <button class="btn" onclick="withFeedback(this,loadChatHistory)">🔄 加载历史</button>
     <span style="margin-left:auto;font-size:14px;color:var(--dim)">与秘书对话,查询状态或提交任务</span>
   </div>
   <div class="chat-container">
@@ -247,7 +256,7 @@
 <!-- 面板: 团队管理 -->
 <div class="panel" id="panel-teams">
   <div class="toolbar">
-    <button class="btn primary" onclick="refreshPMAgents()">🔄 刷新</button>
+    <button class="btn primary" onclick="withFeedback(this,refreshPMAgents)">🔄 刷新</button>
     <span style="margin-left:auto;font-size:14px;color:var(--dim)">
       PM Agent <b id="pm-total" style="color:var(--text)">0</b> ·
       团队 <b id="team-total" style="color:var(--accent)">0</b>
@@ -262,7 +271,7 @@
 <div class="panel" id="panel-hosts">
   <div class="toolbar">
     <input type="text" id="host-search" placeholder="搜索 Work Station 名称/IP/平台...">
-    <button class="btn primary" onclick="refreshHosts()">🔄 刷新</button>
+    <button class="btn primary" onclick="withFeedback(this,refreshHosts)">🔄 刷新</button>
     <button class="btn" onclick="probeIP()">📡 探测IP</button>
     <button class="btn" onclick="showNetworkInfo()">🌐 网络</button>
     <span style="margin-left:auto;font-size:14px;color:var(--dim)">
@@ -281,7 +290,7 @@
     <input type="text" id="task-desc" placeholder="任务描述" style="width:300px">
     <select id="task-project"><option value="">不关联项目</option></select>
     <button class="btn primary" onclick="submitTask()">📤 提交任务</button>
-    <button class="btn" onclick="refreshTasks()">🔄 刷新</button>
+    <button class="btn" onclick="withFeedback(this,refreshTasks)">🔄 刷新</button>
   </div>
   <div class="grid" id="task-grid"><div class="empty"><div class="icon">📋</div><p>暂无任务</p><p class="hint">提交一个任务来开始编排</p></div></div>
 </div>
@@ -289,7 +298,7 @@
 <!-- 面板: Agent 状态 -->
 <div class="panel" id="panel-agents">
   <div class="toolbar">
-    <button class="btn primary" onclick="refreshAgents()">🔄 刷新</button>
+    <button class="btn primary" onclick="withFeedback(this,refreshAgents)">🔄 刷新</button>
     <span style="margin-left:auto;font-size:14px;color:var(--dim)">
       总计 <b id="agent-total" style="color:var(--text)">0</b> ·
       空闲 <b id="agent-idle" style="color:var(--green)">0</b> ·
@@ -302,7 +311,7 @@
 <!-- 面板: MCP 工具 -->
 <div class="panel" id="panel-tools">
   <div class="toolbar">
-    <button class="btn primary" onclick="refreshTools()">🔄 刷新</button>
+    <button class="btn primary" onclick="withFeedback(this,refreshTools)">🔄 刷新</button>
     <button class="btn" onclick="showRegisterServer()">➕ 注册Server</button>
     <span style="margin-left:auto;font-size:14px;color:var(--dim)">
       Servers <b id="srv-total" style="color:var(--text)">0</b> ·
@@ -319,7 +328,7 @@
 <div class="panel" id="panel-projects">
   <div class="toolbar">
     <button class="btn primary" onclick="showCreateProject()">➕ 创建项目</button>
-    <button class="btn" onclick="refreshProjects()">🔄 刷新</button>
+    <button class="btn" onclick="withFeedback(this,refreshProjects)">🔄 刷新</button>
     <span style="margin-left:auto;font-size:14px;color:var(--dim)">
       总计 <b id="proj-total" style="color:var(--text)">0</b> ·
       活跃 <b id="proj-active" style="color:var(--green)">0</b>
@@ -331,7 +340,7 @@
 <!-- 面板: Station Director (默认显示) -->
 <div class="panel active" id="panel-station">
   <div class="toolbar">
-    <button class="btn primary" onclick="refreshStation()">🔄 刷新</button>
+    <button class="btn primary" onclick="withFeedback(this,refreshStation)">🔄 刷新</button>
     <button class="btn" onclick="recomputeRatings()">⚡ 重新评级</button>
     <button class="btn" id="secretary-btn" onclick="toggleSecretary()">启动秘书</button>
     <span style="margin-left:auto;font-size:14px;color:var(--dim)">
@@ -354,7 +363,7 @@
 <!-- 面板: 技能库 -->
 <div class="panel" id="panel-skills">
   <div class="toolbar">
-    <button class="btn primary" onclick="refreshSkills()">🔄 刷新</button>
+    <button class="btn primary" onclick="withFeedback(this,refreshSkills)">🔄 刷新</button>
     <button class="btn" onclick="scanSkills()">🔍 扫描新技能</button>
     <select id="skill-role-filter" onchange="refreshSkills()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px">
       <option value="">全部技能</option>
@@ -380,7 +389,7 @@
 <!-- 面板: 手机通道 -->
 <div class="panel" id="panel-bot">
   <div class="toolbar">
-    <button class="btn primary" onclick="refreshBotChannels()">🔄 刷新</button>
+    <button class="btn primary" onclick="withFeedback(this,refreshBotChannels)">🔄 刷新</button>
     <button class="btn" onclick="showAddBotChannel()">➕ 添加通道</button>
     <span style="margin-left:auto;font-size:14px;color:var(--dim)" id="bot-channel-count"></span>
   </div>
@@ -406,6 +415,24 @@
 </div>
 
 <script>
+// ── Toast 通知 + 按钮反馈 ──
+function showToast(msg,type='info'){
+  const c=document.getElementById('toast-container');
+  const t=document.createElement('div');
+  t.className='toast '+type;
+  t.textContent=msg;
+  c.appendChild(t);
+  requestAnimationFrame(()=>t.classList.add('show'));
+  setTimeout(()=>{t.classList.remove('show');setTimeout(()=>t.remove(),300);},2500);
+}
+async function withFeedback(btn,fn){
+  const orig=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='⏳ '+orig.replace(/^[^\s]+\s*/,'');}
+  try{await fn();if(btn)showToast('刷新完成','ok');}
+  catch(e){showToast('操作失败: '+e.message,'err');console.error(e);}
+  finally{if(btn){btn.disabled=false;btn.textContent=orig;}}
+}
+
 let allHosts=[],allTasks=[],allAgents=[],allProjects=[];
 let ws=null;
 let secretaryActive=false;

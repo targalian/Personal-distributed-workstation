@@ -79,11 +79,15 @@ class StationDirector:
                 rating_summary=rating.summary,
             )
 
-            # 尝试从 UDP 发现列表获取真实 IP
+            # 获取真实 IP: 优先 UDP 发现列表, 其次 HostInfo.ip_addresses
+            ip = ""
             if self.discovery:
                 dev = self.discovery.find_device(info.device_id)
                 if dev:
-                    record.ip = dev.get("ip", "")
+                    ip = dev.get("ip", "")
+            if not ip and getattr(info, "ip_addresses", None):
+                ip = info.ip_addresses[0] if isinstance(info.ip_addresses, list) else str(info.ip_addresses)
+            record.ip = ip
 
             # 持久化
             self.db.upsert_host(record)
@@ -127,11 +131,15 @@ class StationDirector:
             record.online = True
             record.last_seen = time.time()
 
-            # 更新 IP
+            # 更新 IP: 优先 UDP 发现, 其次 metrics 传入的 ip
             if self.discovery:
                 dev = self.discovery.find_device(device_id)
                 if dev:
-                    record.ip = dev.get("ip", record.ip)
+                    new_ip = dev.get("ip", "")
+                    if new_ip:
+                        record.ip = new_ip
+            if not record.ip and metrics.get("ip"):
+                record.ip = metrics["ip"]
 
             self.db.upsert_host(record)
             self.db.log_heartbeat(device_id, record.cpu_percent,

@@ -3,14 +3,22 @@ schema_version: 1
 locale: zh-CN
 branch: master
 nodes_managed: true
-exported_at: "2026-06-30T13:47:49Z"
+exported_at: "2026-07-02T12:31:35Z"
 modules:
     "":
-        dir_name: LAN Mesh 分布式智能体编排与执行引擎
-        title: LAN Mesh 分布式智能体编排与执行引擎
-        scope: []
+        dir_name: LAN Mesh 分布式智能协作平台
+        title: LAN Mesh 分布式智能协作平台
+        scope:
+            - .gitignore
+            - config.yaml
+            - requirements.txt
+            - main.py
+            - scripts/
+            - skills/
         source_files: []
-        children: []
+        children:
+            - lan_mesh_service
+            - quicklan_desktop_app
         depends_on: []
         related_to: []
     build_system:
@@ -30,22 +38,22 @@ modules:
         depends_on: []
         related_to: []
     configuration_system:
-        dir_name: 配置系统架构与实现
-        title: 配置系统架构与实现
+        dir_name: 配置系统：分层加载与强类型校验
+        title: 配置系统：分层加载与强类型校验
         scope: []
         source_files:
-            - config.yaml
             - lan_mesh/config.py
-            - lan_mesh/model_pool.yaml
+            - config.yaml
             - main.py
+            - lan_mesh/model_pool.example.yaml
             - quicklan-main/src-tauri/src/settings.rs
-            - lan_mesh/collect_config.py
+            - quicklan-main/src-tauri/src/storage.rs
         children: []
         depends_on: []
         related_to: []
     dependency_management:
-        dir_name: 多语言混合依赖管理与配置隔离
-        title: 多语言混合依赖管理与配置隔离
+        dir_name: 多语言混合项目的依赖管理策略
+        title: 多语言混合项目的依赖管理策略
         scope: []
         source_files:
             - requirements.txt
@@ -53,36 +61,42 @@ modules:
             - quicklan-main/package-lock.json
             - quicklan-main/src-tauri/Cargo.toml
             - quicklan-main/src-tauri/Cargo.lock
-            - lan_mesh/model_pool.yaml
-            - lan_mesh/model_pool.example.yaml
-            - .gitignore
         children: []
         depends_on: []
         related_to: []
     error_handling:
-        dir_name: 错误处理与异常管理策略_4
-        title: 错误处理与异常管理策略
+        dir_name: 错误处理与异常传播机制_2
+        title: 错误处理与异常传播机制
         scope: []
         source_files:
             - lan_mesh/api.py
-            - lan_mesh/preflight.py
-            - lan_mesh/worker.py
-            - lan_mesh/discovery.py
             - lan_mesh/agent_runtime.py
-            - lan_mesh/database.py
-            - quicklan-main/src-tauri/src/lib.rs
+            - quicklan-main/src-tauri/src/commands.rs
+            - quicklan-main/src-tauri/src/transfer.rs
+            - quicklan-main/src-tauri/src/library.rs
+            - quicklan-main/src-tauri/src/storage.rs
         children: []
         depends_on: []
         related_to: []
     frontend_style:
-        dir_name: 双轨前端视觉风格体系：Tauri 桌面应用与 Web 管理后台
-        title: 双轨前端视觉风格体系：Tauri 桌面应用与 Web 管理后台
+        dir_name: 双模前端视觉风格体系：Tauri 现代极简与 LAN Mesh 深色监控
+        title: 双模前端视觉风格体系：Tauri 现代极简与 LAN Mesh 深色监控
         scope: []
         source_files:
             - quicklan-main/src/styles.css
             - quicklan-main/src/App.tsx
             - quicklan-main/package.json
+            - quicklan-main/src-tauri/tauri.conf.json
             - lan_mesh/web/templates/dashboard.html
+        children: []
+        depends_on: []
+        related_to: []
+    lan_mesh_service:
+        dir_name: 分布式工作站核心数据持久化层
+        title: 分布式工作站核心数据持久化层
+        scope:
+            - lan_mesh/
+        source_files: []
         children: []
         depends_on: []
         related_to: []
@@ -96,6 +110,15 @@ modules:
             - lan_mesh/station_controller.py
             - lan_mesh/discovery.py
             - lan_mesh/preflight.py
+        children: []
+        depends_on: []
+        related_to: []
+    quicklan_desktop_app:
+        dir_name: QuickLAN 局域网文件共享与快传桌面应用
+        title: QuickLAN 局域网文件共享与快传桌面应用
+        scope:
+            - quicklan-main/
+        source_files: []
         children: []
         depends_on: []
         related_to: []

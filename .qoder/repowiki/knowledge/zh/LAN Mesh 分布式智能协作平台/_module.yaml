@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: ""
+title: LAN Mesh 分布式智能协作平台
+scope:
+    - .gitignore
+    - config.yaml
+    - requirements.txt
+    - main.py
+    - scripts/
+    - skills/
+source_files: []
+depends_on: []
+related_to: []

@@ -1,10 +1,11 @@
-﻿@echo off
-chcp 65001 >nul 2>&1
+@echo off
 cd /d "%~dp0.."
+chcp 65001 >nul 2>&1
+set PYTHONIOENCODING=utf-8
+set PYTHONUTF8=1
 
 REM ========================================
 REM  LAN Mesh Work Station - One-Click Start
-REM  双击此文件即可启动工作站
 REM ========================================
 
 echo.
@@ -13,78 +14,79 @@ echo  LAN Mesh Work Station - One-Click Start
 echo ========================================
 echo.
 
-REM -- Step 1: 检查 Python --
-echo [step] 1/5 检查 Python...
+REM -- Step 1: Check Python --
+echo [step] 1/5 Check Python...
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo   [ERROR] 未找到 python, 请安装 Python 3.11+ 并加入 PATH
-    echo   下载: https://www.python.org/downloads/
+    echo   [ERROR] Python not found. Please install Python 3.11+ and add to PATH
+    echo   Download: https://www.python.org/downloads/
     pause
     exit /b 1
 )
 for /f "tokens=*" %%v in ('python --version 2^>^&1') do set PYVER=%%v
 echo   -^> %PYVER%
 
-REM -- Step 2: 虚拟环境 --
-echo [step] 2/5 检查虚拟环境...
+REM -- Step 2: Virtual Environment --
+echo [step] 2/5 Check venv...
 if not exist ".venv\Scripts\python.exe" (
     if exist ".venv" (
-        echo   -^> .venv 存在但不是 Windows 格式, 重建...
+        echo   -^> .venv exists but not Windows format, rebuilding...
         rmdir /s /q ".venv"
     )
-    echo   创建虚拟环境...
+    echo   Creating virtual environment...
     python -m venv .venv
     if not exist ".venv\Scripts\python.exe" (
-        echo   [ERROR] 虚拟环境创建失败
+        echo   [ERROR] venv creation failed
         pause
         exit /b 1
     )
-    echo   -^> 已创建 .venv\
+    echo   -^> Created .venv\
 ) else (
-    echo   -^> 虚拟环境已存在 (skip)
+    echo   -^> venv already exists ^(skip^)
 )
 set PYTHON=.venv\Scripts\python.exe
 set PIP=.venv\Scripts\pip.exe
 
-REM -- Step 3: 依赖安装 --
-echo [step] 3/5 检查依赖...
+REM -- Step 3: Install Dependencies --
+echo [step] 3/5 Check dependencies...
 %PIP% show fastapi >nul 2>&1
 if errorlevel 1 (
-    echo   安装依赖 (首次启动可能需要 1-2 分钟)...
+    echo   Installing dependencies ^(--requires 1-2 min on first run--^)...
     %PIP% install -r requirements.txt -q
     if errorlevel 1 (
-        echo   [ERROR] 依赖安装失败, 请手动运行: .venv\Scripts\pip install -r requirements.txt
+        echo   [ERROR] Dependencies install failed
+        echo   Please run manually: .venv\Scripts\pip install -r requirements.txt
         pause
         exit /b 1
     )
-    echo   -^> 依赖安装完成
+    echo   -^> Dependencies installed
 ) else (
-    echo   -^> 依赖已安装 (skip)
+    echo   -^> Dependencies already installed ^(skip^)
 )
 
-REM -- Step 4: 配置文件 --
-echo [step] 4/5 检查配置...
+REM -- Step 4: Config File --
+echo [step] 4/5 Check config...
 if exist "lan_mesh\model_pool.example.yaml" (
     if not exist "lan_mesh\model_pool.yaml" (
         copy "lan_mesh\model_pool.example.yaml" "lan_mesh\model_pool.yaml" >nul
-        echo   -^> 已创建 lan_mesh\model_pool.yaml (请编辑填入 API Key)
+        echo   -^> Created lan_mesh\model_pool.yaml ^(--edit to add API Key--^)
     ) else (
-        echo   -^> model_pool.yaml 已存在 (skip)
+        echo   -^> model_pool.yaml already exists ^(skip^)
     )
 ) else (
-    echo   -^> model_pool.example.yaml 不存在 (skip)
+    echo   -^> model_pool.example.yaml not found ^(skip^)
 )
 
-REM -- Step 5: 启动 --
-echo [step] 5/5 启动 Station Director...
+REM -- Step 5: Launch --
+echo [step] 5/5 Starting Station Director...
 echo.
 echo ========================================
 echo  LAN Mesh Station Director
 echo  Web UI: http://localhost:45470
-echo  Secretary: 未激活 (启动后在 Web UI 中点击「设为主节点」)
+echo  Secretary: not active ^(--click "Set as Master" in Web UI--^)
 echo ========================================
 echo.
 
-REM 启动 Station Director
+REM Launch Station Director
 %PYTHON% main.py station --port 45470
 pause

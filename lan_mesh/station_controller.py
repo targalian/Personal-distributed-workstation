@@ -326,6 +326,7 @@ class StationController:
                     "memory_percent": info.memory_percent,
                     "disk_percent": info.disk_percent,
                     "shared_file_count": info.shared_file_count,
+                    "ip": info.ip_addresses[0] if info.ip_addresses else "",
                 })
             except Exception:
                 pass

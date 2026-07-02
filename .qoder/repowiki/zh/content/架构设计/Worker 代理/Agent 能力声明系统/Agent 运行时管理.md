@@ -5,6 +5,7 @@
 - [agent_runtime.py](file://lan_mesh/agent_runtime.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [orchestrator.py](file://lan_mesh/orchestrator.py)
+- [pm_agent.py](file://lan_mesh/pm_agent.py)
 - [api.py](file://lan_mesh/api.py)
 - [task.py](file://lan_mesh/task.py)
 - [protocol.py](file://lan_mesh/protocol.py)
@@ -14,8 +15,19 @@
 - [discovery.py](file://lan_mesh/discovery.py)
 - [host_info.py](file://lan_mesh/host_info.py)
 - [project.py](file://lan_mesh/project.py)
+- [skill_registry.py](file://lan_mesh/skill_registry.py)
+- [agent_prompt.py](file://lan_mesh/agent_prompt.py)
 - [config.yaml](file://config.yaml)
 </cite>
+
+## 更新摘要
+**变更内容**
+- 新增 PM Agent 支持章节，详细介绍项目经理 Agent 的架构和功能
+- 更新 Agent Runtime 章节，增加自定义系统提示和选择性技能加载功能
+- 新增子 Agent 管理章节，说明 Worker 内嵌子 Agent 的创建和管理机制
+- 更新技能缓存系统章节，介绍优化3的选择性技能加载机制
+- 新增动态 prompt 更新功能说明
+- 更新架构概览图，包含 PM Agent 的集成
 
 ## 目录
 1. [简介](#简介)
@@ -23,16 +35,18 @@
 3. [核心组件](#核心组件)
 4. [架构概览](#架构概览)
 5. [详细组件分析](#详细组件分析)
-6. [依赖关系分析](#依赖关系分析)
-7. [性能考虑](#性能考虑)
-8. [故障排除指南](#故障排除指南)
-9. [结论](#结论)
+6. [PM Agent 管理](#pm-agent-管理)
+7. [子 Agent 系统](#子-agent-系统)
+8. [依赖关系分析](#依赖关系分析)
+9. [性能考虑](#性能考虑)
+10. [故障排除指南](#故障排除指南)
+11. [结论](#结论)
 
 ## 简介
 
 Agent 运行时管理系统是 LAN Mesh 分布式计算框架的核心组件，负责在 Worker 节点上执行来自 Master 节点的任务分配。该系统实现了任务执行队列管理、并发控制、状态跟踪和结果返回机制，为分布式 AI 任务提供了可靠的执行环境。
 
-系统采用 Master/Worker 架构，其中 Master 负责任务编排和资源管理，Worker 负责具体的任务执行。Agent Runtime 作为 Worker 的核心执行引擎，提供了多种技能处理器来处理不同类型的 AI 任务。
+系统采用 Master/Worker 架构，其中 Master 负责任务编排和资源管理，Worker 负责具体的任务执行。Agent Runtime 作为 Worker 的核心执行引擎，提供了多种技能处理器来处理不同类型的 AI 任务。最新版本引入了项目经理 Agent (PM Agent) 支持，实现了智能的任务分解、团队管理和进度协调功能。
 
 ## 项目结构
 
@@ -40,10 +54,13 @@ LAN Mesh 项目采用模块化设计，主要包含以下核心模块：
 
 ```mermaid
 graph TB
-subgraph "核心模块"
+subgraph "核心执行层"
 AR[Agent Runtime<br/>任务执行引擎]
-OR[Orchestrator<br/>任务编排器]
 WR[Worker Agent<br/>工作节点]
+PM[PM Agent<br/>项目经理]
+end
+subgraph "编排管理层"
+OR[Orchestrator<br/>任务编排器]
 MS[Master Controller<br/>主控节点]
 end
 subgraph "基础设施"
@@ -51,6 +68,7 @@ DB[Database<br/>数据存储]
 DS[Discovery<br/>设备发现]
 SF[Shared Folder<br/>共享存储]
 CFG[Config<br/>配置管理]
+SR[Skill Registry<br/>技能注册表]
 end
 subgraph "协议层"
 PT[Protocol<br/>通信协议]
@@ -59,6 +77,7 @@ end
 MS --> OR
 OR --> WR
 WR --> AR
+WR --> PM
 WR --> API
 MS --> API
 WR --> DB
@@ -69,19 +88,23 @@ WR --> SF
 MS --> SF
 WR --> CFG
 MS --> CFG
+WR --> SR
+MS --> SR
 WR --> PT
 MS --> PT
 ```
 
 **图表来源**
-- [agent_runtime.py:1-242](file://lan_mesh/agent_runtime.py#L1-L242)
-- [worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
-- [orchestrator.py:1-262](file://lan_mesh/orchestrator.py#L1-L262)
+- [agent_runtime.py:1-396](file://lan_mesh/agent_runtime.py#L1-L396)
+- [worker.py:1-593](file://lan_mesh/worker.py#L1-L593)
+- [orchestrator.py:1-301](file://lan_mesh/orchestrator.py#L1-L301)
+- [pm_agent.py:1-893](file://lan_mesh/pm_agent.py#L1-L893)
 
 **章节来源**
-- [agent_runtime.py:1-242](file://lan_mesh/agent_runtime.py#L1-L242)
-- [worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
-- [orchestrator.py:1-262](file://lan_mesh/orchestrator.py#L1-L262)
+- [agent_runtime.py:1-396](file://lan_mesh/agent_runtime.py#L1-L396)
+- [worker.py:1-593](file://lan_mesh/worker.py#L1-L593)
+- [orchestrator.py:1-301](file://lan_mesh/orchestrator.py#L1-L301)
+- [pm_agent.py:1-893](file://lan_mesh/pm_agent.py#L1-L893)
 
 ## 核心组件
 
@@ -94,6 +117,8 @@ Agent Runtime 是 Worker 节点的任务执行引擎，主要负责：
 3. **并发执行**：支持多任务并发执行，同时维护资源使用限制
 4. **结果聚合**：收集执行结果，包括输出数据和模型调用统计信息
 5. **错误处理**：统一处理执行过程中的各种异常情况
+6. **自定义系统提示**：支持 PM 注入的定制 system prompt
+7. **选择性技能加载**：按当前技能类型优化加载技能缓存
 
 ### 技能处理器体系
 
@@ -110,29 +135,35 @@ Agent Runtime 是 Worker 节点的任务执行引擎，主要负责：
 | monitoring | 系统监控 | `_handle_monitoring` |
 
 **章节来源**
-- [agent_runtime.py:28-242](file://lan_mesh/agent_runtime.py#L28-L242)
+- [agent_runtime.py:28-396](file://lan_mesh/agent_runtime.py#L28-L396)
 
 ## 架构概览
 
-Agent 运行时管理系统采用分层架构设计，确保了良好的可扩展性和维护性：
+Agent 运行时管理系统采用分层架构设计，确保了良好的可扩展性和维护性。最新版本增加了 PM Agent 的集成，实现了智能的任务管理和团队协作：
 
 ```mermaid
 sequenceDiagram
 participant Master as Master Controller
 participant Orchestrator as Task Orchestrator
 participant Worker as Worker Agent
+participant PM as PM Agent
 participant Runtime as Agent Runtime
 participant Handler as Skill Handler
 Master->>Orchestrator : 提交任务
 Orchestrator->>Orchestrator : 任务分解与DAG构建
 Orchestrator->>Worker : 查找空闲Agent
 Orchestrator->>Worker : 分发子任务
+Worker->>PM : 接收任务并分析
+PM->>PM : 创建子Agent团队
+PM->>Worker : 创建子Agent实例
 Worker->>Runtime : 接收子任务
 Runtime->>Handler : 路由到相应处理器
 Handler->>Handler : 执行具体任务
 Handler-->>Runtime : 返回执行结果
 Runtime-->>Worker : 返回任务结果
-Worker-->>Orchestrator : 汇报执行状态
+Worker-->>PM : 转发进度报告
+PM-->>PM : 更新团队状态
+PM-->>Orchestrator : 汇报执行状态
 Orchestrator-->>Master : 更新任务状态
 ```
 
@@ -140,31 +171,35 @@ Orchestrator-->>Master : 更新任务状态
 - [orchestrator.py:132-226](file://lan_mesh/orchestrator.py#L132-L226)
 - [worker.py:126-194](file://lan_mesh/worker.py#L126-L194)
 - [agent_runtime.py:47-74](file://lan_mesh/agent_runtime.py#L47-L74)
+- [pm_agent.py:103-134](file://lan_mesh/pm_agent.py#L103-L134)
 
 ## 详细组件分析
 
 ### Agent Runtime 类设计
 
-Agent Runtime 采用了面向对象的设计模式，通过字典映射实现技能处理器的动态路由：
+Agent Runtime 采用了面向对象的设计模式，通过字典映射实现技能处理器的动态路由。最新版本增加了自定义系统提示和选择性技能加载功能：
 
 ```mermaid
 classDiagram
 class AgentRuntime {
 +string agent_id
 +string shared_folder
+-string _custom_system_prompt
+-string _current_skill
+-Path _skills_cache_dir
 -dict _handlers
-+__init__(agent_id, shared_folder)
++__init__(agent_id, shared_folder, custom_system_prompt="")
 +execute(subtask) dict
--_handle_code_generation(input_data) dict
--_handle_code_review(input_data) dict
--_handle_document_summary(input_data) dict
--_handle_rag_search(input_data) dict
--_handle_shell_exec(input_data) dict
--_handle_file_ops(input_data) dict
--_handle_monitoring(input_data) dict
--_call_llm_full(prompt) dict
--_call_deepseek(prompt, api_key) dict
--_call_openai(prompt, api_key) dict
++set_custom_prompt(prompt) void
++_build_system_prompt(task_context) string
++_handle_code_generation(input_data) dict
++_handle_code_review(input_data) dict
++_handle_document_summary(input_data) dict
++_handle_rag_search(input_data) dict
++_handle_shell_exec(input_data) dict
++_handle_file_ops(input_data) dict
++_handle_monitoring(input_data) dict
++_call_llm_with_routing(prompt, input_data) dict
 }
 class SkillHandler {
 <<interface>>
@@ -174,18 +209,20 @@ AgentRuntime --> SkillHandler : "使用"
 ```
 
 **图表来源**
-- [agent_runtime.py:28-242](file://lan_mesh/agent_runtime.py#L28-L242)
+- [agent_runtime.py:28-396](file://lan_mesh/agent_runtime.py#L28-L396)
 
 #### 执行流程分析
 
-Agent Runtime 的执行流程遵循标准的请求-处理-响应模式：
+Agent Runtime 的执行流程遵循标准的请求-处理-响应模式，增加了自定义系统提示的支持：
 
 ```mermaid
 flowchart TD
 Start([接收子任务]) --> Parse["解析任务参数<br/>提取required_skill"]
 Parse --> Validate{"技能类型有效?"}
 Validate --> |否| ReturnError["返回错误结果"]
-Validate --> |是| Route["路由到对应处理器"]
+Validate --> |是| SetSkill["设置当前技能类型<br/>用于选择性加载"]
+SetSkill --> BuildPrompt["构建system prompt<br/>优先使用PM定制prompt"]
+BuildPrompt --> Route["路由到对应处理器"]
 Route --> Execute["执行具体任务"]
 Execute --> Success{"执行成功?"}
 Success --> |是| ExtractUsage["提取使用统计"]
@@ -197,14 +234,14 @@ ReturnFailed --> End
 ```
 
 **图表来源**
-- [agent_runtime.py:47-74](file://lan_mesh/agent_runtime.py#L47-L74)
+- [agent_runtime.py:62-101](file://lan_mesh/agent_runtime.py#L62-L101)
 
 **章节来源**
-- [agent_runtime.py:28-242](file://lan_mesh/agent_runtime.py#L28-L242)
+- [agent_runtime.py:28-396](file://lan_mesh/agent_runtime.py#L28-L396)
 
 ### Worker Agent 生命周期管理
 
-Worker Agent 实现了完整的生命周期管理，包括启动、运行和停止阶段：
+Worker Agent 实现了完整的生命周期管理，包括启动、运行和停止阶段。最新版本增加了 PM Agent 的内嵌支持和子 Agent 管理功能：
 
 ```mermaid
 stateDiagram-v2
@@ -213,17 +250,19 @@ stateDiagram-v2
 设备发现 --> 注册等待 : 发现Master节点
 注册等待 --> 已注册 : 成功注册到Master
 已注册 --> 心跳循环 : 开始心跳通信
-心跳循环 --> 心跳循环 : 定期发送心跳
+心跳循环 --> PM管理 : 启动PM Agent
+PM管理 --> 子Agent管理 : 创建子Agent实例
+子Agent管理 --> 心跳循环 : 继续心跳通信
 心跳循环 --> 停止 : 收到停止信号
 停止 --> [*]
 ```
 
 **图表来源**
-- [worker.py:253-325](file://lan_mesh/worker.py#L253-L325)
+- [worker.py:253-593](file://lan_mesh/worker.py#L253-L593)
 
 #### 心跳机制实现
 
-Worker Agent 通过 HTTP 心跳机制与 Master 保持通信：
+Worker Agent 通过 HTTP 心跳机制与 Master 保持通信，支持 PM Agent 的状态同步：
 
 ```mermaid
 sequenceDiagram
@@ -244,11 +283,11 @@ Heartbeat->>Heartbeat : 等待下次心跳周期
 - [api.py:148-168](file://lan_mesh/api.py#L148-L168)
 
 **章节来源**
-- [worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
+- [worker.py:62-593](file://lan_mesh/worker.py#L62-L593)
 
 ### 任务编排与调度
 
-任务编排器负责将用户任务分解为可执行的子任务，并进行智能调度：
+任务编排器负责将用户任务分解为可执行的子任务，并进行智能调度。最新版本集成了 PM Agent 的任务分析和团队管理功能：
 
 ```mermaid
 flowchart TD
@@ -287,7 +326,7 @@ UpdateDAG --> Schedule
 | cancelled | 已取消 | 无 |
 
 **章节来源**
-- [orchestrator.py:58-262](file://lan_mesh/orchestrator.py#L58-L262)
+- [orchestrator.py:58-301](file://lan_mesh/orchestrator.py#L58-L301)
 
 ### 数据存储与持久化
 
@@ -370,9 +409,27 @@ integer output_tokens
 float cost_usd
 float timestamp
 }
+PM_AGENTS {
+string pm_id PK
+string device_id
+string team_structure
+string status
+float created_at
+float last_seen
+}
+SUB_AGENTS {
+string agent_id PK
+string pm_id
+string agent_name
+string skills
+string status
+float created_at
+float last_seen
+}
 HOSTS ||--o{ TASKS : "关联"
 HOSTS ||--o{ AGENTS : "拥有"
 PROJECTS ||--o{ USAGE_LOG : "产生"
+PM_AGENTS ||--o{ SUB_AGENTS : "管理"
 ```
 
 **图表来源**
@@ -381,9 +438,155 @@ PROJECTS ||--o{ USAGE_LOG : "产生"
 **章节来源**
 - [database.py:16-611](file://lan_mesh/database.py#L16-L611)
 
+## PM Agent 管理
+
+PM Agent (项目经理 Agent) 是 LAN Mesh 中的智能管理型 Agent，负责任务分析、团队架构决策和进度协调。它作为 Worker 进程内的嵌入模块运行，具有以下核心功能：
+
+### PM Agent 架构设计
+
+```mermaid
+classDiagram
+class ProjectManagerAgent {
++string pm_id
++AgentRuntime runtime
++string secretary_url
++string device_id
++string device_name
++dict _plan
++dict _task
++dict _subagents
++dict _teams
++dict _subtask_outputs
++dict _pending_subtasks
++dict _retry_counts
++int _max_retries
++bool _running
++Thread _thread
++Thread _progress_thread
++__init__(pm_id, agent_runtime, secretary_url, device_id, device_name)
++start_task(task) void
++stop() void
++get_status() dict
++_analyze_with_skill(task) dict
++_create_team_and_dispatch(task, plan) void
++_dispatch_subtask(station, agent_info, task, sub, plan) void
++_receive_progress_report(report) void
++_aggregate_results() void
++_handle_subagent_failure(task_name, error_msg) void
+}
+class WorkerAgent {
++ProjectManagerAgent pm_agent
++dict sub_agents
++create_subagent(name, skills, task_desc, system_prompt, preferred_id) dict
++forward_progress_report(report) dict
++update_subagent_prompt(agent_id, new_prompt) dict
+}
+ProjectManagerAgent --> WorkerAgent : "管理子Agent"
+```
+
+**图表来源**
+- [pm_agent.py:30-893](file://lan_mesh/pm_agent.py#L30-L893)
+- [worker.py:320-478](file://lan_mesh/worker.py#L320-L478)
+
+### PM Agent 工作流程
+
+PM Agent 的工作流程体现了智能任务管理和团队协作的特点：
+
+```mermaid
+flowchart TD
+Start([接收任务]) --> LoadSkill["加载multi-agent-architect技能"]
+LoadSkill --> Analyze["LLM分析任务复杂度"]
+Analyze --> Decision{"决策团队架构"}
+Decision --> |simple| SingleMode["单Agent执行模式"]
+Decision --> |moderate| TeamMode["团队协作模式"]
+Decision --> |complex| ComplexMode["复杂团队模式"]
+SingleMode --> DirectExecute["PM直接执行任务"]
+TeamMode --> CreateTeam["创建子Agent团队"]
+ComplexMode --> CreateTeam
+CreateTeam --> DispatchTasks["分发子任务"]
+DispatchTasks --> MonitorProgress["监控进度"]
+MonitorProgress --> CheckCompletion{"全部完成?"}
+CheckCompletion --> |否| MonitorProgress
+CheckCompletion --> |是| AggregateResults["聚合结果"]
+DirectExecute --> ReportComplete["上报完成"]
+AggregateResults --> ReportComplete
+ReportComplete --> End([结束])
+```
+
+**图表来源**
+- [pm_agent.py:103-134](file://lan_mesh/pm_agent.py#L103-L134)
+- [pm_agent.py:224-246](file://lan_mesh/pm_agent.py#L224-L246)
+
+### 子 Agent 管理机制
+
+PM Agent 通过 Worker 的子 Agent 管理接口创建和控制子 Agent：
+
+```mermaid
+sequenceDiagram
+participant PM as PM Agent
+participant Worker as Worker Agent
+participant SubAgent as 子Agent
+PM->>Worker : POST /pm/create-subagent
+Worker->>Worker : 创建AgentRuntime实例
+Worker->>SubAgent : 注入定制system prompt
+SubAgent-->>Worker : 返回agent_id
+Worker-->>PM : 返回子Agent信息
+PM->>SubAgent : 分发子任务
+SubAgent->>SubAgent : 执行任务
+SubAgent-->>Worker : 上报进度
+Worker->>PM : 转发进度报告
+PM->>PM : 更新团队状态
+```
+
+**图表来源**
+- [worker.py:389-426](file://lan_mesh/worker.py#L389-L426)
+- [pm_agent.py:448-483](file://lan_mesh/pm_agent.py#L448-L483)
+
+**章节来源**
+- [pm_agent.py:1-893](file://lan_mesh/pm_agent.py#L1-L893)
+- [worker.py:320-478](file://lan_mesh/worker.py#L320-L478)
+
+## 子 Agent 系统
+
+子 Agent 系统是 PM Agent 的重要组成部分，实现了 Worker 内嵌的 Agent 管理功能。每个子 Agent 都是一个独立的 AgentRuntime 实例，具有自己的 system prompt 和执行能力。
+
+### 子 Agent 创建流程
+
+```mermaid
+flowchart TD
+CreateRequest[创建子Agent请求] --> ValidateInput["验证输入参数"]
+ValidateInput --> GenerateAgentId["生成agent_id"]
+GenerateAgentId --> CreateRuntime["创建AgentRuntime实例"]
+CreateRuntime --> InjectPrompt["注入定制system prompt"]
+InjectPrompt --> RegisterAgent["注册到sub_agents字典"]
+RegisterAgent --> ReturnResponse["返回agent信息"]
+ReturnResponse --> Ready[子Agent就绪]
+```
+
+**图表来源**
+- [worker.py:389-426](file://lan_mesh/worker.py#L389-L426)
+
+### 子 Agent 状态管理
+
+系统为每个子 Agent 维护详细的状态信息：
+
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| agent_id | string | 子 Agent 唯一标识符 |
+| agent_name | string | 子 Agent 名称 |
+| runtime | AgentRuntime | 子 Agent 的运行时实例 |
+| skills | list | 子 Agent 拥有的技能列表 |
+| current_task | string | 当前执行的任务描述 |
+| status | string | 当前状态 (idle/busy/completed/failed) |
+| progress | float | 执行进度 (0.0-1.0) |
+| has_custom_prompt | bool | 是否使用定制prompt |
+
+**章节来源**
+- [worker.py:414-426](file://lan_mesh/worker.py#L414-L426)
+
 ## 依赖关系分析
 
-系统采用松耦合的设计，通过清晰的接口定义实现模块间的交互：
+系统采用松耦合的设计，通过清晰的接口定义实现模块间的交互。最新版本增加了 PM Agent 和子 Agent 系统的依赖关系：
 
 ```mermaid
 graph TB
@@ -393,41 +596,47 @@ Psutil[psutil<br/>系统信息采集]
 Uvicorn[uvicorn<br/>ASGI服务器]
 FastAPI[fastapi<br/>Web框架]
 Sqlite3[sqlite3<br/>数据库接口]
+YAML[yaml<br/>配置解析]
 end
 subgraph "内部模块"
 AgentRuntime[AgentRuntime]
 WorkerAgent[WorkerAgent]
 Orchestrator[Orchestrator]
+ProjectManagerAgent[ProjectManagerAgent]
 Database[Database]
 Discovery[DiscoveryService]
 SharedFolder[SharedFolderManager]
 Config[ConfigManager]
+SkillRegistry[SkillRegistry]
+AgentPrompt[AgentPrompt]
 end
 AgentRuntime --> Requests
 AgentRuntime --> Psutil
 WorkerAgent --> Uvicorn
 WorkerAgent --> FastAPI
 WorkerAgent --> AgentRuntime
+WorkerAgent --> ProjectManagerAgent
+ProjectManagerAgent --> AgentRuntime
+ProjectManagerAgent --> AgentPrompt
 Orchestrator --> Database
 Orchestrator --> Requests
 Database --> Sqlite3
 WorkerAgent --> Discovery
-MasterController --> Discovery
 WorkerAgent --> SharedFolder
-MasterController --> SharedFolder
 WorkerAgent --> Config
-MasterController --> Config
+SkillRegistry --> Database
+SkillRegistry --> YAML
 ```
 
 **图表来源**
 - [agent_runtime.py:20-25](file://lan_mesh/agent_runtime.py#L20-L25)
 - [worker.py:24-44](file://lan_mesh/worker.py#L24-L44)
-- [orchestrator.py:17-21](file://lan_mesh/orchestrator.py#L17-L21)
-- [database.py:6-13](file://lan_mesh/database.py#L6-L13)
+- [pm_agent.py:25-27](file://lan_mesh/pm_agent.py#L25-L27)
+- [skill_registry.py:32-37](file://lan_mesh/skill_registry.py#L32-L37)
 
 ### 错误处理与异常管理
 
-系统实现了多层次的错误处理机制：
+系统实现了多层次的错误处理机制，包括 PM Agent 的失败接管策略：
 
 ```mermaid
 flowchart TD
@@ -439,16 +648,25 @@ Execute --> TryExecute{执行成功?}
 TryExecute --> |否| CatchError[捕获异常]
 TryExecute --> |是| Success[返回成功]
 CatchError --> HandleError[处理异常]
-HandleError --> ReturnError[返回错误]
-ParamError --> ReturnError
+HandleError --> PMFailure[PM失败接管]
+PMFailure --> RetryStrategy[重试策略]
+RetryStrategy --> SameStationRetry[同站重试]
+RetryStrategy --> DifferentStationRetry[换站重试]
+RetryStrategy --> LocalFallback[PM本地接管]
+SameStationRetry --> Success
+DifferentStationRetry --> Success
+LocalFallback --> Success
+ParamError --> ReturnError[返回错误]
 Success --> ReturnSuccess[返回结果]
 ```
 
 **图表来源**
 - [agent_runtime.py:66-74](file://lan_mesh/agent_runtime.py#L66-L74)
+- [pm_agent.py:737-778](file://lan_mesh/pm_agent.py#L737-L778)
 
 **章节来源**
-- [agent_runtime.py:1-242](file://lan_mesh/agent_runtime.py#L1-L242)
+- [agent_runtime.py:1-396](file://lan_mesh/agent_runtime.py#L1-L396)
+- [pm_agent.py:1-893](file://lan_mesh/pm_agent.py#L1-L893)
 
 ## 性能考虑
 
@@ -460,6 +678,7 @@ Success --> ReturnSuccess[返回结果]
 2. **资源限制**：通过 `max_concurrent_tasks` 参数限制单个 Agent 的并发数量
 3. **心跳监控**：定期检查 Agent 的资源使用情况，避免过载
 4. **超时控制**：为长时间运行的任务设置超时机制
+5. **选择性技能加载**：优化技能缓存的加载策略，减少不必要的 I/O 操作
 
 ### 性能优化建议
 
@@ -467,6 +686,7 @@ Success --> ReturnSuccess[返回结果]
    - 优先使用 DeepSeek API（成本较低）
    - 合理设置请求超时时间（默认 120 秒）
    - 实现重试机制处理临时性网络错误
+   - 利用模型路由器进行智能模型选择
 
 2. **文件操作优化**
    - 使用流式处理大文件
@@ -483,6 +703,15 @@ Success --> ReturnSuccess[返回结果]
    - 实现内存使用监控
    - 优化大数据结构的存储方式
 
+5. **PM Agent 优化**
+   - 利用依赖感知的结果传递减少重复计算
+   - 实现失败接管策略提高任务成功率
+   - 优化子 Agent 的动态 prompt 更新机制
+
+**章节来源**
+- [agent_runtime.py:217-265](file://lan_mesh/agent_runtime.py#L217-L265)
+- [pm_agent.py:570-592](file://lan_mesh/pm_agent.py#L570-L592)
+
 ## 故障排除指南
 
 ### 常见问题诊断
@@ -496,11 +725,19 @@ Success --> ReturnSuccess[返回结果]
    - 检查技能处理器是否正确配置
    - 验证 LLM API 密钥设置
    - 查看系统资源使用情况
+   - 检查 PM Agent 的团队架构决策
 
-3. **性能问题**
+3. **PM Agent 相关问题**
+   - 验证 multi-agent-architect 技能是否正确加载
+   - 检查子 Agent 的 system prompt 是否正确注入
+   - 确认子 Agent 的任务分发是否正常
+   - 查看失败接管策略的执行情况
+
+4. **性能问题**
    - 监控 CPU 和内存使用率
    - 检查磁盘 I/O 性能
    - 分析网络延迟情况
+   - 评估 PM Agent 的负载情况
 
 ### 日志分析
 
@@ -509,18 +746,28 @@ Success --> ReturnSuccess[返回结果]
 - **启动日志**：显示系统初始化过程和配置信息
 - **心跳日志**：记录与 Master 的通信状态
 - **任务日志**：跟踪任务执行过程和结果
+- **PM Agent 日志**：记录团队架构决策和子任务管理
 - **错误日志**：记录异常情况和错误堆栈
 
 **章节来源**
 - [worker.py:126-171](file://lan_mesh/worker.py#L126-L171)
-- [orchestrator.py:176-226](file://lan_mesh/orchestrator.py#L176-L226)
+- [pm_agent.py:127-130](file://lan_mesh/pm_agent.py#L127-L130)
 
 ## 结论
 
 Agent 运行时管理系统为分布式 AI 任务提供了可靠、高效的执行环境。通过模块化的设计和完善的错误处理机制，系统能够稳定地处理各种复杂的任务场景。
 
+最新版本的重大更新包括：
+
+1. **PM Agent 支持**：实现了智能的任务分析、团队架构决策和进度协调功能
+2. **自定义系统提示**：支持 PM 注入的定制 prompt，提高了任务执行的针对性
+3. **选择性技能加载**：优化了技能缓存的加载策略，提升了系统性能
+4. **子 Agent 管理**：实现了 Worker 内嵌的 Agent 管理机制
+5. **动态 prompt 更新**：支持运行时动态更新子 Agent 的 system prompt
+
 系统的主要优势包括：
 - **灵活的任务处理**：支持多种技能类型的动态路由
+- **智能的团队管理**：PM Agent 实现了自动化的任务分解和团队协作
 - **可靠的并发控制**：通过状态管理和资源限制确保系统稳定性
 - **完整的生命周期管理**：从启动到停止的全流程自动化
 - **强大的扩展性**：模块化设计便于功能扩展和维护
@@ -530,3 +777,4 @@ Agent 运行时管理系统为分布式 AI 任务提供了可靠、高效的执�
 - 增加任务执行的可视化监控
 - 优化大规模集群的性能表现
 - 增强系统的容错能力和高可用性
+- 扩展 PM Agent 的决策能力，支持更复杂的任务场景

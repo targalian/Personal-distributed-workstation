@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: lan_mesh_service
+title: 分布式工作站核心数据持久化层
+scope:
+    - lan_mesh/
+source_files: []
+depends_on: []
+related_to: []
