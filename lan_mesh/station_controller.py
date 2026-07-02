@@ -295,13 +295,30 @@ class StationController:
         return packet
 
     def _on_device_seen(self, packet: DiscoveryPacket, ip: str):
-        """UDP 发现到新设备时自动注册入 DB (无需等待 HTTP 注册)。"""
+        """UDP 发现到设备时: 首次自动注册入 DB, 后续更新 last_seen (轻量心跳)。
+
+        UDP presence 包每 3 秒到达一次, 证明对方存活。
+        对于已注册主机, 利用 UDP 包更新 last_seen + IP, 避免被 prune_offline 误判离线。
+        这对 Station 间互相发现尤为重要 (Station 间无 HTTP 心跳通道)。
+        """
         if not packet.device_id or packet.device_id == self.state.device_id:
             return
-        # 已注册则跳过 (避免覆盖完整 HTTP 注册信息)
-        if self.db.get_host(packet.device_id):
+
+        existing = self.db.get_host(packet.device_id)
+        if existing:
+            # 已注册: 仅更新 last_seen + IP + 实时指标 (轻量心跳)
+            try:
+                self.station_director.on_heartbeat(packet.device_id, {
+                    "cpu_percent": packet.cpu_percent,
+                    "memory_percent": packet.memory_percent,
+                    "disk_percent": packet.disk_percent,
+                    "ip": ip,
+                })
+            except Exception:
+                pass
             return
-        # 从 UDP 包构造 HostInfo 并自动入站
+
+        # 首次发现: 从 UDP 包构造 HostInfo 并自动入站
         try:
             info = HostInfo(
                 device_id=packet.device_id,
