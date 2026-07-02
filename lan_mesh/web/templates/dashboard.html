@@ -44,10 +44,12 @@
   .card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--green)}
   .card.offline::before{background:var(--red)}
   .card.secretary::before{background:var(--accent)}
+  .card.station::before{background:#a855f7}
   .card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
   .card-title{font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px}
   .badge{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600}
   .badge.secretary{background:rgba(91,140,255,.15);color:var(--accent)}
+  .badge.station{background:rgba(168,85,247,.15);color:#a855f7}
   .badge.worker{background:rgba(74,222,128,.1);color:var(--green)}
   .badge.idle{background:rgba(74,222,128,.1);color:var(--green)}
   .badge.busy{background:rgba(251,191,36,.15);color:var(--yellow)}
@@ -280,7 +282,7 @@
       离线 <b id="stat-offline" style="color:var(--red)">0</b>
     </span>
   </div>
-  <div class="grid" id="host-grid"><div class="empty"><div class="icon">⏳</div><p>正在搜索局域网内的 Work Station...</p><p class="hint">请确保各 Work Station 已启动 Worker</p></div></div>
+  <div class="grid" id="host-grid"><div class="empty"><div class="icon">⏳</div><p>正在搜索局域网内的 Work Station...</p><p class="hint">请确保各主机已运行 start_workstation 或 python main.py worker</p></div></div>
 </div>
 
 <!-- 面板: 任务管理 -->
@@ -553,11 +555,12 @@ function renderHosts(){
   document.getElementById('stat-total').textContent=allHosts.length;
   document.getElementById('stat-online').textContent=allHosts.filter(h=>h.online).length;
   document.getElementById('stat-offline').textContent=allHosts.filter(h=>!h.online).length;
-  if(!hosts.length){grid.innerHTML='<div class="empty"><div class="icon">🖥️</div><p>暂无 Work Station</p><p class="hint">请在各主机上运行 Worker</p></div>';return;}
+  if(!hosts.length){grid.innerHTML='<div class="empty"><div class="icon">🖥️</div><p>暂无 Work Station</p><p class="hint">请在各主机上运行 start_workstation 或 python main.py worker</p></div>';return;}
   grid.innerHTML=hosts.map(h=>{
-    const m=h.role==='secretary';
-    return `<div class="card ${h.online?'':'offline'} ${m?'secretary':''}" onclick='showHostDetail("${h.device_id}")'>
-      <div class="card-head"><div class="card-title">${esc(h.device_name||h.hostname||'未知')}<span class="badge ${m?'secretary':'worker'}">${m?'SECRETARY':'WORKER'}</span></div><span class="badge ${h.online?'idle':'archived'}">${h.online?'在线':'离线'}</span></div>
+    const rc=h.role==='secretary'?'secretary':h.role==='station'?'station':'worker';
+    const rl=h.role==='secretary'?'SECRETARY':h.role==='station'?'STATION':'WORKER';
+    return `<div class="card ${h.online?'':'offline'} ${rc}" onclick='showHostDetail("${h.device_id}")'>
+      <div class="card-head"><div class="card-title">${esc(h.device_name||h.hostname||'未知')}<span class="badge ${rc}">${rl}</span></div><span class="badge ${h.online?'idle':'archived'}">${h.online?'在线':'离线'}</span></div>
       <div class="card-meta">🖥️ <span>${esc(h.hostname||'-')}</span> | 📡 <span>${esc(h.ip||'-')}</span> | 💻 <span>${esc(h.platform||'-')}</span><br>📁 <span>${esc(h.shared_folder||'-')}</span> (${h.shared_file_count||0}文件)</div>
       ${resBar('CPU',h.cpu_count+'核',h.cpu_percent)}${resBar('内存',fmtMem(h.memory_total_mb),h.memory_percent)}${resBar('磁盘',h.disk_total_gb+'GB',h.disk_percent)}
     </div>`;
@@ -567,7 +570,7 @@ document.getElementById('host-search').addEventListener('input',renderHosts);
 function resBar(l,t,p){p=Math.round(p||0);const c=p<60?'low':p<85?'mid':'high';return `<div class="res-row"><span class="res-label">${l}</span><div class="pbar"><div class="pfill ${c}" style="width:${p}%"></div></div><span class="res-val">${p}% / ${t}</span></div>`;}
 async function showHostDetail(id){
   const h=allHosts.find(x=>x.device_id===id);if(!h)return;
-  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>${esc(h.device_name||h.hostname)}</h2><p style="color:var(--dim);font-size:13px">${h.online?'在线':'离线'} · ${h.role==='secretary'?'Secretary':'Worker'}</p>
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>${esc(h.device_name||h.hostname)}</h2><p style="color:var(--dim);font-size:13px">${h.online?'在线':'离线'} · ${h.role==='secretary'?'Secretary':h.role==='station'?'Station':'Worker'}</p>
   <div class="modal-sec"><h3>基本信息</h3><div class="kv-grid"><span class="k">设备ID</span><span class="v">${esc(h.device_id)}</span><span class="k">主机名</span><span class="v">${esc(h.hostname||'-')}</span><span class="k">IP</span><span class="v">${esc(h.ip||'-')}</span><span class="k">平台</span><span class="v">${esc(h.platform||'-')}</span><span class="k">API端口</span><span class="v">${h.api_port||'-'}</span><span class="k">注册时间</span><span class="v">${fmtTime(h.registered_at)}</span><span class="k">最后心跳</span><span class="v">${fmtTime(h.last_seen)}</span></div></div>
   <div class="modal-sec"><h3>硬件资源</h3><div class="kv-grid"><span class="k">CPU</span><span class="v">${h.cpu_count||0}核 / ${h.cpu_percent||0}%</span><span class="k">内存</span><span class="v">${fmtMem(h.memory_total_mb)} / ${h.memory_percent||0}%</span><span class="k">磁盘</span><span class="v">${h.disk_total_gb||0}GB / ${h.disk_percent||0}%</span></div></div>
   <div class="modal-sec"><h3>共享文件夹</h3><div class="kv-grid"><span class="k">路径</span><span class="v">${esc(h.shared_folder||'-')}</span><span class="k">文件数</span><span class="v">${h.shared_file_count||0}</span></div>${h.ip&&h.api_port?`<div style="margin-top:10px"><button class="btn primary sm" onclick="browseFiles('${esc(h.ip)}',${h.api_port})">📂 浏览共享文件</button></div>`:''}</div>`;
