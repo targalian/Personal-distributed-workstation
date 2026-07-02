@@ -3,7 +3,7 @@ schema_version: 1
 locale: zh-CN
 branch: master
 nodes_managed: true
-exported_at: "2026-07-02T12:31:35Z"
+exported_at: "2026-07-02T12:53:49Z"
 modules:
     "":
         dir_name: LAN Mesh 分布式智能协作平台
@@ -52,8 +52,8 @@ modules:
         depends_on: []
         related_to: []
     dependency_management:
-        dir_name: 多语言混合项目的依赖管理策略
-        title: 多语言混合项目的依赖管理策略
+        dir_name: 多语言混合依赖管理策略_4
+        title: 多语言混合依赖管理策略
         scope: []
         source_files:
             - requirements.txt
@@ -65,29 +65,101 @@ modules:
         depends_on: []
         related_to: []
     error_handling:
-        dir_name: 错误处理与异常传播机制_2
-        title: 错误处理与异常传播机制
+        dir_name: 错误处理与异常管理策略_4
+        title: 错误处理与异常管理策略
         scope: []
         source_files:
             - lan_mesh/api.py
+            - lan_mesh/preflight.py
+            - lan_mesh/worker.py
+            - lan_mesh/discovery.py
             - lan_mesh/agent_runtime.py
-            - quicklan-main/src-tauri/src/commands.rs
-            - quicklan-main/src-tauri/src/transfer.rs
-            - quicklan-main/src-tauri/src/library.rs
-            - quicklan-main/src-tauri/src/storage.rs
+            - lan_mesh/database.py
+            - quicklan-main/src-tauri/src/lib.rs
         children: []
         depends_on: []
         related_to: []
     frontend_style:
-        dir_name: 双模前端视觉风格体系：Tauri 现代极简与 LAN Mesh 深色监控
-        title: 双模前端视觉风格体系：Tauri 现代极简与 LAN Mesh 深色监控
+        dir_name: 前端视觉风格与样式架构_2
+        title: 前端视觉风格与样式架构
         scope: []
         source_files:
             - quicklan-main/src/styles.css
             - quicklan-main/src/App.tsx
             - quicklan-main/package.json
-            - quicklan-main/src-tauri/tauri.conf.json
             - lan_mesh/web/templates/dashboard.html
+        children: []
+        depends_on: []
+        related_to: []
+    lan_mesh:
+        dir_name: LAN Mesh 分布式智能体编排与资源调度平台
+        title: LAN Mesh 分布式智能体编排与资源调度平台
+        scope:
+            - lan_mesh/
+        source_files: []
+        children:
+            - lan_mesh/secretary_core
+            - lan_mesh/shared_infra
+            - lan_mesh/station_management
+            - lan_mesh/worker_agent
+        depends_on: []
+        related_to: []
+    lan_mesh/secretary_core:
+        dir_name: LAN Mesh 分布式智能体编排核心
+        title: LAN Mesh 分布式智能体编排核心
+        scope:
+            - lan_mesh/
+        source_files: []
+        children:
+            - lan_mesh/secretary_core/resource_routing
+        depends_on: []
+        related_to: []
+    lan_mesh/secretary_core/resource_routing:
+        dir_name: 资源路由与技能分发
+        title: 资源路由与技能分发
+        scope:
+            - lan_mesh/project.py
+            - lan_mesh/model_router.py
+            - lan_mesh/skill_registry.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    lan_mesh/shared_infra:
+        dir_name: LAN Mesh 共享基础设施层
+        title: LAN Mesh 共享基础设施层
+        scope:
+            - lan_mesh/database.py
+            - lan_mesh/discovery.py
+            - lan_mesh/config.py
+            - lan_mesh/host_info.py
+            - lan_mesh/shared_folder.py
+            - lan_mesh/host_rating.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    lan_mesh/station_management:
+        dir_name: 工作站资源调度与秘书激活管理
+        title: 工作站资源调度与秘书激活管理
+        scope:
+            - lan_mesh/station_director.py
+            - lan_mesh/station_controller.py
+            - lan_mesh/station_api.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    lan_mesh/worker_agent:
+        dir_name: Worker Agent 运行时与 PM 代理管理
+        title: Worker Agent 运行时与 PM 代理管理
+        scope:
+            - lan_mesh/worker.py
+            - lan_mesh/agent_runtime.py
+            - lan_mesh/agent_card.py
+            - lan_mesh/agent_prompt.py
+            - lan_mesh/tool_registry.py
+        source_files: []
         children: []
         depends_on: []
         related_to: []
@@ -101,15 +173,26 @@ modules:
         depends_on: []
         related_to: []
     logging_system:
-        dir_name: 日志与输出系统_3
-        title: 日志与输出系统
+        dir_name: 基于标准输出的轻量级日志与状态反馈机制
+        title: 基于标准输出的轻量级日志与状态反馈机制
         scope: []
         source_files:
+            - .qoder/repowiki/knowledge/zh/基于 print 的控制台日志输出机制/logging_system.md
+            - .qoder/repowiki/knowledge/zh/日志与输出系统：基于标准输出的轻量级调试与状态反馈/logging_system.md
             - lan_mesh/worker.py
-            - lan_mesh/secretary.py
-            - lan_mesh/station_controller.py
             - lan_mesh/discovery.py
             - lan_mesh/preflight.py
+            - quicklan-main/src-tauri/src/lib.rs
+            - quicklan-main/src-tauri/src/discovery.rs
+        children: []
+        depends_on: []
+        related_to: []
+    quicklan_app:
+        dir_name: quicklan_app
+        title: quicklan_app
+        scope:
+            - quicklan-main/
+        source_files: []
         children: []
         depends_on: []
         related_to: []
@@ -118,6 +201,15 @@ modules:
         title: QuickLAN 局域网文件共享与快传桌面应用
         scope:
             - quicklan-main/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    scripts:
+        dir_name: scripts
+        title: scripts
+        scope:
+            - scripts/
         source_files: []
         children: []
         depends_on: []

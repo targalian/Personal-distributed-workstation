@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: quicklan_app
+title: quicklan_app
+scope:
+    - quicklan-main/
+source_files: []
+depends_on: []
+related_to: []

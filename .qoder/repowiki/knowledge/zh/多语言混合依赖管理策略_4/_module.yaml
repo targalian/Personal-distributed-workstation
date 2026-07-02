@@ -8,6 +8,5 @@ source_files:
     - quicklan-main/package-lock.json
     - quicklan-main/src-tauri/Cargo.toml
     - quicklan-main/src-tauri/Cargo.lock
-    - lan_mesh/model_pool.example.yaml
 depends_on: []
 related_to: []

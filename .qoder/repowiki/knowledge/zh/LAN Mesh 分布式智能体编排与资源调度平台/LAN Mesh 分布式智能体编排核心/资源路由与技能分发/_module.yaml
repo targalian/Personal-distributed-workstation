@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: lan_mesh/secretary_core/resource_routing
+title: 资源路由与技能分发
+scope:
+    - lan_mesh/project.py
+    - lan_mesh/model_router.py
+    - lan_mesh/skill_registry.py
+source_files: []
+depends_on: []
+related_to: []

@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: lan_mesh
+title: LAN Mesh 分布式智能体编排与资源调度平台
+scope:
+    - lan_mesh/
+source_files: []
+depends_on: []
+related_to: []

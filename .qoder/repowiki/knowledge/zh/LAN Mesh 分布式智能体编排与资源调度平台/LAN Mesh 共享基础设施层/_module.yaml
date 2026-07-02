@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: lan_mesh/shared_infra
+title: LAN Mesh 共享基础设施层
+scope:
+    - lan_mesh/database.py
+    - lan_mesh/discovery.py
+    - lan_mesh/config.py
+    - lan_mesh/host_info.py
+    - lan_mesh/shared_folder.py
+    - lan_mesh/host_rating.py
+source_files: []
+depends_on: []
+related_to: []

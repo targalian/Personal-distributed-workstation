@@ -37,13 +37,10 @@ work_station/
 │   ├── preflight.py           # 启动前自检
 │   └── api.py                 # FastAPI 路由层 (Worker API + Secretary API)
 ├── quicklan-main/             # Tauri/React 局域网文件共享桌面应用
-├── scripts/                   # 跨平台启动脚本
-│   ├── start_workstation.bat  # 一键启动 (双击即可)
-│   ├── start_workstation.ps1  # 一键启动 (PowerShell, 支持参数)
-│   ├── start_station.*        # 启动 Station Director
-│   ├── start_worker.*         # 启动 Worker
-│   ├── start_secretary.*      # 启动 Secretary (向后兼容)
-│   └── setup_env.*            # 环境初始化
+├── scripts/                   # 跨平台一键启动脚本
+│   ├── start_workstation.bat  # Windows 双击启动
+│   ├── start_workstation.ps1  # PowerShell 启动 (支持参数)
+│   └── start_workstation.sh   # Linux/Mac 启动
 ├── main.py                    # 统一启动入口
 ├── config.yaml                # 运行配置
 └── requirements.txt           # Python 依赖
@@ -137,6 +134,18 @@ work_station/
 
 # 同时启动本地 Worker (后台)
 .\scripts\start_workstation.ps1 -WithWorker
+```
+
+**Linux/Mac 启动：**
+
+```bash
+bash scripts/start_workstation.sh
+
+# 指定端口和名称
+bash scripts/start_workstation.sh --port 8080 --name "Control Center"
+
+# 同时启动本地 Worker
+bash scripts/start_workstation.sh --with-worker
 ```
 
 启动后打开 `http://localhost:45470` 进入 Web UI，点击「设为主节点」激活 Secretary。
