@@ -26,6 +26,48 @@ from fastapi import (
 from fastapi.responses import FileResponse
 
 from .protocol import HostInfo, HostRecord, AgentCard, Task
+from .host_rating import rate_host
+
+
+def _merge_db_and_udp_hosts(db, discovery):
+    """合并 DB 主机列表与 UDP 发现设备 (DB 为主, 补充 UDP-only 设备)。"""
+    db_hosts = db.list_hosts()
+    discovery_devices = discovery.list_devices()
+    db_ids = {h.device_id for h in db_hosts}
+    merged_count = 0
+    for dev in discovery_devices:
+        if dev["device_id"] in db_ids:
+            continue
+        rating = rate_host(
+            dev.get("cpu_count", 0),
+            dev.get("memory_total_mb", 0),
+            dev.get("disk_total_gb", 0),
+        )
+        db_hosts.append(HostRecord(
+            device_id=dev["device_id"],
+            device_name=dev.get("device_name", ""),
+            role=dev.get("role", "worker"),
+            hostname=dev.get("hostname", ""),
+            platform=dev.get("platform", ""),
+            ip=dev.get("ip", ""),
+            api_port=dev.get("api_port", 0),
+            cpu_count=dev.get("cpu_count", 0),
+            memory_total_mb=dev.get("memory_total_mb", 0),
+            disk_total_gb=dev.get("disk_total_gb", 0),
+            cpu_percent=dev.get("cpu_percent", 0),
+            memory_percent=dev.get("memory_percent", 0),
+            disk_percent=dev.get("disk_percent", 0),
+            shared_folder=dev.get("shared_folder", ""),
+            online=dev.get("online", False),
+            last_seen=time.time(),
+            rating_tier=rating.tier,
+            rating_score=rating.score,
+            rating_summary=rating.summary,
+        ))
+        merged_count += 1
+    if merged_count:
+        print(f"[Station] 合并列表: 补充 {merged_count} 台 UDP-only 设备")
+    return db_hosts
 
 
 async def _broadcast(state, msg_type: str, data):
@@ -134,33 +176,11 @@ def create_station_router(controller) -> APIRouter:
     @router.get("/api/hosts")
     async def list_hosts():
         """返回所有注册主机列表 (DB 持久化 + UDP 发现合并)。"""
-        db_hosts = db.list_hosts()
-        discovery_devices = discovery.list_devices()
-        db_ids = {h.device_id for h in db_hosts}
-        for dev in discovery_devices:
-            if dev["device_id"] not in db_ids:
-                db_hosts.append(HostRecord(
-                    device_id=dev["device_id"],
-                    device_name=dev.get("device_name", ""),
-                    role=dev.get("role", "worker"),
-                    hostname=dev.get("hostname", ""),
-                    platform=dev.get("platform", ""),
-                    ip=dev.get("ip", ""),
-                    api_port=dev.get("api_port", 0),
-                    cpu_count=dev.get("cpu_count", 0),
-                    memory_total_mb=dev.get("memory_total_mb", 0),
-                    disk_total_gb=dev.get("disk_total_gb", 0),
-                    cpu_percent=dev.get("cpu_percent", 0),
-                    memory_percent=dev.get("memory_percent", 0),
-                    disk_percent=dev.get("disk_percent", 0),
-                    shared_folder=dev.get("shared_folder", ""),
-                    online=dev.get("online", False),
-                    last_seen=time.time(),
-                ))
+        all_hosts = _merge_db_and_udp_hosts(db, discovery)
         return {
-            "hosts": [h.to_dict() for h in db_hosts],
-            "total": len(db_hosts),
-            "online": sum(1 for h in db_hosts if h.online),
+            "hosts": [h.to_dict() for h in all_hosts],
+            "total": len(all_hosts),
+            "online": sum(1 for h in all_hosts if h.online),
         }
 
     @router.get("/api/hosts/{device_id}")
@@ -230,10 +250,21 @@ def create_station_router(controller) -> APIRouter:
 
     @router.get("/api/station/fleet")
     async def get_fleet():
-        """舰队概览: 在线/离线/各评级分布 + 主机列表。"""
-        summary = station_director.get_fleet_summary()
-        summary["hosts"] = station_director.get_all_hosts()
-        return summary
+        """舰队概览: 在线/离线/各评级分布 + 主机列表 (DB + UDP 合并)。"""
+        all_hosts = _merge_db_and_udp_hosts(db, discovery)
+        online_count = sum(1 for h in all_hosts if h.online)
+        offline_count = len(all_hosts) - online_count
+        tiers = {"S": 0, "A": 0, "B": 0, "C": 0, "D": 0}
+        for h in all_hosts:
+            if h.rating_tier in tiers:
+                tiers[h.rating_tier] += 1
+        return {
+            "total": len(all_hosts),
+            "online": online_count,
+            "offline": offline_count,
+            "tiers": tiers,
+            "hosts": [h.to_dict() for h in all_hosts],
+        }
 
     @router.get("/api/station/hosts")
     async def get_station_hosts(min_tier: str = "D", online_only: bool = False):

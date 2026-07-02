@@ -140,6 +140,7 @@ class StationController:
 
         self._running = False
         self._threads: list[threading.Thread] = []
+        self._ws_push_event: Optional[asyncio.Event] = None  # 在 async 上下文中初始化
 
     # ── Secretary 激活/停用 ───────────────────────────────────────
 
@@ -294,9 +295,41 @@ class StationController:
         return packet
 
     def _on_device_seen(self, packet: DiscoveryPacket, ip: str):
-        """UDP 发现到新设备时的回调。"""
-        if packet.role == "worker" and packet.device_id:
-            pass  # Worker 会通过 HTTP 主动注册
+        """UDP 发现到新设备时自动注册入 DB (无需等待 HTTP 注册)。"""
+        if not packet.device_id or packet.device_id == self.state.device_id:
+            return
+        # 已注册则跳过 (避免覆盖完整 HTTP 注册信息)
+        if self.db.get_host(packet.device_id):
+            return
+        # 从 UDP 包构造 HostInfo 并自动入站
+        try:
+            info = HostInfo(
+                device_id=packet.device_id,
+                device_name=packet.device_name,
+                role=packet.role,
+                hostname=packet.hostname,
+                platform=packet.platform,
+                cpu_count=packet.cpu_count,
+                cpu_percent=packet.cpu_percent,
+                memory_total_mb=packet.memory_total_mb,
+                memory_percent=packet.memory_percent,
+                disk_total_gb=packet.disk_total_gb,
+                disk_percent=packet.disk_percent,
+                shared_folder=packet.shared_folder,
+                ip_addresses=packet.ip_addresses or [ip],
+                api_port=packet.api_port,
+            )
+            self.station_director.on_host_registered(info)
+            # 触发 WS 立即推送 (从非 async 线程安全地设置 event)
+            if self._ws_push_event:
+                try:
+                    loop = self._ws_push_event._loop
+                    loop.call_soon_threadsafe(self._ws_push_event.set)
+                except Exception:
+                    pass
+            print(f"[Station] UDP 自动注册: {packet.device_name} ({ip})")
+        except Exception as e:
+            print(f"[Station] UDP 自动注册异常: {e}")
 
     def _deploy_config_script(self):
         """将独立采集脚本部署到共享文件夹,供其他主机使用。"""
@@ -341,10 +374,16 @@ class StationController:
                 print(f"[Station] 清理离线主机异常: {e}")
 
     async def _ws_push_loop(self):
-        """定期向 WebSocket 客户端推送最新主机状态。"""
+        """定期向 WebSocket 客户端推送最新主机状态 (新主机入站时立即触发)。"""
+        self._ws_push_event = asyncio.Event()
         while self._running:
-            await asyncio.sleep(3)
             try:
+                # 等待事件触发或 3 秒超时
+                try:
+                    await asyncio.wait_for(self._ws_push_event.wait(), timeout=3)
+                except asyncio.TimeoutError:
+                    pass
+                self._ws_push_event.clear()
                 hosts = self.db.list_hosts()
                 from .station_api import _broadcast
                 await _broadcast(self.state, "hosts", [h.to_dict() for h in hosts])
