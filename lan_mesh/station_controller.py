@@ -435,8 +435,12 @@ class StationController:
         self.discovery.start()
 
         # 自注册为主机 (Station Director 本身也是一台主机)
-        self_info = self._collect_info()
-        self.station_director.on_host_registered(self_info)
+        try:
+            self_info = self._collect_info()
+            self.station_director.on_host_registered(self_info)
+            print(f"[Station] 自注册完成: {self_info.device_name} ({self_info.ip_addresses})")
+        except Exception as e:
+            print(f"[Station] [WARNING] 自注册失败: {e} (服务器仍将启动)")
 
         # 部署采集脚本并生成初始配置报告
         self._deploy_config_script()

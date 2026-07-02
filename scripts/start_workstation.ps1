@@ -15,6 +15,11 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $ProjectRoot
 
+# ── 设置 Python UTF-8 环境 (避免 GBK 编码崩溃) ──
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 function Write-Step([string]$msg) { Write-Host "[step] $msg" -ForegroundColor Cyan }
 function Write-Ok([string]$msg)   { Write-Host "  -> $msg" -ForegroundColor Green }
 function Write-Skip([string]$msg) { Write-Host "  -> $msg (skip)" -ForegroundColor DarkGray }

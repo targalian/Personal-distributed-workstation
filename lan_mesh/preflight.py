@@ -29,6 +29,21 @@ from typing import Optional
 
 import yaml
 
+
+def _safe_print(msg=""):
+    """安全打印: 遇到编码错误时回退到 ASCII。"""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        # 替换 emoji/框线字符为 ASCII 等价物
+        safe = msg
+        safe = safe.replace("✅", "[OK]").replace("❌", "[X]").replace("⚠️", "[!]")
+        safe = safe.replace("┌", "+").replace("┬", "+").replace("┐", "+")
+        safe = safe.replace("├", "+").replace("┼", "+").replace("┤", "+")
+        safe = safe.replace("└", "+").replace("┴", "+").replace("┘", "+")
+        safe = safe.replace("─", "-").replace("│", "|")
+        print(safe.encode("ascii", "replace").decode())
+
 from .config import AppConfig, get_db_path, get_shared_folder
 from .protocol import DISCOVERY_PORT
 
@@ -252,10 +267,10 @@ def run_preflight(
 
     # 打印报告
     role_label = "Secretary" if role == "secretary" else "Worker"
-    print()
-    print("┌─────────────────────────────────────────────┐")
-    print(f"│  LAN Mesh {role_label} 启动自检")
-    print("├─────────────────────────────────────────────┤")
+    _safe_print()
+    _safe_print("┌─────────────────────────────────────────────┐")
+    _safe_print(f"│  LAN Mesh {role_label} 启动自检")
+    _safe_print("├─────────────────────────────────────────────┤")
 
     all_passed = True
     for c in checks:
@@ -267,23 +282,23 @@ def run_preflight(
         icon = "✅" if c.passed else ("⚠️" if not c.critical else "❌")
         suffix = " [已自动修复]" if c.auto_fixed else ""
         suffix += " [非致命]" if not c.passed and not c.critical else ""
-        print(f"│  {icon} {c.name}")
-        print(f"│     {c.detail}{suffix}")
-        print("│")
+        _safe_print(f"│  {icon} {c.name}")
+        _safe_print(f"│     {c.detail}{suffix}")
+        _safe_print("│")
 
     # 总结
     critical_failed = [c for c in checks if c and not c.passed and c.critical]
     if critical_failed:
-        print(f"│  ❌ 自检未通过: {len(critical_failed)} 项致命检查失败")
-        print("└─────────────────────────────────────────────┘")
-        print()
+        _safe_print(f"│  ❌ 自检未通过: {len(critical_failed)} 项致命检查失败")
+        _safe_print("└─────────────────────────────────────────────┘")
+        _safe_print()
         return False
     elif all_passed:
-        print(f"│  ✅ 全部 {len([c for c in checks if c])} 项检查通过")
+        _safe_print(f"│  ✅ 全部 {len([c for c in checks if c])} 项检查通过")
     else:
         warnings = [c for c in checks if c and not c.passed]
-        print(f"│  ✅ 自检通过 ({len(warnings)} 项非致命警告)")
-    print("└─────────────────────────────────────────────┘")
-    print()
+        _safe_print(f"│  ✅ 自检通过 ({len(warnings)} 项非致命警告)")
+    _safe_print("└─────────────────────────────────────────────┘")
+    _safe_print()
 
     return True
