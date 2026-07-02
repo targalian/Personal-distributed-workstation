@@ -29,11 +29,22 @@ import requests
 # ── Provider 默认配置 (provider → base_url) ──────────────────────
 
 PROVIDER_CONFIG = {
-    "deepseek":  {"base_url": "https://api.deepseek.com/v1", "api_key_env": "DEEPSEEK_API_KEY"},
-    "openai":    {"base_url": "https://api.openai.com/v1", "api_key_env": "OPENAI_API_KEY"},
-    "anthropic": {"base_url": "https://api.anthropic.com/v1", "api_key_env": "ANTHROPIC_API_KEY"},
-    "qwen":      {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "api_key_env": "QWEN_API_KEY"},
+    "deepseek":          {"base_url": "https://api.deepseek.com/v1", "api_key_env": "DEEPSEEK_API_KEY"},
+    "openai":            {"base_url": "https://api.openai.com/v1", "api_key_env": "OPENAI_API_KEY"},
+    "anthropic":         {"base_url": "https://api.anthropic.com/v1", "api_key_env": "ANTHROPIC_API_KEY"},
+    "qwen":              {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "api_key_env": "QWEN_API_KEY"},
+    "aliyun-tokenplan":  {"base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "api_key_env": "ALIYUN_TOKENPLAN_API_KEY"},
 }
+
+
+def _load_model_pool_entries():
+    """惰性加载 model_pool.yaml, 返回 {model_id: ModelEntryConfig} 字典。"""
+    try:
+        from .config import load_model_pool
+        pool = load_model_pool()
+        return {e.id: e for e in pool.models}
+    except Exception:
+        return {}
 
 
 class AgentRuntime:
@@ -314,7 +325,21 @@ class AgentRuntime:
         return self._call_llm_full(prompt, system_prompt=system_prompt)
 
     def _resolve_provider(self, model_id: str) -> Optional[dict]:
-        """根据模型 ID 解析 provider 配置, 返回 {base_url, api_key} 或 None。"""
+        """根据模型 ID 解析 provider 配置, 返回 {base_url, api_key} 或 None。
+
+        查找顺序:
+        1. model_pool.yaml 精确匹配 (支持所有 provider, 包括 aliyun-tokenplan)
+        2. PROVIDER_CONFIG 前缀匹配 (兼容旧逻辑)
+        """
+        # 1. 从 model_pool.yaml 精确查找
+        pool = _load_model_pool_entries()
+        entry = pool.get(model_id)
+        if entry:
+            api_key = os.environ.get(entry.api_key_env, "")
+            if api_key:
+                return {"base_url": entry.base_url, "api_key": api_key}
+
+        # 2. 前缀匹配 (兼容旧逻辑)
         for provider, cfg in PROVIDER_CONFIG.items():
             api_key = os.environ.get(cfg["api_key_env"], "")
             if not api_key:
@@ -365,30 +390,54 @@ class AgentRuntime:
     def _call_llm_full(self, prompt: str, system_prompt: str = "") -> dict:
         """调用外部 LLM API (回退逻辑, 无路由器时使用)。
 
-        优先使用 DeepSeek (成本低), 其次 OpenAI。
+        遍历所有已配置 API Key 的 provider, 依次尝试:
+        DeepSeek → OpenAI → 阿里云 Token Plan → Anthropic → 通义千问。
         """
-        deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
-        if deepseek_key:
-            return self._call_openai_compatible(
-                prompt, "deepseek-chat",
-                PROVIDER_CONFIG["deepseek"]["base_url"], deepseek_key,
-                system_prompt=system_prompt,
-            )
-
-        openai_key = os.environ.get("OPENAI_API_KEY")
-        if openai_key:
-            return self._call_openai_compatible(
-                prompt, "gpt-4o-mini",
-                PROVIDER_CONFIG["openai"]["base_url"], openai_key,
-                system_prompt=system_prompt,
-            )
+        # 按优先级遍历所有 provider
+        for provider, cfg in PROVIDER_CONFIG.items():
+            api_key = os.environ.get(cfg["api_key_env"], "")
+            if not api_key:
+                continue
+            # 选择该 provider 下的默认模型
+            default_model = self._get_default_model(provider)
+            if not default_model:
+                continue
+            try:
+                return self._call_openai_compatible(
+                    prompt, default_model,
+                    cfg["base_url"], api_key,
+                    system_prompt=system_prompt,
+                )
+            except Exception as e:
+                print(f"[AgentRuntime] {provider} 调用失败: {e}, 尝试下一个 provider...")
+                continue
 
         return {
-            "content": "[未配置 LLM API Key] 请设置 DEEPSEEK_API_KEY 或 OPENAI_API_KEY 环境变量。",
+            "content": "[未配置 LLM API Key] 请设置 ALIYUN_TOKENPLAN_API_KEY、DEEPSEEK_API_KEY 或 OPENAI_API_KEY 环境变量。",
             "model": "none",
             "input_tokens": 0,
             "output_tokens": 0,
         }
+
+    def _get_default_model(self, provider: str) -> Optional[str]:
+        """获取指定 provider 的默认模型 ID (从 model_pool.yaml 查找)。"""
+        pool = _load_model_pool_entries()
+        # 找该 provider 下 quality_score 最高的模型
+        candidates = [
+            e for e in pool.values() if e.provider == provider
+        ]
+        if candidates:
+            best = max(candidates, key=lambda e: e.quality_score)
+            return best.id
+        # 回退到硬编码默认值
+        defaults = {
+            "deepseek": "deepseek-chat",
+            "openai": "gpt-4o-mini",
+            "anthropic": "claude-3-haiku",
+            "qwen": "qwen-turbo",
+            "aliyun-tokenplan": None,  # 必须从 model_pool 查找
+        }
+        return defaults.get(provider)
 
     def _call_llm(self, prompt: str) -> str:
         """调用外部 LLM API 生成回复 (仅返回文本内容)。"""

@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: logging_system
+title: 基于 print() 的简易日志输出约定
+scope: []
+source_files:
+    - main.py
+    - lan_mesh/station_controller.py
+    - lan_mesh/secretary.py
+    - lan_mesh/bot_gateway.py
+    - lan_mesh/agent_runtime.py
+    - CODE_REVIEW_GUIDE.md
+depends_on: []
+related_to: []

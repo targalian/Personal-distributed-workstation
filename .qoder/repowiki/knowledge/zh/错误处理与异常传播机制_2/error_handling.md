@@ -1,37 +1,30 @@
-该仓库采用**语言原生异常模型**作为核心错误处理机制，未引入全局中间件或统一的错误码枚举体系。错误处理呈现出明显的**分层特征**：API 层使用 HTTP 状态码映射业务逻辑错误，Rust 层使用 `Result<T, String>` 进行显式错误传播，而底层业务逻辑则依赖 `try-except` 块进行容错和降级。
+LAN Mesh 框架采用**基于 HTTP 状态码的显式错误传播**与**防御性编程**相结合的错误处理策略。系统未定义全局自定义异常类，而是依赖 FastAPI 的 `HTTPException` 进行 API 层错误反馈，并在业务逻辑层广泛使用 `try-except` 块捕获底层异常以防止服务崩溃。
 
-### 1. Python (FastAPI) 层：HTTPException 与业务校验
-在 `lan_mesh/api.py` 中，错误主要通过抛出 `fastapi.HTTPException` 来处理。这是一种典型的 Web 框架模式，将内部状态直接映射为 HTTP 响应。
+### 1. API 层错误处理 (FastAPI)
+- **统一出口**：所有 API 路由（`api.py`, `station_api.py`）通过抛出 `fastapi.HTTPException` 向客户端返回结构化错误。
 - **状态码约定**：
-  - `404 Not Found`：用于资源不存在（如主机、Agent、任务、文件）。
-  - `403 Forbidden`：用于权限或路径安全校验失败（如共享文件访问越界）。
-  - `409 Conflict`：用于状态冲突（如重复启动子进程）。
-  - `503 Service Unavailable`：用于依赖组件未初始化（如 Agent 运行时、编排器、MCP 网关）。
-  - `402 Payment Required`：用于业务逻辑限制（如项目预算耗尽）。
-- **实现模式**：在每个 API 端点入口处进行前置条件检查（Guard Clauses），若不满足则立即抛出异常。例如：
-  ```python
-  if not agent_runtime:
-      raise HTTPException(status_code=503, detail="Agent 运行时未初始化")
-  ```
+  - `400 Bad Request`: 参数缺失或格式错误（如缺少 `task_id`）。
+  - `403 Forbidden`: 安全校验失败（如共享文件路径穿越攻击）。
+  - `404 Not Found`: 资源不存在（如主机、Agent、任务或文件未找到）。
+  - `409 Conflict`: 状态冲突（如重复启动已运行的子进程）。
+  - `502 Bad Gateway`: 远程主机通信失败（Station Director 调用 Worker API 时）。
+  - `503 Service Unavailable`: 核心组件未初始化或功能未激活（如 Secretary 模式未开启）。
+- **前置检查模式**：在 `station_api.py` 中定义了 `_check_secretary()` 辅助函数，用于在受保护的路由执行前统一校验业务状态，避免空指针或非法操作。
 
-### 2. Rust (Tauri) 层：Result<String> 与命令边界
-在 `quicklan-main/src-tauri/` 中，错误处理遵循 Rust 的 `Result` 模式，但在 Tauri 命令边界处进行了简化。
-- **错误类型**：绝大多数 `#[tauri::command]` 函数返回 `Result<T, String>`。错误信息以人类可读的中文或英文字符串形式传播。
-- **传播策略**：使用 `?` 操作符在内部模块（如 `storage`, `library`, `transfer`）间传播错误，最终在命令函数顶层通过 `map_err` 转换为友好的提示字符串。
-- **容错设计**：在非关键路径（如单例实例通知、托盘图标设置）使用 `unwrap_or` 或 `if let Err(_) = ...` 忽略错误，防止次要故障导致应用崩溃。
+### 2. 业务逻辑层防御
+- **静默失败与容错**：在非关键路径（如 WebSocket 广播 `broadcast_ws`、Bot 消息推送 `bot_gateway.py`）中，使用宽泛的 `except Exception` 捕获异常并记录日志，确保单点故障不影响主流程或其他客户端连接。
+- **资源安全访问**：
+  - `shared_folder.py` 实现了严格的路径解析逻辑 `resolve_path`，通过比对解析后的绝对路径前缀防止目录穿越（Path Traversal），并在越界时抛出 `ValueError`。
+  - 文件操作中使用 `PermissionError` 和 `OSError` 捕获，跳过无法访问的文件。
+- **降级与重试**：
+  - `agent_runtime.py` 在 LLM 调用中实现了**降级链（Fallback Chain）**机制。当首选模型调用失败时，自动捕获异常并尝试备用模型，最终若全部失败则返回包含错误信息的占位结果，而非直接抛出异常中断任务。
 
-### 3. 业务逻辑层：静默失败与降级链
-在核心业务逻辑中，系统倾向于**捕获异常并返回结构化错误状态**，而非向上抛出。
-- **Agent 运行时 (`agent_runtime.py`)**：
-  - **执行容错**：`execute` 方法包裹在 `try-except Exception` 中，任何未预期的异常都会被捕获并转化为 `{"status": "failed", "error": str(e)}` 返回给调用方。
-  - **LLM 降级链**：在 `_call_llm_with_routing` 中实现了**自动重试与降级**。如果首选模型调用失败，系统会遍历 `fallback_models` 列表尝试其他模型，仅在所有尝试均失败后返回错误摘要。
-- **数据库层 (`database.py`)**：
-  - **Schema 演进容错**：在 `_init_db` 中，使用 `try-except sqlite3.OperationalError` 来处理 `ALTER TABLE` 操作，确保在列已存在时不会报错，实现了平滑的数据库迁移。
-- **编排器 (`orchestrator.py`)**：
-  - **异步任务隔离**：子任务的分发与执行在独立线程中进行，网络请求异常（`requests.RequestException`）被捕获并记录为子任务的 `failed` 状态，不会导致主调度循环崩溃。
+### 3. 日志与观测
+- **控制台日志**：系统主要依赖 `print(f"[Component] ...")` 进行运行时状态输出和错误记录（如 `[BotGateway]`、`[AgentRuntime]`）。
+- **缺乏结构化日志**：目前未集成标准的 `logging` 模块或结构化日志框架，错误追踪主要依靠堆栈回溯和控制台输出。
 
-### 4. 开发者约束与建议
-- **禁止裸奔异常**：在 API 边界外，严禁让未处理的 `Exception` 穿透到框架层。应捕获并转化为业务定义的错误状态或日志。
-- **错误信息本地化**：Rust 层的错误字符串目前混合了中英文，建议统一为英文以便后续国际化，或在 UI 层进行映射。
-- **降级优先**：在涉及外部依赖（如 LLM API、网络探测）时，必须实现超时控制和降级策略（Fallback），避免单点故障阻塞整个工作流。
-- **日志记录**：目前在 `print` 中记录关键错误（如模型调用失败、主机离线）。在生产环境中，应替换为结构化日志系统（如 `logging` 模块或 `tracing`），以便追踪错误上下文。
+### 4. 开发者规范
+- **API 开发**：在新增 API 端点时，必须对输入参数进行校验，并在依赖服务不可用时抛出 `HTTPException(status_code=503)`。
+- **跨主机调用**：Station Director 调用 Worker 接口时，必须包裹 `requests.RequestException` 并转换为 `502` 错误，以区分本地逻辑错误与网络通信错误。
+- **文件系统操作**：任何涉及用户输入路径的操作都必须经过 `shared_folder.resolve_path` 校验，严禁直接拼接路径。
+- **后台任务**：在异步广播或消息推送循环中，必须使用 `try-except Exception` 保护循环体，防止单个客户端断开导致整个广播线程终止。

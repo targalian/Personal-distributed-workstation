@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: frontend_style
+title: QuickLAN Tauri+React 前端样式体系
+scope: []
+source_files:
+    - quicklan-main/src/styles.css
+    - quicklan-main/src/App.tsx
+    - quicklan-main/package.json
+    - quicklan-main/vite.config.ts
+depends_on: []
+related_to: []

@@ -5,8 +5,7 @@ scope: []
 source_files:
     - quicklan-main/src/styles.css
     - quicklan-main/src/App.tsx
+    - quicklan-main/package.json
     - lan_mesh/web/templates/dashboard.html
-    - lan_mesh/web/static/manifest.json
-    - quicklan-main/vite.config.ts
 depends_on: []
 related_to: []

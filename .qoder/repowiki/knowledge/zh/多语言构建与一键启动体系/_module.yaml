@@ -1,0 +1,15 @@
+schema_version: 1
+module_path: build_system
+title: 多语言构建与一键启动体系
+scope: []
+source_files:
+    - main.py
+    - requirements.txt
+    - scripts/start_workstation.sh
+    - scripts/start_workstation.bat
+    - quicklan-main/package.json
+    - quicklan-main/src-tauri/Cargo.toml
+    - quicklan-main/src-tauri/tauri.conf.json
+    - quicklan-main/src-tauri/build.rs
+depends_on: []
+related_to: []

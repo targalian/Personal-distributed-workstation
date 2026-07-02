@@ -1,25 +1,30 @@
-该仓库包含两套独立的前端界面，分别服务于不同的子系统，采用了截然不同的技术栈和视觉风格。
+该仓库包含两套独立的前端界面，分别服务于不同的子系统，采用了截然不同的视觉风格和技术栈。
 
-### 1. QuickLAN (Tauri + React) - 现代轻量桌面应用
-**技术栈**：React 18, TypeScript, Vite, Tauri 2.0。
-**样式方案**：**纯 CSS (Vanilla CSS)**。未使用 Tailwind、Sass 或任何 UI 组件库。
-- **设计语言**：采用“企业级清爽”风格。主色调为深蓝色 (`#176bc3`)，背景为浅灰白 (`#f6f8fb`)，强调高对比度和清晰的层级。
-- **布局策略**：大量使用 `CSS Grid` 和 `Flexbox` 进行响应式布局（如 `.grid.two`, `.shell`）。
-- **组件化样式**：通过语义化类名（如 `.tab`, `.pill`, `.dropzone`, `.modal-backdrop`）定义通用 UI 模式。按钮分为 `.primary`（实心蓝）和 `.secondary`（描边白）。
-- **图标系统**：集成 `lucide-react` 提供统一的线性图标风格。
-- **交互反馈**：定义了简单的 Toast 动画 (`@keyframes toast-life`) 和模态框遮罩层。
+### 1. QuickLAN (Tauri + React)
+**技术栈**: React + TypeScript + Vite + Tauri。
+**样式方案**: 纯 CSS (Vanilla CSS)。
+- **设计语言**: 采用“现代商务/工具类”风格。主色调为深蓝 (`#176bc3`) 搭配浅灰背景 (`#f6f8fb`)。
+- **布局策略**: 大量使用 `display: grid` 和 `flexbox` 进行响应式布局。定义了 `.shell`, `.grid.two`, `.panel` 等语义化容器类。
+- **组件风格**: 
+  - **卡片与面板**: 白色背景 (`#ffffff`)，细边框 (`#dce4ed`)，圆角 `8px`。
+  - **按钮**: 区分 `.primary` (实心蓝) 和 `.secondary` (描边白)。
+  - **图标**: 使用 `lucide-react` 库提供统一的线性图标。
+- **响应式**: 通过 `@media (max-width: 920px)` 实现双栏变单栏的自适应。
 
-### 2. LAN Mesh Station Director (Python Web) - 极客暗黑监控面板
-**技术栈**：Python (FastAPI/Flask), 原生 HTML/CSS/JS。
-**样式方案**：**内联 CSS (Dark Theme)**。所有样式集中在 `dashboard.html` 的 `<style>` 标签中。
-- **设计语言**：采用“赛博朋克/开发者工具”暗黑风格。背景为深灰黑 (`#0f1117`)，表面色为 `#1a1d27`，强调色为亮蓝 (`#5b8cff`) 和状态绿 (`#4ade80`)。
-- **CSS 变量**：使用 `:root` 定义了一套完整的设计令牌（Design Tokens），包括 `--bg`, `--surface`, `--border`, `--accent` 等，便于统一维护主题。
-- **可视化元素**：
-  - **进度条**：根据负载动态变色（低负载绿色，中负载黄色，高负载红色）。
-  - **状态徽章**：使用不同颜色的 `.badge` 区分主机角色（Secretary/Worker）和状态（Online/Offline）。
-  - **卡片布局**：`.card` 带有顶部彩色边框指示状态，悬停时有轻微上浮效果。
-- **响应式策略**：针对移动端（`max-width: 640px`）进行了深度优化，将顶部 Tab 栏隐藏并替换为底部固定导航栏（`.mobile-nav`），表格支持横向滚动，模态框在移动端全屏显示。
+### 2. LAN Mesh Station Director (Python Backend + HTML Template)
+**技术栈**: Python (FastAPI/Flask) + 原生 HTML/CSS/JS。
+**样式方案**: 内联 CSS (Single-file styling)。
+- **设计语言**: 采用“深色极客/监控大屏”风格。背景为深黑蓝 (`#0f1117`)，表面色为 `#1a1d27`。
+- **色彩体系**: 
+  - **状态色**: 绿色 (`#4ade80`) 表示在线/成功，红色 (`#f87171`) 表示离线/失败，黄色 (`#fbbf24`) 表示忙碌/警告。
+  - **强调色**: 亮蓝 (`#5b8cff`) 用于高亮和链接。
+- **视觉元素**:
+  - **进度条**: 带有颜色渐变 (`.pfill.low/mid/high`) 的动态进度指示器。
+  - **徽章 (Badges)**: 半透明背景的标签，用于显示角色 (Secretary/Station) 和状态。
+  - **动画**: 包含 WebSocket 连接状态的脉冲动画 (`@keyframes pulse`) 和 Toast 通知的滑入效果。
+- **移动端适配**: 针对小屏幕提供了底部导航栏 (`.mobile-nav`) 和全屏模态框，优化了触摸体验。
 
 ### 开发约定
-- **QuickLAN**：遵循 BEM 类似的命名规范，样式与 React 组件紧密耦合在 `styles.css` 中。禁止随意修改全局重置样式。
-- **LAN Mesh**：由于是单文件应用，样式修改需直接在 HTML 模板中进行。移动端适配优先保证核心数据（如主机状态、任务进度）的可读性。
+- **QuickLAN**: 样式集中在 `src/styles.css`，通过类名组合控制外观，避免使用 CSS-in-JS。
+- **LAN Mesh**: 样式直接嵌入在 `dashboard.html` 的 `<style>` 标签中，便于作为单文件分发，但维护复杂度较高。
+- **一致性**: 两个系统都使用了 `Inter` 或系统默认字体栈以确保跨平台清晰度。

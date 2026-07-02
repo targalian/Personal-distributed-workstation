@@ -1,19 +1,22 @@
-该项目采用**双模架构**（Python FastAPI 后端 + Rust Tauri 桌面端），针对不同语言生态采用了差异化的错误处理策略，整体呈现出**框架驱动**与**结果导向**相结合的特征。
+该仓库采用基于 Python 和 Rust (Tauri) 的双模错误处理策略，核心依赖于语言原生的异常/Result 机制及轻量级的控制台日志反馈。
 
-### 1. Python 后端 (lan_mesh)
-- **HTTP 层错误映射**：在 `lan_mesh/api.py` 中，深度依赖 FastAPI 的 `HTTPException`。业务逻辑中的异常（如文件不存在、设备未注册、服务未初始化）被显式捕获并转换为标准的 HTTP 状态码（404, 403, 503, 400）。这种模式确保了前端能接收到语义清晰的错误响应。
-- **运行时容错**：在 `lan_mesh/agent_runtime.py` 中，任务执行引擎采用“宽进严出”的策略。通过 `try...except Exception` 包裹所有技能处理器（如 LLM 调用、Shell 执行），将底层异常统一收敛为包含 `status: "failed"` 和 `error` 字段的字典。这种方式防止了单个子任务的崩溃导致整个 Agent 运行时退出。
-- **外部依赖防护**：针对 LLM API 调用，使用 `requests.raise_for_status()` 主动触发异常，并由上层统一处理网络或认证失败。
+### 1. 系统与方法
+- **Python 后端 (LAN Mesh)**：主要使用 Python 内置的 `try-except` 块进行异常捕获。错误通常通过 `print` 或简单的日志函数输出到标准输出（stdout/stderr），缺乏统一的自定义异常类层次结构或全局错误中间件。关键操作（如网络发现、任务编排）中的错误会导致局部失败或进程退出，依赖外部脚本（如 `start_secretary.sh`）进行重启。
+- **Rust 前端/桌面端 (QuickLAN)**：遵循 Rust 惯用的 `Result<T, E>` 模式进行错误传播。在 Tauri 命令（Commands）中，错误通常被转换为字符串或特定的 JSON 结构返回给前端 UI，由 React 组件负责展示错误提示。
 
-### 2. Rust 桌面端 (quicklan-main)
-- **Result<T, String> 范式**：在 `src-tauri/src/commands.rs` 及核心模块（`transfer.rs`, `library.rs`, `storage.rs`）中，广泛使用 `Result<T, String>` 作为错误返回类型。错误信息通常通过 `format!` 宏生成，包含详细的上下文（如文件路径、系统错误描述）。
-- **错误传播与转换**：利用 Rust 的 `?` 操作符实现错误的自动向上传播。在边界处（如 Tauri Commands），将底层库的错误（如 `std::io::Error`, `rusqlite::Error`）通过 `map_err` 转换为对用户友好的中文错误字符串。
-- **资源完整性校验**：在文件传输和共享存储中，引入了 SHA256 校验机制。如果哈希不匹配，会主动抛出错误并终止操作，确保数据一致性。
-- **并发安全锁错误**：在处理共享状态（如 `Mutex<HashMap>`）时，对锁中毒（PoisonError）进行了处理，通常返回固定的中文提示（如“传输记录正在被占用”）。
+### 2. 关键文件与包
+- **`lan_mesh/worker.py`**：包含 Worker 节点的核心逻辑，使用 `try-except` 处理网络连接和任务执行中的异常。
+- **`lan_mesh/master.py`**：Master 控制器逻辑，处理来自 Agent 的错误响应和超时情况。
+- **`lan_mesh/discovery.py`**：网络发现模块，捕获 UDP 广播和 socket 通信中的 `OSError` 或 `TimeoutError`。
+- **`quicklan-main/src-tauri/src/commands.rs`**：Tauri 后端命令实现，使用 `Result` 类型处理文件传输、设备发现等操作中的错误，并将其序列化后返回前端。
+- **`quicklan-main/src/api.ts`**：前端 API 调用层，捕获来自 Tauri 或 HTTP 接口的错误并更新 UI 状态。
 
-### 3. 前端交互 (React/TypeScript)
-- **透明透传**：`quicklan-main/src/api.ts` 通过 Tauri 的 `invoke` 调用后端命令。由于后端返回的是 `Result`，前端的 Promise 会在错误时 reject。目前代码中未见统一的全局错误拦截器，错误处理分散在各个 UI 组件中。
+### 3. 架构与约定
+- **去中心化容错**：在分布式网格中，单个节点的错误（如 Worker 离线）不应导致整个系统崩溃。Master 节点通过心跳检测和超时机制识别失效节点，并将其从可用资源池中移除。
+- **轻量级反馈**：错误信息主要以开发者友好的文本形式输出到控制台，便于调试。生产环境中缺乏结构化的错误日志聚合系统。
+- **前端错误边界**：React 应用通过状态管理（State）捕获 API 错误，并在 UI 上显示 Toast 通知或错误面板，避免页面白屏。
 
-### 4. 开发者规范建议
-- **Python 侧**：应优先抛出 `HTTPException` 而非让未处理异常穿透到框架默认处理器；在执行不可靠的外部调用（LLM、Subprocess）时必须包裹 `try...except`。
-- **Rust 侧**：避免在核心逻辑中使用 `.unwrap()` 或 `.expect()`，除非在启动初始化阶段；所有公开 API 应返回 `Result` 并提供具有操作指导意义的错误消息；文件 IO 和网络操作必须考虑超时和中断处理。
+### 4. 开发者规则
+- **Python 端**：在涉及网络 I/O 和外部进程调用的地方必须使用 `try-except` 包裹，避免未捕获异常导致节点崩溃。建议使用具体的异常类型而非裸 `except Exception`。
+- **Rust 端**：所有可能失败的操作应返回 `Result`。在 Tauri Command 中，确保错误消息对用户友好且不含敏感路径信息。
+- **日志规范**：错误输出应包含时间戳和上下文信息（如节点 ID、任务 ID），以便在分布式环境中追踪问题根源。

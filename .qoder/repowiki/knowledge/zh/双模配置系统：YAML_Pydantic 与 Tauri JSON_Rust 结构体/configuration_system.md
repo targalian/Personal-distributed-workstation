@@ -1,39 +1,43 @@
-LAN Mesh 项目采用**双模配置架构**，分别针对后端分布式网格（Python）和桌面客户端（Tauri/Rust）设计了不同的配置加载、校验与管理机制。
+该项目采用**双模配置架构**，分别针对 Python 后端（LAN Mesh）和 Rust/Tauri 桌面前端（QuickLAN）设计了独立的配置加载、校验与持久化机制。
 
-### 1. Python 后端：基于 Pydantic 的分层 YAML 配置
+### 1. LAN Mesh (Python) - 基于 Pydantic 的分层 YAML 配置
 
-**核心逻辑**位于 `lan_mesh/config.py`。系统利用 `pydantic` 提供强类型校验，通过 `yaml.safe_load` 解析配置文件。
+**核心逻辑：**
+- **强类型校验**：使用 `pydantic` 定义配置模型（`AppConfig`, `DiscoveryConfig`, `WorkerConfig`, `SecretaryConfig`），确保配置项的类型安全与默认值管理。
+- **多源加载策略**：`load_config()` 函数实现了严格的优先级查找顺序：
+  1. 命令行参数 `--config` 指定的路径。
+  2. 环境变量 `LAN_MESH_CONFIG`。
+  3. 用户主目录 `~/.lan_mesh/config.yaml`。
+  4. 项目根目录 `./config.yaml`。
+  5. 若均不存在，则返回包含默认值的 `AppConfig` 实例。
+- **命令行覆盖**：在 `main.py` 中，命令行参数（如 `--port`, `--name`, `--shared`）会在加载 YAML 后直接修改配置对象实例，实现运行时灵活覆盖。
+- **敏感信息管理**：API Keys 等敏感信息不直接存入 YAML，而是通过 `model_pool.yaml` 中的 `api_key_env` 字段指定环境变量名（如 `DEEPSEEK_API_KEY`），由业务逻辑在运行时从环境中读取。
+- **模型池配置**：独立的 `model_pool.yaml` 用于管理 LLM 模型元数据（ID、Provider、成本、能力评分、降级链等），通过 `load_model_pool()` 加载，支持包内默认配置与用户自定义配置合并。
 
-*   **分层加载策略**：
-    `load_config()` 函数实现了严格的优先级查找顺序：
-    1.  显式指定的路径参数。
-    2.  环境变量 `LAN_MESH_CONFIG`。
-    3.  用户主目录下的 `~/.lan_mesh/config.yaml`。
-    4.  当前工作目录下的 `./config.yaml`。
-    5.  若均不存在，则返回包含默认值的 `AppConfig` 实例。
+**关键文件：**
+- `lan_mesh/config.py`: 配置模型定义与加载逻辑。
+- `config.yaml`: 项目根目录示例配置。
+- `lan_mesh/model_pool.yaml`: 模型池元数据配置。
+- `main.py`: 入口脚本，处理 CLI 参数与配置合并。
 
-*   **模型池独立配置**：
-    针对 AI 模型路由功能，提供了独立的 `load_model_pool()` 逻辑，支持通过 `LAN_MESH_MODEL_POOL` 环境变量或包目录下的 `model_pool.yaml` 进行配置。该配置定义了模型的厂商、API Key 环境变量名、成本基准及降级链（fallback）。
+### 2. QuickLAN (Tauri/Rust) - 基于 JSON 的用户设置持久化
 
-*   **安全与路径处理**：
-    *   **敏感信息隔离**：API Key 等敏感数据不直接存储在 YAML 中，而是通过 `api_key_env` 字段指定环境变量名，运行时从环境中读取。
-    *   **路径展开**：内置 `_expand()` 工具函数，自动处理路径中的 `~`（用户主目录）和环境变量引用。
+**核心逻辑：**
+- **应用构建配置**：`tauri.conf.json` 管理 Tauri 应用的窗口属性、构建命令、安全策略及打包选项（NSIS 安装器配置）。
+- **用户设置持久化**：`settings.rs` 实现了 `SettingsService`，负责管理用户级运行时设置（如昵称、下载目录）。
+  - **存储位置**：使用 `dirs::config_dir()` 定位平台特定的配置目录（如 Windows 的 `%APPDATA%\QuickLAN`），存储为 `settings.json`。
+  - **加载与容错**：启动时尝试读取并反序列化 JSON；若文件不存在或格式错误，则生成默认配置（默认昵称为主机名，默认下载目录为系统下载文件夹）。
+  - **原子更新**：提供 `update_nickname` 和 `update_download_dir` 方法，修改后立即持久化到磁盘，确保状态一致性。
+- **数据存储路径**：`storage.rs` 定义了应用数据目录（`dirs::data_dir()`），用于存放 SQLite 数据库、共享文件缓存等非配置类持久化数据。
 
-### 2. Tauri 桌面端：基于 JSON 的持久化设置
+**关键文件：**
+- `quicklan-main/src-tauri/tauri.conf.json`: Tauri 框架配置。
+- `quicklan-main/src-tauri/src/settings.rs`: 用户设置加载、校验与持久化逻辑。
+- `quicklan-main/src-tauri/src/storage.rs`: 应用数据目录与文件存储路径管理。
 
-**核心逻辑**位于 `quicklan-main/src-tauri/src/settings.rs`。客户端配置侧重于用户个性化设置（如昵称、下载目录），采用 JSON 格式存储。
+### 3. 开发规范与建议
 
-*   **存储位置**：
-    配置文件 `settings.json` 存储在操作系统标准的配置目录下（通过 `dirs::config_dir()` 获取，如 Windows 的 `%APPDATA%\QuickLAN`）。
-
-*   **加载与容错机制**：
-    `SettingsService::load()` 在启动时尝试读取并反序列化 JSON。若文件不存在或格式错误，系统会自动回退到默认配置（`default_settings()`），并确保将默认配置写回磁盘以初始化环境。
-
-*   **动态更新与同步**：
-    配置对象被包裹在 `Arc<Mutex<AppSettings>>` 中，支持多线程安全访问。当用户通过 UI 修改昵称或下载路径时，`update_*` 方法会同步更新内存状态并持久化到 JSON 文件。
-
-### 3. 开发规范与约定
-
-*   **禁止提交敏感配置**：`model_pool.yaml` 等包含实际密钥引用的文件已被列入 `.gitignore`，开发者应基于 `model_pool.example.yaml` 创建本地配置。
-*   **类型安全优先**：Python 端严禁直接使用字典访问配置，必须通过 `AppConfig` 及其子模型（如 `DiscoveryConfig`）的属性访问，以确保在应用启动阶段即可发现配置错误。
-*   **路径标准化**：在处理文件共享或数据库路径时，必须调用 `get_shared_folder()` 或 `get_db_path()` 等辅助函数，以确保路径在不同操作系统下正确展开。
+- **Python 端**：新增配置项时，必须在 `lan_mesh/config.py` 中更新对应的 Pydantic 模型，并设置合理的默认值。敏感信息严禁硬编码，应通过 `api_key_env` 指向环境变量。
+- **Rust 端**：用户可修改的设置应纳入 `AppSettings` 结构体并通过 `SettingsService` 管理；不可变的系统路径或常量应放在 `storage.rs` 或编译期常量中。
+- **配置隔离**：区分“应用配置”（YAML/JSON，描述系统行为）与“用户数据”（SQLite/文件系统，描述业务状态）。
+- **路径处理**：Python 端使用 `os.path.expanduser` 处理 `~`；Rust 端使用 `dirs` crate 获取平台标准目录，避免硬编码绝对路径。

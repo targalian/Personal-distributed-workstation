@@ -77,10 +77,20 @@ class ChatHandler:
         # 3. 拼接对话历史 + 用户消息
         prompt = self._build_prompt(message, chat_history)
 
-        # 4. 调用 LLM
+        # 4. 调用 LLM (优先使用模型路由器选择模型)
+        model_pref = ""
+        fallback_models = []
+        if self.controller.model_router:
+            try:
+                routing = self.controller.model_router.route(message, skill="document_summary")
+                model_pref = routing.selected_model
+                fallback_models = routing.fallback_chain
+            except Exception:
+                pass
+
         resp = self.runtime._call_llm_with_routing(
             prompt,
-            {"_model_preference": "", "_fallback_models": []},
+            {"_model_preference": model_pref, "_fallback_models": fallback_models},
         )
         reply_text = resp.get("content", "[LLM 调用失败]")
 

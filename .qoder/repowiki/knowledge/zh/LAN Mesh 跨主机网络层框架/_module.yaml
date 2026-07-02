@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: ""
-title: 分布式多智能体工作站系统
+title: LAN Mesh 跨主机网络层框架
 scope: []
 source_files: []
 depends_on: []

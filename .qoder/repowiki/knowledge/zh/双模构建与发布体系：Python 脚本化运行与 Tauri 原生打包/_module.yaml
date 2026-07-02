@@ -3,13 +3,13 @@ module_path: build_system
 title: 双模构建与发布体系：Python 脚本化运行与 Tauri 原生打包
 scope: []
 source_files:
+    - .qoder/repowiki/knowledge/zh/双模构建与发布体系/build_system.md
     - main.py
     - requirements.txt
-    - scripts/setup_env.sh
-    - scripts/start_station.sh
+    - scripts/start_secretary.sh
+    - scripts/start_worker.sh
     - quicklan-main/package.json
     - quicklan-main/src-tauri/Cargo.toml
     - quicklan-main/src-tauri/tauri.conf.json
-    - quicklan-main/src-tauri/build.rs
 depends_on: []
 related_to: []
