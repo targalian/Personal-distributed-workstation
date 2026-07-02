@@ -3,7 +3,7 @@
 <cite>
 **本文档引用的文件**
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [shared_folder.py](file://lan_mesh/shared_folder.py)
@@ -15,7 +15,6 @@
 - [model_router.py](file://lan_mesh/model_router.py)
 - [station_director.py](file://lan_mesh/station_director.py)
 - [host_rating.py](file://lan_mesh/host_rating.py)
-- [station_api.py](file://lan_mesh/station_api.py)
 - [station_controller.py](file://lan_mesh/station_controller.py)
 - [secretary.py](file://lan_mesh/secretary.py)
 - [skill_registry.py](file://lan_mesh/skill_registry.py)
@@ -31,11 +30,10 @@
 
 ## 更新摘要
 **变更内容**
-- 新增完整的Bot管理API端点：添加Bot通道配置、测试和管理相关的REST API端点，包括通道列表、添加/删除通道、测试消息发送等功能
-- 集成Bot Gateway组件，支持企业微信群机器人和Telegram Bot两种通道类型
-- 新增Bot通道优先级控制和脱敏显示功能
-- 完善了Web UI仪表盘的Bot管理能力
-- 新增Bot事件推送和命令处理机制
+- LAN Mesh API层重构：提取 `_merge_db_and_udp_hosts()` 公共函数用于统一合并数据库和UDP发现的主机列表
+- `/api/hosts` 端点简化：使用新的合并函数减少代码重复并确保一致性
+- `/api/station/fleet` 端点增强：返回包含完整主机列表的详细舰队概览信息
+- Bot管理API完善：支持企业微信群机器人和Telegram Bot通道的完整生命周期管理
 
 ## 目录
 1. [简介](#简介)
@@ -51,9 +49,9 @@
 
 ## 简介
 
-Work Station 项目是一个基于局域网的分布式任务执行平台，采用 Master/Worker 架构设计。该项目提供了完整的 Web API 接口，支持设备管理、文件传输、任务执行、工具调度、项目管理、**新增**Bot消息通道管理和技能管理等功能。系统通过 UDP 广播发现机制实现设备自动发现，通过 HTTP API 提供 RESTful 接口，通过 WebSocket 实现实时状态推送。
+Work Station 项目是一个基于局域网的分布式任务执行平台，采用 Master/Worker 架构设计。该项目提供了完整的 Web API 接口，支持设备管理、文件传输、任务执行、工具调度、项目管理、Bot消息通道管理和技能管理等功能。系统通过 UDP 广播发现机制实现设备自动发现，通过 HTTP API 提供 RESTful 接口，通过 WebSocket 实现实时状态推送。
 
-**更新** 新增了完整的Bot管理API端点，提供Bot通道的配置、测试和管理功能，包括企业微信群机器人和Telegram Bot两种通道类型的支持，以及事件推送和命令处理机制。
+**更新** LAN Mesh API层进行了重要重构，提取了 `_merge_db_and_udp_hosts()` 公共函数用于合并数据库和UDP发现的主机列表，减少了代码重复并确保了所有API端点的一致性；同时增强了 `/api/station/fleet` 端点的舰队概览信息，提供更详细的主机统计和列表数据。
 
 ## 项目结构
 
@@ -84,6 +82,7 @@ StationAPI[Station API]
 SecretaryAPI[Secretary API]
 SkillAPI[技能管理 API]
 BotAPI[Bot 管理 API]
+RoleAPI[角色管理 API]
 end
 subgraph "前端集成"
 QuickLAN[QuickLAN 前端]
@@ -115,6 +114,7 @@ TauriApp --> LANAPI
 - [master.py:66-319](file://lan_mesh/master.py#L66-L319)
 - [worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
 - [api.py:37-570](file://lan_mesh/api.py#L37-L570)
+- [station_api.py:85-1031](file://lan_mesh/station_api.py#L85-L1031)
 - [station_director.py:28-224](file://lan_mesh/station_director.py#L28-L224)
 - [host_rating.py:13-115](file://lan_mesh/host_rating.py#L13-L115)
 - [station_api.py:42-127](file://lan_mesh/station_api.py#L42-L127)
@@ -125,8 +125,9 @@ TauriApp --> LANAPI
 **章节来源**
 - [master.py:1-332](file://lan_mesh/master.py#L1-L332)
 - [worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
-- [api.py:1-570](file://lan_mesh/api.py#L1-L570)
-- [station_director.py:1-224](file://lan_mesh/station_director.py#L1-L224)
+- [api.py:1-757](file://lan_mesh/api.py#L1-L757)
+- [station_api.py:1-1031](file://lan_mesh/station_api.py#L1-L1031)
+- [station_director.py:1-232](file://lan_mesh/station_director.py#L1-L232)
 - [host_rating.py:1-115](file://lan_mesh/host_rating.py#L1-L115)
 - [station_api.py:1-757](file://lan_mesh/station_api.py#L1-L757)
 - [station_controller.py:1-480](file://lan_mesh/station_controller.py#L1-L480)
@@ -151,8 +152,8 @@ Worker 守护进程部署在各个主机上，负责：
 - 文件共享服务
 - 任务执行
 - Agent 能力注册
-- **新增** Secretary 子进程管理（远程角色分配）
-- **新增** 技能包下载和缓存管理
+- Secretary 子进程管理（远程角色分配）
+- 技能包下载和缓存管理
 
 ### 发现服务
 基于 UDP 广播的设备发现机制，实现设备自动发现和状态同步。
@@ -173,32 +174,32 @@ Worker 守护进程部署在各个主机上，负责：
 - 策略适配（cost_first、quality_first、balanced）
 
 ### 工作站主管 (Station Director)
-**新增** 工作站主管负责：
+工作站主管负责：
 - 主机注册入站处理和评级计算
 - 心跳处理和实时指标更新
 - 离线检测和事件记录
 - 舰队管理（主机列表、统计、事件历史）
 - 资源池查询（按评级筛选在线主机）
 - 手动评级重算功能
-- **新增** 技能库管理（扫描、注册、权限分配）
-- **新增** Bot 通道管理（配置、测试、事件推送）
+- 技能库管理（扫描、注册、权限分配）
+- Bot 通道管理（配置、测试、事件推送）
 
 ### 角色管理器 (Role Manager)
-**新增** 角色管理器负责：
+角色管理器负责：
 - Secretary 子进程的启动和停止
 - 远程主机角色分配管理
 - 角色状态查询和监控
 - 动态角色切换支持
 
 ### 主机评级系统
-**新增** 主机评级系统负责：
+主机评级系统负责：
 - 基于硬件配置（CPU、内存、磁盘）自动计算综合得分
 - 映射到 S/A/B/C/D 五级评级
 - 生成人类可读的评级摘要
 - 支持手动重算和评级变更事件记录
 
 ### 技能注册表 (Skill Registry)
-**新增** 技能注册表负责：
+技能注册表负责：
 - 技能文件扫描和注册（skills/ 目录）
 - 技能元数据管理（名称、描述、分类、标签、默认访问权限）
 - 技能内容解析（SKILL.md front matter）
@@ -208,7 +209,7 @@ Worker 守护进程部署在各个主机上，负责：
 - 技能统计和查询
 
 ### Bot 网关 (Bot Gateway)
-**新增** Bot 网关负责：
+Bot 网关负责：
 - Bot 通道配置管理（企业微信群机器人、Telegram Bot）
 - 事件推送（任务状态、主机状态、技能分配、预算告警等）
 - 命令处理（Telegram Bot 命令交互）
@@ -304,6 +305,7 @@ MCPGateway --> TCP
 - [master.py:183-218](file://lan_mesh/master.py#L183-L218)
 - [worker.py:219-238](file://lan_mesh/worker.py#L219-L238)
 - [api.py:37-570](file://lan_mesh/api.py#L37-L570)
+- [station_api.py:85-1031](file://lan_mesh/station_api.py#L85-L1031)
 - [station_director.py:28-224](file://lan_mesh/station_director.py#L28-L224)
 - [host_rating.py:13-115](file://lan_mesh/host_rating.py#L13-L115)
 - [station_api.py:42-127](file://lan_mesh/station_api.py#L42-L127)
@@ -331,8 +333,9 @@ MCPGateway --> TCP
 
 **设备列表**
 - 方法：GET `/api/hosts`
-- 功能：获取所有注册设备
+- 功能：获取所有注册设备（DB + UDP 合并）
 - 响应：设备列表和统计信息
+- **更新** 使用统一的合并函数确保数据一致性
 
 **单设备查询**
 - 方法：GET `/api/hosts/{device_id}`
@@ -499,7 +502,7 @@ MCPGateway --> TCP
 
 ### Station API 接口
 
-**新增** 工作站 API 提供舰队管理能力和角色管理系统：
+**更新** 工作站 API 提供舰队管理能力和角色管理系统，经过重构后具有更好的性能和一致性：
 
 #### 角色管理接口
 
@@ -522,8 +525,9 @@ MCPGateway --> TCP
 
 **舰队概览**
 - 方法：GET `/api/station/fleet`
-- 功能：获取舰队概览统计信息
-- 响应：包含总主机数、在线/离线主机数、各评级分布的统计摘要
+- 功能：获取舰队概览统计信息（**增强**）
+- 响应：包含总主机数、在线/离线主机数、各评级分布的统计摘要，以及完整的主机列表
+- **更新** 现在返回包含所有主机的详细信息，便于前端直接展示
 
 **主机列表**
 - 方法：GET `/api/station/hosts`
@@ -678,10 +682,12 @@ MCPGateway --> TCP
 - 消息类型：skills_scanned（技能扫描完成）、skill_assigned（技能分配）、skill_revoked（技能撤销）
 
 **章节来源**
-- [station_api.py:625-684](file://lan_mesh/station_api.py#L625-L684)
+- [station_api.py:251-295](file://lan_mesh/station_api.py#L251-L295)
+- [station_api.py:311-345](file://lan_mesh/station_api.py#L311-L345)
+- [station_api.py:904-962](file://lan_mesh/station_api.py#L904-L962)
+- [station_api.py:968-1001](file://lan_mesh/station_api.py#L968-L1001)
 - [skill_registry.py:128-388](file://lan_mesh/skill_registry.py#L128-L388)
 - [database.py:717-835](file://lan_mesh/database.py#L717-L835)
-- [station_api.py:693-727](file://lan_mesh/station_api.py#L693-L727)
 - [bot_gateway.py:116-130](file://lan_mesh/bot_gateway.py#L116-L130)
 - [bot_gateway.py:325-336](file://lan_mesh/bot_gateway.py#L325-L336)
 
@@ -901,28 +907,28 @@ MCPGateway --> TCP
 - `archiveProject(projectId)`: 归档项目
 - `getProjectUsage(projectId, limit)`: 获取项目消费记录
 
-**舰队管理**（新增）
-- `getFleetStats()`: 获取舰队统计
+**舰队管理**（增强）
+- `getFleetStats()`: 获取舰队统计（**更新** 现在包含完整主机列表）
 - `getHosts(minTier, onlineOnly)`: 获取主机列表
 - `getHostEvents(deviceId, limit)`: 获取主机事件历史
 - `getStationEvents(limit)`: 获取全站事件流
 - `recomputeRatings()`: 重新计算评级
 
-**角色管理**（新增）
+**角色管理**
 - `activateSecretary()`: 激活 Secretary 模式
 - `deactivateSecretary()`: 停用 Secretary 模式
 - `assignSecretaryToHost(deviceId, port)`: 分配 Secretary 到主机
 - `revokeSecretaryFromHost(deviceId)`: 撤销主机的 Secretary 角色
 - `getSecretaryStatus()`: 查询 Secretary 分配状态
 
-**Bot 管理**（新增）
+**Bot 管理**
 - `listBotChannels()`: 获取 Bot 通道列表
 - `addBotChannel(channelData)`: 添加或更新 Bot 通道
 - `removeBotChannel(channelType)`: 删除 Bot 通道
 - `testBotChannel(channelType)`: 测试 Bot 通道
 - `refreshBotChannels()`: 刷新 Bot 通道列表
 
-**技能管理**（新增）
+**技能管理**
 - `listSkills(category)`: 获取技能列表
 - `getSkillStats()`: 获取技能统计
 - `scanSkills()`: 扫描技能
@@ -1217,6 +1223,7 @@ end
 subgraph "公共组件"
 Protocol[Protocol]
 Config[Config]
+MergeFunction[_merge_db_and_udp_hosts]
 end
 MasterAPI --> Database
 MasterAPI --> Discovery
@@ -1242,12 +1249,16 @@ MasterAPI --> Config
 WorkerAPI --> Config
 BotGateway --> Database
 BotGateway --> Config
+MergeFunction --> Database
+MergeFunction --> Discovery
+MergeFunction --> HostRating
 ```
 
 **图表来源**
 - [master.py:32-106](file://lan_mesh/master.py#L32-L106)
 - [worker.py:43-44](file://lan_mesh/worker.py#L43-L44)
 - [api.py:33-34](file://lan_mesh/api.py#L33-L34)
+- [station_api.py:31-70](file://lan_mesh/station_api.py#L31-L70)
 - [station_director.py:31-36](file://lan_mesh/station_director.py#L31-L36)
 - [host_rating.py:13-25](file://lan_mesh/host_rating.py#L13-L25)
 - [worker.py:225-285](file://lan_mesh/worker.py#L225-L285)
@@ -1314,17 +1325,17 @@ BotChannelDisabled --> Response
 | 文件上传大小限制 | 无限制 | 建议设置合理限制 |
 | 项目消费记录保留 | 100 条 | 可根据需求调整 |
 | 模型路由候选数量 | 10 个 | 根据性能调整 |
-| **新增** 事件历史保留 | 50 条 | 可根据需求调整 |
-| **新增** 舰队统计缓存 | 3 秒 | 减少数据库查询频率 |
-| **新增** 角色状态缓存 | 1 秒 | 减少远程查询频率 |
-| **新增** 远程主机分配缓存 | 5 秒 | 减少重复分配检查 |
-| **新增** 技能内容缓存 | 10 分钟 | 减少文件系统读取 |
-| **新增** 技能包构建缓存 | 5 分钟 | 减少重复构建 |
-| **新增** 技能权限检查缓存 | 30 秒 | 减少数据库查询 |
-| **新增** Bot 通道优先级缓存 | 1 秒 | 减少优先级计算频率 |
-| **新增** Bot 通道脱敏缓存 | 5 分钟 | 减少敏感信息处理开销 |
-| **新增** Bot 事件推送缓存 | 1 秒 | 减少重复推送 |
-| **新增** Bot 命令处理缓存 | 30 秒 | 减少命令解析频率 |
+| 事件历史保留 | 50 条 | 可根据需求调整 |
+| 舰队统计缓存 | 3 秒 | 减少数据库查询频率 |
+| 角色状态缓存 | 1 秒 | 减少远程查询频率 |
+| 远程主机分配缓存 | 5 秒 | 减少重复分配检查 |
+| 技能内容缓存 | 10 分钟 | 减少文件系统读取 |
+| 技能包构建缓存 | 5 分钟 | 减少重复构建 |
+| 技能权限检查缓存 | 30 秒 | 减少数据库查询 |
+| Bot 通道优先级缓存 | 1 秒 | 减少优先级计算频率 |
+| Bot 通道脱敏缓存 | 5 分钟 | 减少敏感信息处理开销 |
+| Bot 事件推送缓存 | 1 秒 | 减少重复推送 |
+| Bot 命令处理缓存 | 30 秒 | 减少命令解析频率 |
 
 ### 缓存策略
 
@@ -1344,6 +1355,7 @@ BotChannelDisabled --> Response
 - **Bot 事件模板缓存**：事件模板的内存缓存，减少字符串处理
 - **Bot 优先级比较缓存**：优先级比较结果的短期缓存
 - **Bot 命令处理缓存**：命令处理结果的短期缓存
+- **主机列表合并缓存**：DB和UDP主机列表合并结果的短期缓存
 
 ### 网络优化
 
@@ -1360,6 +1372,7 @@ BotChannelDisabled --> Response
 - **Bot 通道优先级过滤**：在推送前进行优先级过滤，减少无效推送
 - **Bot 命令长轮询**：Telegram Bot 使用长轮询，降低 API 调用频率
 - **Bot 通道脱敏显示**：敏感信息脱敏处理，保护隐私安全
+- **主机列表合并优化**：使用统一的合并函数减少重复计算
 
 ## 故障排除指南
 
@@ -1468,14 +1481,22 @@ BotChannelDisabled --> Response
 5. 验证 Telegram Bot 的消息解析
 6. 检查 Bot 命令的回复机制
 
+**主机列表合并异常**
+1. 检查 `_merge_db_and_udp_hosts()` 函数的实现
+2. 验证数据库连接和UDP发现服务的状态
+3. 查看主机评级计算的日志
+4. 确认合并逻辑的正确性
+5. 检查主机列表缓存的状态
+
 **章节来源**
 - [master.py:300-313](file://lan_mesh/master.py#L300-L313)
 - [worker.py:314-318](file://lan_mesh/worker.py#L314-L318)
 - [station_director.py:92-150](file://lan_mesh/station_director.py#L92-L150)
 - [station_api.py:411-418](file://lan_mesh/station_api.py#L411-L418)
 - [skill_registry.py:57-100](file://lan_mesh/skill_registry.py#L57-L100)
-- [database.py:717-835](file://lan_mesh/database.py#L717-L835)
+- [database.py:717-835](file://lan_mesh/database.py#L717-835)
 - [bot_gateway.py:1-354](file://lan_mesh/bot_gateway.py#L1-L354)
+- [station_api.py:31-70](file://lan_mesh/station_api.py#L31-L70)
 
 ## 结论
 
@@ -1504,6 +1525,7 @@ Work Station 项目提供了完整的 Web API 接口体系，支持高效的局�
 - **脱敏显示保护**：敏感信息脱敏处理，保护隐私安全
 - **异步消息发送**：避免阻塞调用方，提高系统响应性能
 - **命令处理机制**：支持 Telegram Bot 的命令交互和状态查询
+- **API层重构优化**：统一的 `_merge_db_and_udp_hosts()` 函数确保数据一致性和性能优化
 
 **建议在生产环境中**：
 1. 根据实际网络环境调整心跳间隔和 TTL 设置
@@ -1512,27 +1534,30 @@ Work Station 项目提供了完整的 Web API 接口体系，支持高效的局�
 4. 定期备份数据库和重要配置文件
 5. 配置项目管理器的预算阈值和路由策略
 6. 监控项目预算使用情况，及时预警
-7. **新增** 定期检查模型池配置和 API Key 有效性
-8. **新增** 监控模型路由性能和决策准确性
-9. **新增** 定期清理过期事件记录，维护数据库性能
-10. **新增** 监控主机评级准确性，必要时手动重算
-11. **新增** 配置合适的事件推送频率，避免过度推送
-12. **新增** 监控 WebSocket 连接状态，确保实时通信正常
-13. **新增** 定期检查角色管理功能的权限和安全配置
-14. **新增** 监控远程主机连接的稳定性和安全性
-15. **新增** 配置角色状态缓存，提高远程查询性能
-16. **新增** 监控技能管理功能的性能和缓存效果
-17. **新增** 定期验证技能文件的完整性和权限设置
-18. **新增** 监控技能权限分配的准确性和时效性
-19. **新增** 配置技能内容缓存的失效策略和清理机制
-20. **新增** 监控技能包构建和分发的性能和成功率
-21. **新增** 定期检查 Bot 通道配置的完整性和有效性
-22. **新增** 监控 Bot 事件推送的性能和成功率
-23. **新增** 配置 Bot 通道优先级缓存，提高推送效率
-24. **新增** 监控 Bot 命令处理的响应时间和成功率
-25. **新增** 定期验证 Bot 通道的脱敏显示功能
-26. **新增** 监控 Bot 事件的异步推送线程状态
-27. **新增** 配置 Bot 命令长轮询的超时和重试机制
-28. **新增** 监控 Bot 通道的内存缓存状态和性能指标
-29. **新增** 定期检查 Bot 事件模板的完整性和格式正确性
-30. **新增** 监控 Bot 命令处理回调函数的执行状态
+7. 定期检查模型池配置和 API Key 有效性
+8. 监控模型路由性能和决策准确性
+9. 定期清理过期事件记录，维护数据库性能
+10. 监控主机评级准确性，必要时手动重算
+11. 配置合适的事件推送频率，避免过度推送
+12. 监控 WebSocket 连接状态，确保实时通信正常
+13. 定期检查角色管理功能的权限和安全配置
+14. 监控远程主机连接的稳定性和安全性
+15. 配置角色状态缓存，提高远程查询性能
+16. 监控技能管理功能的性能和缓存效果
+17. 定期验证技能文件的完整性和权限设置
+18. 监控技能权限分配的准确性和时效性
+19. 配置技能内容缓存的失效策略和清理机制
+20. 监控技能包构建和分发的性能和成功率
+21. 定期检查 Bot 通道配置的完整性和有效性
+22. 监控 Bot 事件推送的性能和成功率
+23. 配置 Bot 通道优先级缓存，提高推送效率
+24. 监控 Bot 命令处理的响应时间和成功率
+25. 定期验证 Bot 通道的脱敏显示功能
+26. 监控 Bot 事件的异步推送线程状态
+27. 配置 Bot 命令长轮询的超时和重试机制
+28. 监控 Bot 通道的内存缓存状态和性能指标
+29. 定期检查 Bot 事件模板的完整性和格式正确性
+30. 监控 Bot 命令处理回调函数的执行状态
+31. **新增** 监控主机列表合并函数的性能和数据一致性
+32. **新增** 验证 `/api/station/fleet` 端点的响应时间和数据完整性
+33. **新增** 定期检查 `_merge_db_and_udp_hosts()` 函数的合并逻辑正确性

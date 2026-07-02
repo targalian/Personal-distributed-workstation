@@ -1,0 +1,15 @@
+schema_version: 1
+module_path: build_system
+title: 双栈构建与一键启动体系
+scope: []
+source_files:
+    - requirements.txt
+    - main.py
+    - scripts/start_workstation.bat
+    - scripts/start_workstation.ps1
+    - quicklan-main/package.json
+    - quicklan-main/src-tauri/Cargo.toml
+    - quicklan-main/src-tauri/tauri.conf.json
+    - quicklan-main/vite.config.ts
+depends_on: []
+related_to: []

@@ -1,37 +1,22 @@
-该仓库采用**语言原生异常模型**作为核心错误处理机制，未引入全局中间件或统一的错误码枚举体系。错误处理呈现出明显的**分层特征**：API 层使用 HTTP 状态码映射业务逻辑错误，Rust 层使用 `Result<T, String>` 进行显式错误传播，而底层业务逻辑则依赖 `try-except` 块进行容错和降级。
+该仓库采用**分层、多语言混合**的错误处理策略，核心原则是：**底层捕获并转换，上层统一响应或降级**。系统未定义全局统一的自定义异常类体系，而是依赖语言原生机制（Python `Exception`/`HTTPException`，Rust `Result<T, String>`）结合业务逻辑进行错误传播。
 
-### 1. Python (FastAPI) 层：HTTPException 与业务校验
-在 `lan_mesh/api.py` 中，错误主要通过抛出 `fastapi.HTTPException` 来处理。这是一种典型的 Web 框架模式，将内部状态直接映射为 HTTP 响应。
-- **状态码约定**：
-  - `404 Not Found`：用于资源不存在（如主机、Agent、任务、文件）。
-  - `403 Forbidden`：用于权限或路径安全校验失败（如共享文件访问越界）。
-  - `409 Conflict`：用于状态冲突（如重复启动子进程）。
-  - `503 Service Unavailable`：用于依赖组件未初始化（如 Agent 运行时、编排器、MCP 网关）。
-  - `402 Payment Required`：用于业务逻辑限制（如项目预算耗尽）。
-- **实现模式**：在每个 API 端点入口处进行前置条件检查（Guard Clauses），若不满足则立即抛出异常。例如：
-  ```python
-  if not agent_runtime:
-      raise HTTPException(status_code=503, detail="Agent 运行时未初始化")
-  ```
+### 1. Python 后端 (FastAPI)
+- **HTTP 异常标准化**：在 `lan_mesh/api.py` 和 `lan_mesh/station_api.py` 中，所有 API 端点均使用 FastAPI 的 `HTTPException` 向客户端返回结构化错误。常见状态码包括：
+  - `400`: 参数缺失或无效（如 `缺少 task_id`）。
+  - `404`: 资源不存在（如 `设备未注册`、`文件不存在`）。
+  - `409`: 状态冲突（如 `启动失败`、`角色已存在`）。
+  - `503`: 服务不可用（如 `Agent 运行时未初始化`、`Secretary 未激活`）。
+- **防御性编程**：在路由层大量使用前置检查（如 `_check_secretary()`），确保业务组件就绪后再执行逻辑，避免空指针或状态不一致错误。
+- **静默失败与容错**：在 WebSocket 广播 (`broadcast_ws`) 和非关键路径（如 UDP 发现补充）中，采用 `try...except Exception: pass` 或记录死连接后移除，防止单点故障影响整体服务可用性。
+- **LLM 调用降级**：在 `lan_mesh/agent_runtime.py` 中，实现了**模型降级链（Fallback Chain）**。当首选模型调用失败时，自动尝试备用模型，并将最终错误信息封装在返回结果中（`status: "failed"`），而非直接抛出异常中断任务流。
 
-### 2. Rust (Tauri) 层：Result<String> 与命令边界
-在 `quicklan-main/src-tauri/` 中，错误处理遵循 Rust 的 `Result` 模式，但在 Tauri 命令边界处进行了简化。
-- **错误类型**：绝大多数 `#[tauri::command]` 函数返回 `Result<T, String>`。错误信息以人类可读的中文或英文字符串形式传播。
-- **传播策略**：使用 `?` 操作符在内部模块（如 `storage`, `library`, `transfer`）间传播错误，最终在命令函数顶层通过 `map_err` 转换为友好的提示字符串。
-- **容错设计**：在非关键路径（如单例实例通知、托盘图标设置）使用 `unwrap_or` 或 `if let Err(_) = ...` 忽略错误，防止次要故障导致应用崩溃。
+### 2. Rust 前端/桌面端 (Tauri)
+- **Result 类型传播**：在 `quicklan-main/src-tauri/src/commands.rs` 中，所有 Tauri 命令均返回 `Result<T, String>`。错误通过 `?` 操作符或 `map_err` 转换为人类可读的字符串消息，直接反馈给前端 UI。
+- **内部 HTTP 服务器健壮性**：`control_api.rs` 实现了一个轻量级 TCP 服务器用于进程间通信。它通过 `eprintln!` 记录启动失败，并在连接处理中使用 `match` 匹配错误，返回标准 HTTP 错误码（400/404/503）的 JSON 响应，确保外部调用方能正确解析错误。
+- **Panic 策略**：仅在应用入口 (`lib.rs`) 的 `run()` 方法中使用 `expect`，确保启动失败时能明确报错并退出；其他异步任务中避免 panic，优先返回 `Err`。
 
-### 3. 业务逻辑层：静默失败与降级链
-在核心业务逻辑中，系统倾向于**捕获异常并返回结构化错误状态**，而非向上抛出。
-- **Agent 运行时 (`agent_runtime.py`)**：
-  - **执行容错**：`execute` 方法包裹在 `try-except Exception` 中，任何未预期的异常都会被捕获并转化为 `{"status": "failed", "error": str(e)}` 返回给调用方。
-  - **LLM 降级链**：在 `_call_llm_with_routing` 中实现了**自动重试与降级**。如果首选模型调用失败，系统会遍历 `fallback_models` 列表尝试其他模型，仅在所有尝试均失败后返回错误摘要。
-- **数据库层 (`database.py`)**：
-  - **Schema 演进容错**：在 `_init_db` 中，使用 `try-except sqlite3.OperationalError` 来处理 `ALTER TABLE` 操作，确保在列已存在时不会报错，实现了平滑的数据库迁移。
-- **编排器 (`orchestrator.py`)**：
-  - **异步任务隔离**：子任务的分发与执行在独立线程中进行，网络请求异常（`requests.RequestException`）被捕获并记录为子任务的 `failed` 状态，不会导致主调度循环崩溃。
-
-### 4. 开发者约束与建议
-- **禁止裸奔异常**：在 API 边界外，严禁让未处理的 `Exception` 穿透到框架层。应捕获并转化为业务定义的错误状态或日志。
-- **错误信息本地化**：Rust 层的错误字符串目前混合了中英文，建议统一为英文以便后续国际化，或在 UI 层进行映射。
-- **降级优先**：在涉及外部依赖（如 LLM API、网络探测）时，必须实现超时控制和降级策略（Fallback），避免单点故障阻塞整个工作流。
-- **日志记录**：目前在 `print` 中记录关键错误（如模型调用失败、主机离线）。在生产环境中，应替换为结构化日志系统（如 `logging` 模块或 `tracing`），以便追踪错误上下文。
+### 3. 开发规范与建议
+- **API 层**：必须使用 `HTTPException` 返回错误，禁止直接抛出未捕获的 Python 异常。
+- **业务逻辑层**：对于可恢复的错误（如网络波动、模型超时），应实现重试或降级逻辑，并返回包含错误详情的字典，而非中断流程。
+- **Rust 命令层**：避免使用 `unwrap()`，除非能绝对保证安全性；优先使用 `ok_or_else` 或 `map_err` 提供清晰的错误上下文。
+- **日志记录**：目前错误日志较为分散，建议在关键错误路径（如 LLM 调用失败、远程主机连接超时）增加结构化日志记录，以便排查分布式环境下的问题。

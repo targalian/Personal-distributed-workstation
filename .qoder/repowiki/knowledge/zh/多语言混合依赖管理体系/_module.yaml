@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: dependency_management
+title: 多语言混合依赖管理体系
+scope: []
+source_files:
+    - requirements.txt
+    - quicklan-main/package.json
+    - quicklan-main/package-lock.json
+    - quicklan-main/src-tauri/Cargo.toml
+    - quicklan-main/src-tauri/Cargo.lock
+depends_on: []
+related_to: []

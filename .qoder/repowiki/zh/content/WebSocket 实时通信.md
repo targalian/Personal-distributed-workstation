@@ -4,13 +4,22 @@
 **本文引用的文件**
 - [main.py](file://main.py)
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [secretary.py](file://lan_mesh/secretary.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
 - [protocol.rs](file://quicklan-main/src-tauri/src/protocol.rs)
 - [api.ts](file://quicklan-main/src/api.ts)
+- [station_api.py](file://lan_mesh/station_api.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 </cite>
+
+## 更新摘要
+**变更内容**
+- WebSocket推送循环从固定轮询优化为事件驱动方式，提升响应性能
+- 设备自动注册时实现即时UI更新，减少延迟
+- 保持3秒超时机制用于定期状态同步
+- 增强了Station Director的事件驱动广播能力
 
 ## 目录
 1. [简介](#简介)
@@ -41,25 +50,29 @@
 graph TB
 subgraph "后端"
 A["FastAPI 应用<br/>lan_mesh/api.py"]
-B["Master 控制器<br/>lan_mesh/master.py"]
-C["Worker 守护进程<br/>lan_mesh/worker.py"]
-D["协议与模型<br/>lan_mesh/protocol.py"]
+B["Secretary 控制器<br/>lan_mesh/secretary.py"]
+C["Station Director 控制器<br/>lan_mesh/station_controller.py"]
+D["Worker 守护进程<br/>lan_mesh/worker.py"]
+E["协议与模型<br/>lan_mesh/protocol.py"]
 end
 subgraph "前端"
-E["Web UI 仪表盘<br/>lan_mesh/web/templates/dashboard.html"]
-F["Rust/Tauri 客户端<br/>quicklan-main/src/api.ts"]
+F["Web UI 仪表盘<br/>lan_mesh/web/templates/dashboard.html"]
+G["Rust/Tauri 客户端<br/>quicklan-main/src/api.ts"]
 end
 A --> B
 A --> C
-B --> D
-C --> D
-E --> |"ws/wss"| A
-F --> |"HTTP API"| A
+A --> D
+B --> E
+C --> E
+D --> E
+F --> |"ws/wss"| A
+G --> |"HTTP API"| A
 ```
 
 图表来源
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [secretary.py](file://lan_mesh/secretary.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
@@ -68,22 +81,26 @@ F --> |"HTTP API"| A
 章节来源
 - [main.py](file://main.py)
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [secretary.py](file://lan_mesh/secretary.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
 - [api.ts](file://quicklan-main/src/api.ts)
+- [station_api.py](file://lan_mesh/station_api.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 
 ## 核心组件
 - WebSocket 路由与广播器：在 FastAPI 中定义 /ws 路由，接受连接并向所有客户端广播状态变更。
-- Master 状态与后台推送：MasterController 维护 ws_clients 集合并周期性推送主机列表。
+- Secretary 状态与后台推送：SecretaryController 维护 ws_clients 集合并通过事件驱动方式推送主机列表。
+- Station Director 事件驱动推送：StationController 使用 asyncio.Event 实现事件驱动的实时推送，支持设备自动注册即时响应。
 - Worker 心跳与注册：Worker 定期向 Master 发送心跳，触发广播。
 - 前端订阅：Web UI 通过浏览器 WebSocket 订阅 /ws，接收实时状态更新。
 - Rust/Tauri 客户端：通过 @tauri-apps/api 调用后端 HTTP API，结合 WebSocket 实现实时联动。
 
 章节来源
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [secretary.py](file://lan_mesh/secretary.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
 - [api.ts](file://quicklan-main/src/api.ts)
@@ -93,14 +110,15 @@ WebSocket 实时推送的整体流程如下：
 - 客户端建立 WebSocket 连接到 /ws
 - 服务器接受连接并将客户端加入 ws_clients
 - 服务器首次推送当前主机列表
-- 服务器周期性推送主机列表，或在特定事件（如心跳、注册）发生时广播
+- 服务器通过事件驱动或周期性推送主机列表，或在特定事件（如心跳、注册）发生时广播
 - 客户端收到消息后刷新 UI
 
 ```mermaid
 sequenceDiagram
 participant Client as "客户端"
 participant WS as "WebSocket 路由<br/>lan_mesh/api.py"
-participant State as "MasterState<br/>lan_mesh/master.py"
+participant State as "SecretaryState<br/>lan_mesh/secretary.py"
+participant StationState as "StationState<br/>lan_mesh/station_controller.py"
 participant DB as "数据库<br/>lan_mesh/api.py"
 participant Worker as "Worker 守护进程<br/>lan_mesh/worker.py"
 Client->>WS : "建立 ws/wss 连接 /ws"
@@ -112,11 +130,15 @@ WS->>State : "遍历 ws_clients"
 State-->>WS : "客户端集合"
 WS->>Client : "广播消息 {type,data}"
 Client->>Client : "UI 刷新"
+Note over StationState : 事件驱动推送优化
+StationState->>StationState : "_ws_push_event.wait()"
+StationState->>StationState : "3秒超时定期更新"
 ```
 
 图表来源
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [secretary.py](file://lan_mesh/secretary.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 
 ## 详细组件分析
@@ -139,19 +161,41 @@ Client->>Client : "UI 刷新"
 - hosts：推送当前所有主机状态列表
 - heartbeat：Worker 心跳触发的实时状态更新
 - host_registered：Worker 注册触发的新增主机通知
+- agent_registered：Agent 注册通知
+- task_submitted：任务提交通知
+- project_created/project_updated/project_archived：项目管理相关通知
+- pm_registered/pm_status_change：PM Agent 状态变更
+- progress_report：进度报告
+- chat_reply：秘书聊天回复
+- skill_assigned/skill_revoked/skills_scanned：技能库管理通知
+- secretary_activated/deactivated/assigned/revoked：Secretary 状态变更
 - ping：服务器侧保活探测
 
 章节来源
 - [api.py](file://lan_mesh/api.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 
-### Master 状态与后台推送
-- MasterState 维护 ws_clients 集合，作为广播目标。
-- MasterController._ws_push_loop 周期性拉取数据库中的主机列表并广播 hosts。
+### Secretary 状态与后台推送
+- SecretaryState 维护 ws_clients 集合，作为广播目标。
+- SecretaryController._ws_push_loop 周期性拉取数据库中的主机列表并广播 hosts。
 - broadcast_ws 在发送失败时收集异常客户端并清理集合，避免后续发送异常。
 
 章节来源
-- [master.py](file://lan_mesh/master.py)
+- [secretary.py](file://lan_mesh/secretary.py)
 - [api.py](file://lan_mesh/api.py)
+
+### Station Director 事件驱动推送
+**更新** Station Director 的 WebSocket 推送循环已优化为事件驱动方式，显著提升响应性能。
+
+- StationState 维护 ws_clients 集合和 _ws_push_event 事件对象。
+- StationController._ws_push_loop 使用 asyncio.Event 实现事件驱动推送，替代固定轮询。
+- 设备自动注册时立即触发推送：当 UDP 发现新设备时，通过线程安全的方式设置事件，实现即时 UI 更新。
+- 保持 3 秒超时机制：即使使用事件驱动，仍保留 3 秒超时用于定期状态同步。
+- _broadcast 函数在发送失败时清理异常客户端，确保广播效率。
+
+章节来源
+- [station_controller.py](file://lan_mesh/station_controller.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 
 ### Worker 注册与心跳
 - Worker 在发现 Master 后，向 Master 发送注册请求与 Agent Card 注册。
@@ -163,9 +207,10 @@ Client->>Client : "UI 刷新"
 - [api.py](file://lan_mesh/api.py)
 
 ### 前端订阅与 UI 刷新
-- Web UI 仪表盘通过浏览器 WebSocket 订阅 /ws，连接成功后显示“已连接”，断开则显示“断开，重试中…”。
+- Web UI 仪表盘通过浏览器 WebSocket 订阅 /ws，连接成功后显示"已连接"，断开则显示"断开，重试中…"。
 - 收到 hosts/heartbeat/host_registered 类型消息后，前端刷新主机列表与统计信息。
 - 前端还通过 HTTP API 获取主机列表，作为 WebSocket 的补充与降级。
+- 支持 PM Agent 架构的新消息类型：chat_reply、pm_registered、pm_status_change、team_update、progress_report。
 
 章节来源
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
@@ -181,56 +226,67 @@ Client->>Client : "UI 刷新"
 - [protocol.rs](file://quicklan-main/src-tauri/src/protocol.rs)
 
 ### 状态同步机制与消息队列管理
-- 状态来源：Worker 心跳与注册写入数据库；Master 周期性推送或事件触发广播。
+- 状态来源：Worker 心跳与注册写入数据库；Secretary 周期性推送或事件触发广播；Station Director 事件驱动推送。
 - 客户端状态：前端基于收到的消息更新本地状态并渲染 UI。
 - 队列管理：WebSocket 侧未实现显式消息队列；异常客户端会被自动剔除，保证广播效率。
+- 事件驱动优化：Station Director 使用 asyncio.Event 实现高效的事件驱动推送，减少不必要的轮询开销。
 
 章节来源
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [secretary.py](file://lan_mesh/secretary.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 
 ### 错误处理策略与重连机制
 - 连接断开：前端在 onclose 回调中延迟重连，3 秒一次。
 - 保活：服务器在客户端超时未响应时发送 ping；客户端收到 ping 后继续维持连接。
 - 异常清理：广播失败的客户端会被从集合中移除，避免阻塞后续广播。
+- 线程安全：Station Director 使用 call_soon_threadsafe 确保从非异步线程安全地触发事件。
 
 章节来源
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
 - [api.py](file://lan_mesh/api.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 
 ## 依赖关系分析
 WebSocket 实时通信涉及以下关键依赖：
 - FastAPI WebSocket 路由与生命周期管理
-- MasterState 与广播器
+- SecretaryState 与广播器
+- StationDirector 事件驱动推送系统
 - Worker 心跳与注册流程
 - 前端 WebSocket 订阅与 UI 刷新
 - Rust/Tauri 客户端通过 HTTP API 与 WebSocket 协同
 
 ```mermaid
 graph LR
-WS["WebSocket 路由<br/>lan_mesh/api.py"] --> State["MasterState<br/>lan_mesh/master.py"]
-State --> DB["数据库<br/>lan_mesh/api.py"]
+WS["WebSocket 路由<br/>lan_mesh/api.py"] --> SecState["SecretaryState<br/>lan_mesh/secretary.py"]
+WS --> StaState["StationState<br/>lan_mesh/station_controller.py"]
+SecState --> DB["数据库<br/>lan_mesh/api.py"]
+StaState --> DB
 Worker["Worker 守护进程<br/>lan_mesh/worker.py"] --> DB
 Worker --> WS
 UI["前端订阅<br/>lan_mesh/web/templates/dashboard.html"] --> WS
 Rust["Rust/Tauri 客户端<br/>quicklan-main/src/api.ts"] --> WS
+Event["事件驱动推送<br/>asyncio.Event"] --> StaState
 ```
 
 图表来源
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [secretary.py](file://lan_mesh/secretary.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
 - [api.ts](file://quicklan-main/src/api.ts)
 
 ## 性能考量
-- 广播频率：MasterController._ws_push_loop 每 3 秒推送一次 hosts，可根据 UI 需求调整。
+**更新** 事件驱动推送优化显著提升了系统性能。
+
+- 广播频率：SecretaryController._ws_push_loop 每 3 秒推送一次 hosts，StationController 使用事件驱动方式，仅在设备注册或超时后推送。
 - 客户端数量：广播器遍历 ws_clients，异常客户端会被清理；建议限制并发连接数并启用连接池。
 - 心跳保活：服务器在 30 秒超时后发送 ping，避免僵尸连接占用资源。
 - 前端渲染：前端在收到 hosts/heartbeat/host_registered 后刷新 UI，建议使用虚拟滚动与节流优化大列表渲染。
-
-[本节为通用性能建议，不直接分析具体文件]
+- 事件驱动优势：Station Director 的事件驱动推送减少了不必要的轮询开销，设备自动注册时可实现毫秒级响应。
+- 内存优化：异常客户端及时清理，避免内存泄漏。
 
 ## 故障排查指南
 - WebSocket 无法连接
@@ -241,21 +297,22 @@ Rust["Rust/Tauri 客户端<br/>quicklan-main/src/api.ts"] --> WS
   - 前端 onclose 回调中确认重连逻辑生效
 - 无实时更新
   - 确认 Worker 是否成功注册并发送心跳
-  - 检查 Master 是否正常广播
+  - 检查 Secretary 是否正常周期性广播
+  - 验证 Station Director 事件驱动推送是否正常工作
 - 性能问题
   - 减少广播频率或按需推送
   - 限制并发连接数并清理异常客户端
+  - 监控 asyncio.Event 的使用情况，确保事件正确触发
 
 章节来源
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [secretary.py](file://lan_mesh/secretary.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
 
 ## 结论
-本项目的 WebSocket 实时通信以简洁高效为核心：通过 FastAPI WebSocket 路由与 Master 的周期性/事件驱动广播，实现了对前端与 Rust/Tauri 客户端的低延迟状态同步。配合心跳保活与异常清理机制，整体具备良好的鲁棒性与可扩展性。建议在生产环境中进一步引入连接数限制、消息去重与更细粒度的事件类型，以提升性能与用户体验。
-
-[本节为总结性内容，不直接分析具体文件]
+本项目的 WebSocket 实时通信以简洁高效为核心：通过 FastAPI WebSocket 路由与 Secretary 的周期性/事件驱动广播，以及 Station Director 的事件驱动推送优化，实现了对前端与 Rust/Tauri 客户端的低延迟状态同步。配合心跳保活与异常清理机制，整体具备良好的鲁棒性与可扩展性。事件驱动方式的引入显著提升了系统响应性能，特别是在设备自动注册场景下实现了即时 UI 更新。建议在生产环境中进一步引入连接数限制、消息去重与更细粒度的事件类型，以提升性能与用户体验。
 
 ## 附录
 
@@ -268,6 +325,7 @@ Rust["Rust/Tauri 客户端<br/>quicklan-main/src/api.ts"] --> WS
 - 消息处理
   - 监听 onmessage，解析 type 与 data
   - hosts/heartbeat/host_registered 类型触发 UI 刷新
+  - 支持 PM Agent 架构的新消息类型：chat_reply、pm_registered、pm_status_change、team_update、progress_report
 - 示例路径
   - 连接与重连逻辑参考：[dashboard.html](file://lan_mesh/web/templates/dashboard.html)
 
@@ -299,9 +357,46 @@ Rust["Rust/Tauri 客户端<br/>quicklan-main/src/api.ts"] --> WS
 - host_registered
   - 用途：Worker 注册触发的新主机通知
   - 数据：新注册主机记录
+- agent_registered
+  - 用途：Agent 注册通知
+  - 数据：Agent 卡片信息
+- task_submitted/task_updated
+  - 用途：任务提交与状态更新通知
+  - 数据：任务详细信息
+- project_created/project_updated/project_archived
+  - 用途：项目管理相关通知
+  - 数据：项目信息或项目ID
+- pm_registered/pm_status_change
+  - 用途：PM Agent 状态变更通知
+  - 数据：PM Agent 信息或状态变更详情
+- progress_report
+  - 用途：进度报告通知
+  - 数据：进度报告信息
+- chat_reply
+  - 用途：秘书聊天回复
+  - 数据：聊天回复内容
+- skill_assigned/skill_revoked/skills_scanned
+  - 用途：技能库管理通知
+  - 数据：技能分配信息或扫描结果
+- secretary_activated/deactivated/assigned/revoked
+  - 用途：Secretary 状态变更通知
+  - 数据：Secretary 配置信息
 - ping
   - 用途：服务器侧保活探测
   - 数据：空对象
 
 章节来源
 - [api.py](file://lan_mesh/api.py)
+- [station_api.py](file://lan_mesh/station_api.py)
+
+### 事件驱动推送架构详解
+**更新** Station Director 的事件驱动推送架构提供了更高的性能和响应性。
+
+- asyncio.Event 机制：使用 asyncio.Event 对象实现高效的异步事件通知
+- 线程安全触发：通过 loop.call_soon_threadsafe 确保从非异步线程安全地触发事件
+- 双重保障：事件驱动 + 3秒超时，既保证即时响应又确保定期同步
+- 自动注册优化：UDP 发现新设备时立即触发推送，无需等待下一个轮询周期
+- 资源优化：减少不必要的数据库查询和网络传输
+
+章节来源
+- [station_controller.py](file://lan_mesh/station_controller.py)

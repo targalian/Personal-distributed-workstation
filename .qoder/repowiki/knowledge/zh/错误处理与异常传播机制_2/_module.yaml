@@ -5,9 +5,10 @@ scope: []
 source_files:
     - lan_mesh/api.py
     - lan_mesh/agent_runtime.py
+    - lan_mesh/orchestrator.py
+    - lan_mesh/database.py
     - quicklan-main/src-tauri/src/commands.rs
     - quicklan-main/src-tauri/src/transfer.rs
-    - quicklan-main/src-tauri/src/library.rs
-    - quicklan-main/src-tauri/src/storage.rs
+    - quicklan-main/src-tauri/src/lib.rs
 depends_on: []
 related_to: []

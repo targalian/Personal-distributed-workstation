@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: configuration_system
+title: LAN Mesh 配置系统架构与规范
+scope: []
+source_files:
+    - lan_mesh/config.py
+    - config.yaml
+    - lan_mesh/model_pool.yaml
+    - lan_mesh/preflight.py
+    - quicklan-main/src-tauri/tauri.conf.json
+    - quicklan-main/src-tauri/src/settings.rs
+depends_on: []
+related_to: []
