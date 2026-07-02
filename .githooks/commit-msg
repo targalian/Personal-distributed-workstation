@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# commit-msg hook — 校验 Commit Message 格式
+# 安装: 放置于 .git/hooks/commit-msg 并赋予执行权限
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+MSG_FILE="$1"
+MSG=$(head -1 "$MSG_FILE")
+
+VALID_TYPES='feat|fix|refactor|docs|chore|perf|test|ci|style'
+VALID_SCOPES='pm|runtime|router|api|ws|ui|config|discovery|db|auth|skill|station|deploy|scripts'
+
+# 允许 merge commit 和 revert commit 直接通过
+if echo "$MSG" | grep -qE "^(Merge|Revert) "; then
+    echo -e "${GREEN}[commit-msg] 合并/回退提交，跳过格式检查${NC}"
+    exit 0
+fi
+
+# 校验格式: <type>(<scope>): <subject>
+if echo "$MSG" | grep -qE "^($VALID_TYPES)\(($VALID_SCOPES)\): .+"; then
+    echo -e "${GREEN}[commit-msg] 格式正确: $MSG${NC}"
+    exit 0
+fi
+
+# 格式错误，给出提示
+echo -e "${RED}[commit-msg] 提交信息格式不规范${NC}"
+echo ""
+echo "  当前: $MSG"
+echo ""
+echo "  期望格式: <type>(<scope>): <subject>"
+echo ""
+echo "  type:   $VALID_TYPES"
+echo "  scope:  $VALID_SCOPES"
+echo ""
+echo "  示例: feat(pm): 实现子任务依赖感知拓扑分发"
+echo ""
+echo "  提示: 使用 git commit --amend 修改提交信息"
+echo "        使用 git commit --no-verify 跳过检查（不推荐）"
+
+exit 1

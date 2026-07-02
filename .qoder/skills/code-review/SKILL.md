@@ -184,6 +184,17 @@ print(f"使用 Key: {api_key[:8]}...")
 
 scope: `pm`, `runtime`, `router`, `api`, `ws`, `ui`, `config`, `discovery`, `db`
 
+## 自动化 Git Hooks
+
+项目 `.githooks/` 包含两个钩子，运行启动脚本时自动启用：
+
+- **commit-msg**: 校验 `<type>(<scope>): <subject>` 格式，不合规则拒绝提交
+- **pre-push**: 7 项自动检查（语法、硬编码密钥、函数长度、docstring、类型标注、日志格式、commit 格式）
+  - Blocker（语法/密钥）→ 阻止 push
+  - Warning（其余）→ 仅提示
+
+临时跳过: `git push --no-verify` / `git commit --no-verify`
+
 ## 审核分级
 
 | 级别 | 适用场景 | 最少审核人 |

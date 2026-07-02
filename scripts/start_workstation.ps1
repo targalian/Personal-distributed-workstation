@@ -114,8 +114,23 @@ if (-not $hasKey) {
     Write-Host "  设置方法: `$env:DEEPSEEK_API_KEY = 'sk-xxx'" -ForegroundColor DarkGray
 }
 
-# ── Step 5: 启动 ──
-Write-Step "5/5 启动 Station Director..."
+# ── Step 5: Git Hooks 配置 ──
+Write-Step "5/6 配置 Git Hooks..."
+$hooksDir = Join-Path $ProjectRoot ".githooks"
+if (Test-Path $hooksDir) {
+    $currentHooksPath = git config core.hooksPath 2>$null
+    if ($currentHooksPath -ne ".githooks") {
+        git config core.hooksPath .githooks 2>$null
+        Write-Ok "已配置 core.hooksPath -> .githooks (上库自动审核)"
+    } else {
+        Write-Skip "Git Hooks 已配置"
+    }
+} else {
+    Write-Skip ".githooks 目录不存在, 跳过"
+}
+
+# ── Step 6: 启动 ──
+Write-Step "6/6 启动 Station Director..."
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
 Write-Host " LAN Mesh Station Director" -ForegroundColor Green

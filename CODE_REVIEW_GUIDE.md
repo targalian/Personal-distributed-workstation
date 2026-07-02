@@ -400,3 +400,65 @@ feat(pm): 实现子任务依赖感知拓扑分发
 ### ✅ 亮点
 - 值得肯定的做法
 ```
+
+---
+
+## 十二、自动化审核（Git Hooks）
+
+项目提供 `.githooks/` 目录，包含两个自动化钩子：
+
+### 12.1 commit-msg — 提交信息格式校验
+
+**触发时机：** 每次 `git commit` 时
+
+**检查内容：**
+- 提交信息必须符合 `<type>(<scope>): <subject>` 格式
+- `type`: feat, fix, refactor, docs, chore, perf, test, ci, style
+- `scope`: pm, runtime, router, api, ws, ui, config, discovery, db, auth, skill, station
+- Merge/Revert 提交自动放行
+
+### 12.2 pre-push — 上库前代码审核
+
+**触发时机：** 每次 `git push` 时
+
+**检查内容（共 7 项）：**
+
+| # | 检查项 | 严重级别 | 说明 |
+|---|--------|----------|------|
+| 1 | Python 语法 | Blocker | `py_compile` 编译检查 |
+| 2 | 硬编码密钥 | Blocker | 检测 `api_key = "sk-xxx"` 等模式 |
+| 3 | 函数长度 | Warning | 超过 80 行的函数告警 |
+| 4 | 模块 docstring | Warning | 缺少模块级文档字符串 |
+| 5 | 类型标注 | Warning | 公共函数参数缺少类型注解 |
+| 6 | 日志格式 | Warning | `print()` 缺少 `[模块名]` 前缀 |
+| 7 | Commit 格式 | Warning | 提交信息格式不规范 |
+
+**Blocker 项阻止 push，Warning 项仅提示不阻止。**
+
+### 12.3 启用方式
+
+**自动启用：** 运行启动脚本时自动配置：
+```powershell
+.\scripts\start_workstation.ps1
+```
+
+**手动启用：**
+```powershell
+git config core.hooksPath .githooks
+```
+
+**临时跳过：**
+```powershell
+git push --no-verify   # 跳过 pre-push
+git commit --no-verify # 跳过 commit-msg
+```
+
+### 12.4 AI 深度审核
+
+Git Hooks 执行的是规则化静态检查。对于语义级深度审核，在 Qoder 中使用：
+
+```
+/code-review
+```
+
+AI 审核覆盖 PM Agent 六项生产级要求、架构分层合规性等 Hooks 无法自动检查的内容。
