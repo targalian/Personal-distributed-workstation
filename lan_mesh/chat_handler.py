@@ -8,7 +8,7 @@
 4. 解析回复中的操作意图并执行
 5. 返回回复 + 操作结果
 
-聊天历史存储在内存中 (列表), 重启丢失。后续可持久化到 DB。
+聊天历史持久化到 SQLite DB (chat_history 表), 重启不丢失。
 """
 import time
 from typing import Optional
@@ -41,17 +41,20 @@ class ChatHandler:
     通过 station_api 的 /api/secretary/chat 端点对外服务。
     """
 
-    def __init__(self, runtime, controller):
+    def __init__(self, runtime, controller, db=None):
         """初始化聊天处理器。
 
         Args:
             runtime: AgentRuntime 实例, 用于 LLM 调用
             controller: StationController 实例, 用于查询工作站状态和执行操作
+            db: Database 实例, 用于聊天历史持久化 (可选, 为 None 时退化为内存存储)
         """
         self.runtime = runtime
         self.controller = controller
-        self._history: list[dict] = []  # 内存中的聊天历史
+        self._db = db
         self._max_history = 50          # 保留最近 50 条对话
+        # 从 DB 加载历史, 若无可退化为空列表
+        self._history: list[dict] = self._load_history_from_db()
 
     # ── 公开接口 ──────────────────────────────────────────────────
 
@@ -90,7 +93,11 @@ class ChatHandler:
 
         resp = self.runtime._call_llm_with_routing(
             prompt,
-            {"_model_preference": model_pref, "_fallback_models": fallback_models},
+            {
+                "_model_preference": model_pref,
+                "_fallback_models": fallback_models,
+                "_system_prompt": system_prompt,  # 注入秘书专用 system prompt
+            },
         )
         reply_text = resp.get("content", "[LLM 调用失败]")
 
@@ -104,12 +111,15 @@ class ChatHandler:
                 reply_text += f"\n\n📋 **操作结果**: {action_result}"
                 action_taken = action
 
-        # 6. 保存到内部历史
+        # 6. 保存到内部历史 + 持久化到 DB
         now = time.time()
         self._history.append({"role": "user", "content": message, "timestamp": now})
-        self._history.append({"role": "assistant", "content": reply_text, "timestamp": now})
+        self._history.append({"role": "assistant", "content": reply_text, "timestamp": now, "action_taken": action_taken})
         if len(self._history) > self._max_history * 2:
             self._history = self._history[-(self._max_history * 2):]
+        # 持久化到 SQLite
+        self._save_to_db("user", message, timestamp=now)
+        self._save_to_db("assistant", reply_text, action_taken=action_taken, timestamp=now)
 
         return {
             "reply": reply_text,
@@ -122,8 +132,46 @@ class ChatHandler:
         return self._history[-limit:]
 
     def clear_history(self):
-        """清空聊天历史。"""
+        """清空聊天历史 (内存 + DB)。"""
         self._history.clear()
+        if self._db:
+            try:
+                self._db.clear_chat_history()
+            except Exception as e:
+                print(f"[ChatHandler] 清空 DB 聊天历史异常: {e}")
+
+    # ── 持久化辅助方法 ────────────────────────────────────────────
+
+    def _load_history_from_db(self) -> list[dict]:
+        """从 DB 加载聊天历史到内存。"""
+        if not self._db:
+            return []
+        try:
+            rows = self._db.get_chat_history(limit=self._max_history * 2)
+            history = []
+            for r in rows:
+                entry = {
+                    "role": r.get("role", "user"),
+                    "content": r.get("content", ""),
+                    "timestamp": r.get("timestamp", 0),
+                }
+                if r.get("action_taken"):
+                    entry["action_taken"] = r["action_taken"]
+                history.append(entry)
+            print(f"[ChatHandler] 从 DB 加载 {len(history)} 条历史对话")
+            return history
+        except Exception as e:
+            print(f"[ChatHandler] 加载 DB 聊天历史异常: {e}")
+            return []
+
+    def _save_to_db(self, role: str, content: str, action_taken: str = "", timestamp: float = 0):
+        """将单条聊天记录写入 DB。"""
+        if not self._db:
+            return
+        try:
+            self._db.save_chat_message(role, content, action_taken, timestamp)
+        except Exception as e:
+            print(f"[ChatHandler] 保存聊天记录异常: {e}")
 
     # ── 内部方法 ──────────────────────────────────────────────────
 
@@ -181,20 +229,37 @@ class ChatHandler:
         return "\n".join(lines)
 
     def _build_system_prompt(self, status_context: str) -> str:
-        """构建 LLM system prompt。"""
+        """构建 LLM system prompt。
+
+        包含秘书身份、能力边界、行为约束和实时工作站状态。
+        此 prompt 通过 input_data['_system_prompt'] 注入 LLM 调用。
+        """
         return (
-            "你是 LAN Mesh 工作站的秘书 AI 助手。你负责接收 Boss 的指令, "
-            "回答关于工作站状态的问题, 并协助管理任务和 Agent 团队。\n\n"
+            "# 身份\n"
+            "你是 LAN Mesh 分布式 AI 工作站的秘书 AI 助手。"
+            "你的职责是接收 Boss 的指令, 回答关于工作站状态的问题, 并协助管理任务和 Agent 团队。\n\n"
+            "# 能力范围\n"
             "你可以帮助 Boss:\n"
-            "- 查看工作站状态 (在线主机、任务、PM Agent、团队)\n"
-            "- 提交新任务 (会自动分配 PM Agent 接管)\n"
-            "- 激活/停用 Secretary 模式\n"
-            "- 查询任务进度\n\n"
-            "回复要求:\n"
-            "- 简洁明了, 使用中文\n"
-            "- 如果用户想提交任务, 告诉他们可以在 Web 端任务管理 Tab 提交, 或描述任务内容你会协助\n"
-            "- 如果用户想查看状态, 基于下方实时数据回答\n\n"
-            f"## 当前工作站实时状态\n{status_context}"
+            "1. 查看工作站状态 — 在线主机数量、主机评级、PM Agent 状态、任务进度\n"
+            "2. 提交新任务 — 任务会自动分配 PM Agent 接管, 在 Web 端「任务管理」Tab 操作\n"
+            "3. 激活/停用 Secretary 模式\n"
+            "4. 查询任务进度和 PM Agent 团队状态\n"
+            "5. 解释工作站的功能和架构 (Station Director/Worker/Secretary/PM Agent)\n\n"
+            "# 行为约束 (重要)\n"
+            "- 只回答与 LAN Mesh 工作站相关的问题。\n"
+            "- 不要编造不存在的功能、文件、数据库或代码。\n"
+            "- 如果用户询问工作站能力范围外的问题 (如股票交易、编程开发等), "
+            "礼貌地说明你的职责是管理分布式 AI 工作站, 无法处理该类问题。\n"
+            "- 回复必须简洁明了, 使用中文, 基于下方实时数据回答, 不要臆测。\n"
+            "- 如果不确定某个信息, 如实告知「该信息暂不可用」而非编造。\n\n"
+            "# 工作站架构概要\n"
+            "- Station Director: 基础设施管理入口, 提供 Web UI 和 UDP 发现\n"
+            "- Worker: 计算节点, 执行 PM Agent 分配的子任务\n"
+            "- Secretary: 项目管理层, 同进程激活后加载聊天/模型路由/MCP工具\n"
+            "- PM Agent: 项目经理, 在 Worker 上运行, 管理团队和子 Agent\n"
+            "- 技能库: skills/ 目录下的 SKILL.md 文件, 定义 Agent 能力\n"
+            "- 主机通讯: 支持 P2P 聊天和文件传输\n\n"
+            f"# 当前工作站实时状态\n{status_context}"
         )
 
     def _build_prompt(self, message: str, history: list) -> str:

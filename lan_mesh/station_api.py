@@ -762,6 +762,16 @@ def create_station_router(controller) -> APIRouter:
         history = chat_handler.get_history(limit)
         return {"history": history, "total": len(history)}
 
+    @router.delete("/api/secretary/chat/history")
+    async def secretary_chat_history_clear():
+        """清空秘书聊天历史 (内存 + DB 持久化记录)。"""
+        _check_secretary()
+        chat_handler = getattr(controller, 'chat_handler', None)
+        if not chat_handler:
+            return {"ok": True, "message": "聊天处理器未初始化"}
+        chat_handler.clear_history()
+        return {"ok": True, "message": "聊天历史已清空"}
+
     # ── 项目管理 ──
 
     @router.post("/api/projects")

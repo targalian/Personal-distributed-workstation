@@ -227,6 +227,7 @@ Worker 自动发现 Station Director 并注册。
 ### 秘书聊天
 - `POST /api/secretary/chat` — 发送消息（{message} → {reply, action_taken}）
 - `GET /api/secretary/chat/history` — 对话历史
+- `DELETE /api/secretary/chat/history` — 清空对话历史（内存 + DB）
 
 ### Worker PM 端点（PM Agent 调用）
 - `POST /role/start-pm` — 在 Worker 上启动 PM Agent

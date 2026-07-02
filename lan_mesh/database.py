@@ -241,6 +241,17 @@ class Database:
             );
 
             CREATE INDEX IF NOT EXISTS idx_progress_pm ON progress_reports(pm_id, timestamp);
+
+            CREATE TABLE IF NOT EXISTS chat_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                role        TEXT NOT NULL DEFAULT 'user',
+                content     TEXT NOT NULL DEFAULT '',
+                action_taken TEXT NOT NULL DEFAULT '',
+                timestamp   REAL NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_history_ts
+                ON chat_history(timestamp);
         """)
         conn.commit()
 
@@ -1093,6 +1104,33 @@ class Database:
             report.task_name, report.progress, report.status,
             report.message, report.timestamp,
         ))
+        conn.commit()
+
+    # ── Chat History CRUD ─────────────────────────────────────────
+
+    def save_chat_message(self, role: str, content: str, action_taken: str = "", timestamp: float = 0):
+        """保存一条聊天记录到持久化存储。"""
+        conn = self._get_conn()
+        ts = timestamp or time.time()
+        conn.execute(
+            "INSERT INTO chat_history (role, content, action_taken, timestamp) VALUES (?, ?, ?, ?)",
+            (role, content, action_taken, ts),
+        )
+        conn.commit()
+
+    def get_chat_history(self, limit: int = 100) -> list[dict]:
+        """查询最近的聊天记录。"""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT role, content, action_taken, timestamp FROM chat_history ORDER BY timestamp ASC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def clear_chat_history(self):
+        """清空全部聊天记录。"""
+        conn = self._get_conn()
+        conn.execute("DELETE FROM chat_history")
         conn.commit()
 
     def get_progress_reports(self, pm_id: str, limit: int = 50) -> list[dict]:

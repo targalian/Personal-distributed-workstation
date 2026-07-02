@@ -284,16 +284,21 @@ class AgentRuntime:
         """
         model_pref = input_data.get("_model_preference", "")
         fallbacks = input_data.get("_fallback_models", [])
+        # 优先使用外部注入的 system prompt (如 ChatHandler 注入的秘书 prompt)
+        external_system_prompt = input_data.get("_system_prompt", "")
 
         if model_pref:
             # 构建完整重试链: [preferred] + fallbacks
             chain = [model_pref] + [m for m in fallbacks if m != model_pref]
             last_error = None
             unresolved = []  # 无法解析 provider 的模型
-            # 从本地技能缓存构建 system prompt
-            system_prompt = self._build_system_prompt(
-                input_data.get("description", input_data.get("requirement", ""))
-            )
+            # 优先使用外部注入的 system prompt, 否则从技能缓存构建
+            if external_system_prompt:
+                system_prompt = external_system_prompt
+            else:
+                system_prompt = self._build_system_prompt(
+                    input_data.get("description", input_data.get("requirement", ""))
+                )
 
             for model_id in chain:
                 provider_cfg = self._resolve_provider(model_id)
@@ -330,9 +335,12 @@ class AgentRuntime:
             }
 
         # 无路由器信息, 回退旧逻辑
-        system_prompt = self._build_system_prompt(
-            input_data.get("description", input_data.get("requirement", ""))
-        )
+        if external_system_prompt:
+            system_prompt = external_system_prompt
+        else:
+            system_prompt = self._build_system_prompt(
+                input_data.get("description", input_data.get("requirement", ""))
+            )
         return self._call_llm_full(prompt, system_prompt=system_prompt)
 
     def _resolve_provider(self, model_id: str) -> Optional[dict]:

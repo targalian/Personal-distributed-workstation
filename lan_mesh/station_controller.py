@@ -187,6 +187,7 @@ class StationController:
         self.chat_handler = ChatHandler(
             runtime=self.chat_runtime,
             controller=self,
+            db=self.db,  # 持久化聊天历史到 SQLite
         )
 
         self.secretary_active = True

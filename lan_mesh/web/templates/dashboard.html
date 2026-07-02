@@ -199,6 +199,16 @@
   .toast.ok{background:var(--green)}
   .toast.err{background:var(--red)}
   .toast.info{background:var(--accent)}
+  /* ── 秘书思考动画 ── */
+  .typing-bubble{align-self:flex-start;background:var(--surface2);border:1px solid var(--border);border-radius:12px;border-bottom-left-radius:4px;padding:12px 16px;display:flex;align-items:center;gap:6px}
+  .typing-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);opacity:.4;animation:typingBounce 1.2s infinite ease-in-out}
+  .typing-dot:nth-child(1){animation-delay:0s}
+  .typing-dot:nth-child(2){animation-delay:.2s}
+  .typing-dot:nth-child(3){animation-delay:.4s}
+  @keyframes typingBounce{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-6px);opacity:1}}
+  .typing-label{font-size:12px;color:var(--dim);margin-left:4px}
+  .chat-input-bar input:disabled{opacity:.5;cursor:not-allowed}
+  .chat-input-bar button:disabled{opacity:.5;cursor:wait}
   /* ── P2P 主机通讯 ── */
   .chat-msg .file-info{display:flex;align-items:center;gap:8px;padding:4px 0}
   .chat-msg .file-info .file-icon{font-size:20px}
@@ -258,7 +268,7 @@
     </div>
     <div class="chat-input-bar">
       <input type="text" id="chat-input" placeholder="输入消息..." onkeydown="if(event.key==='Enter')sendChatMessage()">
-      <button class="btn primary" onclick="sendChatMessage()">📤 发送</button>
+      <button class="btn primary" id="chat-send-btn" onclick="sendChatMessage()">发送</button>
     </div>
   </div>
 </div>
@@ -825,17 +835,52 @@ async function createProject(){
 
 // ── 秘书聊天 ──
 let chatMessages=[];
+let _chatSending=false;
+function _showTyping(){
+  const container=document.getElementById('chat-messages');
+  const bubble=document.createElement('div');
+  bubble.id='typing-indicator';
+  bubble.className='typing-bubble';
+  bubble.innerHTML='<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-label">秘书思考中...</span>';
+  container.appendChild(bubble);
+  container.scrollTop=container.scrollHeight;
+}
+function _hideTyping(){
+  const el=document.getElementById('typing-indicator');
+  if(el)el.remove();
+}
+function _setChatLock(locked){
+  _chatSending=locked;
+  const input=document.getElementById('chat-input');
+  const btn=document.getElementById('chat-send-btn');
+  if(input)input.disabled=locked;
+  if(btn){btn.disabled=locked;btn.textContent=locked?'思考中...':'发送';}
+}
 async function sendChatMessage(){
+  if(_chatSending)return;
   const input=document.getElementById('chat-input');
   const text=input.value.trim();
   if(!text)return;
   input.value='';
   appendChatMessage('user',text,Date.now()/1000);
+  _setChatLock(true);
+  _showTyping();
+  const t0=Date.now();
   try{
     const r=await fetch('/api/secretary/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text})});
     const d=await r.json();
+    _hideTyping();
     appendChatMessage('assistant',d.reply,d.timestamp);
-  }catch(e){appendChatMessage('assistant','[通信失败] '+e.message,Date.now()/1000);}
+    const elapsed=((Date.now()-t0)/1000).toFixed(1);
+    showToast(`秘书已回复 (${elapsed}s)`, 'info', 2500);
+  }catch(e){
+    _hideTyping();
+    appendChatMessage('assistant','[通信失败] '+e.message,Date.now()/1000);
+    showToast('秘书通信失败', 'err');
+  }finally{
+    _setChatLock(false);
+    document.getElementById('chat-input').focus();
+  }
 }
 function appendChatMessage(role,content,timestamp){
   const container=document.getElementById('chat-messages');
@@ -865,8 +910,13 @@ async function loadChatHistory(){
 }
 function clearChat(){
   if(!confirm('确定要清空对话记录吗？'))return;
-  document.getElementById('chat-messages').innerHTML='<div class="empty"><div class="icon">💬</div><p>向秘书发送消息开始对话</p></div>';
-  chatMessages=[];
+  fetch('/api/secretary/chat/history',{method:'DELETE'})
+    .then(r=>r.json())
+    .then(()=>{
+      document.getElementById('chat-messages').innerHTML='<div class="empty"><div class="icon">💬</div><p>向秘书发送消息开始对话</p></div>';
+      chatMessages=[];
+    })
+    .catch(e=>{console.error('清空对话记录失败:',e);alert('清空失败:'+e.message);});
 }
 
 // ── PM Agent / 团队管理 ──
