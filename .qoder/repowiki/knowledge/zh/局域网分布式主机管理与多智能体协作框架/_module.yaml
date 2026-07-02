@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: ""
-title: LAN Mesh 跨主机网络层框架
+title: 局域网分布式主机管理与多智能体协作框架
 scope: []
 source_files: []
 depends_on: []

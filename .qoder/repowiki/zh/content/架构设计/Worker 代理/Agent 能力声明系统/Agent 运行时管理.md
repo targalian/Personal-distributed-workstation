@@ -5,11 +5,13 @@
 - [agent_runtime.py](file://lan_mesh/agent_runtime.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [orchestrator.py](file://lan_mesh/orchestrator.py)
+- [model_router.py](file://lan_mesh/model_router.py)
+- [config.py](file://lan_mesh/config.py)
+- [model_pool.example.yaml](file://lan_mesh/model_pool.example.yaml)
+- [protocol.py](file://lan_mesh/protocol.py)
 - [pm_agent.py](file://lan_mesh/pm_agent.py)
 - [api.py](file://lan_mesh/api.py)
 - [task.py](file://lan_mesh/task.py)
-- [protocol.py](file://lan_mesh/protocol.py)
-- [config.py](file://lan_mesh/config.py)
 - [database.py](file://lan_mesh/database.py)
 - [shared_folder.py](file://lan_mesh/shared_folder.py)
 - [discovery.py](file://lan_mesh/discovery.py)
@@ -22,12 +24,11 @@
 
 ## 更新摘要
 **变更内容**
-- 新增 PM Agent 支持章节，详细介绍项目经理 Agent 的架构和功能
-- 更新 Agent Runtime 章节，增加自定义系统提示和选择性技能加载功能
-- 新增子 Agent 管理章节，说明 Worker 内嵌子 Agent 的创建和管理机制
-- 更新技能缓存系统章节，介绍优化3的选择性技能加载机制
-- 新增动态 prompt 更新功能说明
-- 更新架构概览图，包含 PM Agent 的集成
+- 新增提供商配置扩展章节，详细介绍阿里云 Token Plan 和其他多提供商支持
+- 更新模型池集成章节，说明 ModelPoolConfig 和动态模型选择机制
+- 新增智能调用逻辑改进章节，介绍降级链重试和多目标优化路由算法
+- 更新 Provider 配置系统，支持 aliyun-tokenplan 等新提供商
+- 增强模型路由器功能，实现基于难度分级和策略适配的智能选择
 
 ## 目录
 1. [简介](#简介)
@@ -35,18 +36,23 @@
 3. [核心组件](#核心组件)
 4. [架构概览](#架构概览)
 5. [详细组件分析](#详细组件分析)
-6. [PM Agent 管理](#pm-agent-管理)
-7. [子 Agent 系统](#子-agent-系统)
-8. [依赖关系分析](#依赖关系分析)
-9. [性能考虑](#性能考虑)
-10. [故障排除指南](#故障排除指南)
-11. [结论](#结论)
+6. [提供商配置扩展](#提供商配置扩展)
+7. [模型池集成](#模型池集成)
+8. [智能调用逻辑改进](#智能调用逻辑改进)
+9. [PM Agent 管理](#pm-agent-管理)
+10. [子 Agent 系统](#子-agent-系统)
+11. [依赖关系分析](#依赖关系分析)
+12. [性能考虑](#性能考虑)
+13. [故障排除指南](#故障排除指南)
+14. [结论](#结论)
 
 ## 简介
 
 Agent 运行时管理系统是 LAN Mesh 分布式计算框架的核心组件，负责在 Worker 节点上执行来自 Master 节点的任务分配。该系统实现了任务执行队列管理、并发控制、状态跟踪和结果返回机制，为分布式 AI 任务提供了可靠的执行环境。
 
 系统采用 Master/Worker 架构，其中 Master 负责任务编排和资源管理，Worker 负责具体的任务执行。Agent Runtime 作为 Worker 的核心执行引擎，提供了多种技能处理器来处理不同类型的 AI 任务。最新版本引入了项目经理 Agent (PM Agent) 支持，实现了智能的任务分解、团队管理和进度协调功能。
+
+**重大更新**：系统现在支持多提供商模型池集成，包括阿里云 Token Plan、DeepSeek、OpenAI、Anthropic 和通义千问等，通过智能路由算法实现最优模型选择和自动降级链重试。
 
 ## 项目结构
 
@@ -58,6 +64,7 @@ subgraph "核心执行层"
 AR[Agent Runtime<br/>任务执行引擎]
 WR[Worker Agent<br/>工作节点]
 PM[PM Agent<br/>项目经理]
+MR[Model Router<br/>模型路由器]
 end
 subgraph "编排管理层"
 OR[Orchestrator<br/>任务编排器]
@@ -69,6 +76,7 @@ DS[Discovery<br/>设备发现]
 SF[Shared Folder<br/>共享存储]
 CFG[Config<br/>配置管理]
 SR[Skill Registry<br/>技能注册表]
+MP[Model Pool<br/>模型池]
 end
 subgraph "协议层"
 PT[Protocol<br/>通信协议]
@@ -92,18 +100,22 @@ WR --> SR
 MS --> SR
 WR --> PT
 MS --> PT
+OR --> MR
+MR --> MP
 ```
 
 **图表来源**
-- [agent_runtime.py:1-396](file://lan_mesh/agent_runtime.py#L1-L396)
+- [agent_runtime.py:1-456](file://lan_mesh/agent_runtime.py#L1-L456)
 - [worker.py:1-593](file://lan_mesh/worker.py#L1-L593)
 - [orchestrator.py:1-301](file://lan_mesh/orchestrator.py#L1-L301)
+- [model_router.py:1-327](file://lan_mesh/model_router.py#L1-L327)
 - [pm_agent.py:1-893](file://lan_mesh/pm_agent.py#L1-L893)
 
 **章节来源**
-- [agent_runtime.py:1-396](file://lan_mesh/agent_runtime.py#L1-L396)
+- [agent_runtime.py:1-456](file://lan_mesh/agent_runtime.py#L1-L456)
 - [worker.py:1-593](file://lan_mesh/worker.py#L1-L593)
 - [orchestrator.py:1-301](file://lan_mesh/orchestrator.py#L1-L301)
+- [model_router.py:1-327](file://lan_mesh/model_router.py#L1-L327)
 - [pm_agent.py:1-893](file://lan_mesh/pm_agent.py#L1-L893)
 
 ## 核心组件
@@ -119,6 +131,7 @@ Agent Runtime 是 Worker 节点的任务执行引擎，主要负责：
 5. **错误处理**：统一处理执行过程中的各种异常情况
 6. **自定义系统提示**：支持 PM 注入的定制 system prompt
 7. **选择性技能加载**：按当前技能类型优化加载技能缓存
+8. **智能模型路由**：支持多提供商模型选择和自动降级链重试
 
 ### 技能处理器体系
 
@@ -135,28 +148,33 @@ Agent Runtime 是 Worker 节点的任务执行引擎，主要负责：
 | monitoring | 系统监控 | `_handle_monitoring` |
 
 **章节来源**
-- [agent_runtime.py:28-396](file://lan_mesh/agent_runtime.py#L28-L396)
+- [agent_runtime.py:28-456](file://lan_mesh/agent_runtime.py#L28-L456)
 
 ## 架构概览
 
-Agent 运行时管理系统采用分层架构设计，确保了良好的可扩展性和维护性。最新版本增加了 PM Agent 的集成，实现了智能的任务管理和团队协作：
+Agent 运行时管理系统采用分层架构设计，确保了良好的可扩展性和维护性。最新版本增加了 PM Agent 的集成和智能模型路由功能，实现了智能的任务管理和团队协作：
 
 ```mermaid
 sequenceDiagram
 participant Master as Master Controller
 participant Orchestrator as Task Orchestrator
+participant ModelRouter as Model Router
 participant Worker as Worker Agent
 participant PM as PM Agent
 participant Runtime as Agent Runtime
 participant Handler as Skill Handler
+participant ModelPool as Model Pool
 Master->>Orchestrator : 提交任务
-Orchestrator->>Orchestrator : 任务分解与DAG构建
-Orchestrator->>Worker : 查找空闲Agent
-Orchestrator->>Worker : 分发子任务
+Orchestrator->>ModelRouter : 请求模型路由决策
+ModelRouter->>ModelPool : 查询可用模型
+ModelPool-->>ModelRouter : 返回模型配置
+ModelRouter-->>Orchestrator : 返回推荐模型和降级链
+Orchestrator->>Worker : 分发子任务(含模型偏好)
 Worker->>PM : 接收任务并分析
 PM->>PM : 创建子Agent团队
 PM->>Worker : 创建子Agent实例
 Worker->>Runtime : 接收子任务
+Runtime->>Runtime : 智能模型路由决策
 Runtime->>Handler : 路由到相应处理器
 Handler->>Handler : 执行具体任务
 Handler-->>Runtime : 返回执行结果
@@ -169,15 +187,16 @@ Orchestrator-->>Master : 更新任务状态
 
 **图表来源**
 - [orchestrator.py:132-226](file://lan_mesh/orchestrator.py#L132-L226)
+- [model_router.py:164-242](file://lan_mesh/model_router.py#L164-L242)
 - [worker.py:126-194](file://lan_mesh/worker.py#L126-L194)
-- [agent_runtime.py:47-74](file://lan_mesh/agent_runtime.py#L47-L74)
+- [agent_runtime.py:73-112](file://lan_mesh/agent_runtime.py#L73-L112)
 - [pm_agent.py:103-134](file://lan_mesh/pm_agent.py#L103-L134)
 
 ## 详细组件分析
 
 ### Agent Runtime 类设计
 
-Agent Runtime 采用了面向对象的设计模式，通过字典映射实现技能处理器的动态路由。最新版本增加了自定义系统提示和选择性技能加载功能：
+Agent Runtime 采用了面向对象的设计模式，通过字典映射实现技能处理器的动态路由。最新版本增加了自定义系统提示、选择性技能加载和智能模型路由功能：
 
 ```mermaid
 classDiagram
@@ -200,20 +219,31 @@ class AgentRuntime {
 +_handle_file_ops(input_data) dict
 +_handle_monitoring(input_data) dict
 +_call_llm_with_routing(prompt, input_data) dict
++_resolve_provider(model_id) dict
++_get_default_model(provider) string
 }
-class SkillHandler {
-<<interface>>
-+handle(input_data) dict
+class ModelRouter {
++route(text, skill, project_id, preferred_model) RoutingResult
++classify_difficulty(text, skill) string
++_compute_score(entry, difficulty, weights) float
++get_fallback_chain(model_id, allowed_models) list
 }
-AgentRuntime --> SkillHandler : "使用"
+class ModelPoolConfig {
++list models
++load_model_pool(config_path) ModelPoolConfig
+}
+AgentRuntime --> ModelRouter : "使用"
+ModelRouter --> ModelPoolConfig : "加载"
 ```
 
 **图表来源**
-- [agent_runtime.py:28-396](file://lan_mesh/agent_runtime.py#L28-L396)
+- [agent_runtime.py:50-456](file://lan_mesh/agent_runtime.py#L50-L456)
+- [model_router.py:116-327](file://lan_mesh/model_router.py#L116-L327)
+- [config.py:39-159](file://lan_mesh/config.py#L39-L159)
 
 #### 执行流程分析
 
-Agent Runtime 的执行流程遵循标准的请求-处理-响应模式，增加了自定义系统提示的支持：
+Agent Runtime 的执行流程遵循标准的请求-处理-响应模式，增加了智能模型路由和自定义系统提示的支持：
 
 ```mermaid
 flowchart TD
@@ -221,7 +251,8 @@ Start([接收子任务]) --> Parse["解析任务参数<br/>提取required_skill"
 Parse --> Validate{"技能类型有效?"}
 Validate --> |否| ReturnError["返回错误结果"]
 Validate --> |是| SetSkill["设置当前技能类型<br/>用于选择性加载"]
-SetSkill --> BuildPrompt["构建system prompt<br/>优先使用PM定制prompt"]
+SetSkill --> ExtractModels["提取模型偏好<br/>和降级链"]
+ExtractModels --> BuildPrompt["构建system prompt<br/>优先使用PM定制prompt"]
 BuildPrompt --> Route["路由到对应处理器"]
 Route --> Execute["执行具体任务"]
 Execute --> Success{"执行成功?"}
@@ -234,10 +265,10 @@ ReturnFailed --> End
 ```
 
 **图表来源**
-- [agent_runtime.py:62-101](file://lan_mesh/agent_runtime.py#L62-L101)
+- [agent_runtime.py:73-112](file://lan_mesh/agent_runtime.py#L73-L112)
 
 **章节来源**
-- [agent_runtime.py:28-396](file://lan_mesh/agent_runtime.py#L28-L396)
+- [agent_runtime.py:50-456](file://lan_mesh/agent_runtime.py#L50-L456)
 
 ### Worker Agent 生命周期管理
 
@@ -287,7 +318,7 @@ Heartbeat->>Heartbeat : 等待下次心跳周期
 
 ### 任务编排与调度
 
-任务编排器负责将用户任务分解为可执行的子任务，并进行智能调度。最新版本集成了 PM Agent 的任务分析和团队管理功能：
+任务编排器负责将用户任务分解为可执行的子任务，并进行智能调度。最新版本集成了 PM Agent 的任务分析和团队管理功能，以及智能模型路由：
 
 ```mermaid
 flowchart TD
@@ -301,9 +332,10 @@ CheckCycle --> |无循环| Schedule[开始调度]
 Schedule --> FindReady[查找就绪子任务]
 FindReady --> HasReady{有就绪任务?}
 HasReady --> |否| CompleteCheck{全部完成?}
-HasReady --> |是| Dispatch[分发到Agent]
+HasReady --> |是| RouteModel[模型路由决策]
 CompleteCheck --> |是| Complete[标记任务完成]
 CompleteCheck --> |否| Wait[等待执行]
+RouteModel --> Dispatch[分发到Agent]
 Dispatch --> Execute[执行任务]
 Execute --> Collect[收集结果]
 Collect --> UpdateDAG[更新DAG状态]
@@ -312,6 +344,7 @@ UpdateDAG --> Schedule
 
 **图表来源**
 - [orchestrator.py:110-156](file://lan_mesh/orchestrator.py#L110-L156)
+- [orchestrator.py:173-189](file://lan_mesh/orchestrator.py#L173-L189)
 
 #### 任务状态管理
 
@@ -438,6 +471,208 @@ PM_AGENTS ||--o{ SUB_AGENTS : "管理"
 **章节来源**
 - [database.py:16-611](file://lan_mesh/database.py#L16-L611)
 
+## 提供商配置扩展
+
+系统现在支持多提供商模型配置，包括阿里云 Token Plan、DeepSeek、OpenAI、Anthropic 和通义千问等。每个提供商都有独立的 API Key 管理和基础 URL 配置。
+
+### 提供商配置架构
+
+```mermaid
+classDiagram
+class ProviderConfig {
++string provider
++string base_url
++string api_key_env
++dict config
+}
+class ModelEntryConfig {
++string id
++string provider
++string api_key_env
++string base_url
++float cost_input_per_1k
++float cost_output_per_1k
++list capabilities
++float quality_score
++float speed_score
++int rate_limit_rpm
++int max_context_tokens
++list fallback
+}
+class ModelPoolConfig {
++list models
++load_model_pool(config_path) ModelPoolConfig
+}
+ProviderConfig <|-- ModelEntryConfig
+ModelPoolConfig --> ModelEntryConfig : "包含多个"
+```
+
+**图表来源**
+- [agent_runtime.py:31-37](file://lan_mesh/agent_runtime.py#L31-L37)
+- [config.py:39-58](file://lan_mesh/config.py#L39-L58)
+
+### 支持的提供商列表
+
+| 提供商 | 基础URL | API Key环境变量 | 默认模型 |
+|--------|---------|----------------|----------|
+| deepseek | https://api.deepseek.com/v1 | DEEPSEEK_API_KEY | deepseek-chat |
+| openai | https://api.openai.com/v1 | OPENAI_API_KEY | gpt-4o-mini |
+| anthropic | https://api.anthropic.com/v1 | ANTHROPIC_API_KEY | claude-3-haiku |
+| qwen | https://dashscope.aliyuncs.com/compatible-mode/v1 | QWEN_API_KEY | qwen-turbo |
+| aliyun-tokenplan | https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1 | ALIYUN_TOKENPLAN_API_KEY | 从模型池动态选择 |
+
+### 阿里云 Token Plan 支持
+
+阿里云 Token Plan 是一个订阅制服务，支持多品牌模型的统一 Credits 计量。该服务提供以下优势：
+
+- **统一计费**：所有模型使用统一的 Credits 计量方式
+- **多品牌支持**：支持千问、DeepSeek、Kimi、GLM、MiniMax 等多个品牌模型
+- **高容量**：最大上下文窗口支持 131072 tokens
+- **成本优化**：订阅制模式下按 Credits 消费，无需关注单个模型价格
+
+**章节来源**
+- [agent_runtime.py:31-37](file://lan_mesh/agent_runtime.py#L31-L37)
+- [config.py:39-58](file://lan_mesh/config.py#L39-L58)
+- [model_pool.example.yaml:140-331](file://lan_mesh/model_pool.example.yaml#L140-L331)
+
+## 模型池集成
+
+模型池系统是系统的核心组件之一，负责管理所有可用的 LLM 模型配置，并提供智能的模型选择和路由功能。
+
+### 模型池配置结构
+
+模型池配置文件 `model_pool.yaml` 定义了所有可用的模型及其属性：
+
+```yaml
+models:
+  - id: deepseek-chat
+    provider: deepseek
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com/v1
+    cost_input_per_1k: 0.0014
+    cost_output_per_1k: 0.0028
+    capabilities: [reasoning, coding]
+    quality_score: 0.85
+    speed_score: 0.80
+    rate_limit_rpm: 200
+    max_context_tokens: 65536
+    fallback: [gpt-4o-mini, qwen-turbo]
+```
+
+### 模型属性详解
+
+| 属性 | 类型 | 描述 |
+|------|------|------|
+| id | string | 模型唯一标识符 |
+| provider | string | 提供商名称 |
+| api_key_env | string | API Key 环境变量名 |
+| base_url | string | API 基础 URL |
+| cost_input_per_1k | float | 输入成本（美元/1K tokens） |
+| cost_output_per_1k | float | 输出成本（美元/1K tokens） |
+| capabilities | list | 能力标签列表 |
+| quality_score | float | 质量评分（0-1） |
+| speed_score | float | 速度评分（0-1） |
+| rate_limit_rpm | int | 每分钟请求数限制 |
+| max_context_tokens | int | 最大上下文长度 |
+| fallback | list | 降级链模型列表 |
+
+### 模型池加载机制
+
+系统支持多种模型池配置文件的查找顺序：
+
+1. 显式指定的配置文件路径
+2. 环境变量 `LAN_MESH_MODEL_POOL` 指定的路径
+3. `lan_mesh/` 包目录下的 `model_pool.yaml`
+4. 当前目录下的 `model_pool.yaml`
+5. 返回空配置（无模型）
+
+**章节来源**
+- [config.py:130-159](file://lan_mesh/config.py#L130-L159)
+- [model_pool.example.yaml:1-331](file://lan_mesh/model_pool.example.yaml#L1-331)
+
+## 智能调用逻辑改进
+
+系统实现了智能的模型调用逻辑，包括难度分级、多目标优化路由算法和自动降级链重试机制。
+
+### 难度分级系统
+
+系统根据任务描述和技能类型自动判断任务难度等级：
+
+```mermaid
+flowchart TD
+Input[任务输入] --> SkillCheck{技能类型检查}
+SkillCheck --> |code_generation/code_review| L3Base[L3基础级别]
+SkillCheck --> |document_summary| L2Base[L2基础级别]
+SkillCheck --> |其他| L2Default[L2默认级别]
+L3Base --> KeywordAnalysis[关键词分析]
+L2Base --> KeywordAnalysis
+L2Default --> KeywordAnalysis
+KeywordAnalysis --> L4Check{L4关键词匹配}
+L4Check --> |匹配| L4[复杂任务]
+L4Check --> |不匹配| L3Check{L3关键词匹配}
+L3Check --> |匹配| L3[中等复杂度]
+L3Check --> |不匹配| L1Check{L1关键词匹配}
+L1Check --> |匹配且短文本| L1[简单任务]
+L1Check --> |其他| BaseLevel[基础级别]
+```
+
+**图表来源**
+- [model_router.py:60-104](file://lan_mesh/model_router.py#L60-L104)
+
+### 多目标优化路由算法
+
+模型路由器使用加权评分算法为每个任务选择最优模型：
+
+```
+Score = (能力匹配度 × W_cap) + (成本反向指数 × W_cost) + (响应速度 × W_speed) - (负载率 × W_load)
+```
+
+#### 评分权重配置
+
+| 策略 | 能力匹配度 | 成本反向指数 | 响应速度 | 负载率 |
+|------|------------|--------------|----------|--------|
+| balanced | 0.4 | 0.3 | 0.2 | 0.1 |
+| cost_first | 0.2 | 0.5 | 0.2 | 0.1 |
+| quality_first | 0.6 | 0.1 | 0.2 | 0.1 |
+
+### 降级链重试机制
+
+当首选模型调用失败时，系统会自动沿降级链重试：
+
+```mermaid
+sequenceDiagram
+participant Client as 客户端
+participant Router as 模型路由器
+participant Runtime as Agent Runtime
+participant Model1 as 首选模型
+participant Model2 as 降级模型1
+participant Model3 as 降级模型2
+Client->>Router : 请求模型路由
+Router->>Client : 返回首选模型和降级链
+Client->>Runtime : 执行任务
+Runtime->>Model1 : 调用首选模型
+Model1-->>Runtime : 调用失败
+Runtime->>Model2 : 尝试降级模型1
+Model2-->>Runtime : 调用失败
+Runtime->>Model3 : 尝试降级模型2
+Model3-->>Runtime : 调用成功
+Runtime-->>Client : 返回结果
+```
+
+**图表来源**
+- [agent_runtime.py:278-330](file://lan_mesh/agent_runtime.py#L278-L330)
+
+### 提供商解析机制
+
+系统实现了智能的提供商解析逻辑，支持精确匹配和前缀匹配两种模式：
+
+1. **精确匹配**：从模型池中查找完全匹配的模型 ID
+2. **前缀匹配**：兼容旧逻辑，根据模型 ID 前缀推断提供商
+
+**章节来源**
+- [model_router.py:116-327](file://lan_mesh/model_router.py#L116-L327)
+- [agent_runtime.py:338-366](file://lan_mesh/agent_runtime.py#L338-L366)
+
 ## PM Agent 管理
 
 PM Agent (项目经理 Agent) 是 LAN Mesh 中的智能管理型 Agent，负责任务分析、团队架构决策和进度协调。它作为 Worker 进程内的嵌入模块运行，具有以下核心功能：
@@ -515,7 +750,7 @@ ReportComplete --> End([结束])
 
 **图表来源**
 - [pm_agent.py:103-134](file://lan_mesh/pm_agent.py#L103-L134)
-- [pm_agent.py:224-246](file://lan_mesh/pm_agent.py#L224-L246)
+- [pm_agent.py:224-246](file://lan_mesh/pm_agent.py#L224-246)
 
 ### 子 Agent 管理机制
 
@@ -586,7 +821,7 @@ ReturnResponse --> Ready[子Agent就绪]
 
 ## 依赖关系分析
 
-系统采用松耦合的设计，通过清晰的接口定义实现模块间的交互。最新版本增加了 PM Agent 和子 Agent 系统的依赖关系：
+系统采用松耦合的设计，通过清晰的接口定义实现模块间的交互。最新版本增加了 PM Agent、子 Agent 系统和智能模型路由的依赖关系：
 
 ```mermaid
 graph TB
@@ -597,12 +832,14 @@ Uvicorn[uvicorn<br/>ASGI服务器]
 FastAPI[fastapi<br/>Web框架]
 Sqlite3[sqlite3<br/>数据库接口]
 YAML[yaml<br/>配置解析]
+Pydantic[pydantic<br/>数据验证]
 end
 subgraph "内部模块"
 AgentRuntime[AgentRuntime]
 WorkerAgent[WorkerAgent]
 Orchestrator[Orchestrator]
 ProjectManagerAgent[ProjectManagerAgent]
+ModelRouter[ModelRouter]
 Database[Database]
 Discovery[DiscoveryService]
 SharedFolder[SharedFolderManager]
@@ -620,6 +857,9 @@ ProjectManagerAgent --> AgentRuntime
 ProjectManagerAgent --> AgentPrompt
 Orchestrator --> Database
 Orchestrator --> Requests
+Orchestrator --> ModelRouter
+ModelRouter --> Config
+ModelRouter --> Pydantic
 Database --> Sqlite3
 WorkerAgent --> Discovery
 WorkerAgent --> SharedFolder
@@ -629,14 +869,16 @@ SkillRegistry --> YAML
 ```
 
 **图表来源**
-- [agent_runtime.py:20-25](file://lan_mesh/agent_runtime.py#L20-L25)
+- [agent_runtime.py:20-27](file://lan_mesh/agent_runtime.py#L20-L27)
 - [worker.py:24-44](file://lan_mesh/worker.py#L24-L44)
 - [pm_agent.py:25-27](file://lan_mesh/pm_agent.py#L25-L27)
-- [skill_registry.py:32-37](file://lan_mesh/skill_registry.py#L32-L37)
+- [model_router.py:17-20](file://lan_mesh/model_router.py#L17-20)
+- [config.py:6-11](file://lan_mesh/config.py#L6-11)
+- [skill_registry.py:32-37](file://lan_mesh/skill_registry.py#L32-37)
 
 ### 错误处理与异常管理
 
-系统实现了多层次的错误处理机制，包括 PM Agent 的失败接管策略：
+系统实现了多层次的错误处理机制，包括 PM Agent 的失败接管策略和智能模型降级：
 
 ```mermaid
 flowchart TD
@@ -665,7 +907,7 @@ Success --> ReturnSuccess[返回结果]
 - [pm_agent.py:737-778](file://lan_mesh/pm_agent.py#L737-L778)
 
 **章节来源**
-- [agent_runtime.py:1-396](file://lan_mesh/agent_runtime.py#L1-L396)
+- [agent_runtime.py:1-456](file://lan_mesh/agent_runtime.py#L1-L456)
 - [pm_agent.py:1-893](file://lan_mesh/pm_agent.py#L1-L893)
 
 ## 性能考虑
@@ -679,14 +921,15 @@ Success --> ReturnSuccess[返回结果]
 3. **心跳监控**：定期检查 Agent 的资源使用情况，避免过载
 4. **超时控制**：为长时间运行的任务设置超时机制
 5. **选择性技能加载**：优化技能缓存的加载策略，减少不必要的 I/O 操作
+6. **模型池缓存**：惰性加载模型池配置，避免重复 I/O 操作
 
 ### 性能优化建议
 
 1. **LLM API 优化**
-   - 优先使用 DeepSeek API（成本较低）
+   - 利用智能模型路由选择最优模型
    - 合理设置请求超时时间（默认 120 秒）
-   - 实现重试机制处理临时性网络错误
-   - 利用模型路由器进行智能模型选择
+   - 实现降级链重试机制处理临时性网络错误
+   - 优先使用阿里云 Token Plan 进行成本控制
 
 2. **文件操作优化**
    - 使用流式处理大文件
@@ -708,9 +951,15 @@ Success --> ReturnSuccess[返回结果]
    - 实现失败接管策略提高任务成功率
    - 优化子 Agent 的动态 prompt 更新机制
 
+6. **模型路由优化**
+   - 预计算成本归一化基准提升路由性能
+   - 实现候选模型过滤减少计算开销
+   - 支持策略自适应调整路由权重
+
 **章节来源**
 - [agent_runtime.py:217-265](file://lan_mesh/agent_runtime.py#L217-L265)
 - [pm_agent.py:570-592](file://lan_mesh/pm_agent.py#L570-L592)
+- [model_router.py:135-141](file://lan_mesh/model_router.py#L135-L141)
 
 ## 故障排除指南
 
@@ -727,17 +976,30 @@ Success --> ReturnSuccess[返回结果]
    - 查看系统资源使用情况
    - 检查 PM Agent 的团队架构决策
 
-3. **PM Agent 相关问题**
+3. **模型路由问题**
+   - 检查模型池配置文件格式
+   - 验证各提供商 API Key 环境变量
+   - 查看降级链配置是否合理
+   - 检查模型能力标签是否匹配任务需求
+
+4. **阿里云 Token Plan 问题**
+   - 确认使用正确的 Token Plan API Key
+   - 验证 base_url 配置正确性
+   - 检查订阅状态和 Credits 余额
+   - 确认模型 ID 在 Token Plan 支持列表中
+
+5. **PM Agent 相关问题**
    - 验证 multi-agent-architect 技能是否正确加载
    - 检查子 Agent 的 system prompt 是否正确注入
    - 确认子 Agent 的任务分发是否正常
    - 查看失败接管策略的执行情况
 
-4. **性能问题**
+6. **性能问题**
    - 监控 CPU 和内存使用率
    - 检查磁盘 I/O 性能
    - 分析网络延迟情况
    - 评估 PM Agent 的负载情况
+   - 检查模型路由决策效率
 
 ### 日志分析
 
@@ -747,34 +1009,43 @@ Success --> ReturnSuccess[返回结果]
 - **心跳日志**：记录与 Master 的通信状态
 - **任务日志**：跟踪任务执行过程和结果
 - **PM Agent 日志**：记录团队架构决策和子任务管理
+- **模型路由日志**：记录模型选择决策和降级链触发
 - **错误日志**：记录异常情况和错误堆栈
 
 **章节来源**
 - [worker.py:126-171](file://lan_mesh/worker.py#L126-L171)
 - [pm_agent.py:127-130](file://lan_mesh/pm_agent.py#L127-L130)
+- [model_router.py:186-189](file://lan_mesh/model_router.py#L186-L189)
 
 ## 结论
 
 Agent 运行时管理系统为分布式 AI 任务提供了可靠、高效的执行环境。通过模块化的设计和完善的错误处理机制，系统能够稳定地处理各种复杂的任务场景。
 
-最新版本的重大更新包括：
+**重大更新亮点**：
 
-1. **PM Agent 支持**：实现了智能的任务分析、团队架构决策和进度协调功能
-2. **自定义系统提示**：支持 PM 注入的定制 prompt，提高了任务执行的针对性
-3. **选择性技能加载**：优化了技能缓存的加载策略，提升了系统性能
-4. **子 Agent 管理**：实现了 Worker 内嵌的 Agent 管理机制
-5. **动态 prompt 更新**：支持运行时动态更新子 Agent 的 system prompt
+1. **多提供商模型池集成**：支持阿里云 Token Plan、DeepSeek、OpenAI、Anthropic 和通义千问等多个提供商
+2. **智能模型路由**：基于难度分级和多目标优化算法的智能模型选择
+3. **自动降级链重试**：当首选模型失败时自动沿降级链重试
+4. **PM Agent 支持**：实现了智能的任务分析、团队架构决策和进度协调功能
+5. **自定义系统提示**：支持 PM 注入的定制 prompt，提高了任务执行的针对性
+6. **选择性技能加载**：优化了技能缓存的加载策略，提升了系统性能
+7. **子 Agent 管理**：实现了 Worker 内嵌的 Agent 管理机制
+8. **动态 prompt 更新**：支持运行时动态更新子 Agent 的 system prompt
 
-系统的主要优势包括：
+**系统的主要优势包括**：
 - **灵活的任务处理**：支持多种技能类型的动态路由
 - **智能的团队管理**：PM Agent 实现了自动化的任务分解和团队协作
 - **可靠的并发控制**：通过状态管理和资源限制确保系统稳定性
 - **完整的生命周期管理**：从启动到停止的全流程自动化
 - **强大的扩展性**：模块化设计便于功能扩展和维护
+- **智能的成本优化**：通过模型路由算法实现最优成本和性能平衡
 
-未来可以考虑的改进方向：
+**未来可以考虑的改进方向**：
 - 实现更智能的任务调度算法
 - 增加任务执行的可视化监控
 - 优化大规模集群的性能表现
 - 增强系统的容错能力和高可用性
 - 扩展 PM Agent 的决策能力，支持更复杂的任务场景
+- 实现更细粒度的模型路由策略
+- 增加模型性能实时监控和自适应调整
+- 支持更多第三方模型提供商的集成

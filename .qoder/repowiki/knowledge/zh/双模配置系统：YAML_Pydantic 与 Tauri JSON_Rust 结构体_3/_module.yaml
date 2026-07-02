@@ -3,11 +3,11 @@ module_path: configuration_system
 title: 双模配置系统：YAML/Pydantic 与 Tauri JSON/Rust 结构体
 scope: []
 source_files:
-    - config.yaml
     - lan_mesh/config.py
-    - main.py
-    - quicklan-main/src-tauri/tauri.conf.json
+    - config.yaml
+    - lan_mesh/model_pool.example.yaml
     - quicklan-main/src-tauri/src/settings.rs
     - quicklan-main/src-tauri/src/storage.rs
+    - quicklan-main/src-tauri/tauri.conf.json
 depends_on: []
 related_to: []

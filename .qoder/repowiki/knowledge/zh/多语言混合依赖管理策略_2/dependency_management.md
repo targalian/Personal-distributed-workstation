@@ -1,20 +1,23 @@
-该仓库采用多语言混合架构，针对 Python 后端、Rust 系统层和 TypeScript 前端分别使用独立的包管理器进行依赖管理。
+LAN Mesh 项目采用多语言混合架构，针对不同技术栈（Python、Rust、TypeScript）实施了独立的依赖管理方案。核心特征如下：
 
-### 1. Python 后端 (`lan_mesh`)
-- **管理工具**: 使用标准的 `pip` 配合 `requirements.txt`。
-- **版本策略**: 采用最小版本约束（如 `fastapi>=0.104.0`），允许自动获取兼容的次版本更新，但未提供 `requirements.lock` 或 `Pipfile.lock`，导致构建环境可能存在细微差异。
-- **核心依赖**: `fastapi`, `uvicorn`, `pydantic`, `websockets` 等，主要用于构建异步 API 服务和 WebSocket 通信。
+### 1. Python 后端 (lan_mesh)
+- **管理工具**：使用标准的 `pip` 和 `requirements.txt`。
+- **版本策略**：采用最小版本约束（如 `fastapi>=0.104.0`），允许向后兼容的自动升级，但未提供 `requirements.lock` 或 `Pipfile.lock`，表明在开发阶段更倾向于灵活性而非严格的确定性构建。
+- **核心依赖**：`fastapi`, `uvicorn`, `pydantic`, `psutil`, `requests` 等，主要用于构建 HTTP API、系统信息采集和网络通信。
 
-### 2. Rust 系统层 (`quicklan-main/src-tauri`)
-- **管理工具**: 使用 `Cargo` (Rust 官方包管理器)。
-- **锁定机制**: 包含 `Cargo.lock` 文件，确保了依赖树中所有 crate 版本的确定性，保证了跨机器构建的一致性。
-- **依赖来源**: 主要依赖 `crates.io` 官方源，并深度集成 `tauri` 生态（如 `tauri-plugin-dialog`）以构建跨平台桌面应用。
+### 2. Rust/Tauri 桌面端 (quicklan-main/src-tauri)
+- **管理工具**：使用 `Cargo` 作为包管理器和构建工具。
+- **锁定机制**：通过 `Cargo.toml` 声明直接依赖，并自动生成 `Cargo.lock` 以确保构建的确定性。所有依赖均指向 `crates.io` 官方源。
+- **关键库**：`tauri` (v2), `tokio` (异步运行时), `serde` (序列化), `rusqlite` (本地存储)。
 
-### 3. TypeScript 前端 (`quicklan-main`)
-- **管理工具**: 使用 `npm`。
-- **锁定机制**: 包含 `package-lock.json` (lockfileVersion 3)，锁定了精确的依赖版本和完整性哈希，确保前端构建的可复现性。
-- **构建工具链**: 基于 `Vite` 和 `@tauri-apps/cli`，依赖包括 `react`, `lucide-react` 等。
+### 3. TypeScript/React 前端 (quicklan-main)
+- **管理工具**：使用 `npm` 配合 `package.json`。
+- **锁定机制**：使用 `package-lock.json` (lockfileVersion 3) 锁定依赖树，确保团队成员和 CI 环境安装完全一致的包版本。
+- **构建生态**：基于 `Vite` 构建，集成 `@tauri-apps/cli` 进行桌面应用打包。
 
-### 开发约定
-- **隔离性**: 各语言模块的依赖相互独立，通过 `quicklan-main` 目录物理隔离前端与 Rust 代码，`lan_mesh` 目录存放 Python 逻辑。
-- **启动脚本**: 根目录 `scripts/` 提供了跨平台的启动脚本（`.sh`, `.ps1`, `.bat`），隐含了环境初始化的顺序，但未在代码层面实现统一的依赖安装自动化（如 Makefile 或 Justfile）。
+### 4. 缺乏统一的 Monorepo 依赖协调
+- 项目根目录与各子模块（`lan_mesh`, `quicklan-main`）之间没有发现统一的依赖编排工具（如 `pnpm workspace`, `Nx`, 或 `Justfile`）。各子模块独立维护其依赖清单，开发者需分别进入对应目录执行安装命令。
+
+### 5. 私有源与 Vendoring
+- 未发现配置私有注册表（如 `.npmrc` 指向私有源，或 `Cargo` 的 `config.toml` 替换源）。
+- 未发现第三方库的代码 vendoring（即直接将库代码提交到 repo）行为，所有依赖均通过标准包管理器从公共源获取。

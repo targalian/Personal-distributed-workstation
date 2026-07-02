@@ -3,29 +3,29 @@ schema_version: 1
 locale: zh-CN
 branch: master
 nodes_managed: true
-exported_at: "2026-07-02T16:22:02Z"
+exported_at: "2026-07-02T16:52:08Z"
 modules:
     "":
-        dir_name: LAN Mesh 跨主机网络层框架
-        title: LAN Mesh 跨主机网络层框架
+        dir_name: 局域网分布式主机管理与多智能体协作框架
+        title: 局域网分布式主机管理与多智能体协作框架
         scope: []
         source_files: []
         children: []
         depends_on: []
         related_to: []
     build_system:
-        dir_name: 多语言构建与一键启动体系
-        title: 多语言构建与一键启动体系
+        dir_name: 构建系统与发布流程
+        title: 构建系统与发布流程
         scope: []
         source_files:
-            - main.py
             - requirements.txt
-            - scripts/start_workstation.sh
-            - scripts/start_workstation.bat
+            - main.py
+            - scripts/setup_env.ps1
+            - scripts/start_secretary.sh
+            - scripts/start_worker.sh
             - quicklan-main/package.json
             - quicklan-main/src-tauri/Cargo.toml
             - quicklan-main/src-tauri/tauri.conf.json
-            - quicklan-main/src-tauri/build.rs
         children: []
         depends_on: []
         related_to: []
@@ -34,12 +34,12 @@ modules:
         title: 双模配置系统：YAML/Pydantic 与 Tauri JSON/Rust 结构体
         scope: []
         source_files:
-            - config.yaml
             - lan_mesh/config.py
-            - main.py
-            - quicklan-main/src-tauri/tauri.conf.json
+            - config.yaml
+            - lan_mesh/model_pool.example.yaml
             - quicklan-main/src-tauri/src/settings.rs
             - quicklan-main/src-tauri/src/storage.rs
+            - quicklan-main/src-tauri/tauri.conf.json
         children: []
         depends_on: []
         related_to: []
@@ -53,29 +53,35 @@ modules:
             - quicklan-main/package-lock.json
             - quicklan-main/src-tauri/Cargo.toml
             - quicklan-main/src-tauri/Cargo.lock
+            - config.yaml
+            - lan_mesh/model_pool.yaml
         children: []
         depends_on: []
         related_to: []
     error_handling:
-        dir_name: 错误处理与异常传播机制_4
-        title: 错误处理与异常传播机制
+        dir_name: 错误处理与异常管理策略_4
+        title: 错误处理与异常管理策略
         scope: []
         source_files:
             - lan_mesh/api.py
-            - lan_mesh/station_api.py
-            - lan_mesh/shared_folder.py
+            - lan_mesh/worker.py
             - lan_mesh/agent_runtime.py
-            - lan_mesh/bot_gateway.py
+            - lan_mesh/preflight.py
+            - lan_mesh/master.py
+            - lan_mesh/database.py
+            - quicklan-main/src-tauri/src/control_api.rs
+            - quicklan-main/src-tauri/src/lib.rs
         children: []
         depends_on: []
         related_to: []
     frontend_style:
-        dir_name: 前端视觉风格与样式系统
-        title: 前端视觉风格与样式系统
+        dir_name: 前端视觉风格与样式架构_4
+        title: 前端视觉风格与样式架构
         scope: []
         source_files:
             - quicklan-main/src/styles.css
             - quicklan-main/src/App.tsx
+            - quicklan-main/package.json
             - lan_mesh/web/templates/dashboard.html
         children: []
         depends_on: []

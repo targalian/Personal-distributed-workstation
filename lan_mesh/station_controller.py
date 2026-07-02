@@ -66,6 +66,7 @@ class StationState:
     start_time: float = field(default_factory=time.time)
     shared_folder: SharedFolderManager = None
     ws_clients: Set = field(default_factory=set)
+    p2p_messages: dict = field(default_factory=dict)  # 主机间 P2P 聊天消息存储
 
 
 class StationController:

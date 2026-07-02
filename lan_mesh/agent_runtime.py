@@ -289,6 +289,7 @@ class AgentRuntime:
             # 构建完整重试链: [preferred] + fallbacks
             chain = [model_pref] + [m for m in fallbacks if m != model_pref]
             last_error = None
+            unresolved = []  # 无法解析 provider 的模型
             # 从本地技能缓存构建 system prompt
             system_prompt = self._build_system_prompt(
                 input_data.get("description", input_data.get("requirement", ""))
@@ -297,6 +298,7 @@ class AgentRuntime:
             for model_id in chain:
                 provider_cfg = self._resolve_provider(model_id)
                 if not provider_cfg:
+                    unresolved.append(model_id)
                     continue
                 try:
                     return self._call_openai_compatible(
@@ -311,6 +313,15 @@ class AgentRuntime:
                     continue
 
             # 整条链都失败
+            if unresolved and not last_error:
+                # 所有模型均无法解析 provider (API Key 环境变量未设置)
+                return {
+                    "content": f"[模型调用失败] 以下模型的 API Key 未配置: {', '.join(unresolved)}。"
+                               f"请在 .env 文件或环境变量中设置对应的 API Key。",
+                    "model": "none",
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                }
             return {
                 "content": f"[模型调用失败] 降级链均不可用: {last_error}",
                 "model": "none",

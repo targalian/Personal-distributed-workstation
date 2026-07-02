@@ -232,6 +232,42 @@ def create_worker_router(
             raise HTTPException(status_code=400, detail="缺少 agent_id")
         return role_manager.update_subagent_prompt(agent_id, new_prompt)
 
+    # ── P2P 消息接收 (主机间通讯) ───────────────────────────
+
+    # Worker 端内存级消息存储
+    _p2p_store = {}
+
+    @router.post("/api/p2p/receive")
+    async def p2p_receive_message(payload: dict):
+        """接收来自远程主机的 P2P 消息。
+
+        其他主机通过 HTTP POST 调用此端点向本机发送消息。
+        Worker 端存储并打印消息,不做 WebSocket 广播。
+        """
+        from_device_id = payload.get("from_device_id", "")
+        from_name = payload.get("from_name", "未知")
+        message = payload.get("message", "")
+        timestamp = payload.get("timestamp", time.time())
+
+        if not from_device_id or not message:
+            raise HTTPException(status_code=400, detail="缺少 from_device_id 或 message")
+
+        msg = {
+            "from_device_id": from_device_id,
+            "from_name": from_name,
+            "message": message,
+            "timestamp": timestamp,
+        }
+
+        # 存储到内存
+        if from_device_id not in _p2p_store:
+            _p2p_store[from_device_id] = []
+        _p2p_store[from_device_id].append(msg)
+
+        print(f"[P2P] 收到来自 {from_name} ({from_device_id[:8]}) 的消息: {message[:80]}")
+
+        return {"ok": True}
+
     return router
 
 

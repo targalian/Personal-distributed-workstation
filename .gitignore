@@ -42,6 +42,7 @@ target/
 # 敏感配置 (密钥、凭证)
 .env
 .env.*
+!.env.example
 *.secret
 model_pool.yaml
 secrets.yaml

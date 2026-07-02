@@ -21,7 +21,7 @@ import requests as http_requests
 
 from fastapi import (
     APIRouter, WebSocket, WebSocketDisconnect, HTTPException,
-    UploadFile, File,
+    UploadFile, File, Form,
 )
 from fastapi.responses import FileResponse
 
@@ -999,6 +999,205 @@ def create_station_router(controller) -> APIRouter:
         if not result.get("ok"):
             raise HTTPException(status_code=400, detail=result.get("error", "测试失败"))
         return result
+
+    # ════════════════════════════════════════════════════════════
+    #  P2P 主机间通讯 (聊天 + 文件传输)
+    # ════════════════════════════════════════════════════════════
+
+    def _resolve_p2p_target(device_id: str) -> tuple:
+        """解析 P2P 目标主机的网络信息, 返回 (ip, port, name) 或抛出 HTTPException。"""
+        host = db.get_host(device_id)
+        if not host:
+            dev = discovery.find_device(device_id)
+            if not dev:
+                raise HTTPException(status_code=404, detail="目标主机不存在")
+            ip = dev.get("ip", "")
+            port = dev.get("api_port", 0)
+            name = dev.get("device_name", dev.get("hostname", "未知"))
+        else:
+            ip = host.ip
+            port = host.api_port
+            name = host.device_name or host.hostname or "未知"
+        if not ip or not port:
+            raise HTTPException(status_code=400, detail="目标主机网络信息不完整")
+        return ip, port, name
+
+    def _append_p2p_msg(device_id: str, msg: dict):
+        """向指定主机的 P2P 消息列表追加一条消息。"""
+        state.p2p_messages.setdefault(device_id, []).append(msg)
+
+    @router.post("/api/p2p/send")
+    async def p2p_send_message(payload: dict):
+        """向目标主机发送聊天消息。
+
+        消息存储在本地并通过 HTTP 转发到目标主机的 /api/p2p/receive 端点,
+        同时通过 WebSocket 广播给本机 Dashboard。
+        """
+        target_device_id = payload.get("target_device_id", "")
+        message = payload.get("message", "")
+        if not target_device_id or not message:
+            raise HTTPException(status_code=400, detail="缺少 target_device_id 或 message")
+
+        target_ip, target_port, target_name = _resolve_p2p_target(target_device_id)
+
+        # 存储发出消息
+        msg = {
+            "id": str(_uuid.uuid4()),
+            "direction": "out",
+            "type": "text",
+            "content": message,
+            "timestamp": time.time(),
+            "from_device_id": state.device_id,
+            "from_name": state.device_name or "本机",
+            "to_device_id": target_device_id,
+            "to_name": target_name,
+        }
+        _append_p2p_msg(target_device_id, msg)
+
+        # WebSocket 广播
+        await _broadcast(state, "p2p_chat", msg)
+
+        # 转发到目标主机
+        try:
+            resp = http_requests.post(
+                f"http://{target_ip}:{target_port}/api/p2p/receive",
+                json={
+                    "from_device_id": state.device_id,
+                    "from_name": state.device_name or "本机",
+                    "from_port": state.api_port,
+                    "message": message,
+                    "timestamp": msg["timestamp"],
+                },
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                err_msg = {
+                    "id": str(_uuid.uuid4()),
+                    "direction": "in",
+                    "type": "system",
+                    "content": f"[送达失败] 目标主机返回 {resp.status_code}",
+                    "timestamp": time.time(),
+                    "from_device_id": target_device_id,
+                    "from_name": target_name,
+                }
+                _append_p2p_msg(target_device_id, err_msg)
+                await _broadcast(state, "p2p_chat", err_msg)
+        except Exception as e:
+            err_msg = {
+                "id": str(_uuid.uuid4()),
+                "direction": "in",
+                "type": "system",
+                "content": f"[发送失败] {str(e)}",
+                "timestamp": time.time(),
+                "from_device_id": target_device_id,
+                "from_name": target_name,
+            }
+            _append_p2p_msg(target_device_id, err_msg)
+            await _broadcast(state, "p2p_chat", err_msg)
+
+        return {"ok": True, "message_id": msg["id"]}
+
+    @router.post("/api/p2p/receive")
+    async def p2p_receive_message(payload: dict):
+        """接收来自远程主机的消息。
+
+        其他主机通过 HTTP POST 调用此端点发送消息给本机。
+        """
+        from_device_id = payload.get("from_device_id", "")
+        from_name = payload.get("from_name", "未知")
+        message = payload.get("message", "")
+        timestamp = payload.get("timestamp", time.time())
+
+        if not from_device_id or not message:
+            raise HTTPException(status_code=400, detail="缺少 from_device_id 或 message")
+
+        msg = {
+            "id": str(_uuid.uuid4()),
+            "direction": "in",
+            "type": "text",
+            "content": message,
+            "timestamp": timestamp,
+            "from_device_id": from_device_id,
+            "from_name": from_name,
+            "to_device_id": state.device_id,
+            "to_name": state.device_name or "本机",
+        }
+        _append_p2p_msg(from_device_id, msg)
+
+        # WebSocket 广播给本机 Dashboard
+        await _broadcast(state, "p2p_chat", msg)
+
+        return {"ok": True}
+
+    @router.get("/api/p2p/messages/{device_id}")
+    async def p2p_get_messages(device_id: str):
+        """获取与指定主机的聊天历史。"""
+        messages = state.p2p_messages.get(device_id, [])
+        return {"messages": messages, "total": len(messages)}
+
+    @router.post("/api/p2p/transfer")
+    async def p2p_transfer_file(
+        file: UploadFile = File(...),
+        target_device_id: str = Form(...),
+    ):
+        """向目标主机传输文件。
+
+        文件通过 HTTP 上传到目标主机的 /shared 端点。
+        """
+        target_ip, target_port, target_name = _resolve_p2p_target(target_device_id)
+
+        # 读取文件数据
+        data = await file.read()
+        filename = file.filename or "upload.bin"
+
+        # 上传到目标主机的 /shared 端点
+        try:
+            resp = http_requests.post(
+                f"http://{target_ip}:{target_port}/shared",
+                files={"file": (filename, data)},
+                timeout=120,
+            )
+            result = resp.json()
+
+            # 存储传输记录
+            transfer_msg = {
+                "id": str(_uuid.uuid4()),
+                "direction": "out",
+                "type": "file",
+                "filename": filename,
+                "size": len(data),
+                "timestamp": time.time(),
+                "from_device_id": state.device_id,
+                "from_name": state.device_name or "本机",
+                "to_device_id": target_device_id,
+                "to_name": target_name,
+                "status": "success" if result.get("ok") else "failed",
+                "remote_path": result.get("path", ""),
+            }
+            _append_p2p_msg(target_device_id, transfer_msg)
+            await _broadcast(state, "p2p_chat", transfer_msg)
+
+            return {"ok": True, "filename": filename, "size": len(data), "remote_path": result.get("path", "")}
+        except Exception as e:
+            # 存储失败记录
+            transfer_msg = {
+                "id": str(_uuid.uuid4()),
+                "direction": "out",
+                "type": "file",
+                "filename": filename,
+                "size": len(data),
+                "timestamp": time.time(),
+                "from_device_id": state.device_id,
+                "from_name": state.device_name or "本机",
+                "to_device_id": target_device_id,
+                "to_name": target_name,
+                "status": "failed",
+                "error": str(e),
+            }
+            _append_p2p_msg(target_device_id, transfer_msg)
+            await _broadcast(state, "p2p_chat", transfer_msg)
+
+            raise HTTPException(status_code=500, detail=f"文件传输失败: {str(e)}")
 
     # ════════════════════════════════════════════════════════════
     #  WebSocket 实时推送

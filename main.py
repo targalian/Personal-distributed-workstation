@@ -20,6 +20,13 @@ LAN Mesh - 统一入口
 import argparse
 import sys
 
+# 启动时加载 .env 文件 (API Key 等敏感配置)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from lan_mesh import __version__
 
 

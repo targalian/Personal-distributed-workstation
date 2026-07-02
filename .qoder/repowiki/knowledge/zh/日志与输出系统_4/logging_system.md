@@ -1,48 +1,43 @@
-## 1. 系统/方法概述
-该仓库**未引入专用的日志框架**（如 `logging`、`loguru` 或 `structlog`）。日志输出完全依赖 Python 内置的 `print()` 函数，采用**手动格式化字符串**的方式向标准输出（stdout/stderr）写入信息。
+## 1. 核心结论
+该仓库**未建立统一的日志系统**。代码中不存在标准的 `logging` 模块配置、结构化日志框架（如 `structlog`、`loguru`）或集中式日志管理逻辑。
 
-- **核心机制**：直接使用 `print(f"[Component] Message")`。
-- **结构化程度**：低。仅通过方括号包裹的组件前缀（如 `[Worker]`, `[Secretary]`, `[发现]`）进行简单的来源标识，缺乏统一的日志级别（INFO, WARN, ERROR）管理、时间戳、上下文追踪或结构化字段（JSON）。
-- **第三方组件日志**：对于使用的 Web 框架（FastAPI/Uvicorn），在启动时显式将日志级别设置为 `warning` (`log_level="warning"`)，以抑制底层的 HTTP 访问日志和调试信息，保持控制台输出的整洁。
+当前的“日志”行为表现为：**直接使用 `print()` 函数向标准输出（stdout）打印带前缀的文本字符串**，且 Uvicorn 底层日志被强制设置为 `warning` 级别以抑制常规 HTTP 访问日志。
 
-## 2. 关键文件与位置
-日志逻辑分散在各个业务模块中，没有统一的日志初始化文件或配置模块。
+## 2. 实现方式与模式
 
-- **入口与控制器**：
-  - `main.py`: 程序入口，无日志输出，仅负责参数解析和角色分发。
-  - `lan_mesh/secretary.py`: 包含大量启动状态、端口绑定、Web UI 地址及后台线程异常的 `print` 输出。
-  - `lan_mesh/worker.py`: 包含注册状态、心跳失败、Agent Card 同步及子进程管理的 `print` 输出。
-- **核心服务**：
-  - `lan_mesh/discovery.py`: UDP 广播发现服务，输出端口绑定失败、回调异常等网络层信息。
-  - `lan_mesh/orchestrator.py`: 任务编排引擎，输出任务分解、模型路由决策、子任务分发及执行结果。
-  - `lan_mesh/preflight.py`: 启动自检模块，使用 ASCII 艺术格式打印详细的检查报告（Python 版本、依赖、端口占用等）。
-- **其他模块**：
-  - `lan_mesh/bot_gateway.py`: Bot 网关，输出微信/Telegram webhook 响应及轮询状态。
-  - `lan_mesh/agent_runtime.py`: Agent 运行时，输出模型调用失败及降级尝试。
+### 2.1 基于 `print` 的控制台输出
+所有核心组件（Worker, Secretary, Station, Discovery）均使用 `print()` 进行状态汇报和错误提示。
+- **格式约定**：采用 `[组件名] 消息内容` 的简单前缀格式，例如：
+  - `[Worker] 设备 ID: ...`
+  - `[Secretary] 模型路由器已加载...`
+  - `[发现] UDP 绑定端口失败...`
+- **缺乏等级控制**：没有区分 `INFO`, `ERROR`, `DEBUG` 等级。所有信息均以相同方式输出，无法通过日志级别过滤噪音。
+- **缺乏结构化**：输出为纯文本，不包含时间戳、线程 ID、请求 ID 等上下文信息，难以进行自动化解析或接入 ELK/Splunk 等日志系统。
 
-## 3. 架构与约定
-### 3.1 输出格式约定
-开发者遵循一种隐式的命名约定来标识日志来源：
+### 2.2 Web 服务器日志抑制
+在 `lan_mesh/secretary.py` 和 `lan_mesh/station_controller.py` 中，启动 Uvicorn 时显式配置了日志级别：
 ```python
-print(f"[{ComponentName}] {Message}")
+config = uvicorn.Config(
+    app,
+    host="0.0.0.0",
+    port=self.state.api_port,
+    log_level="warning",  # 仅显示警告及以上级别，屏蔽 INFO/DEBUG
+)
 ```
-常见组件前缀包括：
-- `[Worker]` / `[Secretary]`: 节点角色标识。
-- `[发现]`: 网络发现服务（DiscoveryService）。
-- `[Orchestrator]`: 任务调度中心。
-- `[Router]`: 模型路由决策。
-- `[BotGateway]`: 外部通讯网关。
+这表明开发者有意减少底层框架产生的日志噪音，但未提供替代的应用层日志方案。
 
-### 3.2 错误处理与静默
-- **异常捕获**：在后台线程（如心跳循环、UDP 监听）中，异常通常被 `try-except` 捕获并通过 `print` 输出错误信息，防止线程崩溃。
-- **静默模式**：Uvicorn 服务器配置为 `log_level="warning"`，意味着正常的 HTTP 请求（200 OK）不会在控制台产生日志，只有错误或警告才会由框架输出。
+### 2.3 启动自检报告
+`lan_mesh/preflight.py` 实现了一个基于 `print` 的格式化自检报告，使用 ASCII 字符绘制边框和图标（✅, ❌, ⚠️），用于在启动阶段向用户展示环境检查结果。这属于交互式 CLI 输出，而非系统运行日志。
 
-### 3.3 启动自检报告
-`preflight.py` 提供了一个结构化的文本块输出，用于在启动前验证环境健康度。这是目前系统中唯一具有“仪表盘”风格的日志输出，使用了边框字符和状态图标（✅/❌/⚠️）。
+## 3. 关键文件
+- `lan_mesh/worker.py`: 大量使用 `print` 汇报注册、心跳、技能拉取状态。
+- `lan_mesh/secretary.py`: 使用 `print` 汇报服务启动、模型加载、离线清理异常。
+- `lan_mesh/station_controller.py`: 使用 `print` 汇报 Bot 通道加载、Secretary 模式激活状态。
+- `lan_mesh/discovery.py`: 使用 `print` 汇报 UDP 端口绑定冲突及回调异常。
+- `lan_mesh/preflight.py`: 负责启动前的环境检查与控制台报告输出。
 
-## 4. 开发者应遵循的规则
-1. **禁止引入新日志库**：除非项目架构发生重大变更，否则应继续使用 `print` 进行输出，以保持轻量级和无依赖特性。
-2. **统一前缀格式**：所有手动日志必须包含 `[Component]` 前缀，以便在混合输出中快速定位来源。
-3. **敏感信息脱敏**：由于直接输出到 stdout，严禁在日志中打印完整的 API Key、密码或详细的堆栈跟踪（除非在调试模式下）。
-4. **后台线程容错**：在守护线程（daemon threads）中，必须捕获所有异常并打印简要错误信息，避免线程无声退出导致功能失效。
-5. **生产环境重定向**：由于缺乏日志文件轮转机制，在生产部署时，建议通过操作系统层面的重定向（如 `nohup ... > lan_mesh.log 2>&1` 或 systemd journal）来管理日志持久化。
+## 4. 开发者建议
+1. **禁止直接 `print`**：在业务逻辑中应避免直接使用 `print`，应引入 Python 标准库 `logging` 或第三方库 `loguru`。
+2. **统一日志入口**：建议在 `lan_mesh/__init__.py` 或新建 `lan_mesh/logger.py` 中初始化全局 Logger，配置统一的格式（包含时间、级别、模块名）。
+3. **结构化异常处理**：当前代码中多处 `except Exception as e: print(...)` 仅打印了异常消息，丢失了堆栈跟踪信息。应使用 `logger.exception(...)` 记录完整堆栈。
+4. **保留 CLI 交互输出**：对于 `preflight.py` 这类面向用户的交互式输出，可保留 `print` 或使用 `rich` 库增强体验，但应与系统运行日志分离。
