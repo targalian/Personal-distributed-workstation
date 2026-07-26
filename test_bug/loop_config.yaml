@@ -1,0 +1,35 @@
+# ── Loop Engineering 配置 ──────────────────────────────────────
+# 每日白盒验证循环的运行时配置
+
+server:
+  # Station Director 地址 (默认本机)
+  base_url: "http://localhost:45470"
+  # 健康检查超时 (秒)
+  health_timeout: 5
+  # API 请求通用超时 (秒)
+  api_timeout: 15
+  # LLM 相关接口超时 (秒, 聊天等需要更长)
+  llm_timeout: 90
+
+loop:
+  # CSV 文件路径 (相对于 test_bug/)
+  csv_file: "test_checklist.csv"
+  # 每日报告输出目录
+  report_dir: "reports"
+  # 复测模式: 只测状态为"已修复"的条目
+  retest_fixed_only: true
+  # 全量测试间隔天数 (每N天做一次全量)
+  full_scan_interval_days: 7
+
+# 测试分组权重 (用于计算健康分数)
+severity_weights:
+  P0: 100
+  P1: 50
+  P2: 20
+  P3: 5
+
+# 通知 (可选, 需要 Bot 通道已配置)
+notify:
+  enabled: false
+  # 只在有新增 Bug 或复测失败时通知
+  only_on_regression: true

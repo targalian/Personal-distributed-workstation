@@ -252,6 +252,41 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_chat_history_ts
                 ON chat_history(timestamp);
+
+            -- 优化14: 任务上下文记忆表
+            CREATE TABLE IF NOT EXISTS task_memory (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_name       TEXT NOT NULL DEFAULT '',
+                task_keywords   TEXT NOT NULL DEFAULT '[]',
+                task_type       TEXT NOT NULL DEFAULT '',
+                collaboration_mode TEXT NOT NULL DEFAULT '',
+                team_size       INTEGER NOT NULL DEFAULT 0,
+                duration_secs   REAL NOT NULL DEFAULT 0,
+                success         INTEGER NOT NULL DEFAULT 1,
+                error_pattern   TEXT NOT NULL DEFAULT '',
+                boss_feedback   TEXT NOT NULL DEFAULT '',
+                device_id       TEXT NOT NULL DEFAULT '',
+                created_at      REAL NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_task_memory_type
+                ON task_memory(task_type, success);
+            CREATE INDEX IF NOT EXISTS idx_task_memory_ts
+                ON task_memory(created_at);
+
+            -- Graph Engine: 图执行检查点表
+            CREATE TABLE IF NOT EXISTS graph_checkpoints (
+                checkpoint_id  TEXT PRIMARY KEY,
+                task_id        TEXT NOT NULL,
+                phase          TEXT NOT NULL DEFAULT '',
+                dag_json       TEXT NOT NULL DEFAULT '{}',
+                context_json   TEXT NOT NULL DEFAULT '{}',
+                history_json   TEXT NOT NULL DEFAULT '[]',
+                created_at     REAL NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_checkpoint_task
+                ON graph_checkpoints(task_id, created_at);
         """)
         conn.commit()
 
@@ -633,6 +668,15 @@ class Database:
             project_id=row["project_id"] if "project_id" in row.keys() else "",
             pm_agent_id=row["pm_agent_id"] if "pm_agent_id" in row.keys() else "",
         )
+
+    def update_task_status(self, task_id: str, status: str):
+        """更新任务状态 (用于取消/暂停)。"""
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE tasks SET status = ? WHERE task_id = ?",
+            (status, task_id),
+        )
+        conn.commit()
 
     def list_tasks(self, status: str = None, limit: int = 50) -> list[Task]:
         """列出任务,可按状态过滤。"""
@@ -1141,3 +1185,147 @@ class Database:
             (pm_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── 优化14: 任务上下文记忆 CRUD ──────────────────────────────
+
+    def save_task_memory(self, task_name: str, task_keywords: list,
+                         task_type: str, collaboration_mode: str,
+                         team_size: int, duration_secs: float,
+                         success: bool, error_pattern: str = "",
+                         boss_feedback: str = "", device_id: str = ""):
+        """保存一条任务记忆 (PM 完成后调用)。
+
+        记录任务模式, 用于未来同类任务的决策参考:
+        - 什么类型的任务适合什么协作模式
+        - 历史上哪些任务失败过, 失败原因是什么
+        - Boss 对交付物的反馈偏好
+        """
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO task_memory (
+                task_name, task_keywords, task_type, collaboration_mode,
+                team_size, duration_secs, success, error_pattern,
+                boss_feedback, device_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            task_name, json.dumps(task_keywords, ensure_ascii=False),
+            task_type, collaboration_mode, team_size, duration_secs,
+            1 if success else 0, error_pattern, boss_feedback,
+            device_id, time.time(),
+        ))
+        conn.commit()
+
+    def query_task_memory(self, task_type: str = "", keyword: str = "",
+                          limit: int = 10) -> list[dict]:
+        """查询任务记忆 (按类型或关键词)。
+
+        用于新任务提交时参考历史经验:
+        - 同类型任务的历史成功/失败率
+        - 推荐的协作模式和团队规模
+        - 常见错误模式预警
+        """
+        conn = self._get_conn()
+        if task_type:
+            rows = conn.execute(
+                "SELECT * FROM task_memory WHERE task_type = ? ORDER BY created_at DESC LIMIT ?",
+                (task_type, limit),
+            ).fetchall()
+        elif keyword:
+            rows = conn.execute(
+                "SELECT * FROM task_memory WHERE task_keywords LIKE ? ORDER BY created_at DESC LIMIT ?",
+                (f"%{keyword}%", limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM task_memory ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["task_keywords"] = json.loads(d["task_keywords"]) if d["task_keywords"] else []
+            d["success"] = bool(d["success"])
+            results.append(d)
+        return results
+
+    def get_task_memory_stats(self, task_type: str = "") -> dict:
+        """统计任务记忆 (成功率、平均耗时、推荐模式)。"""
+        conn = self._get_conn()
+        if task_type:
+            rows = conn.execute(
+                "SELECT * FROM task_memory WHERE task_type = ?", (task_type,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM task_memory").fetchall()
+
+        if not rows:
+            return {"total": 0, "success_rate": 0, "avg_duration": 0, "recommended_mode": ""}
+
+        total = len(rows)
+        success_count = sum(1 for r in rows if r["success"])
+        avg_duration = sum(r["duration_secs"] for r in rows) / total if total else 0
+
+        # 统计最常用的协作模式
+        mode_counts: dict[str, int] = {}
+        for r in rows:
+            mode = r["collaboration_mode"]
+            if mode:
+                mode_counts[mode] = mode_counts.get(mode, 0) + 1
+        recommended_mode = max(mode_counts, key=mode_counts.get) if mode_counts else ""
+
+        # 常见错误模式
+        error_patterns: dict[str, int] = {}
+        for r in rows:
+            ep = r["error_pattern"]
+            if ep:
+                error_patterns[ep] = error_patterns.get(ep, 0) + 1
+
+        return {
+            "total": total,
+            "success_rate": success_count / total if total else 0,
+            "avg_duration": avg_duration,
+            "recommended_mode": recommended_mode,
+            "common_errors": sorted(error_patterns.items(), key=lambda x: -x[1])[:3],
+        }
+
+    # ── Graph Checkpoint CRUD ───────────────────────────────────
+
+    def save_checkpoint(self, checkpoint_id: str, task_id: str, phase: str,
+                        dag_json: str, context_json: str, history_json: str):
+        """保存图执行检查点。"""
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT OR REPLACE INTO graph_checkpoints
+                (checkpoint_id, task_id, phase, dag_json, context_json, history_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (checkpoint_id, task_id, phase, dag_json, context_json, history_json, time.time()))
+        conn.commit()
+
+    def get_latest_checkpoint(self, task_id: str) -> Optional[dict]:
+        """获取指定任务的最新检查点。"""
+        conn = self._get_conn()
+        row = conn.execute("""
+            SELECT * FROM graph_checkpoints
+            WHERE task_id = ?
+            ORDER BY created_at DESC LIMIT 1
+        """, (task_id,)).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def list_checkpoints(self, task_id: str) -> list:
+        """列出指定任务的所有检查点 (按时间倒序)。"""
+        conn = self._get_conn()
+        rows = conn.execute("""
+            SELECT checkpoint_id, task_id, phase, created_at
+            FROM graph_checkpoints
+            WHERE task_id = ?
+            ORDER BY created_at DESC
+        """, (task_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_checkpoints(self, task_id: str):
+        """删除指定任务的所有检查点。"""
+        conn = self._get_conn()
+        conn.execute("DELETE FROM graph_checkpoints WHERE task_id = ?", (task_id,))
+        conn.commit()

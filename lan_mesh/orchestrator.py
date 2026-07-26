@@ -1,5 +1,5 @@
 """
-任务编排引擎 — 借鉴 LangGraph Supervisor 模式
+任务编排引擎 — 借鉴 LangGraph Supervisor 模式 (增强版: 显式状态机 + Checkpoint)
 
 职责:
 1. 接收用户任务,分解为子任务 (规则/LLM 驱动)
@@ -8,10 +8,14 @@
 4. 通过 HTTP 分发子任务到 Worker
 5. 收集结果并聚合
 6. 管理任务生命周期 (pending → running → completed/failed)
+7. 显式状态机驱动: decompose → route → dispatch → monitor → aggregate → deliver
+8. 自动 Checkpoint: 每次状态转换时持久化图状态, 支持断点恢复
 """
+import json
 import time
 import uuid
 import threading
+from dataclasses import dataclass, field
 from typing import Optional, Callable
 
 import requests
@@ -19,6 +23,34 @@ import requests
 from .database import Database
 from .protocol import Task, SubTask, AgentCard
 from .task import TaskDAG
+
+
+# ── 显式状态机定义 ─────────────────────────────────────────────
+
+@dataclass
+class GraphState:
+    """图执行状态 — 状态机的核心数据结构。
+
+    每次状态转换时自动保存 checkpoint,
+    支持从任意 phase 断点恢复。
+    """
+    task_id: str = ""
+    phase: str = "decompose"   # decompose|route|dispatch|monitor|aggregate|deliver|completed|failed
+    dag: Optional[TaskDAG] = None
+    context: dict = field(default_factory=dict)   # 累积上下文 (子任务输出、路由决策等)
+    history: list = field(default_factory=list)    # [(timestamp, from_phase, to_phase, reason)]
+    checkpoint_id: str = ""                        # 最近一次 checkpoint ID
+
+
+# 合法状态转换表
+PHASE_TRANSITIONS: dict[str, list[str]] = {
+    "decompose": ["route", "failed"],
+    "route": ["dispatch", "failed"],
+    "dispatch": ["monitor", "failed"],
+    "monitor": ["dispatch", "aggregate", "failed"],  # monitor 可回到 dispatch (动态路由)
+    "aggregate": ["deliver", "failed"],
+    "deliver": ["completed"],
+}
 
 
 # ── 预置任务分解模板 ────────────────────────────────────────────
@@ -56,9 +88,10 @@ def _classify_task(task: Task) -> str:
 
 
 class Orchestrator:
-    """任务编排器。
+    """任务编排器 (状态机驱动)。
 
     在 Secretary 端运行,负责任务分解、Agent 匹配、子任务分发与结果聚合。
+    增强: 显式状态机 + 自动 Checkpoint + 断点恢复。
     """
 
     def __init__(self, db: Database, project_manager=None, model_router=None,
@@ -70,13 +103,127 @@ class Orchestrator:
         self.on_event = on_event  # 事件回调: on_event(event_type: str, data: dict)
         self._lock = threading.Lock()
         self._active_dags: dict[str, TaskDAG] = {}  # task_id → DAG
+        self._active_states: dict[str, GraphState] = {}  # task_id → GraphState
+
+    # ── 状态机核心 ─────────────────────────────────────────────
+
+    def transition(self, state: GraphState, to_phase: str, reason: str = "") -> bool:
+        """状态转换 (校验合法性 + 记录 history + 触发 checkpoint)。
+
+        Args:
+            state: 当前图状态
+            to_phase: 目标 phase
+            reason: 转换原因 (记录到 history)
+
+        Returns:
+            True 转换成功, False 转换非法
+        """
+        allowed = PHASE_TRANSITIONS.get(state.phase, [])
+        if to_phase not in allowed:
+            print(f"[Orchestrator] 非法状态转换: {state.phase} → {to_phase} (允许: {allowed})")
+            return False
+
+        from_phase = state.phase
+        state.phase = to_phase
+        state.history.append((time.time(), from_phase, to_phase, reason))
+
+        # 自动保存 checkpoint
+        self._save_checkpoint(state)
+
+        print(f"[Orchestrator] 状态转换: {from_phase} → {to_phase} ({reason})")
+        if self.on_event:
+            self.on_event("phase_transition", {
+                "task_id": state.task_id,
+                "from_phase": from_phase,
+                "to_phase": to_phase,
+                "reason": reason,
+            })
+        return True
+
+    def _save_checkpoint(self, state: GraphState):
+        """保存当前图状态到数据库 checkpoint。"""
+        checkpoint_id = str(uuid.uuid4())
+        state.checkpoint_id = checkpoint_id
+
+        dag_json = "{}"
+        if state.dag:
+            dag_json = json.dumps(state.dag.to_graph_json(), ensure_ascii=False)
+
+        context_json = json.dumps(state.context, ensure_ascii=False, default=str)
+        history_json = json.dumps(state.history, ensure_ascii=False, default=str)
+
+        self.db.save_checkpoint(
+            checkpoint_id=checkpoint_id,
+            task_id=state.task_id,
+            phase=state.phase,
+            dag_json=dag_json,
+            context_json=context_json,
+            history_json=history_json,
+        )
+
+    def resume_task(self, task_id: str) -> bool:
+        """从 checkpoint 恢复任务执行。
+
+        流程:
+        1. 从 DB 加载最新 checkpoint
+        2. 重建 TaskDAG (from_graph_json)
+        3. 恢复 GraphState (phase + context + history)
+        4. 重新启动状态机循环
+
+        Args:
+            task_id: 要恢复的任务 ID
+
+        Returns:
+            True 恢复成功, False 无 checkpoint 或恢复失败
+        """
+        ckpt = self.db.get_latest_checkpoint(task_id)
+        if not ckpt:
+            print(f"[Orchestrator] 任务 {task_id} 无 checkpoint, 无法恢复")
+            return False
+
+        try:
+            dag_data = json.loads(ckpt.get("dag_json", "{}"))
+            context = json.loads(ckpt.get("context_json", "{}"))
+            history = json.loads(ckpt.get("history_json", "[]"))
+        except (json.JSONDecodeError, TypeError):
+            print(f"[Orchestrator] checkpoint 数据解析失败")
+            return False
+
+        # 重建 DAG
+        dag = TaskDAG.from_graph_json(dag_data) if dag_data.get("nodes") else None
+
+        # 恢复 GraphState
+        state = GraphState(
+            task_id=task_id,
+            phase=ckpt.get("phase", "dispatch"),
+            dag=dag,
+            context=context,
+            history=history,
+            checkpoint_id=ckpt.get("checkpoint_id", ""),
+        )
+
+        # 注册到活跃状态
+        self._active_states[task_id] = state
+        if dag:
+            self._active_dags[task_id] = dag
+
+        # 更新任务状态
+        task = self.db.get_task(task_id)
+        if task:
+            task.status = "running"
+            self.db.save_task(task)
+
+        print(f"[Orchestrator] 任务已从 checkpoint 恢复: {task_id} (phase={state.phase})")
+
+        # 启动状态机循环
+        threading.Thread(
+            target=self._state_machine_loop, args=(task_id,), daemon=True
+        ).start()
+        return True
 
     def submit_task(self, name: str, description: str, input_data: dict = None,
                     created_by: str = "user", project_id: str = "") -> Task:
-        """提交新任务,自动分解并开始调度。
-
-        如果指定了 project_id,任务将与项目关联,执行过程中记录消费。
-        """
+        """提交新任务,自动分解并开始调度 (状态机驱动)。"""
         task = Task(
             task_id=str(uuid.uuid4()),
             name=name,
@@ -87,6 +234,14 @@ class Orchestrator:
             project_id=project_id,
         )
 
+        # 初始化 GraphState
+        state = GraphState(task_id=task.task_id, phase="decompose", context={
+            "task_name": name,
+            "task_description": description,
+            "input_data": input_data or {},
+            "project_id": project_id,
+        })
+
         # 分解为子任务
         subtasks = self._decompose(task)
         task.subtasks = [st.to_dict() for st in subtasks]
@@ -96,17 +251,21 @@ class Orchestrator:
         if dag.has_cycle():
             task.status = "failed"
             task.output_data = {"error": "子任务存在循环依赖"}
+            state.phase = "failed"
         else:
             task.status = "running"
+            state.dag = dag
             self._active_dags[task.task_id] = dag
 
+        self._active_states[task.task_id] = state
         self.db.save_task(task)
         print(f"[Orchestrator] 任务已提交: {task.task_id} ({name}) → {len(subtasks)} 个子任务")
 
-        # 异步调度
+        # 启动状态机循环
         if task.status == "running":
+            self.transition(state, "route", "分解完成")
             threading.Thread(
-                target=self._schedule_loop, args=(task.task_id,), daemon=True
+                target=self._state_machine_loop, args=(task.task_id,), daemon=True
             ).start()
 
         return task
@@ -133,30 +292,114 @@ class Orchestrator:
             ))
         return subtasks
 
-    def _schedule_loop(self, task_id: str):
-        """调度循环: 持续分发就绪的子任务直到全部完成。"""
-        while task_id in self._active_dags:
-            dag = self._active_dags[task_id]
-            ready = dag.get_ready_subtasks()
+    # ── 状态机循环 (替代原 _schedule_loop) ─────────────────────
 
-            if not ready:
-                if dag.is_all_completed():
-                    self._complete_task(task_id, dag)
-                    break
-                if dag.has_failed():
-                    self._fail_task(task_id, "部分子任务失败")
-                    break
-                # 等待正在执行的子任务完成
-                time.sleep(2)
-                continue
+    def _state_machine_loop(self, task_id: str):
+        """状态机驱动循环: 根据当前 phase 执行对应处理函数。"""
+        while task_id in self._active_states:
+            state = self._active_states[task_id]
 
-            # 分发每个就绪的子任务
-            for st in ready:
-                agent = self.db.find_idle_agent_with_skill(st.required_skill)
-                if agent:
-                    self._dispatch_subtask(task_id, st, agent, dag)
-                # 如果没有空闲 Agent,等待重试
+            if state.phase == "route":
+                self._phase_route(state)
+            elif state.phase == "dispatch":
+                self._phase_dispatch(state)
+            elif state.phase == "monitor":
+                self._phase_monitor(state)
+            elif state.phase == "aggregate":
+                self._phase_aggregate(state)
+            elif state.phase == "deliver":
+                self._phase_deliver(state)
+            elif state.phase in ("completed", "failed"):
+                break
+            else:
+                time.sleep(1)
+
+    def _phase_route(self, state: GraphState):
+        """路由阶段: 为各子任务确定模型路由 (当前简化为直接进入 dispatch)。"""
+        # 未来可在此处为每个子任务预计算模型路由
+        self.transition(state, "dispatch", "路由决策完成")
+
+    def _phase_dispatch(self, state: GraphState):
+        """分发阶段: 分发所有就绪的子任务到 Agent。"""
+        dag = state.dag
+        if not dag:
+            self.transition(state, "failed", "DAG 不存在")
+            return
+
+        ready = dag.get_ready_subtasks(context=state.context)
+        if not ready:
+            # 无就绪子任务, 检查是否全部完成
+            if dag.is_all_completed():
+                self.transition(state, "aggregate", "所有子任务已完成")
+                return
+            if dag.has_failed():
+                self.transition(state, "failed", "部分子任务失败")
+                self._fail_task(state.task_id, "部分子任务失败")
+                return
+            # 等待正在执行的子任务
             time.sleep(2)
+            self.transition(state, "monitor", "等待执行中子任务")
+            return
+
+        # 分发每个就绪的子任务
+        for st in ready:
+            agent = self.db.find_idle_agent_with_skill(st.required_skill)
+            if agent:
+                self._dispatch_subtask(state.task_id, st, agent, dag)
+
+        self.transition(state, "monitor", f"已分发 {len(ready)} 个子任务")
+
+    def _phase_monitor(self, state: GraphState):
+        """监控阶段: 等待子任务完成, 根据结果决定下一步。"""
+        dag = state.dag
+        if not dag:
+            self.transition(state, "failed", "DAG 不存在")
+            return
+
+        # 等待一段时间让子任务执行
+        time.sleep(3)
+
+        # 收集已完成的子任务输出到 context
+        for st in dag.to_subtask_list():
+            if st.status == "completed" and st.output_data:
+                state.context[f"output_{st.name}"] = st.output_data
+
+        # 条件路由: 决定下一步
+        if dag.is_all_completed():
+            self.transition(state, "aggregate", "所有子任务完成, 进入聚合")
+        elif dag.has_failed():
+            self.transition(state, "failed", "子任务失败")
+            self._fail_task(state.task_id, "部分子任务失败")
+        elif dag.get_ready_subtasks(context=state.context):
+            # 还有就绪子任务 (动态路由: 回到 dispatch)
+            self.transition(state, "dispatch", "有新的就绪子任务 (动态路由)")
+        else:
+            # 仍在执行中, 继续监控
+            time.sleep(2)
+
+    def _phase_aggregate(self, state: GraphState):
+        """聚合阶段: 收集所有子任务结果。"""
+        dag = state.dag
+        if dag:
+            state.context["aggregated_outputs"] = {
+                st.name: st.output_data
+                for st in dag.to_subtask_list()
+            }
+        self.transition(state, "deliver", "聚合完成")
+
+    def _phase_deliver(self, state: GraphState):
+        """交付阶段: 标记任务完成。"""
+        self._complete_task(state.task_id, state.dag)
+        self.transition(state, "completed", "任务交付完成")
+        # 清理活跃状态
+        self._active_states.pop(state.task_id, None)
+        self._active_dags.pop(state.task_id, None)
+
+    # ── 兼容旧接口 (保留 _schedule_loop 作为别名) ─────────────
+
+    def _schedule_loop(self, task_id: str):
+        """兼容旧接口: 转发到状态机循环。"""
+        self._state_machine_loop(task_id)
 
     def _dispatch_subtask(self, task_id: str, subtask: SubTask, agent: AgentCard, dag: TaskDAG):
         """分发子任务到目标 Agent (HTTP 调用)。
@@ -269,9 +512,10 @@ class Orchestrator:
             task.output_data = {
                 st.name: st.output_data
                 for st in dag.to_subtask_list()
-            }
+            } if dag else {}
             self.db.save_task(task)
             self._active_dags.pop(task_id, None)
+            self._active_states.pop(task_id, None)
             print(f"[Orchestrator] 任务完成: {task_id}")
             if self.on_event:
                 self.on_event("task_completed", {
@@ -287,6 +531,7 @@ class Orchestrator:
             task.output_data = {"error": reason}
             self.db.save_task(task)
             self._active_dags.pop(task_id, None)
+            self._active_states.pop(task_id, None)
             print(f"[Orchestrator] 任务失败: {task_id} ({reason})")
             if self.on_event:
                 self.on_event("task_failed", {
@@ -298,3 +543,86 @@ class Orchestrator:
     def get_task_status(self, task_id: str) -> Optional[Task]:
         """查询任务状态。"""
         return self.db.get_task(task_id)
+
+    def get_graph_state(self, task_id: str) -> Optional[dict]:
+        """获取任务的当前图状态 (供 API 层查询)。
+
+        Returns:
+            {phase, history, checkpoint_id, dag_json} 或 None
+        """
+        state = self._active_states.get(task_id)
+        if state:
+            return {
+                "task_id": task_id,
+                "phase": state.phase,
+                "history": state.history,
+                "checkpoint_id": state.checkpoint_id,
+                "dag": state.dag.to_graph_json() if state.dag else None,
+            }
+        # 尝试从 checkpoint 加载
+        ckpt = self.db.get_latest_checkpoint(task_id)
+        if ckpt:
+            return {
+                "task_id": task_id,
+                "phase": ckpt.get("phase", ""),
+                "history": json.loads(ckpt.get("history_json", "[]")),
+                "checkpoint_id": ckpt.get("checkpoint_id", ""),
+                "dag": json.loads(ckpt.get("dag_json", "{}")),
+            }
+        return None
+
+    def get_task_graph(self, task_id: str) -> Optional[dict]:
+        """获取任务的 DAG 图结构 JSON (供前端渲染)。
+
+        优先从活跃状态获取, 否则从 DB 中的 task.subtasks 重建。
+        """
+        # 优先活跃 DAG
+        dag = self._active_dags.get(task_id)
+        if dag:
+            return dag.to_graph_json()
+
+        # 从 checkpoint 获取
+        ckpt = self.db.get_latest_checkpoint(task_id)
+        if ckpt:
+            try:
+                return json.loads(ckpt.get("dag_json", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # 从 task.subtasks 重建
+        task = self.db.get_task(task_id)
+        if task and task.subtasks:
+            subtasks = [SubTask.from_dict(st) for st in task.subtasks]
+            dag = TaskDAG(subtasks)
+            return dag.to_graph_json()
+
+        return None
+
+    def update_task_graph(self, task_id: str, graph_data: dict) -> dict:
+        """更新任务的 DAG 图结构 (前端编辑保存)。
+
+        Args:
+            task_id: 任务 ID
+            graph_data: {"nodes": [...], "edges": [...]}
+
+        Returns:
+            {"ok": bool, "message": str}
+        """
+        # 重建 DAG 并验证
+        new_dag = TaskDAG.from_graph_json(graph_data)
+        if new_dag.has_cycle():
+            return {"ok": False, "message": "图结构存在循环依赖, 无法保存"}
+
+        # 更新活跃 DAG
+        if task_id in self._active_dags:
+            self._active_dags[task_id] = new_dag
+        if task_id in self._active_states:
+            self._active_states[task_id].dag = new_dag
+
+        # 同步到 DB
+        task = self.db.get_task(task_id)
+        if task:
+            task.subtasks = [st.to_dict() for st in new_dag.to_subtask_list()]
+            self.db.save_task(task)
+
+        return {"ok": True, "message": "DAG 图结构已更新"}

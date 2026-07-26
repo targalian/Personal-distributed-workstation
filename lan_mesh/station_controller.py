@@ -23,6 +23,7 @@ import socket
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Set
@@ -141,9 +142,16 @@ class StationController:
         self.secretary_host_id = None  # device_id of the host running Secretary
         self.secretary_host_port = None  # Secretary HTTP port on that host
 
+        # ── 优化7: PM→Worker 映射 (用于反向沟通和取消/暂停) ──
+        self._pm_worker_map: dict[str, dict] = {}  # pm_id → {"ip", "api_port", "device_id"}
+
         self._running = False
         self._threads: list[threading.Thread] = []
         self._ws_push_event: Optional[asyncio.Event] = None  # 在 async 上下文中初始化
+
+        # ── 优化12: 定期汇报 ──
+        self._report_interval: float = 300.0  # 汇报间隔 (默认5分钟)
+        self._last_report_time: float = 0.0
 
     # ── Secretary 激活/停用 ───────────────────────────────────────
 
@@ -190,6 +198,10 @@ class StationController:
             db=self.db,  # 持久化聊天历史到 SQLite
         )
 
+        # 优化15: 将 ChatHandler 注入 BotGateway, 统一消息入口
+        if self.bot_gateway:
+            self.bot_gateway.set_chat_handler(self.chat_handler)
+
         self.secretary_active = True
         print("[Station] Secretary 模式已激活 — 聊天处理器/模型路由/MCP工具 已就绪 (PM Agent 架构)")
 
@@ -212,8 +224,262 @@ class StationController:
         self.chat_handler = None
         self.chat_runtime = None
 
+        # 优化15: 清除 BotGateway 的 ChatHandler 引用
+        if self.bot_gateway:
+            self.bot_gateway.set_chat_handler(None)
+
         print("[Station] Secretary 模式已停用 — 回到纯基础设施管理")
         return {"ok": True, "message": "Secretary 已停用"}
+
+    def submit_task_from_chat(self, name: str, description: str, created_by: str = "secretary",
+                              priority: str = "normal") -> dict:
+        """从秘书对话直接提交任务并分配 PM Agent。
+
+        与 station_api.submit_task() 逻辑一致, 但同步执行。
+        优化13: 支持优先级 + 负载感知选站。
+
+        Args:
+            priority: 优先级 (low / normal / high / urgent)
+        """
+        from .protocol import Task, PMAgent
+
+        task = Task(
+            task_id=f"task-{uuid.uuid4().hex[:12]}",
+            name=name,
+            description=description,
+            created_by=created_by,
+            status="pending",
+        )
+        # 优化13: 记录优先级到 input_data
+        task.input_data = task.input_data or {}
+        task.input_data["_priority"] = priority
+        self.db.save_task(task)
+        print(f"[Station] 对话提交任务: {task.task_id} ({name}) 优先级={priority}")
+
+        # 选择在线 work_station (优化13: 评级 + 负载感知)
+        hosts = self.db.list_hosts()
+        online_hosts = [h for h in hosts if h.online and h.device_id != self.state.device_id]
+        if not online_hosts:
+            online_hosts = [h for h in hosts if h.online]
+
+        if not online_hosts:
+            task.status = "failed"
+            task.output_data = {"error": "无可用 work_station"}
+            self.db.save_task(task)
+            return task.to_dict()
+
+        # 优化13: 负载感知排序 — 评级优先, 同评级选 PM 数量少的
+        tier_order = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "": 0}
+        pm_agents = self.db.list_pm_agents()
+        # 统计每台主机上的活跃 PM 数量
+        host_pm_count: dict[str, int] = {}
+        for pm in pm_agents:
+            if pm.status in ("planning", "executing", "monitoring", "awaiting_input"):
+                host_pm_count[pm.device_id] = host_pm_count.get(pm.device_id, 0) + 1
+
+        def _host_sort_key(h):
+            tier = tier_order.get(h.rating_tier, 0)
+            load = host_pm_count.get(h.device_id, 0)
+            # 先按评级降序, 再按负载升序
+            return (-tier, load)
+
+        online_hosts.sort(key=_host_sort_key)
+        target_host = online_hosts[0]
+
+        # 构造 Secretary URL
+        local_ips = self._collect_info().ip_addresses
+        secretary_url = (
+            f"http://{local_ips[0]}:{self.state.api_port}" if local_ips
+            else f"http://{self.state.device_id}:{self.state.api_port}"
+        )
+
+        # POST 到目标 Worker 启动 PM Agent
+        try:
+            import requests as _requests
+            resp = _requests.post(
+                f"http://{target_host.ip}:{target_host.api_port}/role/start-pm",
+                json={
+                    "task_id": task.task_id,
+                    "secretary_url": secretary_url,
+                    "task_data": task.to_dict(),
+                },
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                pm_data = resp.json()
+                pm_id = pm_data.get("pm_id", "")
+                task.pm_agent_id = pm_id
+                task.status = "running"
+                self.db.save_task(task)
+
+                pm_agent = PMAgent(
+                    pm_id=pm_id,
+                    agent_name=f"PM-{pm_id[:8]}",
+                    task_id=task.task_id,
+                    device_id=target_host.device_id,
+                    hostname=target_host.hostname or target_host.device_name,
+                    ip=target_host.ip,
+                    api_port=target_host.api_port,
+                    status="starting",
+                )
+                self.db.upsert_pm_agent(pm_agent)
+                # 优化7: 记录 PM→Worker 映射
+                self._pm_worker_map[pm_id] = {
+                    "ip": target_host.ip,
+                    "api_port": target_host.api_port,
+                    "device_id": target_host.device_id,
+                }
+                print(f"[Station] PM Agent 已启动: {pm_id[:12]} → {target_host.device_name}")
+                self.bot_gateway.notify("pm_registered", {
+                    "pm_id": pm_id[:12], "task": task.name,
+                    "station": target_host.device_name or target_host.hostname,
+                })
+            else:
+                task.status = "failed"
+                task.output_data = {"error": f"PM 启动失败: {resp.text}"}
+                self.db.save_task(task)
+        except Exception as e:
+            task.status = "failed"
+            task.output_data = {"error": f"PM 启动异常: {e}"}
+            self.db.save_task(task)
+
+        return task.to_dict()
+
+    # ── 优化7: 反向沟通 ──
+
+    def inject_input_to_pm(self, pm_id: str, input_data: dict) -> dict:
+        """向指定 PM Agent 注入来自 Boss 的回复。
+
+        查找 PM 所在的 Worker, HTTP POST 到 /pm/inject-input 端点。
+
+        Args:
+            pm_id: PM Agent ID
+            input_data: Boss 回复数据
+
+        Returns:
+            {ok: bool, message: str}
+        """
+        worker = self._pm_worker_map.get(pm_id)
+        if not worker:
+            return {"ok": False, "message": f"PM {pm_id[:12]} 的 Worker 信息未找到"}
+
+        ip = worker.get("ip", "")
+        port = worker.get("api_port", 0)
+        if not ip or not port:
+            return {"ok": False, "message": "Worker 地址信息不完整"}
+
+        try:
+            import requests as _req
+            resp = _req.post(
+                f"http://{ip}:{port}/pm/inject-input",
+                json=input_data,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+                print(f"[Station] 已注入回复到 PM {pm_id[:12]}")
+                return {"ok": True, "message": "回复已发送到 PM Agent"}
+            else:
+                return {"ok": False, "message": f"Worker 返回错误: {resp.text[:200]}"}
+        except Exception as e:
+            return {"ok": False, "message": f"注入失败: {e}"}
+
+    # ── 优化8: 取消/暂停任务 ──
+
+    def cancel_task(self, task_id: str) -> dict:
+        """取消指定任务及对应的 PM Agent。
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            {ok: bool, message: str}
+        """
+        task = self.db.get_task(task_id)
+        if not task:
+            return {"ok": False, "message": f"任务 {task_id} 不存在"}
+
+        pm_id = task.pm_agent_id
+        if not pm_id:
+            # 任务尚未分配 PM, 直接取消
+            self.db.update_task_status(task_id, "cancelled")
+            return {"ok": True, "message": "任务已取消 (未分配 PM)"}
+
+        worker = self._pm_worker_map.get(pm_id)
+        if not worker:
+            # Worker 信息丢失, 标记取消
+            self.db.update_task_status(task_id, "cancelled")
+            self.db.update_pm_status(pm_id, "cancelled")
+            return {"ok": True, "message": "任务已标记取消 (Worker 信息丢失)"}
+
+        ip = worker.get("ip", "")
+        port = worker.get("api_port", 0)
+        if not ip or not port:
+            return {"ok": False, "message": "Worker 地址信息不完整"}
+
+        try:
+            import requests as _req
+            resp = _req.post(
+                f"http://{ip}:{port}/role/cancel-pm",
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                self.db.update_task_status(task_id, "cancelled")
+                self.db.update_pm_status(pm_id, "cancelled")
+                print(f"[Station] 任务已取消: {task_id}")
+                self.bot_gateway.notify("task_cancelled", {
+                    "task_id": task_id, "name": task.name,
+                })
+                return {"ok": True, "message": "任务已取消"}
+            else:
+                return {"ok": False, "message": f"Worker 返回错误: {resp.text[:200]}"}
+        except Exception as e:
+            return {"ok": False, "message": f"取消失败: {e}"}
+
+    def pause_task(self, task_id: str) -> dict:
+        """暂停指定任务及对应的 PM Agent。
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            {ok: bool, message: str}
+        """
+        task = self.db.get_task(task_id)
+        if not task:
+            return {"ok": False, "message": f"任务 {task_id} 不存在"}
+
+        pm_id = task.pm_agent_id
+        if not pm_id:
+            return {"ok": False, "message": "任务尚未分配 PM Agent"}
+
+        worker = self._pm_worker_map.get(pm_id)
+        if not worker:
+            return {"ok": False, "message": "PM Agent 的 Worker 信息未找到"}
+
+        ip = worker.get("ip", "")
+        port = worker.get("api_port", 0)
+        if not ip or not port:
+            return {"ok": False, "message": "Worker 地址信息不完整"}
+
+        try:
+            import requests as _req
+            resp = _req.post(
+                f"http://{ip}:{port}/role/pause-pm",
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                self.db.update_task_status(task_id, "paused")
+                self.db.update_pm_status(pm_id, "paused")
+                print(f"[Station] 任务已暂停: {task_id}")
+                self.bot_gateway.notify("task_paused", {
+                    "task_id": task_id, "name": task.name,
+                })
+                return {"ok": True, "message": "任务已暂停"}
+            else:
+                return {"ok": False, "message": f"Worker 返回错误: {resp.text[:200]}"}
+        except Exception as e:
+            return {"ok": False, "message": f"暂停失败: {e}"}
 
     # ── Bot 通道管理 ───────────────────────────────────────────────
 
@@ -368,7 +634,7 @@ class StationController:
             print(f"[Station] 配置报告刷新异常: {e}")
 
     def _config_refresh_loop(self):
-        """定期刷新共享文件夹中的配置报告 + 自身心跳。"""
+        """定期刷新共享文件夹中的配置报告 + 自身心跳 + 优化12: 定期汇报。"""
         while self._running:
             time.sleep(HEARTBEAT_INTERVAL_SECS)
             self._refresh_host_config()
@@ -384,6 +650,9 @@ class StationController:
                 })
             except Exception:
                 pass
+            # 优化12: 定期汇报 (仅 Secretary 激活时)
+            if self.secretary_active:
+                self._try_periodic_report()
 
     def _prune_loop(self):
         """定期清理超时离线主机。"""
@@ -393,6 +662,63 @@ class StationController:
                 self.station_director.prune_offline(self.cfg.discovery.device_ttl)
             except Exception as e:
                 print(f"[Station] 清理离线主机异常: {e}")
+
+    def _try_periodic_report(self):
+        """优化12: 定期汇报 — 当有活跃任务时, 生成简报推送到 Web UI 和 Bot。
+
+        每 _report_interval 秒检查一次, 如果有 running/pending 任务:
+        1. 汇总所有 PM 进度
+        2. 检测异常 (进度停滞、资源不足)
+        3. 生成简报推送到 WebSocket + Bot
+        """
+        now = time.time()
+        if now - self._last_report_time < self._report_interval:
+            return
+        self._last_report_time = now
+
+        try:
+            # 检查是否有活跃任务
+            tasks = self.db.list_tasks(limit=20)
+            active_tasks = [t for t in tasks if t.status in ("running", "pending")]
+            if not active_tasks:
+                return  # 无活跃任务, 不汇报
+
+            # 汇总 PM 进度
+            pm_lines = []
+            pms = self.db.list_pm_agents()
+            for pm in pms:
+                if pm.status in ("planning", "executing", "monitoring", "awaiting_input", "escalated"):
+                    reports = self.db.get_progress_reports(pm.pm_id, limit=1)
+                    progress = reports[0]["progress"] if reports else 0.0
+                    pm_lines.append(f"{pm.agent_name}: {pm.status} ({progress*100:.0f}%)")
+
+            # 检测异常
+            alerts = []
+            for pm in pms:
+                if pm.status == "escalated":
+                    alerts.append(f"🚨 {pm.agent_name} 已升级, 需要决策")
+                elif pm.status == "awaiting_input":
+                    alerts.append(f"⚠️ {pm.agent_name} 等待您的输入")
+
+            # 生成简报
+            report = (
+                f"📊 工作站定期汇报\n"
+                f"活跃任务: {len(active_tasks)} 个\n"
+                f"PM Agent: {', '.join(pm_lines) if pm_lines else '无活跃 PM'}\n"
+            )
+            if alerts:
+                report += f"⚠️ 注意: {'; '.join(alerts)}\n"
+
+            # Bot 推送 (仅当有异常或活跃任务时)
+            self.bot_gateway.notify("periodic_report", {
+                "active_tasks": len(active_tasks),
+                "summary": report[:300],
+            })
+
+            print(f"[Station] 定期汇报: {len(active_tasks)} 个活跃任务")
+
+        except Exception as e:
+            print(f"[Station] 定期汇报异常: {e}")
 
     async def _ws_push_loop(self):
         """定期向 WebSocket 客户端推送最新主机状态 (新主机入站时立即触发)。"""

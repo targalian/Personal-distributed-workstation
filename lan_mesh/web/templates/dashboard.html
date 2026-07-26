@@ -239,6 +239,7 @@
   <div class="tab secretary-tab" data-tab="agents" style="display:none">🤖 Agent状态</div>
   <div class="tab secretary-tab" data-tab="tools" style="display:none">🔧 MCP工具</div>
   <div class="tab secretary-tab" data-tab="projects" style="display:none">📁 项目管理</div>
+  <div class="tab secretary-tab" data-tab="dag" style="display:none">📊 DAG 图</div>
   <div class="tab" data-tab="bot">📱 手机通道</div>
   <div class="tab" data-tab="p2p">📡 主机通讯</div>
 </div>
@@ -355,6 +356,42 @@
     </span>
   </div>
   <div class="grid" id="project-grid"><div class="empty"><div class="icon">📁</div><p>暂无项目</p><p class="hint">创建项目以启用预算控制与隔离</p></div></div>
+</div>
+
+<!-- 面板: DAG 图编辑器 -->
+<div class="panel" id="panel-dag">
+  <div class="toolbar">
+    <select id="dag-task-select" onchange="loadDAGFromSelect()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;min-width:200px">
+      <option value="">选择任务...</option>
+    </select>
+    <button class="btn primary" onclick="loadDAGFromSelect()">📂 加载</button>
+    <button class="btn" onclick="saveDAG()">💾 保存</button>
+    <button class="btn" onclick="dagAddNode()">➕ 添加节点</button>
+    <button class="btn" id="dag-connect-btn" onclick="dagToggleConnect()">🔗 连线</button>
+    <button class="btn danger" onclick="dagDeleteSelected()">🗑️ 删除选中</button>
+    <span style="margin-left:auto;font-size:13px;color:var(--dim)" id="dag-status">未加载</span>
+  </div>
+  <div style="position:relative;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface);min-height:500px">
+    <svg id="dag-svg" width="100%" height="500" style="display:block;cursor:crosshair">
+      <defs>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="var(--dim)"/>
+        </marker>
+        <marker id="arrowhead-cond" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="var(--yellow)"/>
+        </marker>
+      </defs>
+      <g id="dag-edges"></g>
+      <g id="dag-nodes"></g>
+    </svg>
+    <div id="dag-node-detail" style="display:none;position:absolute;top:10px;right:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;width:260px;font-size:13px;z-index:10">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b>节点详情</b><span style="cursor:pointer;color:var(--dim)" onclick="document.getElementById('dag-node-detail').style.display='none'">✖</span></div>
+      <div id="dag-detail-content"></div>
+    </div>
+  </div>
+  <div style="margin-top:10px;font-size:12px;color:var(--dim)">
+    🟢 completed · 🔵 running/assigned · 🟡 pending · 🔴 failed · 虚线=条件边 · 点击节点查看详情 · 拖拽移动位置
+  </div>
 </div>
 
 <!-- 面板: Station Director (默认显示) -->
@@ -551,6 +588,7 @@ function switchTab(tab){
   if(tab==='p2p')refreshP2PHosts();
   if(tab==='chat')loadChatHistory();
   if(tab==='teams')refreshPMAgents();
+  if(tab==='dag')refreshDagTaskSelect();
 }
 document.querySelectorAll('.tab').forEach(t=>{
   t.addEventListener('click',()=>switchTab(t.dataset.tab));
@@ -866,17 +904,23 @@ async function sendChatMessage(){
   _setChatLock(true);
   _showTyping();
   const t0=Date.now();
+  const abortCtrl=new AbortController();
+  const timeout=setTimeout(()=>abortCtrl.abort(),60000);
   try{
-    const r=await fetch('/api/secretary/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text})});
+    const r=await fetch('/api/secretary/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text}),signal:abortCtrl.signal});
+    clearTimeout(timeout);
     const d=await r.json();
     _hideTyping();
-    appendChatMessage('assistant',d.reply,d.timestamp);
+    // WS 连接正常时由 chat_reply 事件统一渲染; WS 断连时回退到 HTTP 响应渲染
+    if(!ws||ws.readyState!==WebSocket.OPEN){appendChatMessage('assistant',d.reply,d.timestamp);}
     const elapsed=((Date.now()-t0)/1000).toFixed(1);
     showToast(`秘书已回复 (${elapsed}s)`, 'info', 2500);
   }catch(e){
+    clearTimeout(timeout);
     _hideTyping();
-    appendChatMessage('assistant','[通信失败] '+e.message,Date.now()/1000);
-    showToast('秘书通信失败', 'err');
+    const msg=e.name==='AbortError'?'[超时] 秘书响应超过60s,请重试':'[通信失败] '+e.message;
+    appendChatMessage('assistant',msg,Date.now()/1000);
+    showToast(e.name==='AbortError'?'秘书响应超时':'秘书通信失败', 'err');
   }finally{
     _setChatLock(false);
     document.getElementById('chat-input').focus();
@@ -900,12 +944,14 @@ async function loadChatHistory(){
     const d=await r.json();
     const container=document.getElementById('chat-messages');
     container.innerHTML='';
-    chatMessages=d.history||[];
-    if(!chatMessages.length){
+    const history=d.history||[];
+    if(!history.length){
+      chatMessages=[];
       container.innerHTML='<div class="empty"><div class="icon">💬</div><p>向秘书发送消息开始对话</p><p class="hint">例如: "当前状态如何?" 或 "提交一个代码审查任务"</p></div>';
       return;
     }
-    chatMessages.forEach(m=>appendChatMessage(m.role,m.content,m.timestamp));
+    chatMessages=[];
+    history.forEach(m=>appendChatMessage(m.role,m.content,m.timestamp));
   }catch(e){console.error('加载聊天历史失败:',e);}
 }
 function clearChat(){
@@ -1379,6 +1425,197 @@ async function sendP2PFile(){
     uploadDiv.remove();
     alert('传输失败: '+e.message);
   }finally{fileInput.value='';}
+}
+
+// ── DAG 图编辑器 ──────────────────────────────────────────────
+let dagNodes=[];let dagEdges=[];let dagTaskId='';let dagSelected=null;
+let dagConnectMode=false;let dagConnectSource=null;let dagDragging=null;let dagDragOffset={x:0,y:0};
+const dagSvg=()=>document.getElementById('dag-svg');
+const dagNodesG=()=>document.getElementById('dag-nodes');
+const dagEdgesG=()=>document.getElementById('dag-edges');
+const NODE_W=160,NODE_H=50;
+
+function dagStatusColor(s){
+  if(s==='completed')return'var(--green)';
+  if(s==='running'||s==='assigned')return'var(--accent)';
+  if(s==='failed')return'var(--red)';
+  return'var(--yellow)';
+}
+
+async function loadDAGFromSelect(){
+  const sel=document.getElementById('dag-task-select');
+  const tid=sel.value;
+  if(!tid){showToast('请先选择任务','err');return;}
+  dagTaskId=tid;
+  try{
+    const r=await fetch(`/api/tasks/${tid}/graph`);
+    if(!r.ok){const e=await r.json();showToast(e.detail||'加载失败','err');return;}
+    const data=await r.json();
+    dagNodes=data.nodes||[];dagEdges=data.edges||[];
+    renderDAG();
+    document.getElementById('dag-status').textContent=`已加载: ${dagNodes.length} 节点 / ${dagEdges.length} 边`;
+    showToast('DAG 图已加载','ok');
+  }catch(e){showToast('加载失败: '+e.message,'err');}
+}
+
+function renderDAG(){
+  const ng=dagNodesG();const eg=dagEdgesG();
+  ng.innerHTML='';eg.innerHTML='';
+  // 渲染边
+  dagEdges.forEach((e,i)=>{
+    const src=dagNodes.find(n=>n.id===e.source);
+    const tgt=dagNodes.find(n=>n.id===e.target);
+    if(!src||!tgt)return;
+    const x1=(src.x||0)+NODE_W/2,y1=(src.y||0)+NODE_H;
+    const x2=(tgt.x||0)+NODE_W/2,y2=(tgt.y||0);
+    const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1',x1);line.setAttribute('y1',y1);
+    line.setAttribute('x2',x2);line.setAttribute('y2',y2);
+    line.setAttribute('stroke',e.condition?'var(--yellow)':'var(--dim)');
+    line.setAttribute('stroke-width','2');
+    if(e.condition)line.setAttribute('stroke-dasharray','6,4');
+    line.setAttribute('marker-end',e.condition?'url(#arrowhead-cond)':'url(#arrowhead)');
+    eg.appendChild(line);
+    if(e.condition){
+      const txt=document.createElementNS('http://www.w3.org/2000/svg','text');
+      txt.setAttribute('x',(x1+x2)/2);txt.setAttribute('y',(y1+y2)/2-6);
+      txt.setAttribute('fill','var(--yellow)');txt.setAttribute('font-size','10');
+      txt.setAttribute('text-anchor','middle');
+      txt.textContent=e.condition.length>20?e.condition.slice(0,20)+'...':e.condition;
+      eg.appendChild(txt);
+    }
+  });
+  // 渲染节点
+  dagNodes.forEach((n,i)=>{
+    const g=document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('transform',`translate(${n.x||0},${n.y||0})`);
+    g.style.cursor='grab';
+    g.dataset.idx=i;
+    const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');
+    rect.setAttribute('width',NODE_W);rect.setAttribute('height',NODE_H);
+    rect.setAttribute('rx','10');rect.setAttribute('ry','10');
+    rect.setAttribute('fill','var(--surface2)');
+    rect.setAttribute('stroke',dagSelected===n.id?'#fff':dagStatusColor(n.status));
+    rect.setAttribute('stroke-width',dagSelected===n.id?'3':'2');
+    g.appendChild(rect);
+    const txt=document.createElementNS('http://www.w3.org/2000/svg','text');
+    txt.setAttribute('x',NODE_W/2);txt.setAttribute('y',20);
+    txt.setAttribute('text-anchor','middle');txt.setAttribute('fill','var(--text)');
+    txt.setAttribute('font-size','12');txt.setAttribute('font-weight','600');
+    txt.textContent=(n.name||'unnamed').length>14?(n.name||'').slice(0,14)+'...':(n.name||'');
+    g.appendChild(txt);
+    const sub=document.createElementNS('http://www.w3.org/2000/svg','text');
+    sub.setAttribute('x',NODE_W/2);sub.setAttribute('y',38);
+    sub.setAttribute('text-anchor','middle');sub.setAttribute('fill','var(--dim)');
+    sub.setAttribute('font-size','10');
+    sub.textContent=`${n.skill||''} [${n.status||'pending'}]`;
+    g.appendChild(sub);
+    // 事件
+    g.addEventListener('mousedown',(ev)=>dagNodeMouseDown(ev,i));
+    g.addEventListener('click',(ev)=>dagNodeClick(ev,i));
+    ng.appendChild(g);
+  });
+}
+
+function dagNodeMouseDown(ev,idx){
+  if(dagConnectMode)return;
+  ev.preventDefault();
+  dagDragging=idx;
+  const svg=dagSvg();const rect=svg.getBoundingClientRect();
+  dagDragOffset={x:ev.clientX-rect.left-(dagNodes[idx].x||0),y:ev.clientY-rect.top-(dagNodes[idx].y||0)};
+}
+
+function dagNodeClick(ev,idx){
+  ev.stopPropagation();
+  const n=dagNodes[idx];
+  if(dagConnectMode){
+    if(!dagConnectSource){dagConnectSource=n.id;showToast(`连线: 源=${n.name}`,'info');}
+    else{
+      if(dagConnectSource!==n.id){
+        dagEdges.push({source:dagConnectSource,target:n.id,condition:'',description:''});
+        renderDAG();showToast('连线已添加','ok');
+      }
+      dagConnectSource=null;
+    }
+    return;
+  }
+  dagSelected=n.id;
+  renderDAG();
+  // 显示详情
+  const det=document.getElementById('dag-node-detail');
+  det.style.display='block';
+  document.getElementById('dag-detail-content').innerHTML=`
+    <div style="margin-bottom:6px"><b>名称:</b> ${n.name||'-'}</div>
+    <div style="margin-bottom:6px"><b>技能:</b> ${n.skill||'-'}</div>
+    <div style="margin-bottom:6px"><b>状态:</b> <span style="color:${dagStatusColor(n.status)}">${n.status||'pending'}</span></div>
+    <div style="margin-bottom:6px"><b>描述:</b> ${n.description||'-'}</div>
+    <div style="margin-bottom:6px"><b>Agent:</b> ${n.assigned_agent_id||'未分配'}</div>
+    <div><b>条件:</b> ${n.condition_expr||'无'}</div>`;
+}
+
+document.addEventListener('mousemove',(ev)=>{
+  if(dagDragging===null)return;
+  const svg=dagSvg();const rect=svg.getBoundingClientRect();
+  dagNodes[dagDragging].x=Math.max(0,ev.clientX-rect.left-dagDragOffset.x);
+  dagNodes[dagDragging].y=Math.max(0,ev.clientY-rect.top-dagDragOffset.y);
+  renderDAG();
+});
+document.addEventListener('mouseup',()=>{dagDragging=null;});
+
+function dagToggleConnect(){
+  dagConnectMode=!dagConnectMode;dagConnectSource=null;
+  const btn=document.getElementById('dag-connect-btn');
+  btn.style.background=dagConnectMode?'var(--accent)':'';
+  btn.style.color=dagConnectMode?'#fff':'';
+  showToast(dagConnectMode?'连线模式: 依次点击源节点和目标节点':'连线模式已关闭','info');
+}
+
+function dagAddNode(){
+  const name=prompt('节点名称:','新子任务');
+  if(!name)return;
+  const skill=prompt('技能 (code_generation/code_review/shell_exec/...):','code_generation')||'code_generation';
+  const id='node-'+Date.now().toString(36);
+  dagNodes.push({id,name,status:'pending',skill,description:'',input_data:{},output_data:{},assigned_agent_id:'',condition_expr:'',x:100+Math.random()*200,y:100+Math.random()*200});
+  renderDAG();
+  document.getElementById('dag-status').textContent=`${dagNodes.length} 节点 / ${dagEdges.length} 边`;
+}
+
+function dagDeleteSelected(){
+  if(!dagSelected){showToast('请先点击选中一个节点','err');return;}
+  dagNodes=dagNodes.filter(n=>n.id!==dagSelected);
+  dagEdges=dagEdges.filter(e=>e.source!==dagSelected&&e.target!==dagSelected);
+  dagSelected=null;
+  document.getElementById('dag-node-detail').style.display='none';
+  renderDAG();
+  document.getElementById('dag-status').textContent=`${dagNodes.length} 节点 / ${dagEdges.length} 边`;
+  showToast('节点已删除','ok');
+}
+
+async function saveDAG(){
+  if(!dagTaskId){showToast('请先加载任务','err');return;}
+  try{
+    const r=await fetch(`/api/tasks/${dagTaskId}/graph`,{
+      method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({nodes:dagNodes,edges:dagEdges})
+    });
+    const d=await r.json();
+    if(r.ok&&d.ok)showToast('DAG 图已保存','ok');
+    else showToast(d.detail||d.message||'保存失败','err');
+  }catch(e){showToast('保存失败: '+e.message,'err');}
+}
+
+async function refreshDagTaskSelect(){
+  try{
+    const r=await fetch('/api/tasks?limit=50');
+    const d=await r.json();
+    const sel=document.getElementById('dag-task-select');
+    sel.innerHTML='<option value="">选择任务...</option>';
+    (d.tasks||[]).forEach(t=>{
+      const opt=document.createElement('option');
+      opt.value=t.task_id;opt.textContent=`${t.name||t.task_id.slice(0,8)} [${t.status}]`;
+      sel.appendChild(opt);
+    });
+  }catch(e){}
 }
 
 // ── 初始化 ──

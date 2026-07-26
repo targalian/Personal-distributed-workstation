@@ -289,6 +289,7 @@ class SubTask:
     status: str = "pending"
     assigned_agent_id: str = ""
     depends_on: list = field(default_factory=list)  # 前置 subtask_id 列表
+    condition_expr: str = ""               # 条件边表达式 (如 "status == 'completed' and score > 0.8")
     created_at: float = field(default_factory=time.time)
     started_at: float = 0.0
     completed_at: float = 0.0

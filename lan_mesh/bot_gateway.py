@@ -36,6 +36,8 @@ EVENT_TEMPLATES = {
     "task_submitted": "📋 新任务: {name}\n📝 {description}\n🆔 {task_id}",
     "task_completed": "✅ 任务完成: {name}\n🆔 {task_id}",
     "task_failed": "❌ 任务失败: {name}\n原因: {reason}\n🆔 {task_id}",
+    "task_cancelled": "🚫 任务已取消: {name}\n🆔 {task_id}",
+    "task_paused": "⏸️ 任务已暂停: {name}\n🆔 {task_id}",
     "host_online": "🖥️ 主机上线: {device_name} ({ip})",
     "host_offline": "⚠️ 主机离线: {device_name}",
     "secretary_activated": "🔑 Secretary 已激活 (端口 {port})",
@@ -44,6 +46,10 @@ EVENT_TEMPLATES = {
     "skill_revoked": "📚 技能撤销: {skill_id} ← {assignee_type}:{assignee_id}",
     "budget_warning": "💰 预算告警: 项目 {project_id} 已用 {used:.2f}/{limit:.2f} USD",
     "bot_test": "🤖 Bot 通道测试 — 如果你看到这条消息，说明配置正确！",
+    "pm_awaiting_input": "❓ PM {pm_id} 请求决策: {question}",
+    "task_delivered": "📦 任务交付: {name}\n🆔 {task_id}\n请验收或退回",
+    "task_escalated": "🚨 任务升级: {task_name}\n子任务 {failed_subtask} 失败\n错误: {error}\n需要您的决策!",
+    "periodic_report": "{summary}",
 }
 
 # 事件严重级别 → 决定是否推送（避免低优先级事件打扰）
@@ -51,6 +57,8 @@ EVENT_PRIORITY = {
     "task_submitted": "normal",
     "task_completed": "normal",
     "task_failed": "high",
+    "task_cancelled": "high",
+    "task_paused": "normal",
     "host_online": "low",
     "host_offline": "normal",
     "secretary_activated": "high",
@@ -59,6 +67,10 @@ EVENT_PRIORITY = {
     "skill_revoked": "low",
     "budget_warning": "high",
     "bot_test": "high",
+    "pm_awaiting_input": "high",
+    "task_delivered": "high",
+    "task_escalated": "high",
+    "periodic_report": "low",
 }
 
 
@@ -95,6 +107,8 @@ class BotGateway:
         self._tg_poll_thread: Optional[threading.Thread] = None
         self._tg_last_update_id = 0
         self._tg_polling = False
+        # ── 优化15: 统一消息入口 ──
+        self._chat_handler = None  # ChatHandler 实例, 用于统一处理自然语言消息
 
     # ── 通道管理 ──
 
@@ -144,6 +158,14 @@ class BotGateway:
         返回值作为回复消息发送给用户。
         """
         self._command_handler = handler
+
+    def set_chat_handler(self, chat_handler):
+        """优化15: 设置 ChatHandler 实例, 统一处理自然语言消息。
+
+        设置后, Bot 收到的非斜杠命令消息将转发给 ChatHandler 处理,
+        与 Web 聊天窗口使用相同的 LLM + 操作意图检测逻辑。
+        """
+        self._chat_handler = chat_handler
 
     # ── 推送通知 ──
 
@@ -277,8 +299,8 @@ class BotGateway:
                 time.sleep(5)
 
     def _handle_telegram_command(self, channel: BotChannel, text: str, chat_id: str):
-        """处理来自 Telegram 的命令。"""
-        print(f"[BotGateway] 收到 Telegram 命令: {text} (from {chat_id})")
+        """处理来自 Telegram 的命令 (优化15: 统一入口)。"""
+        print(f"[BotGateway] 收到 Telegram 消息: {text} (from {chat_id})")
 
         # 内置命令
         if text == "/start" or text == "/help":
@@ -288,12 +310,14 @@ class BotGateway:
                 "/status — 工作站状态概览\n"
                 "/hosts — 在线主机列表\n"
                 "/tasks — 最近任务\n"
-                "/help — 显示帮助"
+                "/help — 显示帮助\n\n"
+                "或直接发送自然语言消息, 秘书将为您处理。\n"
+                "示例: 「提交一个代码审查任务: 检查 xxx 项目」"
             )
         elif text == "/ping":
             reply = "pong 🏓"
-        else:
-            # 委托给外部命令处理器
+        elif text.startswith("/"):
+            # 斜杠命令: 委托给外部命令处理器
             if self._command_handler:
                 try:
                     parts = text.split(maxsplit=1)
@@ -303,7 +327,10 @@ class BotGateway:
                 except Exception as e:
                     reply = f"⚠️ 命令执行出错: {e}"
             else:
-                reply = f"收到: {text}\n（未设置命令处理器）"
+                reply = f"未知命令: {text}\n发送 /help 查看可用命令"
+        else:
+            # 优化15: 自然语言消息 → 统一转发给 ChatHandler
+            reply = self._handle_natural_language(text, chat_id)
 
         # 发送回复
         url = f"https://api.telegram.org/bot{channel.bot_token}/sendMessage"
@@ -315,6 +342,40 @@ class BotGateway:
             }, timeout=10)
         except Exception as e:
             print(f"[BotGateway] 回复 Telegram 失败: {e}")
+
+    def _handle_natural_language(self, text: str, chat_id: str) -> str:
+        """优化15: 统一处理自然语言消息。
+
+        优先使用 ChatHandler (与 Web 端相同的 LLM + 操作意图),
+        回退到 command_handler, 最后回退到提示信息。
+        """
+        # 策略1: ChatHandler (完整的秘书对话能力)
+        if self._chat_handler:
+            try:
+                result = self._chat_handler.chat(text)
+                reply = result.get("reply", "")
+                if reply:
+                    # Telegram 消息长度限制 4096 字符
+                    if len(reply) > 4000:
+                        reply = reply[:4000] + "\n...(内容过长已截断)"
+                    return reply
+            except Exception as e:
+                print(f"[BotGateway] ChatHandler 处理异常: {e}")
+                return f"⚠️ 秘书处理异常: {e}"
+
+        # 策略2: command_handler (简单命令模式)
+        if self._command_handler:
+            try:
+                return self._command_handler("chat", text, chat_id)
+            except Exception as e:
+                return f"⚠️ 命令执行出错: {e}"
+
+        # 策略3: 无处理器
+        return (
+            f"收到: {text}\n"
+            "秘书尚未激活, 无法处理自然语言消息。\n"
+            "请先在 Web UI 激活 Secretary, 或发送 /help 查看可用命令。"
+        )
 
     def stop(self):
         """停止所有后台线程。"""

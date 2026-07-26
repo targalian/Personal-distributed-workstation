@@ -581,6 +581,12 @@ def create_station_router(controller) -> APIRouter:
                     status="starting",
                 )
                 db.upsert_pm_agent(pm_agent)
+                # 优化7: 记录 PM→Worker 映射
+                controller._pm_worker_map[pm_id] = {
+                    "ip": target_host.ip,
+                    "api_port": target_host.api_port,
+                    "device_id": target_host.device_id,
+                }
 
                 await _broadcast(state, "pm_registered", {
                     "pm_id": pm_id,
@@ -617,6 +623,203 @@ def create_station_router(controller) -> APIRouter:
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
         return task.to_dict()
+
+    # ── 优化8: 取消/暂停任务 ──
+
+    @router.post("/api/tasks/{task_id}/cancel")
+    async def cancel_task(task_id: str):
+        """取消指定任务及其 PM Agent。"""
+        _check_secretary()
+        result = controller.cancel_task(task_id)
+        if result.get("ok"):
+            await _broadcast(state, "task_cancelled", {
+                "task_id": task_id, "message": result.get("message", ""),
+            })
+            return result
+        raise HTTPException(status_code=409, detail=result.get("message", "取消失败"))
+
+    @router.post("/api/tasks/{task_id}/pause")
+    async def pause_task(task_id: str):
+        """暂停指定任务及其 PM Agent。"""
+        _check_secretary()
+        result = controller.pause_task(task_id)
+        if result.get("ok"):
+            await _broadcast(state, "task_paused", {
+                "task_id": task_id, "message": result.get("message", ""),
+            })
+            return result
+        raise HTTPException(status_code=409, detail=result.get("message", "暂停失败"))
+
+    # ── Graph Engine: DAG 图结构 / Checkpoint / 断点恢复 ──
+
+    @router.get("/api/tasks/{task_id}/graph")
+    async def get_task_graph(task_id: str):
+        """获取任务的 DAG 图结构 JSON (供前端 SVG 渲染)。
+
+        返回: {nodes: [{id, name, status, skill, x, y, ...}], edges: [{source, target, condition}]}
+        """
+        _check_secretary()
+        orchestrator = controller.orchestrator
+        if not orchestrator:
+            raise HTTPException(status_code=503, detail="编排器未初始化")
+        graph = orchestrator.get_task_graph(task_id)
+        if not graph:
+            raise HTTPException(status_code=404, detail="任务无 DAG 图数据")
+        return graph
+
+    @router.put("/api/tasks/{task_id}/graph")
+    async def update_task_graph(task_id: str, payload: dict):
+        """保存编辑后的 DAG 图结构 (前端图编辑器保存)。
+
+        接收: {nodes: [...], edges: [...]}
+        验证: 环检测, 失败则拒绝保存。
+        """
+        _check_secretary()
+        orchestrator = controller.orchestrator
+        if not orchestrator:
+            raise HTTPException(status_code=503, detail="编排器未初始化")
+        result = orchestrator.update_task_graph(task_id, payload)
+        if result.get("ok"):
+            await _broadcast(state, "task_graph_updated", {
+                "task_id": task_id, "message": result.get("message", ""),
+            })
+            return result
+        raise HTTPException(status_code=409, detail=result.get("message", "保存失败"))
+
+    @router.post("/api/tasks/{task_id}/resume")
+    async def resume_task(task_id: str):
+        """从 checkpoint 恢复任务执行。"""
+        _check_secretary()
+        orchestrator = controller.orchestrator
+        if not orchestrator:
+            raise HTTPException(status_code=503, detail="编排器未初始化")
+        success = orchestrator.resume_task(task_id)
+        if success:
+            await _broadcast(state, "task_resumed", {
+                "task_id": task_id, "message": "任务已从 checkpoint 恢复",
+            })
+            return {"ok": True, "message": "任务已恢复执行"}
+        raise HTTPException(status_code=409, detail="无可用 checkpoint 或恢复失败")
+
+    @router.get("/api/tasks/{task_id}/checkpoints")
+    async def list_checkpoints(task_id: str):
+        """查看任务的 checkpoint 列表。"""
+        _check_secretary()
+        checkpoints = db.list_checkpoints(task_id)
+        return {"checkpoints": checkpoints, "total": len(checkpoints)}
+
+    @router.get("/api/tasks/{task_id}/graph-state")
+    async def get_graph_state(task_id: str):
+        """获取任务的当前状态机状态 (phase + history)。"""
+        _check_secretary()
+        orchestrator = controller.orchestrator
+        if not orchestrator:
+            raise HTTPException(status_code=503, detail="编排器未初始化")
+        gs = orchestrator.get_graph_state(task_id)
+        if not gs:
+            raise HTTPException(status_code=404, detail="任务无图状态数据")
+        return gs
+
+    # ── 优化7: 反向沟通 — PM 注入回复 ──
+
+    @router.post("/api/pm/{pm_id}/inject-input")
+    async def inject_pm_input(pm_id: str, payload: dict):
+        """向 PM Agent 注入来自 Boss/秘书的回复 (反向沟通通道)。
+
+        当 PM 上报 awaiting_input 状态后, 秘书/Web UI 可通过此端点
+        将 Boss 的决策回复注入到 PM Agent。
+        """
+        _check_secretary()
+        result = controller.inject_input_to_pm(pm_id, payload)
+        if result.get("ok"):
+            await _broadcast(state, "pm_input_injected", {
+                "pm_id": pm_id, "message": "回复已注入 PM Agent",
+            })
+            return result
+        raise HTTPException(status_code=409, detail=result.get("message", "注入失败"))
+
+    # ── 优化9: 交付闭环 ──
+
+    @router.post("/api/pm/{pm_id}/deliver")
+    async def receive_pm_delivery(pm_id: str, payload: dict):
+        """接收 PM Agent 的最终交付物 (任务完成后调用)。
+
+        存储交付物 → WebSocket 广播 → Bot 推送 → 聊天窗口通知 Boss。
+        Boss 可随后「验收」或「退回」。
+        """
+        _check_secretary()
+        task_id = payload.get("task_id", "")
+        task_name = payload.get("task_name", "")
+        deliverable = payload.get("deliverable", "")
+        summary = payload.get("summary", "")
+        subtask_stats = payload.get("subtask_stats", {})
+
+        # 存储交付物到 DB (追加到 task output_data)
+        if task_id:
+            task = db.get_task(task_id)
+            if task:
+                if not task.output_data:
+                    task.output_data = {}
+                task.output_data["_delivery"] = {
+                    "pm_id": pm_id,
+                    "deliverable": deliverable,
+                    "summary": summary,
+                    "subtask_stats": subtask_stats,
+                    "delivered_at": payload.get("delivered_at", time.time()),
+                    "accepted": None,  # 等待 Boss 验收
+                }
+                db.save_task(task)
+
+        # WebSocket 广播
+        await _broadcast(state, "task_delivered", {
+            "pm_id": pm_id,
+            "task_id": task_id,
+            "task_name": task_name,
+            "summary": summary,
+            "subtask_stats": subtask_stats,
+        })
+
+        # Bot 推送
+        controller.bot_gateway.notify("task_delivered", {
+            "name": task_name, "task_id": task_id[:12] if task_id else "",
+        })
+
+        print(f"[Station] PM {pm_id[:12]} 交付物已接收: {task_name}")
+        return {"ok": True, "task_id": task_id, "message": "交付物已接收, 等待 Boss 验收"}
+
+    # ── 优化14: 任务记忆 ──
+
+    @router.post("/api/pm/{pm_id}/task-memory")
+    async def receive_task_memory(pm_id: str, payload: dict):
+        """接收 PM Agent 的任务记忆 (任务完成后调用)。
+
+        存储到 task_memory 表, 用于未来同类任务的决策参考:
+        - 推荐协作模式
+        - 历史成功率
+        - 常见错误预警
+        """
+        _check_secretary()
+        db.save_task_memory(
+            task_name=payload.get("task_name", ""),
+            task_keywords=payload.get("task_keywords", []),
+            task_type=payload.get("task_type", "general"),
+            collaboration_mode=payload.get("collaboration_mode", ""),
+            team_size=payload.get("team_size", 0),
+            duration_secs=payload.get("duration_secs", 0),
+            success=payload.get("success", True),
+            error_pattern=payload.get("error_pattern", ""),
+            boss_feedback=payload.get("boss_feedback", ""),
+            device_id=payload.get("device_id", ""),
+        )
+        print(f"[Station] PM {pm_id[:12]} 任务记忆已存储 (type={payload.get('task_type', '')})")
+        return {"ok": True, "message": "任务记忆已存储"}
+
+    @router.get("/api/task-memory/stats")
+    async def get_task_memory_stats(task_type: str = ""):
+        """查询任务记忆统计 (成功率、推荐模式等)。"""
+        _check_secretary()
+        stats = db.get_task_memory_stats(task_type=task_type)
+        return stats
 
     # ── PM Agent 管理 ──
 
@@ -680,10 +883,31 @@ def create_station_router(controller) -> APIRouter:
             collaboration_mode=collaboration_mode,
         )
 
-        await _broadcast(state, "pm_status_change", {
+        # 优化7: awaiting_input 状态时附带澄清问题
+        broadcast_data = {
             "pm_id": pm_id, "status": status,
             "collaboration_mode": collaboration_mode or "",
-        })
+        }
+        clarification_question = payload.get("clarification_question", "")
+        if clarification_question:
+            broadcast_data["clarification_question"] = clarification_question
+            broadcast_data["clarification_options"] = payload.get("clarification_options", [])
+
+        # 优化10: escalated 状态时附带升级详情
+        escalation = payload.get("escalation")
+        if escalation:
+            broadcast_data["escalation"] = escalation
+
+        await _broadcast(state, "pm_status_change", broadcast_data)
+
+        # 优化10: escalated 时额外广播 + Bot 推送
+        if status == "escalated" and escalation:
+            await _broadcast(state, "task_escalated", escalation)
+            controller.bot_gateway.notify("task_escalated", {
+                "task_name": escalation.get("task_name", ""),
+                "failed_subtask": escalation.get("failed_subtask", ""),
+                "error": escalation.get("error", "")[:200],
+            })
         return {"ok": True, "pm_id": pm_id, "status": status}
 
     @router.post("/api/pm/{pm_id}/progress")
@@ -771,6 +995,50 @@ def create_station_router(controller) -> APIRouter:
             return {"ok": True, "message": "聊天处理器未初始化"}
         chat_handler.clear_history()
         return {"ok": True, "message": "聊天历史已清空"}
+
+    # ── 优化15: Bot 统一消息入口 ──
+
+    @router.post("/api/bot/message")
+    async def bot_message_ingress(payload: dict):
+        """优化15: Bot 消息统一入口 (Webhook 模式)。
+
+        用于 Telegram Webhook 或其他 Bot 平台回调:
+        - 接收外部 Bot 平台推送的用户消息
+        - 转发给 ChatHandler 处理 (与 Web 聊天相同逻辑)
+        - 返回回复内容, 由调用方推送给用户
+
+        Payload:
+            {"message": "...", "chat_id": "...", "platform": "telegram"}
+        """
+        _check_secretary()
+        chat_handler = getattr(controller, 'chat_handler', None)
+        if not chat_handler:
+            raise HTTPException(status_code=503, detail="秘书未激活")
+
+        message = payload.get("message", "").strip()
+        if not message:
+            raise HTTPException(status_code=400, detail="消息不能为空")
+
+        chat_id = payload.get("chat_id", "")
+        platform = payload.get("platform", "unknown")
+        print(f"[Station] Bot 消息入口 ({platform}): {message[:50]} (from {chat_id})")
+
+        # 统一转发给 ChatHandler
+        result = chat_handler.chat(message)
+
+        # 广播到 Web UI (显示 Bot 来源的对话)
+        await _broadcast(state, "bot_chat", {
+            "platform": platform,
+            "chat_id": chat_id,
+            "message": message,
+            "reply": result.get("reply", ""),
+        })
+
+        return {
+            "ok": True,
+            "reply": result.get("reply", ""),
+            "action_taken": result.get("action_taken", ""),
+        }
 
     # ── 项目管理 ──
 

@@ -31,6 +31,20 @@ _ACTION_KEYWORDS = {
     "主机列表": "query_hosts",
     "查看任务": "query_tasks",
     "任务列表": "query_tasks",
+    # 优化8: 取消/暂停任务
+    "取消任务": "cancel_task",
+    "终止任务": "cancel_task",
+    "停止任务": "cancel_task",
+    "暂停任务": "pause_task",
+    # 优化7: 回复 PM 决策请求
+    "回复PM": "respond_to_pm",
+    "告诉PM": "respond_to_pm",
+    "告知PM": "respond_to_pm",
+    # 优化9: 验收/退回交付物
+    "验收": "accept_delivery",
+    "通过": "accept_delivery",
+    "退回": "reject_delivery",
+    "重新做": "reject_delivery",
 }
 
 
@@ -55,6 +69,9 @@ class ChatHandler:
         self._max_history = 50          # 保留最近 50 条对话
         # 从 DB 加载历史, 若无可退化为空列表
         self._history: list[dict] = self._load_history_from_db()
+
+        # ── 优化7: 反向沟通跟踪 ──
+        self._last_awaiting_pm: str = ""   # 最近请求决策的 PM ID
 
     # ── 公开接口 ──────────────────────────────────────────────────
 
@@ -201,6 +218,24 @@ class ChatHandler:
                 if active_pms:
                     for pm in active_pms[:3]:
                         lines.append(f"  - {pm.agent_name} [{pm.status}] 任务: {pm.task_id}")
+                # 优化7: 高亮等待决策的 PM
+                awaiting_pms = [p for p in pm_agents if p.status == "awaiting_input"]
+                if awaiting_pms:
+                    # 记录最近的 awaiting PM (用于后续回复匹配)
+                    self._last_awaiting_pm = awaiting_pms[-1].pm_id
+                    lines.append(f"- ⚠️ 等待决策 PM: {len(awaiting_pms)} 个")
+                    for pm in awaiting_pms[:2]:
+                        lines.append(f"  - {pm.agent_name} 正在等待您的决策! (任务: {pm.task_id})")
+                        lines.append(f"    请回复「告诉PM {pm.agent_name} <您的决策>」来回复")
+                # 优化10: 高亮升级的 PM
+                escalated_pms = [p for p in pm_agents if p.status == "escalated"]
+                if escalated_pms:
+                    self._last_awaiting_pm = escalated_pms[-1].pm_id
+                    lines.append(f"- 🚨 升级告警 PM: {len(escalated_pms)} 个")
+                    for pm in escalated_pms[:2]:
+                        lines.append(f"  - {pm.agent_name} 遇到严重失败, 需要您的决策! (任务: {pm.task_id})")
+                        lines.append(f"    可选: 忽略继续 / 简化重试 / 指定主机 / 放弃任务")
+                        lines.append(f"    请回复「告诉PM {pm.agent_name} <您的选择>」")
             except Exception:
                 lines.append("- PM Agent: 数据不可用")
 
@@ -241,7 +276,7 @@ class ChatHandler:
             "# 能力范围\n"
             "你可以帮助 Boss:\n"
             "1. 查看工作站状态 — 在线主机数量、主机评级、PM Agent 状态、任务进度\n"
-            "2. 提交新任务 — 任务会自动分配 PM Agent 接管, 在 Web 端「任务管理」Tab 操作\n"
+            "2. 直接提交任务 — Boss 描述任务后, 你可以直接创建并分配 PM Agent 接管\n"
             "3. 激活/停用 Secretary 模式\n"
             "4. 查询任务进度和 PM Agent 团队状态\n"
             "5. 解释工作站的功能和架构 (Station Director/Worker/Secretary/PM Agent)\n\n"
@@ -251,7 +286,8 @@ class ChatHandler:
             "- 如果用户询问工作站能力范围外的问题 (如股票交易、编程开发等), "
             "礼貌地说明你的职责是管理分布式 AI 工作站, 无法处理该类问题。\n"
             "- 回复必须简洁明了, 使用中文, 基于下方实时数据回答, 不要臆测。\n"
-            "- 如果不确定某个信息, 如实告知「该信息暂不可用」而非编造。\n\n"
+            "- 如果不确定某个信息, 如实告知「该信息暂不可用」而非编造。\n"
+            "- 当 Boss 描述任务时, 直接创建任务并分配 PM Agent, 无需让 Boss 去 Web UI。\n\n"
             "# 工作站架构概要\n"
             "- Station Director: 基础设施管理入口, 提供 Web UI 和 UDP 发现\n"
             "- Worker: 计算节点, 执行 PM Agent 分配的子任务\n"
@@ -316,13 +352,99 @@ class ChatHandler:
             elif action == "deactivate_secretary":
                 return self._action_deactivate_secretary()
             elif action == "submit_task":
-                # 提交任务需要通过 Web 端任务管理 Tab, 这里只给出提示
-                return "请在 Web 端「任务管理」Tab 中提交任务, 或描述任务名称和内容, 我会协助您填写。"
+                return self._action_submit_task(message)
+            elif action == "cancel_task":
+                return self._action_cancel_task(message)
+            elif action == "pause_task":
+                return self._action_pause_task(message)
+            elif action == "respond_to_pm":
+                return self._action_respond_to_pm(message)
+            elif action == "accept_delivery":
+                return self._action_accept_delivery(message)
+            elif action == "reject_delivery":
+                return self._action_reject_delivery(message)
             return ""
         except Exception as e:
             return f"操作执行失败: {e}"
 
     # ── 操作实现 ──────────────────────────────────────────────────
+
+    def _parse_task_from_message(self, message: str) -> dict:
+        """从用户消息中提取任务名称和描述 (LLM 解析)。"""
+        extract_prompt = (
+            "从以下用户消息中提取任务信息。返回严格 JSON 格式: "
+            "{\"name\": \"简短任务名称(10字以内)\", \"description\": \"详细任务描述\"}。\n"
+            "如果描述太模糊无法提取有效信息, 返回 {\"name\": \"\", \"description\": \"\"}。\n\n"
+            f"消息: {message}"
+        )
+        resp = self.runtime._call_llm_with_routing(
+            extract_prompt,
+            {"_model_preference": "", "_fallback_models": []},
+        )
+        content = resp.get("content", "")
+        try:
+            # 提取 JSON 部分
+            import json
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            if start >= 0 and end > start:
+                return json.loads(content[start:end])
+        except Exception:
+            pass
+        return {"name": message[:20], "description": message}
+
+    def _action_submit_task(self, message: str) -> str:
+        """从对话直接提交任务并分配 PM Agent (优化13: 支持优先级)。"""
+        task_info = self._parse_task_from_message(message)
+        name = task_info.get("name", "")
+        description = task_info.get("description", "")
+
+        if not name or len(description) < 5:
+            return (
+                "请提供更详细的任务信息, 例如:\n"
+                "「提交一个代码审查任务: 检查 xxx 项目的安全漏洞」\n"
+                "可选: 加「优先」或「紧急」提高优先级"
+            )
+
+        # 优化13: 从消息中推断优先级
+        priority = "normal"
+        msg_lower = message.lower()
+        if any(kw in msg_lower for kw in ["紧急", "urgent", "立刻", "马上"]):
+            priority = "urgent"
+        elif any(kw in msg_lower for kw in ["优先", "重要", "high", "尽快"]):
+            priority = "high"
+        elif any(kw in msg_lower for kw in ["不急", "低优先", "low", "有空"]):
+            priority = "low"
+
+        result = self.controller.submit_task_from_chat(
+            name=name,
+            description=description,
+            created_by="secretary",
+            priority=priority,
+        )
+
+        # 优化14: 查询任务记忆, 提供历史参考
+        memory_hint = self._get_task_memory_hint(name, description)
+
+        status = result.get("status", "unknown")
+        if status == "failed":
+            error = result.get("output_data", {}).get("error", "未知错误")
+            return f"任务创建失败: {error}"
+        elif status == "running":
+            pm_id = result.get("pm_agent_id", "")[:8]
+            priority_label = {"low": "低", "normal": "普通", "high": "高", "urgent": "紧急"}.get(priority, priority)
+            msg = (
+                f"✅ 任务已创建并分配 PM Agent!\n"
+                f"- 任务ID: {result.get('task_id', '')}\n"
+                f"- 名称: {name}\n"
+                f"- 优先级: {priority_label}\n"
+                f"- PM Agent: {pm_id}\n"
+                f"- 状态: 运行中"
+            )
+            if memory_hint:
+                msg += f"\n\n💡 历史参考: {memory_hint}"
+            return msg
+        return f"任务已创建: {name} (状态: {status})"
 
     def _action_query_status(self) -> str:
         """查询综合状态。"""
@@ -355,23 +477,48 @@ class ChatHandler:
         return f"最近任务 ({len(tasks)} 个):\n" + "\n".join(lines)
 
     def _action_query_progress(self) -> str:
-        """查询 PM Agent 进度。"""
+        """查询 PM Agent 进度 (优化11: LLM 智能摘要)。"""
         if not self.controller.secretary_active:
             return "Secretary 未激活"
         try:
             pms = self.controller.db.list_pm_agents()
             if not pms:
                 return "暂无 PM Agent"
-            lines = []
+
+            # 收集原始数据
+            raw_lines = []
             for pm in pms:
                 reports = self.controller.db.get_progress_reports(pm.pm_id, limit=3)
                 latest_progress = reports[0]["progress"] if reports else 0.0
-                lines.append(
-                    f"  {pm.agent_name} [{pm.status}] "
-                    f"进度: {latest_progress*100:.0f}% "
-                    f"模式: {pm.collaboration_mode or '-'}"
+                latest_msg = reports[0]["message"] if reports else ""
+                raw_lines.append(
+                    f"- {pm.agent_name} | 状态: {pm.status} | "
+                    f"进度: {latest_progress*100:.0f}% | "
+                    f"模式: {pm.collaboration_mode or '-'} | "
+                    f"最新消息: {latest_msg[:100]}"
                 )
-            return f"PM Agent 进度 ({len(pms)} 个):\n" + "\n".join(lines)
+
+            raw_text = "\n".join(raw_lines)
+
+            # 优化11: 用 LLM 生成自然语言摘要
+            summary_prompt = (
+                "你是 LAN Mesh 工作站的秘书。请用简洁的中文 (2-3句话) 向 Boss 汇报以下 PM Agent 进度。\n"
+                "要求: 突出整体进展、异常情况和预计剩余时间。不要逐条列出, 用自然段落。\n\n"
+                f"PM Agent 数据:\n{raw_text}"
+            )
+            try:
+                resp = self.runtime._call_llm_with_routing(
+                    summary_prompt,
+                    {"_model_preference": "", "_fallback_models": []},
+                )
+                summary = resp.get("content", "").strip()
+                if summary and len(summary) > 10:
+                    return f"📊 进度汇报:\n{summary}\n\n--- 原始数据 ---\n{raw_text}"
+            except Exception:
+                pass
+
+            # LLM 失败时回退到原始格式
+            return f"PM Agent 进度 ({len(pms)} 个):\n{raw_text}"
         except Exception as e:
             return f"进度查询失败: {e}"
 
@@ -388,3 +535,231 @@ class ChatHandler:
             return "Secretary 当前未激活"
         result = self.controller.deactivate_secretary()
         return result.get("message", "Secretary 停用结果未知")
+
+    # ── 优化8: 取消/暂停任务操作 ──
+
+    def _action_cancel_task(self, message: str) -> str:
+        """取消指定任务。"""
+        task_id = self._extract_task_id_from_message(message)
+        if not task_id:
+            # 尝试从消息中找任务名称
+            tasks = self.controller.db.list_tasks(status="running", limit=10)
+            if not tasks:
+                return "当前没有运行中的任务可以取消"
+            # 模糊匹配任务名
+            for t in tasks:
+                if t.name and t.name in message:
+                    task_id = t.task_id
+                    break
+            if not task_id:
+                task_list = "\n".join([f"  - [{t.status}] {t.name} (ID: {t.task_id[:12]})" for t in tasks[:5]])
+                return f"请指定要取消的任务。当前运行中的任务:\n{task_list}\n\n示例: 取消任务 {tasks[0].name if tasks else 'XXX'}"
+
+        result = self.controller.cancel_task(task_id)
+        if result.get("ok"):
+            return f"✅ {result.get('message', '任务已取消')}"
+        return f"❌ 取消失败: {result.get('message', '未知错误')}"
+
+    def _action_pause_task(self, message: str) -> str:
+        """暂停指定任务。"""
+        task_id = self._extract_task_id_from_message(message)
+        if not task_id:
+            tasks = self.controller.db.list_tasks(status="running", limit=10)
+            if not tasks:
+                return "当前没有运行中的任务可以暂停"
+            for t in tasks:
+                if t.name and t.name in message:
+                    task_id = t.task_id
+                    break
+            if not task_id:
+                task_list = "\n".join([f"  - [{t.status}] {t.name} (ID: {t.task_id[:12]})" for t in tasks[:5]])
+                return f"请指定要暂停的任务。当前运行中的任务:\n{task_list}\n\n示例: 暂停任务 {tasks[0].name if tasks else 'XXX'}"
+
+        result = self.controller.pause_task(task_id)
+        if result.get("ok"):
+            return f"⏸️ {result.get('message', '任务已暂停')}"
+        return f"❌ 暂停失败: {result.get('message', '未知错误')}"
+
+    def _extract_task_id_from_message(self, message: str) -> str:
+        """从消息中提取 task_id (格式: task-xxxx)。"""
+        import re
+        match = re.search(r'task-[a-f0-9]{12}', message, re.IGNORECASE)
+        return match.group(0) if match else ""
+
+    # ── 优化7: 回复 PM 决策 ──
+
+    def _action_respond_to_pm(self, message: str) -> str:
+        """向等待决策的 PM Agent 回复 Boss 的决策。
+
+        支持两种方式:
+        1. 「告诉PM PM-abc 用方案A」→ 精确指定 PM
+        2. 如果只有一个 PM 在等待决策, 可直接用「用方案A」
+        """
+        pm_id = self._extract_pm_id_from_message(message)
+
+        # 如果没有明确指定 PM, 使用最近的 awaiting PM
+        if not pm_id:
+            # 刷新 _last_awaiting_pm
+            try:
+                pm_agents = self.controller.db.list_pm_agents()
+                awaiting = [p for p in pm_agents if p.status == "awaiting_input"]
+                if awaiting:
+                    pm_id = awaiting[-1].pm_id
+                    self._last_awaiting_pm = pm_id
+            except Exception:
+                pass
+
+        if not pm_id:
+            pm_id = self._last_awaiting_pm
+
+        if not pm_id:
+            return "当前没有 PM Agent 在等待您的决策。"
+
+        # 提取回复内容 (去掉"告诉PM xxx"前缀)
+        response_text = message
+        for prefix in ["告诉PM", "告知PM", "回复PM"]:
+            if prefix in message:
+                # 找到前缀后的内容
+                idx = message.index(prefix) + len(prefix)
+                # 跳过 PM ID 部分
+                after_prefix = message[idx:].strip()
+                # 如果以 PM ID 开头, 去掉它
+                if after_prefix.startswith("PM-") or after_prefix.startswith("pm-"):
+                    parts = after_prefix.split(None, 1)
+                    response_text = parts[1] if len(parts) > 1 else ""
+                else:
+                    response_text = after_prefix
+                break
+
+        if not response_text.strip():
+            return "请提供您的决策内容。示例: 告诉PM PM-abc 用方案A"
+
+        # 获取 PM 信息
+        pm = self.controller.db.get_pm_agent(pm_id)
+        if not pm:
+            return f"PM Agent {pm_id[:12]} 不存在"
+
+        result = self.controller.inject_input_to_pm(pm_id, {
+            "response": response_text,
+            "choice": response_text,
+        })
+
+        if result.get("ok"):
+            return f"✅ 已将您的决策发送给 {pm.agent_name}: {response_text[:100]}"
+        return f"❌ 发送失败: {result.get('message', '未知错误')}"
+
+    def _extract_pm_id_from_message(self, message: str) -> str:
+        """从消息中提取 pm_id (格式: pm-xxxx 或 PM-xxxx)。"""
+        import re
+        match = re.search(r'[Pp][Mm]-[a-f0-9]{12}', message)
+        return match.group(0) if match else ""
+
+    # ── 优化9: 验收/退回交付物 ──
+
+    def _action_accept_delivery(self, message: str) -> str:
+        """验收最近交付的任务。"""
+        task = self._find_latest_delivered_task()
+        if not task:
+            return "当前没有待验收的任务交付物。"
+
+        task_id = task.task_id
+        delivery = task.output_data.get("_delivery", {})
+        delivery["accepted"] = True
+        delivery["accepted_at"] = time.time()
+        task.output_data["_delivery"] = delivery
+        task.status = "completed"
+        self.controller.db.save_task(task)
+
+        return (
+            f"✅ 已验收任务「{task.name}」的交付物。\n"
+            f"任务状态已更新为 completed。"
+        )
+
+    def _action_reject_delivery(self, message: str) -> str:
+        """退回最近交付的任务, 附带修改意见。"""
+        task = self._find_latest_delivered_task()
+        if not task:
+            return "当前没有待退回的任务交付物。"
+
+        task_id = task.task_id
+        delivery = task.output_data.get("_delivery", {})
+        delivery["accepted"] = False
+        delivery["rejected_at"] = time.time()
+
+        # 提取退回原因
+        reason = message
+        for kw in ["退回", "重新做"]:
+            if kw in message:
+                idx = message.index(kw) + len(kw)
+                reason = message[idx:].strip()
+                break
+        if not reason:
+            reason = "Boss 未提供具体修改意见"
+
+        delivery["reject_reason"] = reason
+        task.output_data["_delivery"] = delivery
+        task.status = "running"  # 重新运行
+        self.controller.db.save_task(task)
+
+        # 通知 PM Agent (如果还在运行)
+        pm_id = task.pm_agent_id
+        if pm_id:
+            self.controller.inject_input_to_pm(pm_id, {
+                "response": f"[退回] {reason}",
+                "choice": "reject",
+                "task_name": task.name,
+            })
+
+        return (
+            f"↩️ 已退回任务「{task.name}」的交付物。\n"
+            f"退回原因: {reason}\n"
+            f"PM Agent 将收到修改意见并重新执行。"
+        )
+
+    def _find_latest_delivered_task(self):
+        """查找最近的已交付但未验收的任务。"""
+        try:
+            tasks = self.controller.db.list_tasks(limit=20)
+            for t in tasks:
+                if t.output_data and "_delivery" in t.output_data:
+                    delivery = t.output_data["_delivery"]
+                    if delivery.get("accepted") is None:  # 未验收
+                        return t
+        except Exception:
+            pass
+        return None
+
+    # ── 优化14: 任务记忆辅助 ──
+
+    def _get_task_memory_hint(self, task_name: str, task_desc: str) -> str:
+        """优化14: 查询任务记忆, 生成历史参考提示。
+
+        当 Boss 提交新任务时, 查询同类型任务的历史记录:
+        - 成功率和平均耗时
+        - 推荐的协作模式
+        - 常见错误预警
+        """
+        try:
+            db = self.controller.db
+            # 推断任务类型 (复用 PM Agent 的逻辑)
+            from .pm_agent import ProjectManagerAgent
+            task_type = ProjectManagerAgent._infer_task_type(task_name, task_desc)
+
+            stats = db.get_task_memory_stats(task_type=task_type)
+            if stats.get("total", 0) == 0:
+                return ""
+
+            hints = []
+            hints.append(f"同类任务历史 {stats['total']} 次, 成功率 {stats['success_rate']*100:.0f}%")
+            if stats.get("avg_duration", 0) > 0:
+                mins = stats["avg_duration"] / 60
+                hints.append(f"平均耗时 {mins:.1f} 分钟")
+            if stats.get("recommended_mode"):
+                hints.append(f"推荐模式: {stats['recommended_mode']}")
+            if stats.get("common_errors"):
+                top_error = stats["common_errors"][0][0]
+                hints.append(f"注意: 历史常见错误「{top_error[:50]}」")
+
+            return "; ".join(hints)
+        except Exception:
+            return ""

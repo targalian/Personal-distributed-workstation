@@ -374,13 +374,46 @@ class WorkerAgent:
         if not self.state.pm_agent:
             return {"ok": False, "message": "PM Agent 未运行"}
 
-        self.state.pm_agent.stop()
+        self.state.pm_agent.cancel()
         pm_id = self.state.pm_agent.pm_id
         self.state.pm_agent = None
         # 清理子 Agent
         self.state.sub_agents.clear()
         print(f"[Worker] PM Agent 已停止: {pm_id}")
         return {"ok": True, "pm_id": pm_id}
+
+    def cancel_pm(self) -> dict:
+        """取消 PM Agent (保留实例, 标记取消)。"""
+        if not self.state.pm_agent:
+            return {"ok": False, "message": "PM Agent 未运行"}
+        self.state.pm_agent.cancel()
+        return {"ok": True, "pm_id": self.state.pm_agent.pm_id}
+
+    def pause_pm(self) -> dict:
+        """暂停 PM Agent。"""
+        if not self.state.pm_agent:
+            return {"ok": False, "message": "PM Agent 未运行"}
+        self.state.pm_agent.pause()
+        return {"ok": True, "pm_id": self.state.pm_agent.pm_id}
+
+    def inject_pm_input(self, input_data: dict) -> dict:
+        """向 PM Agent 注入来自 Secretary/Boss 的回复输入。
+
+        用于反向沟通通道: Boss 回复 PM 的澄清请求后,
+        Secretary 通过此方法将回复注入 PM。
+
+        Args:
+            input_data: Boss 回复数据
+
+        Returns:
+            {ok: True} 或 {ok: False, message}
+        """
+        if not self.state.pm_agent:
+            return {"ok": False, "message": "PM Agent 未运行"}
+        if not self.state.pm_agent._running:
+            return {"ok": False, "message": "PM Agent 已停止"}
+        self.state.pm_agent.receive_input(input_data)
+        return {"ok": True, "pm_id": self.state.pm_agent.pm_id}
 
     def get_pm_status(self) -> dict:
         """查询本 Worker 上的 PM Agent 运行状态。"""

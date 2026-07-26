@@ -63,6 +63,11 @@ class ProjectManagerAgent:
         self._retry_counts: dict = {}      # task_name → 已重试次数
         self._max_retries: int = 2         # 最大重试次数
 
+        # ── 优化7: 反向沟通通道 (PM → Secretary → Boss) ──
+        self._clarification_event = threading.Event()   # 等待 Boss 回复
+        self._clarification_response: dict = {}          # Boss 的回复数据
+        self._clarification_timeout: float = 600.0       # 等待回复超时 (默认10分钟)
+
     # ── 生命周期 ──────────────────────────────────────────────────
 
     def start_task(self, task: dict):
@@ -734,6 +739,151 @@ class ProjectManagerAgent:
         self._subtask_outputs["_aggregated"] = aggregated
         print(f"[PM {self.pm_id[:8]}] 聚合完成, 结果长度: {len(aggregated)} 字符")
 
+        # ── 优化9: 交付闭环 — 将最终交付物上报 Secretary ──
+        self._deliver_result(task_name, task_desc, aggregated, subtask_results)
+
+    def _deliver_result(self, task_name: str, task_desc: str,
+                        aggregated: str, subtask_results: list):
+        """优化9: 将最终交付物上报 Secretary, 触发 Boss 验收流程。
+
+        Secretary 收到后:
+        1. 存储交付物到 DB
+        2. WebSocket 广播 "task_delivered" 到 Web UI
+        3. Bot 推送通知到手机
+        4. 聊天窗口主动告知 Boss
+
+        Args:
+            task_name: 任务名称
+            task_desc: 任务描述
+            aggregated: 聚合后的最终交付物 (Markdown)
+            subtask_results: 各子任务结果摘要
+        """
+        # 构建交付物摘要 (避免过长)
+        summary = aggregated[:500] if len(aggregated) > 500 else aggregated
+        completed_count = sum(1 for r in subtask_results if r.get("status") == "completed")
+        total_count = len(subtask_results)
+
+        delivery = {
+            "pm_id": self.pm_id,
+            "task_id": self._task.get("task_id", ""),
+            "task_name": task_name,
+            "task_description": task_desc,
+            "deliverable": aggregated,
+            "summary": summary,
+            "subtask_stats": {
+                "total": total_count,
+                "completed": completed_count,
+                "failed": total_count - completed_count,
+            },
+            "delivered_at": time.time(),
+        }
+
+        try:
+            resp = requests.post(
+                f"{self.secretary_url}/api/pm/{self.pm_id}/deliver",
+                json=delivery,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                print(f"[PM {self.pm_id[:8]}] 交付物已上报 Secretary")
+            else:
+                print(f"[PM {self.pm_id[:8]}] 交付物上报失败: HTTP {resp.status_code}")
+        except Exception as e:
+            print(f"[PM {self.pm_id[:8]}] 交付物上报异常: {e}")
+
+        # ── 优化14: 记录任务记忆 ──
+        self._record_task_memory(task_name, task_desc, subtask_results)
+
+    def _record_task_memory(self, task_name: str, task_desc: str, subtask_results: list):
+        """优化14: 任务完成后记录模式到 Secretary 的任务记忆表。
+
+        记录内容:
+        - 任务名称和关键词 (用于未来同类任务匹配)
+        - 协作模式 (parallel/sequential/hierarchical)
+        - 团队规模
+        - 耗时
+        - 成功/失败
+        - 错误模式 (如果有)
+
+        Secretary 收到后存入 task_memory 表, 未来提交同类任务时
+        可参考历史经验选择最优协作模式和团队配置。
+        """
+        # 提取关键词 (从任务名和描述中提取)
+        keywords = []
+        for word in task_name.replace(":", " ").replace(":", " ").split():
+            if len(word) >= 2:
+                keywords.append(word)
+        # 从描述中补充关键词
+        for word in task_desc[:100].replace(":", " ").replace(":", " ").split():
+            if len(word) >= 2 and word not in keywords:
+                keywords.append(word)
+        keywords = keywords[:10]  # 最多10个
+
+        # 推断任务类型
+        task_type = self._infer_task_type(task_name, task_desc)
+
+        # 计算耗时
+        duration = time.time() - self._task.get("_start_time", time.time())
+
+        # 判断成功/失败
+        completed_count = sum(1 for r in subtask_results if r.get("status") == "completed")
+        success = completed_count >= len(subtask_results) * 0.5 if subtask_results else True
+
+        # 提取错误模式
+        error_pattern = ""
+        for r in subtask_results:
+            if r.get("status") != "completed" and r.get("error"):
+                error_pattern = r["error"][:100]
+                break
+
+        # 团队规模
+        team_size = len(self._subagents) + len(self._teams)
+
+        memory_data = {
+            "pm_id": self.pm_id,
+            "task_name": task_name,
+            "task_keywords": keywords,
+            "task_type": task_type,
+            "collaboration_mode": self._plan.get("collaboration_mode", "") if self._plan else "",
+            "team_size": team_size,
+            "duration_secs": duration,
+            "success": success,
+            "error_pattern": error_pattern,
+            "device_id": self.device_id,
+        }
+
+        try:
+            resp = requests.post(
+                f"{self.secretary_url}/api/pm/{self.pm_id}/task-memory",
+                json=memory_data,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                print(f"[PM {self.pm_id[:8]}] 任务记忆已记录 (type={task_type}, success={success})")
+            else:
+                print(f"[PM {self.pm_id[:8]}] 任务记忆记录失败: HTTP {resp.status_code}")
+        except Exception as e:
+            print(f"[PM {self.pm_id[:8]}] 任务记忆记录异常: {e}")
+
+    @staticmethod
+    def _infer_task_type(task_name: str, task_desc: str) -> str:
+        """从任务名称和描述推断任务类型。"""
+        text = f"{task_name} {task_desc}".lower()
+        type_keywords = {
+            "code_review": ["代码审查", "code review", "审查", "review"],
+            "development": ["开发", "实现", "编写", "develop", "implement", "coding"],
+            "research": ["调研", "研究", "分析", "research", "analysis", "investigate"],
+            "documentation": ["文档", "说明", "documentation", "readme", "doc"],
+            "testing": ["测试", "test", "验证", "verify"],
+            "refactoring": ["重构", "refactor", "优化", "optimize"],
+            "deployment": ["部署", "deploy", "发布", "release"],
+            "data_processing": ["数据", "data", "处理", "process", "etl"],
+        }
+        for task_type, kws in type_keywords.items():
+            if any(kw in text for kw in kws):
+                return task_type
+        return "general"
+
     def _handle_subagent_failure(self, task_name: str, error_msg: str):
         """优化5: 子 Agent 失败后的接管策略。
 
@@ -806,7 +956,177 @@ class ProjectManagerAgent:
 
         # 策略3: PM 本地接管
         print(f"[PM {self.pm_id[:8]}] PM 本地接管子任务 '{task_name}'")
-        self._execute_subtask_locally(self._task, sub)
+        result = self._execute_subtask_locally(self._task, sub)
+
+        # ── 优化10: 如果本地接管也失败, 上报 escalated 到 Secretary ──
+        # (当前 _execute_subtask_locally 不返回明确状态, 通过进度上报判断)
+        # 这里主动上报升级状态, 让 Boss 知晓
+        self._report_escalation(task_name, error_msg, sub)
+
+    def _report_escalation(self, task_name: str, error_msg: str, sub: dict):
+        """优化10: 三级接管全失败后, 上报 escalated 状态到 Secretary。
+
+        Secretary 收到后:
+        1. WebSocket 广播 "task_escalated" 到 Web UI
+        2. Bot 推送高优先级通知到手机
+        3. 聊天窗口展示升级问题和选项, 等待 Boss 决策
+
+        Args:
+            task_name: 失败的子任务名
+            error_msg: 最后的错误信息
+            sub: 子任务定义
+        """
+        escalation = {
+            "pm_id": self.pm_id,
+            "task_id": self._task.get("task_id", ""),
+            "task_name": self._task.get("name", ""),
+            "failed_subtask": task_name,
+            "error": error_msg[:500],
+            "retry_count": self._retry_counts.get(task_name, 0),
+            "options": [
+                "忽略此子任务, 继续执行其他部分",
+                "降低质量要求, 用简化方案重试",
+                "手动指定一台主机重试",
+                "放弃整个任务",
+            ],
+            "escalated_at": time.time(),
+        }
+
+        # 通过 status 上报 (Secretary 会识别 escalated 状态)
+        self._report_status("escalated")
+        self._report_progress(
+            -2.0,  # 特殊标记: escalated
+            "escalated",
+            f"子任务 '{task_name}' 三级接管全失败: {error_msg[:200]}",
+            reporter_type="pm_escalation",
+            task_name=task_name,
+        )
+
+        # 额外 POST 升级详情 (含选项)
+        try:
+            requests.post(
+                f"{self.secretary_url}/api/pm/{self.pm_id}/status",
+                json={
+                    "status": "escalated",
+                    "escalation": escalation,
+                },
+                timeout=5,
+            )
+        except Exception:
+            pass
+
+        print(f"[PM {self.pm_id[:8]}] ⚠ 子任务 '{task_name}' 已上报 escalated, 等待 Boss 决策")
+
+    # ── 优化7: 反向沟通通道 ──────────────────────────────────────
+
+    def receive_input(self, input_data: dict):
+        """接收来自 Boss 的回复输入 (由 Worker 调用)。
+
+        当 PM 通过 _request_clarification() 请求 Boss 决策后,
+        Secretary 将 Boss 的回复通过此方法注入, 唤醒等待中的 PM 线程。
+
+        Args:
+            input_data: Boss 回复数据, 至少包含 {"response": "...", "choice": "..."}
+        """
+        self._clarification_response = input_data
+        self._clarification_event.set()
+        print(f"[PM {self.pm_id[:8]}] 收到 Boss 回复: {str(input_data)[:200]}")
+
+    def _request_clarification(self, question: str, options: list = None,
+                                timeout: float = None) -> dict:
+        """向 Boss 发起澄清请求, 阻塞等待回复。
+
+        当 PM 在执行中遇到需要人类决策的问题时调用此方法:
+        1. 上报 status='awaiting_input' 到 Secretary (附带问题+选项)
+        2. 阻塞当前线程, 等待 Boss 通过 Secretary 回复
+        3. 超时或收到回复后返回决策结果
+
+        Args:
+            question: 请求 Boss 决策的问题描述
+            options: 可选决策列表, 如 ["方案A: xxx", "方案B: yyy"]
+            timeout: 等待超时秒数 (默认使用 self._clarification_timeout)
+
+        Returns:
+            {"response": "Boss的文本回复", "choice": "选中的选项", "timestamp": ...}
+            超时返回 {"response": "", "choice": "", "timed_out": True}
+        """
+        # 重置 event
+        self._clarification_event.clear()
+        self._clarification_response = {}
+
+        # 向 Secretary 上报等待输入状态
+        self._report_status(
+            "awaiting_input",
+            task_list=[{
+                "name": "请求决策",
+                "status": "awaiting_input",
+                "description": question,
+            }],
+        )
+        # 附带问题详情到进度上报
+        self._report_progress(
+            -1.0,  # 特殊标记: awaiting_input
+            "awaiting_input",
+            question,
+            reporter_type="pm_clarification",
+            task_name=question[:100],
+        )
+        # 可选: 将 options 写入 DB (通过 status payload 扩展)
+        if options:
+            try:
+                import requests as _r
+                _r.post(
+                    f"{self.secretary_url}/api/pm/{self.pm_id}/status",
+                    json={
+                        "status": "awaiting_input",
+                        "clarification_question": question,
+                        "clarification_options": options,
+                    },
+                    timeout=5,
+                )
+            except Exception:
+                pass
+
+        actual_timeout = timeout if timeout is not None else self._clarification_timeout
+        print(f"[PM {self.pm_id[:8]}] 等待 Boss 决策 (超时={actual_timeout}s): {question[:120]}")
+
+        # 阻塞等待回复
+        received = self._clarification_event.wait(timeout=actual_timeout)
+
+        if not received:
+            print(f"[PM {self.pm_id[:8]}] 等待 Boss 决策超时, 使用默认策略继续")
+            return {"response": "", "choice": "", "timed_out": True}
+
+        # 恢复 running 状态
+        self._report_status("executing")
+        return self._clarification_response
+
+    # ── 优化8: 取消/暂停 ───────────────────────────────────────────
+
+    def cancel(self):
+        """取消 PM Agent 及所有子 Agent 的执行。"""
+        self._running = False
+        # 唤醒可能在等待澄清的线程
+        self._clarification_event.set()
+        self._clarification_response = {"response": "", "choice": "", "cancelled": True}
+        self._report_status("cancelled")
+        self._report_progress(0.0, "cancelled", "任务已被 Boss 取消")
+        print(f"[PM {self.pm_id[:8]}] 任务已取消")
+
+    def pause(self):
+        """暂停 PM Agent 的任务执行。
+
+        注意: 当前通过设置 running=False 实现暂停,
+        已分发的子任务不会立即停止 (它们独立运行)。
+        恢复时需重新调用 start_task()。
+        """
+        self._running = False
+        # 唤醒可能在等待澄清的线程
+        self._clarification_event.set()
+        self._clarification_response = {"response": "", "choice": "", "paused": True}
+        self._report_status("paused")
+        self._report_progress(0.0, "paused", "任务已被 Boss 暂停")
+        print(f"[PM {self.pm_id[:8]}] 任务已暂停")
 
     # ── 上报 Secretary ───────────────────────────────────────────
 

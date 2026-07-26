@@ -232,6 +232,42 @@ def create_worker_router(
             raise HTTPException(status_code=400, detail="缺少 agent_id")
         return role_manager.update_subagent_prompt(agent_id, new_prompt)
 
+    # ── 优化7: 反向沟通通道 ──
+
+    @router.post("/pm/inject-input")
+    async def pm_inject_input(payload: dict):
+        """向 PM Agent 注入来自 Secretary/Boss 的回复 (反向沟通通道)。
+
+        请求体:
+            {
+                "response": "Boss的回复文本",
+                "choice": "选中的选项",
+                "task_name": "请求决策"
+            }
+        """
+        if not role_manager:
+            raise HTTPException(status_code=503, detail="角色管理未初始化")
+        result = role_manager.inject_pm_input(payload)
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result.get("message", "注入失败"))
+        return result
+
+    # ── 优化8: PM 控制端点 ──
+
+    @router.post("/role/cancel-pm")
+    async def cancel_pm():
+        """取消本 Worker 上的 PM Agent 任务。"""
+        if not role_manager:
+            raise HTTPException(status_code=503, detail="角色管理未初始化")
+        return role_manager.cancel_pm()
+
+    @router.post("/role/pause-pm")
+    async def pause_pm():
+        """暂停本 Worker 上的 PM Agent 任务。"""
+        if not role_manager:
+            raise HTTPException(status_code=503, detail="角色管理未初始化")
+        return role_manager.pause_pm()
+
     # ── P2P 消息接收 (主机间通讯) ───────────────────────────
 
     # Worker 端内存级消息存储
