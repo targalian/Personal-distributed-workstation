@@ -109,6 +109,22 @@ def _tool_python_eval(params: dict) -> dict:
         return {"result": str(e), "success": False}
 
 
+def _tool_run_code(params: dict) -> dict:
+    """F2.2: 在安全沙箱中执行代码 (独立进程 + 超时保护)。"""
+    from .sandbox import sandbox
+    code = params.get("code", "")
+    language = params.get("language", "python")
+    timeout = params.get("timeout", 30)
+    packages = params.get("packages", [])
+
+    if packages and language == "python":
+        result = sandbox.execute_with_venv(code, packages=packages, timeout=timeout)
+    else:
+        result = sandbox.execute(code, language=language, timeout=timeout)
+
+    return result.to_dict()
+
+
 # ── 内置工具定义 ────────────────────────────────────────────────
 
 BUILTIN_TOOLS = {
@@ -210,6 +226,24 @@ BUILTIN_TOOLS = {
             },
         ),
         "handler": _tool_python_eval,
+    },
+    "run_code": {
+        "tool": ToolDef(
+            name="run_code",
+            description="在安全沙箱中执行代码 (独立进程+超时保护, 支持python/javascript/bash/powershell)",
+            mcp_compatible=True,
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "要执行的代码"},
+                    "language": {"type": "string", "enum": ["python", "javascript", "bash", "powershell"], "description": "编程语言"},
+                    "timeout": {"type": "integer", "description": "超时秒数 (1-120, 默认30)"},
+                    "packages": {"type": "array", "items": {"type": "string"}, "description": "Python依赖包 (可选, 将创建venv)"},
+                },
+                "required": ["code"],
+            },
+        ),
+        "handler": _tool_run_code,
     },
 }
 

@@ -148,14 +148,15 @@ class StationDirector:
 
     # ── 离线检测 ─────────────────────────────────────────────────
 
-    def prune_offline(self, ttl: float):
-        """清理超时离线主机并记录离线事件。"""
+    def prune_offline(self, ttl: float) -> list[str]:
+        """清理超时离线主机并记录离线事件。返回被清理的 device_id 列表。"""
         gone_ids = self.db.prune_offline(ttl)
         for device_id in gone_ids:
             self.db.log_host_event(device_id, "leave", "超时未心跳, 标记离线")
             record = self.db.get_host(device_id)
             name = record.device_name if record else device_id[:8]
             print(f"[Station] 主机离线: {name}")
+        return gone_ids
 
     # ── 舰队查询 ─────────────────────────────────────────────────
 

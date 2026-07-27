@@ -828,13 +828,91 @@ class StationController:
                 self._try_periodic_report()
 
     def _prune_loop(self):
-        """定期清理超时离线主机。"""
+        """定期清理超时离线主机, 并触发 F3.3 PM 迁移。"""
         while self._running:
             time.sleep(PRUNE_INTERVAL_SECS)
             try:
-                self.station_director.prune_offline(self.cfg.discovery.device_ttl)
+                gone_ids = self.station_director.prune_offline(self.cfg.discovery.device_ttl)
+                if gone_ids:
+                    self._migrate_orphaned_pms(gone_ids)
             except Exception as e:
-                print(f"[Station] 清理离线主机异常: {e}")
+                logger.error("清理离线主机异常: %s", e)
+
+    # ── F3.3: PM Agent 故障迁移 ─────────────────────────────────
+
+    def _migrate_orphaned_pms(self, gone_device_ids: list[str]):
+        """F3.3: 检测离线主机上的 PM, 将其任务迁移到可用节点或本机接管。
+
+        策略:
+        1. 扫描 _pm_worker_map, 找出 device_id 在 gone_ids 中的 PM
+        2. 查找该 PM 关联的任务, 重置为 pending
+        3. 优先派发到其他在线 Worker, 否则本机接管
+        """
+        gone_set = set(gone_device_ids)
+        orphaned_pms = []
+
+        for pm_id, info in list(self._pm_worker_map.items()):
+            if info.get("device_id") in gone_set:
+                orphaned_pms.append((pm_id, info))
+
+        if not orphaned_pms:
+            return
+
+        logger.warning("[F3.3] 检测到 %d 个 PM 因主机离线而孤立", len(orphaned_pms))
+
+        # 查找可用替代 Worker
+        hosts = self.db.list_hosts()
+        available_workers = [
+            h for h in hosts
+            if getattr(h, 'online', False)
+            and getattr(h, 'role', '') == 'worker'
+            and getattr(h, 'device_id', '') not in gone_set
+        ]
+
+        for pm_id, info in orphaned_pms:
+            # 查找关联任务
+            task_id = info.get("task_id", "")
+            if task_id:
+                task = self.db.get_task(task_id)
+                if task and getattr(task, 'status', '') in ('running', 'monitoring'):
+                    # 重置任务状态
+                    task.status = "pending"
+                    task.pm_agent_id = ""
+                    self.db.upsert_task(task)
+                    logger.info("[F3.3] 任务 %s 已重置为 pending", task_id[:8])
+
+                    # 尝试迁移
+                    if available_workers:
+                        target = available_workers[0]
+                        self._dispatch_next_task_to_worker(target)
+                        logger.info("[F3.3] 任务已迁移到 %s",
+                                   getattr(target, 'device_name', ''))
+                    else:
+                        # 本机接管
+                        logger.info("[F3.3] 无可用 Worker, 本机接管任务 %s", task_id[:8])
+                        self._start_local_pm_for_task(task_id)
+
+            # 清理映射
+            del self._pm_worker_map[pm_id]
+
+    def _start_local_pm_for_task(self, task_id: str):
+        """F3.3: 本机启动 PM Agent 接管指定任务。"""
+        try:
+            from .pm_agent import ProjectManagerAgent
+            task = self.db.get_task(task_id)
+            if not task:
+                return
+
+            pm = ProjectManagerAgent(
+                pm_id=f"pm-migrated-{task_id[:8]}",
+                task=task.to_dict() if hasattr(task, 'to_dict') else {"task_id": task_id},
+                secretary_url=f"http://127.0.0.1:{self.state.api_port}",
+                runtime=None,
+            )
+            self._local_pm_agent = pm
+            logger.info("[F3.3] 本机 PM 已启动: %s", pm.pm_id[:8])
+        except Exception as e:
+            logger.error("[F3.3] 本机接管失败: %s", e)
 
     def _try_periodic_report(self):
         """优化12: 定期汇报 — 当有活跃任务时, 生成简报推送到 Web UI 和 Bot。
