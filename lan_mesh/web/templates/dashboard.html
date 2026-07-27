@@ -164,7 +164,17 @@
   /* 表格包装器 */
   .table-wrap{width:100%}
   /* ── 聊天面板 ── */
-  .chat-container{display:flex;flex-direction:column;height:calc(100vh - 200px);min-height:400px;max-height:600px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  .chat-layout{display:flex;height:calc(100vh - 160px);min-height:450px;gap:0}
+  .conv-sidebar{width:220px;min-width:180px;border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--surface)}
+  .conv-sidebar-header{padding:12px}
+  .conv-list{flex:1;overflow-y:auto;padding:4px 8px}
+  .conv-item{padding:10px 12px;border-radius:8px;cursor:pointer;margin-bottom:4px;transition:background .15s}
+  .conv-item:hover{background:var(--surface2)}
+  .conv-item.active{background:var(--accent);color:#fff}
+  .conv-item .conv-title{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .conv-item .conv-time{font-size:11px;opacity:.6;margin-top:2px}
+  .chat-main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .chat-container{display:flex;flex-direction:column;flex:1;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
   .chat-messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
   .chat-msg{max-width:80%;padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.5;word-break:break-word;white-space:pre-wrap}
   .chat-msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:4px}
@@ -256,20 +266,33 @@
   <div class="mobile-nav-item" data-tab="p2p"><span class="nav-icon">📡</span><span>通讯</span></div>
 </div>
 
-<!-- 面板: 秘书对话 -->
+<!-- 面板: 秘书对话 (多项目对话) -->
 <div class="panel" id="panel-chat">
-  <div class="toolbar">
-    <button class="btn primary" onclick="clearChat()">🗑️ 清空对话</button>
-    <button class="btn" onclick="withFeedback(this,loadChatHistory)">🔄 加载历史</button>
-    <span style="margin-left:auto;font-size:14px;color:var(--dim)">与秘书对话,查询状态或提交任务</span>
-  </div>
-  <div class="chat-container">
-    <div class="chat-messages" id="chat-messages">
-      <div class="empty"><div class="icon">💬</div><p>向秘书发送消息开始对话</p><p class="hint">例如: "当前状态如何?" 或 "提交一个代码审查任务"</p></div>
+  <div class="chat-layout">
+    <!-- 左侧: 对话列表 -->
+    <div class="conv-sidebar" id="conv-sidebar">
+      <div class="conv-sidebar-header">
+        <button class="btn primary" onclick="createConversation()" style="width:100%">➕ 新建对话</button>
+      </div>
+      <div class="conv-list" id="conv-list"></div>
     </div>
-    <div class="chat-input-bar">
-      <input type="text" id="chat-input" placeholder="输入消息..." onkeydown="if(event.key==='Enter')sendChatMessage()">
-      <button class="btn primary" id="chat-send-btn" onclick="sendChatMessage()">发送</button>
+    <!-- 右侧: 聊天主区域 -->
+    <div class="chat-main">
+      <div class="toolbar">
+        <span id="chat-conv-title" style="font-weight:600;font-size:14px">默认对话</span>
+        <span style="margin-left:auto;font-size:13px;color:var(--dim)" id="chat-conv-project"></span>
+        <button class="btn" onclick="clearChat()" title="清空当前对话">🗑️</button>
+        <button class="btn" onclick="deleteCurrentConv()" title="删除对话">❌</button>
+      </div>
+      <div class="chat-container">
+        <div class="chat-messages" id="chat-messages">
+          <div class="empty"><div class="icon">💬</div><p>向秘书发送消息开始对话</p><p class="hint">例如: "当前状态如何?" 或 "提交一个代码审查任务"</p></div>
+        </div>
+        <div class="chat-input-bar">
+          <input type="text" id="chat-input" placeholder="输入消息..." onkeydown="if(event.key==='Enter')sendChatMessage()">
+          <button class="btn primary" id="chat-send-btn" onclick="sendChatMessage()">发送</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -586,7 +609,7 @@ function switchTab(tab){
   if(tab==='skills')refreshSkills();
   if(tab==='bot')refreshBotChannels();
   if(tab==='p2p')refreshP2PHosts();
-  if(tab==='chat')loadChatHistory();
+  if(tab==='chat')loadConversations();
   if(tab==='teams')refreshPMAgents();
   if(tab==='dag')refreshDagTaskSelect();
 }
@@ -907,14 +930,14 @@ async function sendChatMessage(){
   const abortCtrl=new AbortController();
   const timeout=setTimeout(()=>abortCtrl.abort(),60000);
   try{
-    const r=await fetch('/api/secretary/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text}),signal:abortCtrl.signal});
+    const r=await fetch('/api/secretary/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conv_id:_activeConvId}),signal:abortCtrl.signal});
     clearTimeout(timeout);
     const d=await r.json();
     _hideTyping();
-    // WS 连接正常时由 chat_reply 事件统一渲染; WS 断连时回退到 HTTP 响应渲染
     if(!ws||ws.readyState!==WebSocket.OPEN){appendChatMessage('assistant',d.reply,d.timestamp);}
     const elapsed=((Date.now()-t0)/1000).toFixed(1);
     showToast(`秘书已回复 (${elapsed}s)`, 'info', 2500);
+    loadConversations(); // 刷新侧边栏时间
   }catch(e){
     clearTimeout(timeout);
     _hideTyping();
@@ -928,41 +951,123 @@ async function sendChatMessage(){
 }
 function appendChatMessage(role,content,timestamp){
   const container=document.getElementById('chat-messages');
-  // 清除空状态
   const empty=container.querySelector('.empty');
   if(empty)empty.remove();
   const msg=document.createElement('div');
   msg.className='chat-msg '+role;
-  msg.innerHTML=esc(content)+'<div class="msg-meta">'+(role==='user'?'Boss':'秘书')+' · '+fmtTime(timestamp)+'</div>';
+  const rendered=role==='assistant'?renderMarkdown(content):esc(content);
+  msg.innerHTML=rendered+'<div class="msg-meta">'+(role==='user'?'Boss':'秘书')+' · '+fmtTime(timestamp)+'</div>';
   container.appendChild(msg);
   container.scrollTop=container.scrollHeight;
   chatMessages.push({role,content,timestamp});
 }
+function renderMarkdown(text){
+  // 简易 Markdown 渲染: 代码块 + 行内代码 + 加粗 + 列表
+  let h=esc(text);
+  // 代码块 ```...```
+  h=h.replace(/```(\w*)\n([\s\S]*?)```/g,(m,lang,code)=>'<pre style="background:var(--bg);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;margin:6px 0"><code>'+code+'</code></pre>');
+  // 行内代码
+  h=h.replace(/`([^`]+)`/g,'<code style="background:var(--bg);padding:2px 5px;border-radius:3px;font-size:12px">$1</code>');
+  // 加粗
+  h=h.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+  // 标题
+  h=h.replace(/^### (.+)$/gm,'<strong style="font-size:14px">$1</strong>');
+  h=h.replace(/^## (.+)$/gm,'<strong style="font-size:15px">$1</strong>');
+  // 列表
+  h=h.replace(/^- (.+)$/gm,'• $1');
+  h=h.replace(/^\d+\. (.+)$/gm,(m,p1,i)=>'• '+p1);
+  return h;
+}
 async function loadChatHistory(){
+  // 加载当前活跃对话的消息
+  if(!_activeConvId){return;}
   try{
-    const r=await fetch('/api/secretary/chat/history?limit=50');
+    const r=await fetch(`/api/conversations/${_activeConvId}/messages?limit=100`);
     const d=await r.json();
     const container=document.getElementById('chat-messages');
     container.innerHTML='';
-    const history=d.history||[];
-    if(!history.length){
+    const msgs=d.messages||[];
+    if(!msgs.length){
       chatMessages=[];
       container.innerHTML='<div class="empty"><div class="icon">💬</div><p>向秘书发送消息开始对话</p><p class="hint">例如: "当前状态如何?" 或 "提交一个代码审查任务"</p></div>';
       return;
     }
     chatMessages=[];
-    history.forEach(m=>appendChatMessage(m.role,m.content,m.timestamp));
-  }catch(e){console.error('加载聊天历史失败:',e);}
+    msgs.forEach(m=>appendChatMessage(m.role,m.content,m.timestamp));
+  }catch(e){console.error('加载对话消息失败:',e);}
 }
 function clearChat(){
-  if(!confirm('确定要清空对话记录吗？'))return;
+  if(!confirm('确定要清空当前对话记录吗？'))return;
   fetch('/api/secretary/chat/history',{method:'DELETE'})
     .then(r=>r.json())
     .then(()=>{
       document.getElementById('chat-messages').innerHTML='<div class="empty"><div class="icon">💬</div><p>向秘书发送消息开始对话</p></div>';
       chatMessages=[];
     })
-    .catch(e=>{console.error('清空对话记录失败:',e);alert('清空失败:'+e.message);});
+    .catch(e=>{showToast('清空失败:'+e.message,'err');});
+}
+
+// ── 多对话管理 ──
+let _activeConvId='';
+let _convList=[];
+
+async function loadConversations(){
+  try{
+    const r=await fetch('/api/conversations');
+    const d=await r.json();
+    _convList=d.conversations||[];
+    renderConvList();
+    // 若无活跃对话, 选第一个
+    if(!_activeConvId&&_convList.length){
+      switchConversation(_convList[0].id);
+    }
+  }catch(e){console.error('加载对话列表失败:',e);}
+}
+function renderConvList(){
+  const el=document.getElementById('conv-list');
+  if(!el)return;
+  el.innerHTML=_convList.map(c=>{
+    const active=c.id===_activeConvId?'active':'';
+    const t=c.updated_at?new Date(c.updated_at*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+    return `<div class="conv-item ${active}" onclick="switchConversation('${c.id}')"><div class="conv-title">${esc(c.title||'未命名')}</div><div class="conv-time">${t}</div></div>`;
+  }).join('');
+}
+async function switchConversation(convId){
+  _activeConvId=convId;
+  renderConvList();
+  // 更新标题
+  const meta=_convList.find(c=>c.id===convId);
+  document.getElementById('chat-conv-title').textContent=meta?meta.title:'对话';
+  document.getElementById('chat-conv-project').textContent=meta&&meta.project_id?`项目: ${meta.project_id}`:'';
+  await loadChatHistory();
+}
+async function createConversation(){
+  const title=prompt('对话标题:','新对话');
+  if(!title)return;
+  try{
+    const r=await fetch('/api/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})});
+    const conv=await r.json();
+    if(conv.id){
+      await loadConversations();
+      switchConversation(conv.id);
+      showToast(`对话「${title}」已创建`,'info');
+    }
+  }catch(e){showToast('创建失败:'+e.message,'err');}
+}
+async function deleteCurrentConv(){
+  if(!_activeConvId)return;
+  if(!confirm('确定删除当前对话?'))return;
+  try{
+    await fetch(`/api/conversations/${_activeConvId}`,{method:'DELETE'});
+    _activeConvId='';
+    await loadConversations();
+    if(_convList.length)switchConversation(_convList[0].id);
+    else{
+      document.getElementById('chat-messages').innerHTML='<div class="empty"><div class="icon">💬</div><p>点击“新建对话”开始</p></div>';
+      document.getElementById('chat-conv-title').textContent='无对话';
+    }
+    showToast('对话已删除','info');
+  }catch(e){showToast('删除失败:'+e.message,'err');}
 }
 
 // ── PM Agent / 团队管理 ──

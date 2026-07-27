@@ -55,6 +55,7 @@ class ModelEntryConfig(BaseModel):
 class ModelPoolConfig(BaseModel):
     """模型池配置集合。"""
     models: list = Field(default_factory=list)  # List[ModelEntryConfig]
+    default_model: str = ""  # 全局默认模型 (留空则走自动路由)
 
 
 # ── Bot 通道配置 (Phase: 手机交互) ─────────────────────────────
@@ -175,6 +176,7 @@ def load_model_pool(config_path: Optional[str] = None) -> ModelPoolConfig:
             with open(p, "r", encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}
             models = [ModelEntryConfig(**m) for m in raw.get("models", [])]
-            return ModelPoolConfig(models=models)
+            default_model = raw.get("default_model", "")
+            return ModelPoolConfig(models=models, default_model=default_model)
 
     return ModelPoolConfig()

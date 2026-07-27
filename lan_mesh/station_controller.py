@@ -136,6 +136,7 @@ class StationController:
         self.project_manager = None
         self.orchestrator = None  # 保留属性以兼容旧引用, 但不再使用
         self.model_router = None
+        self._default_model = ""  # 全局默认模型 (model_pool.yaml)
         self.mcp_gateway = None
         self.chat_handler = None    # 秘书聊天处理器
         self.chat_runtime = None    # 聊天专用 AgentRuntime
@@ -156,6 +157,7 @@ class StationController:
         self._start_timestamp: float = time.time()  # F1.2: 启动时间戳
         self._threads: list[threading.Thread] = []
         self._ws_push_event: Optional[asyncio.Event] = None  # 在 async 上下文中初始化
+        self._ws_broadcast_queue: list = []  # 同步代码向 WS 队列塞事件
 
         # ── 优化12: 定期汇报 ──
         self._report_interval: float = 300.0  # 汇报间隔 (默认5分钟)
@@ -212,8 +214,12 @@ class StationController:
         # 模型路由器
         model_pool = load_model_pool()
         self.model_router = ModelRouter(model_pool.models, self.project_manager) if model_pool.models else None
+        self._default_model = model_pool.default_model  # 全局默认模型
         if self.model_router:
-            print(f"[Station] 模型路由器已加载: {self.model_router.pool_size} 个模型")
+            model_info = f"{self.model_router.pool_size} 个模型"
+            if self._default_model:
+                model_info += f", 默认: {self._default_model}"
+            logger.info("模型路由器已加载: %s", model_info)
 
         # MCP 工具网关
         self.mcp_gateway = MCPGateway()
@@ -224,11 +230,12 @@ class StationController:
             shared_folder_path=str(self.state.shared_folder.path),
         )
 
-        # 秘书聊天处理器
+        # 秘书聊天处理器 (多对话 + 共享文件夹持久化)
         self.chat_handler = ChatHandler(
             runtime=self.chat_runtime,
             controller=self,
-            db=self.db,  # 持久化聊天历史到 SQLite
+            db=self.db,
+            shared_folder=self.state.shared_folder,
         )
 
         # 优化15: 将 ChatHandler 注入 BotGateway, 统一消息入口
@@ -264,6 +271,33 @@ class StationController:
         logger.info("Secretary 模式已停用 — 回到纯基础设施管理")
         return {"ok": True, "message": "Secretary 已停用"}
 
+    # ── Secretary 自动选举 ─────────────────────────────────────
+
+    def _secretary_election(self):
+        """First-Station-Wins 选举: 等待发现窗口, 判断是否由本站担任 Secretary。"""
+        logger.info("Secretary 选举: 等待 5s 发现窗口...")
+        time.sleep(5)  # 等待 UDP 发现收集网络中已有主机
+
+        existing = self._find_existing_secretary()
+        if not existing:
+            try:
+                self.activate_secretary()
+                logger.info("Secretary 选举: 本站当选 (网络中无其他 Secretary)")
+            except Exception as e:
+                logger.error("Secretary 自动激活失败: %s (可在 Web UI 手动激活)", e)
+        else:
+            logger.info("Secretary 选举: 网络中已有 Secretary [%s], 本站保持 Station 模式", existing)
+
+    def _find_existing_secretary(self) -> str:
+        """查找网络中已存在的在线 Secretary。返回设备名或空字符串。"""
+        hosts = self.db.list_hosts()
+        for h in hosts:
+            if (getattr(h, 'device_id', '') != self.state.device_id
+                    and getattr(h, 'role', '') == 'secretary'
+                    and getattr(h, 'online', False)):
+                return getattr(h, 'device_name', h.device_id[:8])
+        return ""
+
     def submit_task_from_chat(self, name: str, description: str, created_by: str = "secretary",
                               priority: str = "normal") -> dict:
         """从秘书对话直接提交任务并分配 PM Agent。
@@ -288,6 +322,8 @@ class StationController:
         task.input_data["_priority"] = priority
         self.db.save_task(task)
         print(f"[Station] 对话提交任务: {task.task_id} ({name}) 优先级={priority}")
+        # WS 广播: 通知前端任务面板刷新
+        self._queue_ws_broadcast("task_submitted", task.to_dict())
 
         # 选择在线 work_station (优化13: 评级 + 负载感知)
         hosts = self.db.list_hosts()
@@ -352,6 +388,13 @@ class StationController:
                     "local": True,
                 }
                 print(f"[Station] PM Agent 本机启动: {pm_id[:12]}")
+                # WS 广播: 通知前端 PM 面板 + 任务面板刷新
+                self._queue_ws_broadcast("pm_registered", {
+                    "pm_id": pm_id, "agent_name": f"PM-{pm_id[:8]}",
+                    "task_id": task.task_id, "status": "starting",
+                    "device_id": self.state.device_id,
+                })
+                self._queue_ws_broadcast("task_updated", task.to_dict())
                 self.bot_gateway.notify("pm_registered", {
                     "pm_id": pm_id[:12], "task": task.name, "station": self.state.device_name,
                 })
@@ -747,6 +790,13 @@ class StationController:
         if not packet.device_id or packet.device_id == self.state.device_id:
             return
 
+        # Secretary 冲突检测: 发现另一个 Secretary 且本站也是 Secretary
+        if (packet.role == "secretary" and self.secretary_active
+                and not getattr(self, '_secretary_conflict_warned', False)):
+            logger.warning("[Secretary 冲突] 网络中发现另一个 Secretary: %s (%s), 请手动决定保留哪个",
+                          packet.device_name, ip)
+            self._secretary_conflict_warned = True
+
         existing = self.db.get_host(packet.device_id)
         if existing:
             # 已注册: 仅更新 last_seen + IP + 实时指标 (轻量心跳)
@@ -1072,6 +1122,22 @@ class StationController:
                 hosts = self.db.list_hosts()
                 from .station_api import _broadcast
                 await _broadcast(self.state, "hosts", [h.to_dict() for h in hosts])
+
+                # 消费同步代码塞入的广播队列 (任务创建/PM启动等事件)
+                while self._ws_broadcast_queue:
+                    evt = self._ws_broadcast_queue.pop(0)
+                    await _broadcast(self.state, evt["type"], evt["data"])
+            except Exception:
+                pass
+
+    def _queue_ws_broadcast(self, event_type: str, data):
+        """从同步代码向 WS 广播队列塞事件 (下次 push loop 迭代时发送)。"""
+        self._ws_broadcast_queue.append({"type": event_type, "data": data})
+        # 触发 push loop 立即唤醒
+        if self._ws_push_event:
+            try:
+                loop = self._ws_push_event._loop
+                loop.call_soon_threadsafe(self._ws_push_event.set)
             except Exception:
                 pass
 
@@ -1145,7 +1211,6 @@ class StationController:
         logger.info("共享目录: %s", self.state.shared_folder.path)
         logger.info("数据库: %s", get_db_path(self.cfg))
         logger.info("HTTP API + Web UI 端口: %d", self.state.api_port)
-        logger.info("Secretary 模式: 未激活 (请在 Web UI 中激活)")
 
         # 启动 UDP 发现服务
         self.discovery = DiscoveryService(
@@ -1211,6 +1276,9 @@ class StationController:
         # F3.1: 启动自动扩缩容监控
         self._start_autoscaler()
 
+        # Secretary 自动选举 (First-Station-Wins)
+        self._secretary_election()
+
         # 创建 FastAPI 应用
         app = self._create_app()
 
@@ -1232,8 +1300,7 @@ class StationController:
         print(f"  Web UI:  http://localhost:{self.state.api_port}")
         for ip in local_ips:
             print(f"  局域网:  http://{ip}:{self.state.api_port}")
-        print(f"\n[Station] 等待 Worker 节点注册...")
-        print(f"[Station] 在 Web UI 中点击「启动秘书」激活 Secretary 模式\n")
+        print(f"\n[Station] Secretary 已就绪, 可直接通过聊天窗口下发任务\n")
 
         try:
             server.run()

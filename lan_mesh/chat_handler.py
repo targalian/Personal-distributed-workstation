@@ -21,6 +21,24 @@ _ACTION_KEYWORDS = {
     "提交一个": "submit_task",
     "创建任务": "submit_task",
     "新任务": "submit_task",
+    "下发任务": "submit_task",
+    "下发": "submit_task",
+    "激活下发": "submit_task",
+    "立即下发": "submit_task",
+    "分配任务": "submit_task",
+    # 自然语言表达 (用户日常说法)
+    "做一个": "submit_task",
+    "写一个": "submit_task",
+    "开发一个": "submit_task",
+    "帮我做": "submit_task",
+    "帮我写": "submit_task",
+    "帮我开发": "submit_task",
+    "实现一个": "submit_task",
+    "制作一个": "submit_task",
+    "搞一个": "submit_task",
+    "弄一个": "submit_task",
+    "做个": "submit_task",
+    "写个": "submit_task",
     "启动秘书": "activate_secretary",
     "激活秘书": "activate_secretary",
     "停止秘书": "deactivate_secretary",
@@ -45,48 +63,77 @@ _ACTION_KEYWORDS = {
     "通过": "accept_delivery",
     "退回": "reject_delivery",
     "重新做": "reject_delivery",
+    # 项目管理
+    "创建项目": "create_project",
+    "新建项目": "create_project",
+    "建立项目": "create_project",
 }
 
 
 class ChatHandler:
-    """秘书聊天处理器。
+    """秘书聊天处理器 — 支持多项目对话隔离。
 
     在 Secretary 激活后由 StationController 创建,
-    通过 station_api 的 /api/secretary/chat 端点对外服务。
+    通过 station_api 的 /api/conversations 端点对外服务。
+
+    对话持久化到共享文件夹 (conversations/), 跨主机可访问。
     """
 
-    def __init__(self, runtime, controller, db=None):
+    def __init__(self, runtime, controller, db=None, shared_folder=None):
         """初始化聊天处理器。
 
         Args:
             runtime: AgentRuntime 实例, 用于 LLM 调用
-            controller: StationController 实例, 用于查询工作站状态和执行操作
-            db: Database 实例, 用于聊天历史持久化 (可选, 为 None 时退化为内存存储)
+            controller: StationController 实例
+            db: Database 实例 (本地缓存)
+            shared_folder: SharedFolderManager 实例 (权威源)
         """
         self.runtime = runtime
         self.controller = controller
         self._db = db
-        self._max_history = 50          # 保留最近 50 条对话
-        # 从 DB 加载历史, 若无可退化为空列表
-        self._history: list[dict] = self._load_history_from_db()
+        self._shared_folder = shared_folder
+        self._max_history = 50
+
+        # ── 多对话状态 ──
+        self._conv_index: list[dict] = []       # [{id, title, project_id, created_at, updated_at}]
+        self._conversations: dict[str, list] = {}  # conv_id → messages
+        self._active_conv_id: str = ""
+
+        # 加载对话索引
+        self._load_conv_index()
+
+        # 向后兼容: 若无任何对话, 创建默认对话
+        if not self._conv_index:
+            self._create_conversation("默认对话")
+
+        # 确保活跃对话有效
+        if not self._active_conv_id and self._conv_index:
+            self._active_conv_id = self._conv_index[0]["id"]
 
         # ── 优化7: 反向沟通跟踪 ──
-        self._last_awaiting_pm: str = ""   # 最近请求决策的 PM ID
+        self._last_awaiting_pm: str = ""
 
     # ── 公开接口 ──────────────────────────────────────────────────
 
-    def chat(self, message: str, history: Optional[list] = None) -> dict:
+    def chat(self, message: str, conv_id: str = "", history: Optional[list] = None) -> dict:
         """处理用户消息, 返回回复。
 
         Args:
             message: 用户输入文本
-            history: 可选的外部历史 (Web 端传入), 为 None 则使用内部历史
+            conv_id: 对话 ID (留空则用当前活跃对话)
+            history: 可选外部历史 (向后兼容)
 
         Returns:
-            {"reply": str, "action_taken": str, "timestamp": float}
+            {"reply": str, "action_taken": str, "timestamp": float, "conv_id": str}
         """
-        # 使用外部历史或内部历史
-        chat_history = history if history is not None else self._history
+        # 确定对话
+        cid = conv_id or self._active_conv_id
+        if not cid or cid not in self._conversations:
+            cid = self._conv_index[0]["id"] if self._conv_index else self._create_conversation("默认对话")
+        self._active_conv_id = cid
+
+        # 获取对话历史
+        chat_history = history if history is not None else self._conversations.get(cid, [])
 
         # 1. 构建状态上下文
         status_context = self._build_status_context()
@@ -97,10 +144,20 @@ class ChatHandler:
         # 3. 拼接对话历史 + 用户消息
         prompt = self._build_prompt(message, chat_history)
 
-        # 4. 调用 LLM (优先使用模型路由器选择模型)
+        # 4. 调用 LLM (优先用全局默认模型, 否则走自动路由)
         model_pref = ""
         fallback_models = []
-        if self.controller.model_router:
+
+        # 全局默认模型 (model_pool.yaml 中配置)
+        default_model = getattr(self.controller, '_default_model', '')
+        if default_model:
+            model_pref = default_model
+            # 降级链: 从模型池中获取 fallback
+            if self.controller.model_router:
+                entry = self.controller.model_router._entries.get(default_model)
+                if entry and hasattr(entry, 'fallback'):
+                    fallback_models = entry.fallback or []
+        elif self.controller.model_router:
             try:
                 routing = self.controller.model_router.route(message, skill="document_summary")
                 model_pref = routing.selected_model
@@ -128,34 +185,234 @@ class ChatHandler:
                 reply_text += f"\n\n📋 **操作结果**: {action_result}"
                 action_taken = action
 
-        # 6. 保存到内部历史 + 持久化到 DB
+        # 6. 保存到对话 + 持久化
         now = time.time()
-        self._history.append({"role": "user", "content": message, "timestamp": now})
-        self._history.append({"role": "assistant", "content": reply_text, "timestamp": now, "action_taken": action_taken})
-        if len(self._history) > self._max_history * 2:
-            self._history = self._history[-(self._max_history * 2):]
-        # 持久化到 SQLite
+        user_msg = {"role": "user", "content": message, "timestamp": now}
+        asst_msg = {"role": "assistant", "content": reply_text, "timestamp": now, "action_taken": action_taken}
+
+        if cid not in self._conversations:
+            self._conversations[cid] = []
+        self._conversations[cid].append(user_msg)
+        self._conversations[cid].append(asst_msg)
+        # 裁剪过长对话
+        if len(self._conversations[cid]) > self._max_history * 2:
+            self._conversations[cid] = self._conversations[cid][-(self._max_history * 2):]
+
+        # 持久化: 共享文件夹 (权威源) + DB (本地缓存)
+        self._save_message_to_file(cid, user_msg)
+        self._save_message_to_file(cid, asst_msg)
         self._save_to_db("user", message, timestamp=now)
         self._save_to_db("assistant", reply_text, action_taken=action_taken, timestamp=now)
+        # 更新索引时间
+        self._touch_conv(cid)
+
+        # O1: 自动标题生成 (首次对话后)
+        if len(self._conversations.get(cid, [])) == 2:
+            meta = self._get_conv_meta(cid)
+            if meta and meta.get("title", "") in ("新对话", "默认对话", ""):
+                self._auto_title(cid, message)
 
         return {
             "reply": reply_text,
             "action_taken": action_taken,
             "timestamp": now,
+            "conv_id": cid,
         }
 
-    def get_history(self, limit: int = 50) -> list[dict]:
-        """返回最近的聊天历史。"""
-        return self._history[-limit:]
+    def get_history(self, limit: int = 50, conv_id: str = "") -> list[dict]:
+        """返回指定对话的最近消息。"""
+        cid = conv_id or self._active_conv_id
+        msgs = self._conversations.get(cid, [])
+        return msgs[-limit:]
 
-    def clear_history(self):
-        """清空聊天历史 (内存 + DB)。"""
-        self._history.clear()
-        if self._db:
+    def clear_history(self, conv_id: str = ""):
+        """清空指定对话历史。"""
+        cid = conv_id or self._active_conv_id
+        self._conversations[cid] = []
+        # 清空文件
+        self._clear_conv_file(cid)
+
+    # ── 多对话管理 API ─────────────────────────────────────────
+
+    def list_conversations(self) -> list[dict]:
+        """返回对话列表 (按 updated_at 降序)。"""
+        return sorted(self._conv_index, key=lambda c: c.get("updated_at", 0), reverse=True)
+
+    def create_conversation(self, title: str, project_id: str = "") -> dict:
+        """新建对话, 返回对话元数据。"""
+        cid = self._create_conversation(title, project_id)
+        return self._get_conv_meta(cid)
+
+    def delete_conversation(self, conv_id: str) -> bool:
+        """删除对话。"""
+        self._conv_index = [c for c in self._conv_index if c["id"] != conv_id]
+        self._conversations.pop(conv_id, None)
+        self._save_conv_index()
+        self._delete_conv_file(conv_id)
+        # 若删除的是活跃对话, 切换到第一个
+        if self._active_conv_id == conv_id:
+            self._active_conv_id = self._conv_index[0]["id"] if self._conv_index else ""
+        return True
+
+    def rename_conversation(self, conv_id: str, title: str) -> bool:
+        """重命名对话。"""
+        for c in self._conv_index:
+            if c["id"] == conv_id:
+                c["title"] = title
+                self._save_conv_index()
+                return True
+        return False
+
+    def get_messages(self, conv_id: str, limit: int = 100) -> list[dict]:
+        """获取指定对话的消息 (懒加载)。"""
+        if conv_id not in self._conversations:
+            self._conversations[conv_id] = self._load_conversation_from_file(conv_id)
+        return self._conversations.get(conv_id, [])[-limit:]
+
+    def switch_conversation(self, conv_id: str) -> bool:
+        """切换活跃对话。"""
+        if any(c["id"] == conv_id for c in self._conv_index):
+            self._active_conv_id = conv_id
+            # 懒加载消息
+            if conv_id not in self._conversations:
+                self._conversations[conv_id] = self._load_conversation_from_file(conv_id)
+            return True
+        return False
+
+    # ── 对话持久化 (共享文件夹) ─────────────────────────────────
+
+    def _get_conv_dir(self):
+        """获取对话存储目录。"""
+        import os
+        if self._shared_folder:
+            base = self._shared_folder.path
+        else:
+            from pathlib import Path
+            base = Path.home() / ".lan_mesh"
+        conv_dir = os.path.join(str(base), "conversations")
+        os.makedirs(conv_dir, exist_ok=True)
+        return conv_dir
+
+    def _load_conv_index(self):
+        """从共享文件夹加载对话索引。"""
+        import json, os
+        idx_path = os.path.join(self._get_conv_dir(), "index.json")
+        if os.path.isfile(idx_path):
             try:
-                self._db.clear_chat_history()
-            except Exception as e:
-                print(f"[ChatHandler] 清空 DB 聊天历史异常: {e}")
+                with open(idx_path, "r", encoding="utf-8") as f:
+                    self._conv_index = json.load(f)
+            except Exception:
+                self._conv_index = []
+        # 预加载所有对话消息
+        for c in self._conv_index:
+            cid = c["id"]
+            if cid not in self._conversations:
+                self._conversations[cid] = self._load_conversation_from_file(cid)
+
+    def _save_conv_index(self):
+        """原子写入对话索引到共享文件夹。"""
+        import json, os
+        idx_path = os.path.join(self._get_conv_dir(), "index.json")
+        tmp_path = idx_path + ".tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self._conv_index, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, idx_path)  # 原子替换
+        except Exception:
+            pass
+
+    def _create_conversation(self, title: str, project_id: str = "") -> str:
+        """内部创建对话, 返回 conv_id。"""
+        import uuid
+        cid = f"conv-{uuid.uuid4().hex[:10]}"
+        now = time.time()
+        meta = {
+            "id": cid,
+            "title": title,
+            "project_id": project_id,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self._conv_index.append(meta)
+        self._conversations[cid] = []
+        self._active_conv_id = cid
+        self._save_conv_index()
+        return cid
+
+    def _get_conv_meta(self, conv_id: str) -> dict:
+        for c in self._conv_index:
+            if c["id"] == conv_id:
+                return c
+        return {}
+
+    def _touch_conv(self, conv_id: str):
+        """更新对话的 updated_at。"""
+        for c in self._conv_index:
+            if c["id"] == conv_id:
+                c["updated_at"] = time.time()
+                break
+        self._save_conv_index()
+
+    def _save_message_to_file(self, conv_id: str, msg: dict):
+        """追加写入消息到 JSONL 文件。"""
+        import json, os
+        filepath = os.path.join(self._get_conv_dir(), f"{conv_id}.jsonl")
+        try:
+            with open(filepath, "a", encoding="utf-8") as f:
+                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+    def _load_conversation_from_file(self, conv_id: str) -> list[dict]:
+        """从 JSONL 文件加载对话消息。"""
+        import json, os
+        filepath = os.path.join(self._get_conv_dir(), f"{conv_id}.jsonl")
+        messages = []
+        if os.path.isfile(filepath):
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            messages.append(json.loads(line))
+            except Exception:
+                pass
+        return messages
+
+    def _clear_conv_file(self, conv_id: str):
+        """清空对话文件。"""
+        import os
+        filepath = os.path.join(self._get_conv_dir(), f"{conv_id}.jsonl")
+        try:
+            if os.path.isfile(filepath):
+                open(filepath, "w").close()
+        except Exception:
+            pass
+
+    def _delete_conv_file(self, conv_id: str):
+        """删除对话文件。"""
+        import os
+        filepath = os.path.join(self._get_conv_dir(), f"{conv_id}.jsonl")
+        try:
+            if os.path.isfile(filepath):
+                os.remove(filepath)
+        except Exception:
+            pass
+
+    def _auto_title(self, conv_id: str, first_message: str):
+        """O1: 根据首条消息自动生成对话标题 (5字内)。"""
+        try:
+            prompt = f"请用不超过8个字概括以下对话主题,直接输出标题,不要任何解释:\n{first_message[:100]}"
+            resp = self.runtime._call_llm_with_routing(
+                prompt,
+                {"_model_preference": getattr(self.controller, '_default_model', ''),
+                 "_fallback_models": [], "_system_prompt": "你是标题生成器,只输出标题文本。"}
+            )
+            title = resp.get("content", "").strip().strip('"').strip("'")[:20]
+            if title:
+                self.rename_conversation(conv_id, title)
+        except Exception:
+            pass  # 标题生成失败不影响主流程
 
     # ── 持久化辅助方法 ────────────────────────────────────────────
 
@@ -276,18 +533,24 @@ class ChatHandler:
             "# 能力范围\n"
             "你可以帮助 Boss:\n"
             "1. 查看工作站状态 — 在线主机数量、主机评级、PM Agent 状态、任务进度\n"
-            "2. 直接提交任务 — Boss 描述任务后, 你可以直接创建并分配 PM Agent 接管\n"
-            "3. 激活/停用 Secretary 模式\n"
-            "4. 查询任务进度和 PM Agent 团队状态\n"
-            "5. 解释工作站的功能和架构 (Station Director/Worker/Secretary/PM Agent)\n\n"
+            "2. 直接提交任务 — Boss 描述任务后, 系统会自动创建并分配 PM Agent 接管\n"
+            "3. 创建项目 — Boss 描述项目后, 系统会自动创建项目\n"
+            "4. 激活/停用 Secretary 模式\n"
+            "5. 查询任务进度和 PM Agent 团队状态\n"
+            "6. 解释工作站的功能和架构 (Station Director/Worker/Secretary/PM Agent)\n\n"
             "# 行为约束 (重要)\n"
             "- 只回答与 LAN Mesh 工作站相关的问题。\n"
             "- 不要编造不存在的功能、文件、数据库或代码。\n"
             "- 如果用户询问工作站能力范围外的问题 (如股票交易、编程开发等), "
             "礼貌地说明你的职责是管理分布式 AI 工作站, 无法处理该类问题。\n"
             "- 回复必须简洁明了, 使用中文, 基于下方实时数据回答, 不要臆测。\n"
-            "- 如果不确定某个信息, 如实告知「该信息暂不可用」而非编造。\n"
-            "- 当 Boss 描述任务时, 直接创建任务并分配 PM Agent, 无需让 Boss 去 Web UI。\n\n"
+            "- 如果不确定某个信息, 如实告知「该信息暂不可用」而非编造。\n\n"
+            "# 操作执行规则 (极其重要, 必须严格遵守)\n"
+            "- 你只是语言模型, 你本身没有任何执行能力, 不能创建任务、不能创建项目、不能激活任何服务。\n"
+            "- 所有实际操作由系统在后台通过关键词检测自动执行, 执行结果会以「📋 操作结果」的形式追加在你的回复之后。\n"
+            "- 绝对禁止在回复中声称操作已执行、已完成、已创建。例如不能说「已创建PM Agent」「任务已下发」。\n"
+            "- 当 Boss 要求执行操作时, 你只需回复确认和理解, 例如「收到, 系统正在处理您的指令」。\n"
+            "- 如果 Boss 的指令不够明确, 引导 Boss 补充信息, 但不要假装已经执行。\n\n"
             "# 工作站架构概要\n"
             "- Station Director: 基础设施管理入口, 提供 Web UI 和 UDP 发现\n"
             "- Worker: 计算节点, 执行 PM Agent 分配的子任务\n"
@@ -363,6 +626,8 @@ class ChatHandler:
                 return self._action_accept_delivery(message)
             elif action == "reject_delivery":
                 return self._action_reject_delivery(message)
+            elif action == "create_project":
+                return self._action_create_project(message)
             return ""
         except Exception as e:
             return f"操作执行失败: {e}"
@@ -445,6 +710,41 @@ class ChatHandler:
                 msg += f"\n\n💡 历史参考: {memory_hint}"
             return msg
         return f"任务已创建: {name} (状态: {status})"
+
+    def _action_create_project(self, message: str) -> str:
+        """从对话创建项目 (BUG-026: 秘书幻觉修复配套)。"""
+        pm = getattr(self.controller, "project_manager", None)
+        if pm is None:
+            return "项目创建失败: Secretary 未激活或项目管理器不可用"
+
+        # 复用 LLM 解析提取项目名称和描述
+        info = self._parse_task_from_message(message)
+        name = info.get("name", "")
+        description = info.get("description", "")
+
+        if not name or len(description) < 5:
+            return (
+                "请提供更详细的项目信息, 例如:\n"
+                "「创建一个项目: 股票自动交易系统, 预算10美元」"
+            )
+
+        try:
+            project = pm.create_project(
+                name=name,
+                description=description,
+                budget_limit_usd=10.0,
+                allowed_models=[],
+                routing_strategy="balanced",
+                workspace_base="",
+            )
+            return (
+                f"✅ 项目已创建!\n"
+                f"- 项目ID: {project.project_id}\n"
+                f"- 名称: {name}\n"
+                f"- 描述: {description[:80]}"
+            )
+        except Exception as e:
+            return f"项目创建失败: {e}"
 
     def _action_query_status(self) -> str:
         """查询综合状态。"""

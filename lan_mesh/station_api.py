@@ -1135,11 +1135,11 @@ def create_station_router(controller) -> APIRouter:
             raise HTTPException(status_code=404, detail="团队不存在")
         return team.to_dict() if hasattr(team, 'to_dict') else team
 
-    # ── 秘书聊天 ──
+    # ── 秘书聊天 (向后兼容) ──
 
     @router.post("/api/secretary/chat")
     async def secretary_chat(payload: dict):
-        """与秘书对话 — 处理用户消息并返回回复。"""
+        """与秘书对话 — 处理用户消息并返回回复 (向后兼容, 内部转发到多对话)。"""
         _check_secretary()
         chat_handler = getattr(controller, 'chat_handler', None)
         if not chat_handler:
@@ -1147,14 +1147,15 @@ def create_station_router(controller) -> APIRouter:
         message = payload.get("message", "")
         if not message:
             raise HTTPException(status_code=400, detail="消息不能为空")
+        conv_id = payload.get("conv_id", "")
         history = payload.get("history")
-        result = chat_handler.chat(message, history)
+        result = chat_handler.chat(message, conv_id=conv_id, history=history)
         await _broadcast(state, "chat_reply", result)
         return result
 
     @router.get("/api/secretary/chat/history")
     async def secretary_chat_history(limit: int = 50):
-        """返回最近的聊天历史。"""
+        """返回当前活跃对话的聊天历史。"""
         _check_secretary()
         chat_handler = getattr(controller, 'chat_handler', None)
         if not chat_handler:
@@ -1164,13 +1165,84 @@ def create_station_router(controller) -> APIRouter:
 
     @router.delete("/api/secretary/chat/history")
     async def secretary_chat_history_clear():
-        """清空秘书聊天历史 (内存 + DB 持久化记录)。"""
+        """清空当前对话历史。"""
         _check_secretary()
         chat_handler = getattr(controller, 'chat_handler', None)
         if not chat_handler:
             return {"ok": True, "message": "聊天处理器未初始化"}
         chat_handler.clear_history()
         return {"ok": True, "message": "聊天历史已清空"}
+
+    # ── 多对话管理 API ──
+
+    @router.get("/api/conversations")
+    async def list_conversations():
+        """对话列表。"""
+        _check_secretary()
+        ch = getattr(controller, 'chat_handler', None)
+        if not ch:
+            return {"conversations": []}
+        return {"conversations": ch.list_conversations()}
+
+    @router.post("/api/conversations")
+    async def create_conversation(payload: dict):
+        """新建对话。"""
+        _check_secretary()
+        ch = getattr(controller, 'chat_handler', None)
+        if not ch:
+            raise HTTPException(status_code=503, detail="聊天处理器未初始化")
+        title = payload.get("title", "新对话")
+        project_id = payload.get("project_id", "")
+        conv = ch.create_conversation(title, project_id)
+        await _broadcast(state, "conversation_created", conv)
+        return conv
+
+    @router.get("/api/conversations/{conv_id}/messages")
+    async def get_conversation_messages(conv_id: str, limit: int = 100):
+        """获取对话消息。"""
+        _check_secretary()
+        ch = getattr(controller, 'chat_handler', None)
+        if not ch:
+            return {"messages": []}
+        messages = ch.get_messages(conv_id, limit)
+        return {"messages": messages, "conv_id": conv_id}
+
+    @router.post("/api/conversations/{conv_id}/messages")
+    async def send_conversation_message(conv_id: str, payload: dict):
+        """在指定对话中发送消息。"""
+        _check_secretary()
+        ch = getattr(controller, 'chat_handler', None)
+        if not ch:
+            raise HTTPException(status_code=503, detail="聊天处理器未初始化")
+        message = payload.get("message", "")
+        if not message:
+            raise HTTPException(status_code=400, detail="消息不能为空")
+        result = ch.chat(message, conv_id=conv_id)
+        await _broadcast(state, "chat_reply", result)
+        return result
+
+    @router.delete("/api/conversations/{conv_id}")
+    async def delete_conversation(conv_id: str):
+        """删除对话。"""
+        _check_secretary()
+        ch = getattr(controller, 'chat_handler', None)
+        if not ch:
+            return {"ok": False}
+        ok = ch.delete_conversation(conv_id)
+        return {"ok": ok}
+
+    @router.put("/api/conversations/{conv_id}/title")
+    async def rename_conversation(conv_id: str, payload: dict):
+        """重命名对话。"""
+        _check_secretary()
+        ch = getattr(controller, 'chat_handler', None)
+        if not ch:
+            return {"ok": False}
+        title = payload.get("title", "")
+        if not title:
+            raise HTTPException(status_code=400, detail="标题不能为空")
+        ok = ch.rename_conversation(conv_id, title)
+        return {"ok": ok}
 
     # ── 优化15: Bot 统一消息入口 ──
 
