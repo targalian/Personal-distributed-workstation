@@ -20,10 +20,15 @@ LLM API 调用通过环境变量配置 (OPENAI_API_KEY / DEEPSEEK_API_KEY 等)�
 import os
 import subprocess
 import time
+import json as _json
 from pathlib import Path
 from typing import Optional
 
 import requests
+
+from .logger import get_logger
+
+logger = get_logger("agent_runtime")
 
 
 # ── Provider 默认配置 (provider → base_url) ──────────────────────
@@ -68,6 +73,7 @@ class AgentRuntime:
             "shell_exec": self._handle_shell_exec,
             "file_ops": self._handle_file_ops,
             "monitoring": self._handle_monitoring,
+            "react_agent": self._handle_react_agent,  # F2.1: 工具循环 Agent
         }
 
     def execute(self, subtask: dict) -> dict:
@@ -119,7 +125,14 @@ class AgentRuntime:
         language = input_data.get("language", "python")
         context = input_data.get("context", "")
 
-        prompt = f"请用 {language} 编写以下需求的代码:\n{requirement}"
+        prompt = (
+            f"请用 {language} 编写以下需求的代码:\n{requirement}\n\n"
+            "要求:\n"
+            "- 直接输出完整可运行的代码, 不要反问、不要请求补充信息\n"
+            "- 需求中未明确的细节, 按最佳实践自行假设 (在代码注释中注明)\n"
+            "- 包含必要的错误处理和输入验证\n"
+            "- 代码末尾附带简要使用说明"
+        )
         if context:
             prompt += f"\n\n已有代码/上下文:\n{context}"
 
@@ -203,6 +216,223 @@ class AgentRuntime:
             "memory_percent": psutil.virtual_memory().percent,
             "disk_percent": psutil.disk_usage("/").percent,
             "timestamp": time.time(),
+        }
+
+    # ── F2.1: ReAct 工具循环 Agent ─────────────────────────────
+
+    def _handle_react_agent(self, input_data: dict) -> dict:
+        """F2.1: ReAct (Reasoning + Acting) 工具循环执行。
+
+        子 Agent 自主决策使用哪些工具, 多步推理直到完成任务。
+        支持: file_read, file_write, shell_exec, http_request, dir_list, python_eval
+
+        流程:
+        1. 将任务描述 + 可用工具发送给 LLM (function calling)
+        2. LLM 返回 tool_calls → 执行工具 → 结果回填
+        3. 重复直到 LLM 给出最终文本回复或达到最大轮次
+        """
+        from .tool_registry import ToolRegistry
+
+        requirement = input_data.get("requirement", input_data.get("description", ""))
+        max_iterations = input_data.get("max_iterations", 10)
+        cwd = input_data.get("cwd", self.shared_folder)
+
+        # 初始化工具注册表
+        registry = ToolRegistry()
+        tools_schema = self._build_openai_tools_schema(registry)
+
+        # 构建 system prompt
+        system_prompt = self._build_system_prompt(requirement)
+        if not system_prompt:
+            system_prompt = ""
+        system_prompt += (
+            "\n\n你是一个自主执行 Agent。你可以使用提供的工具来完成任务。\n"
+            "规则:\n"
+            "- 直接执行, 不要反问\n"
+            "- 每次只调用一个工具, 观察结果后决定下一步\n"
+            "- 任务完成后直接输出最终结果 (不再调用工具)\n"
+            "- 如果工具执行失败, 尝试替代方案\n"
+            f"- 工作目录: {cwd}\n"
+        )
+
+        # 对话历史
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": requirement},
+        ]
+
+        total_input_tokens = 0
+        total_output_tokens = 0
+        steps_log = []
+
+        for iteration in range(max_iterations):
+            # 调用 LLM (with tools)
+            resp = self._call_llm_messages_with_tools(
+                messages, tools_schema, input_data
+            )
+
+            total_input_tokens += resp.get("input_tokens", 0)
+            total_output_tokens += resp.get("output_tokens", 0)
+
+            message = resp.get("message", {})
+            tool_calls = message.get("tool_calls", [])
+            content = message.get("content", "")
+
+            # 无工具调用 → 最终答案
+            if not tool_calls:
+                logger.info("[ReAct] 完成 (轮次=%d)", iteration + 1)
+                return {
+                    "result": content,
+                    "iterations": iteration + 1,
+                    "steps": steps_log,
+                    "usage": {
+                        "model": resp.get("model", ""),
+                        "input_tokens": total_input_tokens,
+                        "output_tokens": total_output_tokens,
+                    },
+                }
+
+            # 执行工具调用
+            messages.append(message)  # 添加 assistant 消息 (含 tool_calls)
+
+            for tc in tool_calls:
+                func_name = tc["function"]["name"]
+                try:
+                    func_args = _json.loads(tc["function"].get("arguments", "{}"))
+                except _json.JSONDecodeError:
+                    func_args = {}
+
+                # 注入 cwd
+                if func_name in ("shell_exec", "dir_list") and "cwd" not in func_args:
+                    func_args["cwd"] = cwd
+
+                logger.info("[ReAct] 轮次%d 工具: %s(%s)",
+                           iteration + 1, func_name, str(func_args)[:100])
+
+                # 执行
+                tool_result = registry.call_tool(func_name, func_args)
+                result_text = tool_result["content"][0]["text"] if tool_result["content"] else ""
+                is_error = tool_result.get("isError", False)
+
+                steps_log.append({
+                    "iteration": iteration + 1,
+                    "tool": func_name,
+                    "args": func_args,
+                    "result_preview": result_text[:300],
+                    "is_error": is_error,
+                })
+
+                # 回填工具结果
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result_text,
+                })
+
+        # 达到最大轮次
+        logger.warning("[ReAct] 达到最大轮次 (%d), 强制结束", max_iterations)
+        return {
+            "result": f"[达到最大执行轮次 {max_iterations}] 最后步骤: {steps_log[-1] if steps_log else 'N/A'}",
+            "iterations": max_iterations,
+            "steps": steps_log,
+            "status": "max_iterations_reached",
+            "usage": {
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+            },
+        }
+
+    def _build_openai_tools_schema(self, registry) -> list[dict]:
+        """F2.1: 将 ToolRegistry 的工具转换为 OpenAI function calling 格式。"""
+        tools = []
+        for entry in registry.list_tools():
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": entry["name"],
+                    "description": entry["description"],
+                    "parameters": entry["inputSchema"],
+                },
+            })
+        return tools
+
+    def _call_llm_messages_with_tools(self, messages: list[dict],
+                                       tools: list[dict],
+                                       input_data: dict) -> dict:
+        """F2.1: 支持多轮 messages + tools 的 LLM 调用。
+
+        与 _call_llm_with_routing 类似, 但支持完整 messages 数组和 tools 参数。
+        """
+        model_pref = input_data.get("_model_preference", "")
+        fallbacks = input_data.get("_fallback_models", [])
+
+        chain = []
+        if model_pref:
+            chain = [model_pref] + [m for m in fallbacks if m != model_pref]
+        else:
+            # 无偏好: 遍历所有可用 provider
+            for provider, cfg in PROVIDER_CONFIG.items():
+                api_key = os.environ.get(cfg["api_key_env"], "")
+                if api_key:
+                    default_model = self._get_default_model(provider)
+                    if default_model:
+                        chain.append(default_model)
+
+        last_error = None
+        for model_id in chain:
+            provider_cfg = self._resolve_provider(model_id)
+            if not provider_cfg:
+                continue
+            try:
+                return self._call_openai_with_tools(
+                    messages, tools, model_id,
+                    provider_cfg["base_url"],
+                    provider_cfg["api_key"],
+                )
+            except Exception as e:
+                last_error = e
+                logger.warning("[ReAct] 模型 %s 调用失败: %s, 降级...", model_id, e)
+                continue
+
+        return {
+            "message": {"content": f"[模型调用失败] {last_error}", "tool_calls": []},
+            "model": "none",
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+
+    def _call_openai_with_tools(self, messages: list[dict], tools: list[dict],
+                                 model_id: str, base_url: str, api_key: str) -> dict:
+        """F2.1: OpenAI 兼容 API 调用 (支持 tools 参数)。"""
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        payload = {
+            "model": model_id,
+            "messages": messages,
+            "max_tokens": 4096,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        resp = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        usage = data.get("usage", {})
+        choice_msg = data["choices"][0]["message"]
+
+        return {
+            "message": choice_msg,  # 含 content + tool_calls
+            "model": model_id,
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
         }
 
     # ── LLM API 调用 (支持多 Provider + 降级链重试) ──────────────────

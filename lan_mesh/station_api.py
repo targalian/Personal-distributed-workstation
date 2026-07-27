@@ -13,6 +13,7 @@ Station Director API 路由层
 """
 import asyncio
 import json
+import threading
 import time
 import uuid as _uuid
 from typing import Optional
@@ -21,12 +22,65 @@ import requests as http_requests
 
 from fastapi import (
     APIRouter, WebSocket, WebSocketDisconnect, HTTPException,
-    UploadFile, File, Form,
+    UploadFile, File, Form, Request,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from .protocol import HostInfo, HostRecord, AgentCard, Task
 from .host_rating import rate_host
+
+
+# ── F1.5: API 限流器 ─────────────────────────────────────────────
+
+class _RateLimiter:
+    """F1.5: 简单滑动窗口限流器 (per-IP)。"""
+
+    def __init__(self, max_requests: int = 120, window_secs: float = 60.0):
+        self._max = max_requests
+        self._window = window_secs
+        self._hits: dict[str, list[float]] = {}  # ip → [timestamps]
+        self._lock = threading.Lock()
+
+    def is_allowed(self, client_ip: str) -> bool:
+        now = time.time()
+        cutoff = now - self._window
+        with self._lock:
+            hits = self._hits.get(client_ip, [])
+            hits = [t for t in hits if t > cutoff]
+            if len(hits) >= self._max:
+                self._hits[client_ip] = hits
+                return False
+            hits.append(now)
+            self._hits[client_ip] = hits
+            return True
+
+
+_rate_limiter = _RateLimiter(max_requests=120, window_secs=60.0)
+
+# F1.5: API Key 认证 (可选, 通过环境变量 LAN_MESH_API_KEY 启用)
+import os as _os
+_API_KEY = _os.environ.get("LAN_MESH_API_KEY", "")  # 空 = 不启用认证
+
+# 无需认证的白名单路径
+_AUTH_WHITELIST = {"/health", "/api/register", "/api/heartbeat", "/ws"}
+
+
+async def api_guard_middleware(request: Request, call_next):
+    """F1.5: 全局限流 + API Key 认证中间件。"""
+    path = request.url.path
+
+    # 限流
+    client_ip = request.client.host if request.client else "unknown"
+    if not _rate_limiter.is_allowed(client_ip):
+        return JSONResponse(status_code=429, content={"detail": "请求过于频繁, 请稍后重试"})
+
+    # API Key 认证 (仅当配置了 key 时启用)
+    if _API_KEY and path not in _AUTH_WHITELIST and not path.startswith("/static"):
+        provided = request.headers.get("X-API-Key", "") or request.query_params.get("api_key", "")
+        if provided != _API_KEY:
+            return JSONResponse(status_code=401, content={"detail": "未授权: 缺少有效的 API Key"})
+
+    return await call_next(request)
 
 
 def _merge_db_and_udp_hosts(db, discovery):
@@ -96,6 +150,91 @@ def create_station_router(controller) -> APIRouter:
     discovery = controller.discovery
     shared_folder = controller.state.shared_folder
     station_director = controller.station_director
+
+    # ════════════════════════════════════════════════════════════
+    #  F1.2: 健康检查端点
+    # ════════════════════════════════════════════════════════════
+
+    @router.get("/health")
+    async def health_check():
+        """F1.2: 系统健康检查端点。
+
+        返回各组件状态、资源使用、运行时间。
+        用于外部监控 / 自愈重启判断 / 负载均衡探活。
+        """
+        import os
+        import shutil
+        import psutil
+
+        proc = psutil.Process(os.getpid())
+        mem_mb = proc.memory_info().rss / (1024 * 1024)
+        uptime_secs = time.time() - controller._start_timestamp
+
+        # 磁盘使用
+        try:
+            disk = shutil.disk_usage(str(controller.state.shared_folder.path))
+            disk_percent = round(disk.used / disk.total * 100, 1)
+        except Exception:
+            disk_percent = -1
+
+        # 活跃任务数
+        try:
+            all_tasks = db.list_tasks()
+            active_tasks = len([t for t in all_tasks if getattr(t, 'status', '') in ("pending", "running", "monitoring")])
+        except Exception:
+            active_tasks = 0
+
+        status = "healthy"
+        if mem_mb > 1024:
+            status = "degraded"
+        if disk_percent > 90:
+            status = "critical"
+
+        return {
+            "status": status,
+            "uptime_secs": round(uptime_secs, 1),
+            "timestamp": time.time(),
+            "components": {
+                "station": "active",
+                "secretary": "active" if controller.secretary_active else "inactive",
+                "discovery": "active" if controller.discovery else "inactive",
+                "local_pm": "active" if controller._local_pm_agent else "idle",
+                "bot_gateway": "active" if controller.bot_gateway and controller.bot_gateway._channels else "idle",
+            },
+            "resources": {
+                "memory_mb": round(mem_mb, 1),
+                "cpu_percent": proc.cpu_percent(interval=0.1),
+                "disk_percent": disk_percent,
+                "threads": threading.active_count(),
+            },
+            "workload": {
+                "active_tasks": active_tasks,
+                "active_pms": 1 if controller._local_pm_agent else 0,
+                "ws_clients": len(state.ws_clients),
+            },
+        }
+
+    @router.post("/health/restart")
+    async def request_restart():
+        """F1.2: 触发自愈重启 (graceful)。"""
+        controller.request_restart("manual_health_restart")
+        return {"ok": True, "message": "重启已调度, 服务将在 3 秒后关闭"}
+
+    # ════════════════════════════════════════════════════════════
+    #  F1.4: 错误追踪端点
+    # ════════════════════════════════════════════════════════════
+
+    @router.get("/api/errors/stats")
+    async def error_stats():
+        """F1.4: 错误统计摘要。"""
+        from .error_tracker import error_tracker
+        return error_tracker.get_stats()
+
+    @router.get("/api/errors/recent")
+    async def error_recent(limit: int = 20, module: str = ""):
+        """F1.4: 最近错误记录。"""
+        from .error_tracker import error_tracker
+        return {"errors": error_tracker.get_recent(limit=min(limit, 100), module=module)}
 
     # ════════════════════════════════════════════════════════════
     #  角色激活端点
@@ -229,6 +368,25 @@ def create_station_router(controller) -> APIRouter:
             "uptime": time.time() - state.start_time,
             "device_id": state.device_id,
         }
+
+    @router.post("/api/health/restart")
+    async def restart_system():
+        """触发系统自愈重启。"""
+        import threading
+        import time
+        
+        def delayed_restart():
+            time.sleep(1)  # 等待响应发送
+            import os
+            import sys
+            print(f"[Station] 正在执行自愈重启...")
+            os.execv(sys.executable, ['python'] + sys.argv)
+        
+        thread = threading.Thread(target=delayed_restart)
+        thread.daemon = True
+        thread.start()
+        
+        return {"ok": True, "message": "重启已触发"}
 
     @router.get("/api/station-info")
     async def station_info():
@@ -928,6 +1086,24 @@ def create_station_router(controller) -> APIRouter:
         )
         db.save_progress_report(report)
 
+        # ── 关键: PM 完成/失败时同步更新任务状态 ──
+        pm_status = payload.get("status", "")
+        if pm_status in ("completed", "failed") and payload.get("reporter_type") == "pm":
+            # 通过 pm_agent_id 查找对应任务并更新状态
+            try:
+                conn = db._get_conn()
+                row = conn.execute(
+                    "SELECT task_id FROM tasks WHERE pm_agent_id = ? AND status = 'running'",
+                    (pm_id,)
+                ).fetchone()
+                if row:
+                    task_id = row["task_id"]
+                    new_status = "completed" if pm_status == "completed" else "failed"
+                    db.update_task_status(task_id, new_status)
+                    print(f"[Station] 任务 {task_id[:16]} 状态同步: running → {new_status}")
+            except Exception as e:
+                print(f"[Station] 任务状态同步失败: {e}")
+
         await _broadcast(state, "progress_report", {
             "pm_id": pm_id,
             "reporter_id": report.reporter_id,
@@ -1303,6 +1479,77 @@ def create_station_router(controller) -> APIRouter:
     def _append_p2p_msg(device_id: str, msg: dict):
         """向指定主机的 P2P 消息列表追加一条消息。"""
         state.p2p_messages.setdefault(device_id, []).append(msg)
+
+    # ── 内嵌 Worker: 本机 PM Agent 端点 (PM 回调用) ────────────
+
+    @router.post("/role/start-pm")
+    async def local_start_pm(payload: dict):
+        """在本机 Station 进程内启动 PM Agent (无需单独 Worker)。"""
+        task_id = payload.get("task_id", "")
+        secretary_url = payload.get("secretary_url", "")
+        task_data = payload.get("task_data")
+        if not task_id or not secretary_url:
+            raise HTTPException(status_code=400, detail="缺少 task_id 或 secretary_url")
+        result = controller._local_start_pm(task_id, secretary_url, task_data)
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result.get("message", "启动失败"))
+        return result
+
+    @router.post("/role/stop-pm")
+    async def local_stop_pm():
+        return controller._local_stop_pm()
+
+    @router.post("/role/cancel-pm")
+    async def local_cancel_pm():
+        return controller._local_cancel_pm()
+
+    @router.post("/role/pause-pm")
+    async def local_pause_pm():
+        return controller._local_pause_pm()
+
+    @router.get("/role/pm-status")
+    async def local_pm_status():
+        return controller._local_pm_status()
+
+    @router.post("/pm/create-subagent")
+    async def local_create_subagent(payload: dict):
+        """在本机为 PM 创建子 Agent。"""
+        agent_name = payload.get("agent_name", "")
+        if not agent_name:
+            raise HTTPException(status_code=400, detail="缺少 agent_name")
+        return controller._local_create_subagent(
+            agent_name=agent_name,
+            skills=payload.get("skills", []),
+            task_description=payload.get("task_description", ""),
+            system_prompt=payload.get("system_prompt", ""),
+            preferred_agent_id=payload.get("preferred_agent_id", ""),
+        )
+
+    @router.post("/pm/progress-report")
+    async def local_progress_report(payload: dict):
+        """子 Agent 向本机 PM 上报进度。"""
+        return controller._local_forward_progress(payload)
+
+    @router.post("/pm/inject-input")
+    async def local_inject_input(payload: dict):
+        """向本机 PM 注入 Boss 回复。"""
+        result = controller._local_inject_input(payload)
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result.get("message", "注入失败"))
+        return result
+
+    @router.get("/pm/subagents")
+    async def local_list_subagents():
+        """列出本机所有子 Agent。"""
+        result = []
+        for agent_id, info in controller._local_sub_agents.items():
+            result.append({
+                "agent_id": agent_id,
+                "agent_name": info.get("agent_name", ""),
+                "current_task": info.get("current_task", ""),
+                "status": info.get("status", "idle"),
+            })
+        return {"sub_agents": result, "total": len(result)}
 
     @router.post("/api/p2p/send")
     async def p2p_send_message(payload: dict):

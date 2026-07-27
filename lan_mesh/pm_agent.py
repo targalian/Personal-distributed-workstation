@@ -25,6 +25,9 @@ from typing import Optional
 import requests
 
 from .agent_prompt import build_subagent_prompt, build_dispatch_context, build_aggregation_prompt
+from .logger import get_logger
+
+logger = get_logger("pm")
 
 
 class ProjectManagerAgent:
@@ -68,6 +71,12 @@ class ProjectManagerAgent:
         self._clarification_response: dict = {}          # Boss 的回复数据
         self._clarification_timeout: float = 600.0       # 等待回复超时 (默认10分钟)
 
+        # ── F1.3: PM Agent 超时保护 ──
+        self._global_timeout: float = 3600.0  # 全局任务超时 (默认1小时)
+        self._subtask_timeout: float = 1800.0  # 子任务超时 (默认30分钟)
+        self._start_time: float = time.time()  # 任务开始时间
+        self._subtask_start_times: dict = {}   # task_name → 开始时间
+
     # ── 生命周期 ──────────────────────────────────────────────────
 
     def start_task(self, task: dict):
@@ -103,16 +112,55 @@ class ProjectManagerAgent:
             "subagents": len(self._subagents),
         }
 
+    # ── F1.3: 超时保护 ─────────────────────────────────────────
+
+    def _is_global_timed_out(self) -> bool:
+        """F1.3: 检查全局任务是否超时。"""
+        return (time.time() - self._start_time) > self._global_timeout
+
+    def _check_subtask_timeouts(self):
+        """F1.3: 检测子任务超时, 触发失败接管。"""
+        now = time.time()
+        timed_out = []
+        for task_name, start_t in list(self._subtask_start_times.items()):
+            if (now - start_t) > self._subtask_timeout:
+                timed_out.append(task_name)
+
+        for task_name in timed_out:
+            del self._subtask_start_times[task_name]
+            logger.warning("[%s] 子任务 '%s' 超时 (%.0fs), 触发接管",
+                          self.pm_id[:8], task_name, self._subtask_timeout)
+            # 标记对应 subagent 为 failed
+            for agent_id, info in self._subagents.items():
+                if info.get("current_task") == task_name and info.get("status") not in ("completed", "failed"):
+                    info["status"] = "failed"
+                    break
+            # 触发失败接管策略
+            self._handle_subagent_failure(task_name, f"子任务超时 ({self._subtask_timeout}s)")
+
+    def _record_subtask_start(self, task_name: str):
+        """F1.3: 记录子任务开始时间。"""
+        self._subtask_start_times[task_name] = time.time()
+
     # ── 核心工作流 ────────────────────────────────────────────────
 
     def _run_task(self, task: dict):
         """任务执行主流程 (工作线程)。"""
+        self._start_time = time.time()  # F1.3: 重置开始时间
         try:
+            # F1.3: 全局超时守卫
+            if self._is_global_timed_out():
+                raise TimeoutError(f"全局任务超时 ({self._global_timeout}s)")
+
+            # F2.3: 多轮任务细化 (可选, 仅当任务描述模糊时触发)
+            task = self._refine_requirements(task)
+
             # 阶段 1: 规划
             self._report_status("planning")
             plan = self._analyze_with_skill(task)
-            print(f"[PM {self.pm_id[:8]}] 规划完成: 模式={plan.get('pattern', 'single')}, "
-                  f"子任务={len(plan.get('decomposition', []))}")
+            logger.info("[%s] 规划完成: 模式=%s, 子任务=%d",
+                       self.pm_id[:8], plan.get('pattern', 'single'),
+                       len(plan.get('decomposition', [])))
 
             # 阶段 2: 执行
             pattern = plan.get("pattern", "single")
@@ -130,7 +178,7 @@ class ProjectManagerAgent:
                 self._report_status("monitoring")
 
         except Exception as e:
-            print(f"[PM {self.pm_id[:8]}] 任务执行失败: {e}")
+            logger.error("[%s] 任务执行失败: %s", self.pm_id[:8], e)
             self._report_status("failed")
             self._report_progress(0.0, "failed", str(e))
 
@@ -139,6 +187,8 @@ class ProjectManagerAgent:
 
     def _analyze_with_skill(self, task: dict) -> dict:
         """用 LLM + multi-agent-architect skill 分析任务。
+
+        F2.4: 优先匹配任务模板, 命中则跳过 LLM 规划 (节省 token + 加速)。
 
         返回 JSON:
         {
@@ -150,6 +200,27 @@ class ProjectManagerAgent:
         }
         """
         task_desc = task.get("description", task.get("name", ""))
+
+        # F2.4: 模板匹配 (关键词命中 >= 2 时直接使用模板)
+        try:
+            from .task_templates import match_template, apply_template
+            matched = match_template(task_desc)
+            if matched and matched.get("match_score", 0) >= 2:
+                variables = {
+                    "project_path": task.get("input_data", {}).get("project_path", "."),
+                    "language": task.get("input_data", {}).get("language", "python"),
+                    "data_source": task.get("input_data", {}).get("data_source", ""),
+                    "output_format": task.get("input_data", {}).get("output_format", "json"),
+                    "doc_type": task.get("input_data", {}).get("doc_type", "API"),
+                }
+                plan = apply_template(matched, variables)
+                logger.info("[%s] 模板命中: %s (score=%d)",
+                           self.pm_id[:8], matched.get("name", ""), matched.get("match_score", 0))
+                return plan
+        except Exception as e:
+            logger.debug("[%s] 模板匹配异常, 回退 LLM: %s", self.pm_id[:8], e)
+
+        # LLM 规划
         prompt = f"""你是项目经理 Agent。请分析以下任务并给出架构决策。
 
 ## 任务信息
@@ -167,7 +238,7 @@ class ProjectManagerAgent:
   "pattern": "single|orchestrator|teams|bus|shared_state",
   "team_size": 1,
   "decomposition": [
-    {{"name": "子任务名", "skill": "code_generation|code_review|document_summary|shell_exec|file_ops|monitoring", "depends_on": [], "description": "子任务描述"}}
+    {{"name": "子任务名", "skill": "react_agent|code_generation|code_review|document_summary|shell_exec|file_ops|monitoring", "depends_on": [], "description": "子任务描述"}}
   ],
   "reasoning": "决策理由"
 }}
@@ -178,6 +249,14 @@ class ProjectManagerAgent:
 - moderate → orchestrator, team_size=2-3
 - complex → orchestrator 或 teams, team_size=3-5
 - decomposition 中的 depends_on 是子任务名称列表 (前序依赖)
+- skill 选择: 需要多步工具操作(读文件+执行命令+写文件) → react_agent; 纯代码生成 → code_generation; 纯审查 → code_review
+
+自主执行原则 (极其重要):
+- 你是自主执行者, 不是交互式助手。收到任务后必须立即规划并执行, 禁止反问用户。
+- 需求中未明确的细节, 按行业最佳实践自行假设并在 reasoning 中注明。
+- 例如: "写一个计算器" → 直接假设 CLI 交互、支持四则运算、含错误处理, 立即执行。
+- 只有当任务目标完全无法推断时 (如仅一个字 "做"), 才可标记为需要澄清。
+- decomposition 中每个子任务的 description 必须足够具体, 让执行者无需再问。
 """
 
         resp = self.runtime._call_llm_with_routing(
@@ -197,7 +276,7 @@ class ProjectManagerAgent:
             plan = json.loads(content.strip())
         except json.JSONDecodeError:
             # 解析失败，回退为 single 模式
-            print(f"[PM {self.pm_id[:8]}] LLM 输出 JSON 解析失败, 回退 single 模式")
+            logger.warning("[%s] LLM 输出 JSON 解析失败, 回退 single 模式", self.pm_id[:8])
             plan = {
                 "complexity": "simple",
                 "pattern": "single",
@@ -210,13 +289,18 @@ class ProjectManagerAgent:
 
     def _execute_directly(self, task: dict) -> dict:
         """PM 自己执行简单任务。"""
+        task_desc = task.get("description", task.get("name", ""))
+        # 将任务描述注入 input_data, 确保 handler 能获取到需求文本
+        input_data = dict(task.get("input_data", {}))
+        if not input_data.get("requirement") and not input_data.get("description"):
+            input_data["requirement"] = task_desc
         subtask = {
             "subtask_id": str(uuid.uuid4()),
             "parent_task_id": task.get("task_id", ""),
             "name": task.get("name", ""),
-            "description": task.get("description", ""),
+            "description": task_desc,
             "required_skill": "code_generation",
-            "input_data": task.get("input_data", {}),
+            "input_data": input_data,
             "model_preference": "",
             "fallback_models": [],
         }
@@ -245,7 +329,7 @@ class ProjectManagerAgent:
         stations = self._get_available_stations()
         if not stations:
             # 没有可用站点，在本机执行
-            print(f"[PM {self.pm_id[:8]}] 无可用 work_station, 本地执行全部子任务")
+            logger.info("[%s] 无可用 work_station, 本地执行全部子任务", self.pm_id[:8])
             for sub in decomposition:
                 self._execute_subtask_locally(task, sub)
             return
@@ -313,12 +397,13 @@ class ProjectManagerAgent:
                 # 依赖感知分发: 无依赖立即分发, 有依赖暂存
                 if not sub.get("depends_on"):
                     self._dispatched.add(sub_name)
+                    self._record_subtask_start(sub_name)  # F1.3
                     self._dispatch_subtask(station, agent_info, task, sub, plan=plan)
                 else:
                     self._pending_subtasks[sub_name] = {
                         "sub": sub, "station": station, "agent_info": agent_info,
                     }
-                    print(f"[PM {self.pm_id[:8]}] 子任务 '{sub_name}' 等待依赖: {sub.get('depends_on')}")
+                    logger.debug("[%s] 子任务 '%s' 等待依赖: %s", self.pm_id[:8], sub_name, sub.get('depends_on'))
 
         # 上报团队结构到 Secretary
         self._teams[team_id] = team
@@ -327,13 +412,18 @@ class ProjectManagerAgent:
 
     def _execute_subtask_locally(self, task: dict, sub: dict):
         """在本地执行子任务 (无可用远程站点时)。"""
+        sub_desc = sub.get("description", sub.get("name", ""))
+        # 将子任务描述注入 input_data, 确保 handler 能获取到需求文本
+        input_data = dict(task.get("input_data", {}))
+        if not input_data.get("requirement") and not input_data.get("description"):
+            input_data["requirement"] = sub_desc
         subtask = {
             "subtask_id": str(uuid.uuid4()),
             "parent_task_id": task.get("task_id", ""),
             "name": sub.get("name", ""),
-            "description": sub.get("description", ""),
+            "description": sub_desc,
             "required_skill": sub.get("skill", "code_generation"),
-            "input_data": task.get("input_data", {}),
+            "input_data": input_data,
             "model_preference": "",
             "fallback_models": [],
         }
@@ -447,7 +537,7 @@ class ProjectManagerAgent:
                 # 只返回在线且有 API 端口的站点
                 return [h for h in hosts if h.get("online") and h.get("api_port")]
         except Exception as e:
-            print(f"[PM {self.pm_id[:8]}] 获取 work_station 列表失败: {e}")
+            logger.error("[%s] 获取 work_station 列表失败: %s", self.pm_id[:8], e)
         return []
 
     def _create_subagent_on_station(self, station: dict, agent_name: str, skills: list,
@@ -484,7 +574,7 @@ class ProjectManagerAgent:
             if resp.status_code == 200:
                 return resp.json()
         except Exception as e:
-            print(f"[PM {self.pm_id[:8]}] 创建子 Agent 失败 ({ip}:{port}): {e}")
+            logger.error("[%s] 创建子 Agent 失败 (%s:%s): %s", self.pm_id[:8], ip, port, e)
         return None
 
     def _update_subagent_prompt(self, station: dict, agent_id: str, new_prompt: str) -> bool:
@@ -518,10 +608,10 @@ class ProjectManagerAgent:
             if resp.status_code == 200:
                 result = resp.json()
                 if result.get("ok"):
-                    print(f"[PM {self.pm_id[:8]}] 子 Agent {agent_id} prompt 已更新")
+                    logger.info("[%s] 子 Agent %s prompt 已更新", self.pm_id[:8], agent_id)
                     return True
         except Exception as e:
-            print(f"[PM {self.pm_id[:8]}] 更新子 Agent prompt 失败: {e}")
+            logger.error("[%s] 更新子 Agent prompt 失败: %s", self.pm_id[:8], e)
         return False
 
     def _dispatch_subtask(self, station: dict, agent_info: dict, task: dict, sub: dict,
@@ -569,7 +659,7 @@ class ProjectManagerAgent:
                     f"子任务 {sub.get('name', '')}: {result.get('error', '已分发')[:200]}"
                 )
         except Exception as e:
-            print(f"[PM {self.pm_id[:8]}] 分发子任务失败: {e}")
+            logger.error("[%s] 分发子任务失败: %s", self.pm_id[:8], e)
 
     # ── 进度收集 ──────────────────────────────────────────────────
 
@@ -578,6 +668,18 @@ class ProjectManagerAgent:
         _aggregated = False
         while self._running:
             time.sleep(10)  # 每 10 秒收集一次
+
+            # F1.3: 全局超时检测
+            if self._is_global_timed_out():
+                logger.error("[%s] 全局任务超时 (%.0fs), 强制终止",
+                            self.pm_id[:8], self._global_timeout)
+                self._report_progress(0.0, "failed", f"全局超时 ({self._global_timeout}s)")
+                self._running = False
+                break
+
+            # F1.3: 子任务超时检测
+            self._check_subtask_timeouts()
+
             if not self._subagents:
                 continue
             # 聚合进度
@@ -618,19 +720,33 @@ class ProjectManagerAgent:
             # 优化6: 验证自检结果
             self_check = report.get("self_check", {})
             if not self_check:
-                print(f"[PM {self.pm_id[:8]}] ⚠ 子任务 '{task_name}' 完成但未附带自检结果")
+                logger.warning("[%s] 子任务 '%s' 完成但未附带自检结果", self.pm_id[:8], task_name)
             elif not self_check.get("passed", False):
                 notes = self_check.get("notes", "")
-                print(f"[PM {self.pm_id[:8]}] ⚠ 子任务 '{task_name}' 自检未通过: {notes[:200]}")
+                logger.warning("[%s] 子任务 '%s' 自检未通过: %s", self.pm_id[:8], task_name, notes[:200])
             else:
-                print(f"[PM {self.pm_id[:8]}] 子任务 '{task_name}' 完成, 自检通过: {self_check.get('notes', '')[:100]}")
-                print(f"[PM {self.pm_id[:8]}] 子任务 '{task_name}' 完成, 输出已存储")
+                logger.info("[%s] 子任务 '%s' 完成, 自检通过: %s", self.pm_id[:8], task_name, self_check.get('notes', '')[:100])
+                logger.info("[%s] 子任务 '%s' 完成, 输出已存储", self.pm_id[:8], task_name)
+
+            # F2.5: 质量验证 (生成-验证器模式)
+            quality = self._verify_output_quality(task_name, output)
+            if quality and not quality.get("accepted", True):
+                logger.warning("[%s] 子任务 '%s' 质量未达标 (score=%.1f): %s",
+                              self.pm_id[:8], task_name, quality.get("score", 0),
+                              quality.get("issues", "")[:150])
+                # 质量不达标且未超过重试上限 → 触发重做
+                retry_count = self._retry_counts.get(task_name, 0)
+                if retry_count < self._max_retries:
+                    self._subtask_outputs.pop(task_name, None)  # 清除不合格输出
+                    self._handle_subagent_failure(task_name, f"质量验证未通过: {quality.get('issues', '')}")
+                    return  # 不继续分发依赖链
+
             self._try_dispatch_pending()
 
         # 优化5: 任务失败时触发接管策略
         if status == "failed" and task_name:
             error_msg = report.get("message", "未知错误")
-            print(f"[PM {self.pm_id[:8]}] 子任务 '{task_name}' 失败: {error_msg[:200]}")
+            logger.error("[%s] 子任务 '%s' 失败: %s", self.pm_id[:8], task_name, error_msg[:200])
             self._handle_subagent_failure(task_name, error_msg)
 
         # 转发到 Secretary
@@ -674,7 +790,8 @@ class ProjectManagerAgent:
             task["input_data"] = input_data
 
             self._dispatched.add(sub_name)
-            print(f"[PM {self.pm_id[:8]}] 依赖就绪, 分发待执行子任务 '{sub_name}'")
+            self._record_subtask_start(sub_name)  # F1.3
+            logger.info("[%s] 依赖就绪, 分发待执行子任务 '%s'", self.pm_id[:8], sub_name)
             self._dispatch_subtask(station, agent_info, task, sub, plan=self._plan)
 
     def _aggregate_results(self):
@@ -712,7 +829,7 @@ class ProjectManagerAgent:
                 "output": output,
             })
 
-        print(f"[PM {self.pm_id[:8]}] 开始聚合 {len(subtask_results)} 个子任务结果")
+        logger.info("[%s] 开始聚合 %d 个子任务结果", self.pm_id[:8], len(subtask_results))
 
         # 生成聚合 prompt 并调用 LLM
         agg_prompt = build_aggregation_prompt(task_name, task_desc, subtask_results, self._plan)
@@ -724,7 +841,7 @@ class ProjectManagerAgent:
             )
             aggregated = resp.get("content", "")
         except Exception as e:
-            print(f"[PM {self.pm_id[:8]}] LLM 聚合失败: {e}")
+            logger.error("[%s] LLM 聚合失败: %s", self.pm_id[:8], e)
             aggregated = f"[聚合失败] {e}"
 
         # 上报聚合结果
@@ -737,7 +854,7 @@ class ProjectManagerAgent:
 
         # 将聚合结果也存入 subtask_outputs 供后续查询
         self._subtask_outputs["_aggregated"] = aggregated
-        print(f"[PM {self.pm_id[:8]}] 聚合完成, 结果长度: {len(aggregated)} 字符")
+        logger.info("[%s] 聚合完成, 结果长度: %d 字符", self.pm_id[:8], len(aggregated))
 
         # ── 优化9: 交付闭环 — 将最终交付物上报 Secretary ──
         self._deliver_result(task_name, task_desc, aggregated, subtask_results)
@@ -785,14 +902,49 @@ class ProjectManagerAgent:
                 timeout=10,
             )
             if resp.status_code == 200:
-                print(f"[PM {self.pm_id[:8]}] 交付物已上报 Secretary")
+                logger.info("[%s] 交付物已上报 Secretary", self.pm_id[:8])
             else:
-                print(f"[PM {self.pm_id[:8]}] 交付物上报失败: HTTP {resp.status_code}")
+                logger.error("[%s] 交付物上报失败: HTTP %d", self.pm_id[:8], resp.status_code)
         except Exception as e:
-            print(f"[PM {self.pm_id[:8]}] 交付物上报异常: {e}")
+            logger.error("[%s] 交付物上报异常: %s", self.pm_id[:8], e)
+
+        # F3.2: 任务产物自动分发到共享目录 (跨站同步)
+        self._distribute_artifacts(task_name, aggregated)
 
         # ── 优化14: 记录任务记忆 ──
         self._record_task_memory(task_name, task_desc, subtask_results)
+
+    def _distribute_artifacts(self, task_name: str, content: str):
+        """F3.2: 将任务产物写入共享目录, 触发跨站文件同步。
+
+        产物存储在: shared_folder/deliverables/{task_id}_{task_name}.md
+        其他站点通过 cloud_sync 自动拉取。
+        """
+        try:
+            from .shared_folder import SharedFolder
+            from .config import load_config
+            cfg = load_config()
+            sf = SharedFolder(cfg)
+
+            # 构建产物目录
+            import os
+            deliverables_dir = os.path.join(sf.path, "deliverables")
+            os.makedirs(deliverables_dir, exist_ok=True)
+
+            # 文件名: task_id_taskname.md
+            task_id = self._task.get("task_id", "unknown")[:8]
+            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in task_name)[:40]
+            filename = f"{task_id}_{safe_name}.md"
+            filepath = os.path.join(deliverables_dir, filename)
+
+            # 写入产物
+            header = f"# {task_name}\n\n> PM: {self.pm_id[:8]} | 时间: {time.strftime('%Y-%m-%d %H:%M')}\n\n"
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(header + content)
+
+            logger.info("[%s] F3.2 产物已分发: %s", self.pm_id[:8], filename)
+        except Exception as e:
+            logger.debug("[%s] 产物分发失败 (non-critical): %s", self.pm_id[:8], e)
 
     def _record_task_memory(self, task_name: str, task_desc: str, subtask_results: list):
         """优化14: 任务完成后记录模式到 Secretary 的任务记忆表。
@@ -859,11 +1011,11 @@ class ProjectManagerAgent:
                 timeout=10,
             )
             if resp.status_code == 200:
-                print(f"[PM {self.pm_id[:8]}] 任务记忆已记录 (type={task_type}, success={success})")
+                logger.info("[%s] 任务记忆已记录 (type=%s, success=%s)", self.pm_id[:8], task_type, success)
             else:
-                print(f"[PM {self.pm_id[:8]}] 任务记忆记录失败: HTTP {resp.status_code}")
+                logger.error("[%s] 任务记忆记录失败: HTTP %d", self.pm_id[:8], resp.status_code)
         except Exception as e:
-            print(f"[PM {self.pm_id[:8]}] 任务记忆记录异常: {e}")
+            logger.error("[%s] 任务记忆记录异常: %s", self.pm_id[:8], e)
 
     @staticmethod
     def _infer_task_type(task_name: str, task_desc: str) -> str:
@@ -884,6 +1036,67 @@ class ProjectManagerAgent:
                 return task_type
         return "general"
 
+    # ── F2.5: 质量验证器 ───────────────────────────────────────
+
+    def _verify_output_quality(self, task_name: str, output: str) -> Optional[dict]:
+        """F2.5: 生成-验证器模式 — 用 LLM 评估子任务输出质量。
+
+        返回:
+            {"accepted": bool, "score": float (0-10), "issues": str}
+            或 None (跳过验证, 如输出过短)
+        """
+        # 跳过条件: 输出过短 (可能是简单状态报告) 或无 LLM 可用
+        if not output or len(str(output)) < 50:
+            return None
+
+        # 查找子任务描述
+        sub_desc = ""
+        for d in self._plan.get("decomposition", []):
+            if d.get("name") == task_name:
+                sub_desc = d.get("description", "")
+                break
+
+        verify_prompt = f"""你是质量验证器。请评估以下子任务输出的质量。
+
+## 子任务要求
+{sub_desc or task_name}
+
+## 实际输出 (前2000字)
+{str(output)[:2000]}
+
+## 评估标准
+1. 完整性: 是否覆盖了任务要求的所有方面
+2. 正确性: 内容是否逻辑正确、无明显错误
+3. 可用性: 输出是否可直接使用 (代码可运行/文档可阅读)
+
+请严格输出 JSON (不要 markdown):
+{{"accepted": true/false, "score": 0-10, "issues": "问题描述(无问题则为空)"}}
+
+注意: score >= 6 则 accepted=true。只有明显缺陷才判定为不通过。"""
+
+        try:
+            resp = self.runtime._call_llm_with_routing(
+                verify_prompt,
+                {"_model_preference": "", "_fallback_models": [], "description": "质量验证"}
+            )
+            content = resp.get("content", "")
+            # 解析 JSON
+            import json as _j
+            # 尝试提取 JSON
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            if start >= 0 and end > start:
+                result = _j.loads(content[start:end])
+                return {
+                    "accepted": result.get("accepted", True),
+                    "score": float(result.get("score", 7)),
+                    "issues": result.get("issues", ""),
+                }
+        except Exception as e:
+            logger.debug("[%s] 质量验证异常 (skip): %s", self.pm_id[:8], e)
+
+        return None  # 验证失败时不阻塞流程
+
     def _handle_subagent_failure(self, task_name: str, error_msg: str):
         """优化5: 子 Agent 失败后的接管策略。
 
@@ -902,7 +1115,7 @@ class ProjectManagerAgent:
                 sub = d
                 break
         if not sub:
-            print(f"[PM {self.pm_id[:8]}] 失败子任务 '{task_name}' 未在 plan 中找到, 跳过接管")
+            logger.warning("[%s] 失败子任务 '%s' 未在 plan 中找到, 跳过接管", self.pm_id[:8], task_name)
             return
 
         original_station = self._task_station.get(task_name, {})
@@ -911,7 +1124,7 @@ class ProjectManagerAgent:
         # 策略1: 同站重试
         if retry_count < self._max_retries:
             self._retry_counts[task_name] = retry_count + 1
-            print(f"[PM {self.pm_id[:8]}] 同站重试 '{task_name}' (第 {retry_count + 1} 次)")
+            logger.info("[%s] 同站重试 '%s' (第 %d 次)", self.pm_id[:8], task_name, retry_count + 1)
             # 更新 prompt: 追加失败上下文
             agent_id = original_agent.get("agent_id", "")
             if agent_id and original_station:
@@ -933,7 +1146,7 @@ class ProjectManagerAgent:
                           if s.get("device_id") != original_station.get("device_id")]
         if other_stations:
             new_station = other_stations[0]
-            print(f"[PM {self.pm_id[:8]}] 换站重试 '{task_name}' → {new_station.get('device_name', new_station.get('ip', ''))}")
+            logger.info("[%s] 换站重试 '%s' → %s", self.pm_id[:8], task_name, new_station.get('device_name', new_station.get('ip', '')))
             self._retry_counts[task_name] = retry_count + 1
 
             # 在新站点创建子 Agent
@@ -955,7 +1168,7 @@ class ProjectManagerAgent:
             return
 
         # 策略3: PM 本地接管
-        print(f"[PM {self.pm_id[:8]}] PM 本地接管子任务 '{task_name}'")
+        logger.info("[%s] PM 本地接管子任务 '%s'", self.pm_id[:8], task_name)
         result = self._execute_subtask_locally(self._task, sub)
 
         # ── 优化10: 如果本地接管也失败, 上报 escalated 到 Secretary ──
@@ -1015,7 +1228,7 @@ class ProjectManagerAgent:
         except Exception:
             pass
 
-        print(f"[PM {self.pm_id[:8]}] ⚠ 子任务 '{task_name}' 已上报 escalated, 等待 Boss 决策")
+        logger.warning("[%s] 子任务 '%s' 已上报 escalated, 等待 Boss 决策", self.pm_id[:8], task_name)
 
     # ── 优化7: 反向沟通通道 ──────────────────────────────────────
 
@@ -1030,7 +1243,72 @@ class ProjectManagerAgent:
         """
         self._clarification_response = input_data
         self._clarification_event.set()
-        print(f"[PM {self.pm_id[:8]}] 收到 Boss 回复: {str(input_data)[:200]}")
+        logger.info("[%s] 收到 Boss 回复: %s", self.pm_id[:8], str(input_data)[:200])
+
+    # ── F2.3: 多轮任务细化 ─────────────────────────────────────
+
+    def _refine_requirements(self, task: dict) -> dict:
+        """F2.3: 多轮对话式任务细化。
+
+        仅当任务描述过短/模糊时触发 (描述 < 20 字且无 input_data)。
+        最多 2 轮追问, 将 Boss 回复累积到 task description 中。
+        如果 Boss 未回复 (超时), 则按原有描述继续执行。
+        """
+        desc = task.get("description", task.get("name", ""))
+        input_data = task.get("input_data", {})
+
+        # 触发条件: 描述过短 且 无额外输入数据
+        if len(desc) >= 20 or input_data:
+            return task
+
+        logger.info("[%s] 任务描述模糊 (%d字), 尝试细化", self.pm_id[:8], len(desc))
+
+        max_rounds = 2
+        accumulated_context = []
+
+        for round_num in range(max_rounds):
+            # 生成追问
+            question = self._generate_refinement_question(desc, accumulated_context, round_num)
+            if not question:
+                break
+
+            # 向 Boss 发起追问 (短超时, 不阻塞太久)
+            response = self._request_clarification(
+                question=question,
+                timeout=120.0,  # 2分钟超时
+            )
+
+            if not response or response.get("timed_out"):
+                logger.info("[%s] 细化轮次%d 未收到回复, 继续执行", self.pm_id[:8], round_num + 1)
+                break
+
+            # 累积回复
+            answer = response.get("response", response.get("choice", ""))
+            if answer:
+                accumulated_context.append(f"Q{round_num+1}: {question}\nA{round_num+1}: {answer}")
+
+        # 将累积的上下文注入任务描述
+        if accumulated_context:
+            enriched_desc = desc + "\n\n## 补充信息 (Boss 细化)\n" + "\n".join(accumulated_context)
+            task = dict(task)  # 浅拷贝
+            task["description"] = enriched_desc
+            logger.info("[%s] 任务描述已细化: %d → %d 字",
+                       self.pm_id[:8], len(desc), len(enriched_desc))
+
+        return task
+
+    def _generate_refinement_question(self, desc: str, context: list, round_num: int) -> str:
+        """F2.3: 生成细化追问。"""
+        if round_num == 0:
+            return (
+                f"任务描述 '{desc}' 比较简短。请补充以下信息:\n"
+                "1. 具体要实现什么功能/目标?\n"
+                "2. 涉及哪些文件或目录?\n"
+                "3. 有无技术约束 (语言/框架/风格)?"
+            )
+        elif round_num == 1 and context:
+            return "还有没有其他重要约束或期望? (如无需补充请回复 '无')"
+        return ""
 
     def _request_clarification(self, question: str, options: list = None,
                                 timeout: float = None) -> dict:
@@ -1088,7 +1366,7 @@ class ProjectManagerAgent:
                 pass
 
         actual_timeout = timeout if timeout is not None else self._clarification_timeout
-        print(f"[PM {self.pm_id[:8]}] 等待 Boss 决策 (超时={actual_timeout}s): {question[:120]}")
+        logger.info("[%s] 等待 Boss 决策 (超时=%ds): %s", self.pm_id[:8], actual_timeout, question[:120])
 
         # 阻塞等待回复
         received = self._clarification_event.wait(timeout=actual_timeout)

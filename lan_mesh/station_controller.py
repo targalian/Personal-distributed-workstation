@@ -36,6 +36,9 @@ from fastapi.staticfiles import StaticFiles
 from .config import AppConfig, get_db_path, load_model_pool
 from .database import Database
 from .discovery import DiscoveryService
+from .logger import get_logger
+
+logger = get_logger("station")
 from .host_info import (
     collect_host_info,
     load_or_create_device_id,
@@ -145,13 +148,43 @@ class StationController:
         # ── 优化7: PM→Worker 映射 (用于反向沟通和取消/暂停) ──
         self._pm_worker_map: dict[str, dict] = {}  # pm_id → {"ip", "api_port", "device_id"}
 
+        # ── 内嵌 Worker 能力: 本机直接运行 PM Agent (无需单独 Worker 进程) ──
+        self._local_pm_agent = None       # 本机 PM Agent 实例
+        self._local_sub_agents: dict = {} # 本机子 Agent Runtime 实例
+
         self._running = False
+        self._start_timestamp: float = time.time()  # F1.2: 启动时间戳
         self._threads: list[threading.Thread] = []
         self._ws_push_event: Optional[asyncio.Event] = None  # 在 async 上下文中初始化
 
         # ── 优化12: 定期汇报 ──
         self._report_interval: float = 300.0  # 汇报间隔 (默认5分钟)
         self._last_report_time: float = 0.0
+
+        # ── F3.1: 自动扩缩容 ──
+        self._autoscale_up_threshold: int = 2    # 队列积压 >= 2 时扩容
+        self._autoscale_down_threshold: int = 0  # 队列清空时记录缩容观察
+
+    # ── F1.2: 自愈重启 ─────────────────────────────────────────
+
+    def request_restart(self, reason: str = ""):
+        """F1.2: 调度 graceful 重启。
+
+        在后台线程中等待 3 秒后关闭进程，
+        配合外部进程管理器 (systemd/schtasks) 实现自动拉起。
+        """
+        import os
+        import signal
+
+        logger.warning("自愈重启已触发: %s", reason)
+
+        def _delayed_exit():
+            time.sleep(3)
+            logger.info("进程即将退出 (reason=%s)", reason)
+            os.kill(os.getpid(), signal.SIGTERM if hasattr(signal, 'SIGTERM') else signal.SIGINT)
+
+        t = threading.Thread(target=_delayed_exit, daemon=True, name="restart-worker")
+        t.start()
 
     # ── Secretary 激活/停用 ───────────────────────────────────────
 
@@ -203,7 +236,7 @@ class StationController:
             self.bot_gateway.set_chat_handler(self.chat_handler)
 
         self.secretary_active = True
-        print("[Station] Secretary 模式已激活 — 聊天处理器/模型路由/MCP工具 已就绪 (PM Agent 架构)")
+        logger.info("Secretary 模式已激活 — 聊天处理器/模型路由/MCP工具 已就绪 (PM Agent 架构)")
 
         return {
             "ok": True,
@@ -228,7 +261,7 @@ class StationController:
         if self.bot_gateway:
             self.bot_gateway.set_chat_handler(None)
 
-        print("[Station] Secretary 模式已停用 — 回到纯基础设施管理")
+        logger.info("Secretary 模式已停用 — 回到纯基础设施管理")
         return {"ok": True, "message": "Secretary 已停用"}
 
     def submit_task_from_chat(self, name: str, description: str, created_by: str = "secretary",
@@ -290,10 +323,43 @@ class StationController:
         local_ips = self._collect_info().ip_addresses
         secretary_url = (
             f"http://{local_ips[0]}:{self.state.api_port}" if local_ips
-            else f"http://{self.state.device_id}:{self.state.api_port}"
+            else f"http://127.0.0.1:{self.state.api_port}"
         )
 
-        # POST 到目标 Worker 启动 PM Agent
+        # 优先本机派发 (内嵌 Worker, 无需单独 Worker 进程)
+        if self.secretary_active and self.chat_runtime:
+            result = self._local_start_pm(task.task_id, secretary_url, task.to_dict())
+            if result.get("ok"):
+                pm_id = result["pm_id"]
+                task.pm_agent_id = pm_id
+                task.status = "running"
+                self.db.save_task(task)
+                pm_agent = PMAgent(
+                    pm_id=pm_id,
+                    agent_name=f"PM-{pm_id[:8]}",
+                    task_id=task.task_id,
+                    device_id=self.state.device_id,
+                    hostname=self.state.device_name,
+                    ip=local_ips[0] if local_ips else "127.0.0.1",
+                    api_port=self.state.api_port,
+                    status="starting",
+                )
+                self.db.upsert_pm_agent(pm_agent)
+                self._pm_worker_map[pm_id] = {
+                    "ip": "127.0.0.1",
+                    "api_port": self.state.api_port,
+                    "device_id": self.state.device_id,
+                    "local": True,
+                }
+                print(f"[Station] PM Agent 本机启动: {pm_id[:12]}")
+                self.bot_gateway.notify("pm_registered", {
+                    "pm_id": pm_id[:12], "task": task.name, "station": self.state.device_name,
+                })
+                return task.to_dict()
+            else:
+                print(f"[Station] 本机 PM 启动失败: {result.get('message')}, 尝试远程派发")
+
+        # 回退: POST 到远程 Worker 启动 PM Agent
         try:
             import requests as _requests
             resp = _requests.post(
@@ -345,21 +411,110 @@ class StationController:
 
         return task.to_dict()
 
+    # ── 内嵌 Worker: 本机 PM Agent 管理 ─────────────────────
+
+    def _local_start_pm(self, task_id: str, secretary_url: str, task_data: dict = None) -> dict:
+        """在本机 Station 进程内直接启动 PM Agent (无需 Worker)。"""
+        if self._local_pm_agent and getattr(self._local_pm_agent, '_running', False):
+            return {"ok": False, "message": "本机 PM Agent 已在运行"}
+        if not self.chat_runtime:
+            return {"ok": False, "message": "AgentRuntime 未初始化 (Secretary 未激活)"}
+
+        import uuid as _uuid
+        from .pm_agent import ProjectManagerAgent
+        pm_id = f"pm-{_uuid.uuid4().hex[:12]}"
+
+        if not task_data:
+            return {"ok": False, "message": "缺少任务数据"}
+
+        self._local_pm_agent = ProjectManagerAgent(
+            pm_id=pm_id,
+            agent_runtime=self.chat_runtime,
+            secretary_url=secretary_url,
+            device_id=self.state.device_id,
+            device_name=self.state.device_name,
+        )
+        self._local_pm_agent.start_task(task_data)
+        logger.info("本机 PM Agent 已启动: %s, 任务: %s", pm_id, task_id)
+        return {"ok": True, "pm_id": pm_id, "device_id": self.state.device_id}
+
+    def _local_stop_pm(self) -> dict:
+        """停止本机 PM Agent。"""
+        if not self._local_pm_agent:
+            return {"ok": False, "message": "PM Agent 未运行"}
+        self._local_pm_agent.cancel()
+        pm_id = self._local_pm_agent.pm_id
+        self._local_pm_agent = None
+        self._local_sub_agents.clear()
+        logger.info("本机 PM Agent 已停止: %s", pm_id)
+        return {"ok": True, "pm_id": pm_id}
+
+    def _local_cancel_pm(self) -> dict:
+        if not self._local_pm_agent:
+            return {"ok": False, "message": "PM Agent 未运行"}
+        self._local_pm_agent.cancel()
+        return {"ok": True, "pm_id": self._local_pm_agent.pm_id}
+
+    def _local_pause_pm(self) -> dict:
+        if not self._local_pm_agent:
+            return {"ok": False, "message": "PM Agent 未运行"}
+        self._local_pm_agent.pause()
+        return {"ok": True, "pm_id": self._local_pm_agent.pm_id}
+
+    def _local_inject_input(self, input_data: dict) -> dict:
+        if not self._local_pm_agent or not self._local_pm_agent._running:
+            return {"ok": False, "message": "PM Agent 未运行"}
+        self._local_pm_agent.receive_input(input_data)
+        return {"ok": True, "pm_id": self._local_pm_agent.pm_id}
+
+    def _local_pm_status(self) -> dict:
+        if not self._local_pm_agent:
+            return {"running": False}
+        return self._local_pm_agent.get_status()
+
+    def _local_create_subagent(self, agent_name: str, skills: list,
+                               task_description: str = "", system_prompt: str = "",
+                               preferred_agent_id: str = "") -> dict:
+        """在本机创建子 Agent。"""
+        import uuid as _uuid
+        from .agent_runtime import AgentRuntime
+        agent_id = preferred_agent_id or f"sub-{_uuid.uuid4().hex[:10]}"
+        sub_runtime = AgentRuntime(
+            agent_id=agent_id,
+            shared_folder_path=str(self.state.shared_folder.path),
+            custom_system_prompt=system_prompt,
+        )
+        self._local_sub_agents[agent_id] = {
+            "agent_id": agent_id, "agent_name": agent_name,
+            "runtime": sub_runtime, "skills": skills,
+            "current_task": task_description, "status": "idle",
+        }
+        logger.info("本机子 Agent 已创建: %s (%s)", agent_id, agent_name)
+        return {"agent_id": agent_id, "agent_name": agent_name}
+
+    def _local_forward_progress(self, report: dict) -> dict:
+        if not self._local_pm_agent:
+            return {"ok": False, "message": "PM Agent 未运行"}
+        self._local_pm_agent.receive_progress_report(report)
+        return {"ok": True}
+
     # ── 优化7: 反向沟通 ──
 
     def inject_input_to_pm(self, pm_id: str, input_data: dict) -> dict:
         """向指定 PM Agent 注入来自 Boss 的回复。
 
-        查找 PM 所在的 Worker, HTTP POST 到 /pm/inject-input 端点。
-
-        Args:
-            pm_id: PM Agent ID
-            input_data: Boss 回复数据
-
-        Returns:
-            {ok: bool, message: str}
+        优先检查本机 PM, 否则 HTTP POST 到远程 Worker。
         """
         worker = self._pm_worker_map.get(pm_id)
+
+        # 本机 PM 直接调用
+        if worker and worker.get("local") and self._local_pm_agent:
+            result = self._local_inject_input(input_data)
+            if result.get("ok"):
+                print(f"[Station] 已注入回复到本机 PM {pm_id[:12]}")
+                return {"ok": True, "message": "回复已发送到 PM Agent"}
+            return result
+
         if not worker:
             return {"ok": False, "message": f"PM {pm_id[:12]} 的 Worker 信息未找到"}
 
@@ -412,6 +567,15 @@ class StationController:
             self.db.update_pm_status(pm_id, "cancelled")
             return {"ok": True, "message": "任务已标记取消 (Worker 信息丢失)"}
 
+        # 本机 PM 直接取消
+        if worker.get("local"):
+            self._local_cancel_pm()
+            self.db.update_task_status(task_id, "cancelled")
+            self.db.update_pm_status(pm_id, "cancelled")
+            print(f"[Station] 本机任务已取消: {task_id}")
+            self.bot_gateway.notify("task_cancelled", {"task_id": task_id, "name": task.name})
+            return {"ok": True, "message": "任务已取消"}
+
         ip = worker.get("ip", "")
         port = worker.get("api_port", 0)
         if not ip or not port:
@@ -456,6 +620,15 @@ class StationController:
         worker = self._pm_worker_map.get(pm_id)
         if not worker:
             return {"ok": False, "message": "PM Agent 的 Worker 信息未找到"}
+
+        # 本机 PM 直接暂停
+        if worker.get("local"):
+            self._local_pause_pm()
+            self.db.update_task_status(task_id, "paused")
+            self.db.update_pm_status(pm_id, "paused")
+            print(f"[Station] 本机任务已暂停: {task_id}")
+            self.bot_gateway.notify("task_paused", {"task_id": task_id, "name": task.name})
+            return {"ok": True, "message": "任务已暂停"}
 
         ip = worker.get("ip", "")
         port = worker.get("api_port", 0)
@@ -715,10 +888,97 @@ class StationController:
                 "summary": report[:300],
             })
 
-            print(f"[Station] 定期汇报: {len(active_tasks)} 个活跃任务")
+            logger.info("定期汇报: %d 个活跃任务", len(active_tasks))
 
         except Exception as e:
-            print(f"[Station] 定期汇报异常: {e}")
+            logger.error("定期汇报异常: %s", e)
+
+    # ── F3.1: Worker 自动扩缩容 ─────────────────────────────────
+
+    def _start_autoscaler(self):
+        """F3.1: 启动自动扩缩容监控线程。"""
+        t = threading.Thread(target=self._autoscaler_loop, daemon=True, name="autoscaler")
+        t.start()
+        logger.info("自动扩缩容监控已启动 (interval=30s, scale_up=%d, scale_down=%d)",
+                   self._autoscale_up_threshold, self._autoscale_down_threshold)
+
+    def _autoscaler_loop(self):
+        """F3.1: 定期检测任务队列深度, 触发扩缩容决策。"""
+        while self._running:
+            time.sleep(30)  # 每 30 秒检测一次
+            try:
+                self._autoscale_check()
+            except Exception as e:
+                logger.debug("自动扩缩容检测异常: %s", e)
+
+    def _autoscale_check(self):
+        """F3.1: 扩缩容决策逻辑。
+
+        策略:
+        - 队列深度 > up_threshold → 尝试激活空闲 Worker
+        - 队列深度 < down_threshold 且无活跃 PM → 允许 Worker 进入低功耗
+        """
+        # 统计任务队列
+        all_tasks = self.db.list_tasks()
+        pending = [t for t in all_tasks if getattr(t, 'status', '') in ('pending', 'queued')]
+        running = [t for t in all_tasks if getattr(t, 'status', '') in ('running', 'monitoring')]
+        queue_depth = len(pending)
+        active_count = len(running)
+
+        # 获取在线 Worker 列表
+        hosts = self.db.list_hosts()
+        online_workers = [h for h in hosts
+                         if getattr(h, 'online', False)
+                         and getattr(h, 'role', '') == 'worker']
+        idle_workers = [h for h in online_workers
+                       if not self._is_worker_busy(h)]
+
+        # 扩容: 队列积压且有可用 Worker
+        if queue_depth >= self._autoscale_up_threshold and idle_workers:
+            target = idle_workers[0]
+            logger.info("[自动扩容] 队列=%d, 激活 Worker: %s",
+                       queue_depth, getattr(target, 'device_name', ''))
+            self._dispatch_next_task_to_worker(target)
+
+        # 缩容日志 (仅记录, 不主动关闭 Worker)
+        elif queue_depth == 0 and active_count == 0 and online_workers:
+            logger.debug("[缩容观察] 无活跃任务, %d 台 Worker 空闲", len(online_workers))
+
+    def _is_worker_busy(self, host) -> bool:
+        """F3.1: 检查 Worker 是否正在执行任务。"""
+        device_id = getattr(host, 'device_id', '')
+        # 检查是否有活跃 PM 在该 Worker 上
+        for pm_info in self._pm_worker_map.values():
+            if pm_info.get("device_id") == device_id:
+                return True
+        return False
+
+    def _dispatch_next_task_to_worker(self, worker_host):
+        """F3.1: 将队列中下一个 pending 任务派发到指定 Worker。"""
+        all_tasks = self.db.list_tasks()
+        pending = [t for t in all_tasks if getattr(t, 'status', '') == 'pending']
+        if not pending:
+            return
+
+        task = pending[0]
+        task_id = getattr(task, 'task_id', '')
+        ip = getattr(worker_host, 'ip', '')
+        port = getattr(worker_host, 'api_port', 0)
+
+        if not ip or not port:
+            return
+
+        try:
+            import requests as req
+            resp = req.post(
+                f"http://{ip}:{port}/role/start-pm",
+                json={"task_id": task_id, "secretary_url": f"http://127.0.0.1:{self.state.api_port}"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                logger.info("[自动扩容] 任务 %s 已派发到 %s", task_id[:8], ip)
+        except Exception as e:
+            logger.debug("[自动扩容] 派发失败: %s", e)
 
     async def _ws_push_loop(self):
         """定期向 WebSocket 客户端推送最新主机状态 (新主机入站时立即触发)。"""
@@ -747,6 +1007,10 @@ class StationController:
         - Secretary 层 (激活后可用): 任务/Agent/项目/MCP工具/模型路由
         """
         app = FastAPI(title="LAN Mesh Station Director", version="0.1.0")
+
+        # F1.5: 注册限流 + 认证中间件
+        from .station_api import api_guard_middleware
+        app.middleware("http")(api_guard_middleware)
 
         # Station 路由 (含全部 API, Secretary 路由会检查 active 状态)
         station_router = create_station_router(self)
@@ -798,12 +1062,12 @@ class StationController:
 
         self.state.api_port = self._find_available_port(self.cfg.secretary.api_port)
 
-        print(f"[Station] 设备 ID: {self.state.device_id}")
-        print(f"[Station] 设备名称: {self.state.device_name}")
-        print(f"[Station] 共享目录: {self.state.shared_folder.path}")
-        print(f"[Station] 数据库: {get_db_path(self.cfg)}")
-        print(f"[Station] HTTP API + Web UI 端口: {self.state.api_port}")
-        print(f"[Station] Secretary 模式: 未激活 (请在 Web UI 中激活)")
+        logger.info("设备 ID: %s", self.state.device_id)
+        logger.info("设备名称: %s", self.state.device_name)
+        logger.info("共享目录: %s", self.state.shared_folder.path)
+        logger.info("数据库: %s", get_db_path(self.cfg))
+        logger.info("HTTP API + Web UI 端口: %d", self.state.api_port)
+        logger.info("Secretary 模式: 未激活 (请在 Web UI 中激活)")
 
         # 启动 UDP 发现服务
         self.discovery = DiscoveryService(
@@ -865,6 +1129,9 @@ class StationController:
         )
         prune_thread.start()
         self._threads.append(prune_thread)
+
+        # F3.1: 启动自动扩缩容监控
+        self._start_autoscaler()
 
         # 创建 FastAPI 应用
         app = self._create_app()

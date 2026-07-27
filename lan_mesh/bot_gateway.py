@@ -29,6 +29,10 @@ from typing import Optional, Callable
 
 import requests
 
+from .logger import get_logger
+
+logger = get_logger("bot")
+
 
 # ── 事件消息模板 ──────────────────────────────────────────────
 
@@ -212,7 +216,7 @@ class BotGateway:
             elif channel.channel_type == "telegram":
                 self._send_telegram(channel, message)
         except Exception as e:
-            print(f"[BotGateway] 发送到 {channel.channel_type} 失败: {e}")
+            logger.error("发送到 %s 失败: %s", channel.channel_type, e)
 
     # ── 企业微信群机器人 ──
 
@@ -261,7 +265,7 @@ class BotGateway:
             name="bot-telegram-poll",
         )
         self._tg_poll_thread.start()
-        print("[BotGateway] Telegram 轮询已启动，等待手机端命令...")
+        logger.info("Telegram 轮询已启动，等待手机端命令...")
 
     def _telegram_poll_loop(self, channel: BotChannel):
         """Telegram getUpdates 长轮询循环。"""
@@ -295,12 +299,12 @@ class BotGateway:
             except requests.exceptions.Timeout:
                 continue  # 长轮询超时是正常的
             except Exception as e:
-                print(f"[BotGateway] Telegram 轮询异常: {e}")
+                logger.error("Telegram 轮询异常: %s", e)
                 time.sleep(5)
 
     def _handle_telegram_command(self, channel: BotChannel, text: str, chat_id: str):
         """处理来自 Telegram 的命令 (优化15: 统一入口)。"""
-        print(f"[BotGateway] 收到 Telegram 消息: {text} (from {chat_id})")
+        logger.info("收到 Telegram 消息: %s (from %s)", text[:50], chat_id)
 
         # 内置命令
         if text == "/start" or text == "/help":
@@ -341,7 +345,7 @@ class BotGateway:
                 "parse_mode": "HTML",
             }, timeout=10)
         except Exception as e:
-            print(f"[BotGateway] 回复 Telegram 失败: {e}")
+            logger.error("回复 Telegram 失败: %s", e)
 
     def _handle_natural_language(self, text: str, chat_id: str) -> str:
         """优化15: 统一处理自然语言消息。
@@ -360,7 +364,7 @@ class BotGateway:
                         reply = reply[:4000] + "\n...(内容过长已截断)"
                     return reply
             except Exception as e:
-                print(f"[BotGateway] ChatHandler 处理异常: {e}")
+                logger.error("ChatHandler 处理异常: %s", e)
                 return f"⚠️ 秘书处理异常: {e}"
 
         # 策略2: command_handler (简单命令模式)
