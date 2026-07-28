@@ -50,5 +50,8 @@ secrets.yaml
 # 日志
 *.log
 
+# 临时调试产物 (根目录下划线开头的截图/脚本)
+/_*
+
 # Tauri 自动生成 (可选保留，按需取消注释)
 # src-tauri/gen/schemas/
