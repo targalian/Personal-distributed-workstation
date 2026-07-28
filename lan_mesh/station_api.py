@@ -1114,6 +1114,59 @@ def create_station_router(controller) -> APIRouter:
         })
         return {"ok": True, "report_id": report.report_id}
 
+    @router.post("/api/pm/{pm_id}/subtasks")
+    async def sync_pm_subtasks(pm_id: str, payload: dict):
+        """PM 同步子任务状态列表到任务记录 (前端进度实时展示)。
+
+        将 PM 的 plan decomposition + 运行态合并为 SubTask 结构,
+        写入对应任务的 subtasks 字段, 并广播 task_updated 事件。
+        """
+        _check_secretary()
+        task_id = payload.get("task_id", "")
+        incoming = payload.get("subtasks", [])
+
+        # task_id 缺失时通过 pm_agent_id 反查
+        if not task_id:
+            try:
+                conn = db._get_conn()
+                row = conn.execute(
+                    "SELECT task_id FROM tasks WHERE pm_agent_id = ? ORDER BY created_at DESC LIMIT 1",
+                    (pm_id,)
+                ).fetchone()
+                if row:
+                    task_id = row["task_id"]
+            except Exception:
+                pass
+        if not task_id:
+            raise HTTPException(status_code=400, detail="缺少 task_id")
+
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
+        # 合并: 保留已有 subtask_id, 按 name 匹配更新状态
+        existing = {st.get("name"): st for st in task.subtasks if isinstance(st, dict)}
+        merged = []
+        for sub in incoming:
+            name = sub.get("name", "")
+            prev = existing.get(name, {})
+            item = {
+                "subtask_id": prev.get("subtask_id") or f"sub-{_uuid.uuid4().hex[:8]}",
+                "parent_task_id": task_id,
+                "name": name,
+                "description": sub.get("description", prev.get("description", "")),
+                "required_skill": sub.get("required_skill", prev.get("required_skill", "")),
+                "depends_on": sub.get("depends_on", prev.get("depends_on", [])),
+                "status": sub.get("status", prev.get("status", "pending")),
+                "assigned_agent_id": prev.get("assigned_agent_id", ""),
+            }
+            merged.append(item)
+
+        db.update_task_subtasks(task_id, merged)
+        task.subtasks = merged
+        await _broadcast(state, "task_updated", task.to_dict())
+        return {"ok": True, "task_id": task_id, "subtasks": len(merged)}
+
     # ── 团队管理 ──
 
     @router.get("/api/teams")

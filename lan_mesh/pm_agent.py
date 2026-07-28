@@ -162,18 +162,36 @@ class ProjectManagerAgent:
                        self.pm_id[:8], plan.get('pattern', 'single'),
                        len(plan.get('decomposition', [])))
 
+            # 记录 plan/task 供子任务状态同步使用
+            self._plan = plan
+            self._task = task
+
             # 阶段 2: 执行
             pattern = plan.get("pattern", "single")
             if pattern == "single":
                 # 简单任务，PM 自己做
                 self._report_status("executing", collaboration_mode="single")
+                # 单体任务: 构造一个子任务节点供前端进度展示
+                if not plan.get("decomposition"):
+                    plan["decomposition"] = [{
+                        "name": task.get("name", "执行"),
+                        "skill": "code_generation",
+                        "depends_on": [],
+                        "description": task.get("description", ""),
+                    }]
+                self._sync_subtasks()  # 先推送 pending 状态
                 result = self._execute_directly(task)
+                # 标记子任务完成并同步
+                for sub in plan.get("decomposition", []):
+                    self._subtask_outputs[sub.get("name", "")] = result
+                self._sync_subtasks()
                 self._report_status("completed", task_list=[{"name": task.get("name", ""), "status": "completed"}])
                 self._report_progress(1.0, "completed", f"任务完成: {result.get('summary', '')}")
             else:
                 # 复杂任务，创建团队并分发
                 self._report_status("executing", collaboration_mode=pattern,
                                     task_list=plan.get("decomposition", []))
+                self._sync_subtasks()  # 推送初始子任务列表 (全部 pending)
                 self._create_team_and_dispatch(task, plan)
                 self._report_status("monitoring")
 
@@ -748,6 +766,9 @@ class ProjectManagerAgent:
             error_msg = report.get("message", "未知错误")
             logger.error("[%s] 子任务 '%s' 失败: %s", self.pm_id[:8], task_name, error_msg[:200])
             self._handle_subagent_failure(task_name, error_msg)
+
+        # 同步子任务状态到 Secretary (前端进度实时展示)
+        self._sync_subtasks()
 
         # 转发到 Secretary
         self._report_progress(
@@ -1457,6 +1478,57 @@ class ProjectManagerAgent:
             )
         except Exception as e:
             print(f"[PM {self.pm_id[:8]}] 上报进度失败: {e}")
+
+    def _sync_subtasks(self):
+        """向 Secretary 同步子任务状态列表 (供前端进度展示)。
+
+        将当前 plan decomposition + 运行时状态合并为 SubTask 结构,
+        写入任务记录的 subtasks 字段, 解决前端进度始终 0% 的问题。
+        """
+        try:
+            subtasks = self._build_subtask_status()
+            if not subtasks:
+                return
+            requests.post(
+                f"{self.secretary_url}/api/pm/{self.pm_id}/subtasks",
+                json={
+                    "task_id": (self._task or {}).get("task_id", ""),
+                    "subtasks": subtasks,
+                },
+                timeout=5,
+            )
+        except Exception as e:
+            print(f"[PM {self.pm_id[:8]}] 同步子任务失败: {e}")
+
+    def _build_subtask_status(self) -> list:
+        """构建当前子任务状态列表 (从 plan + 运行时状态推导)。"""
+        decomposition = (self._plan or {}).get("decomposition", [])
+        result = []
+        for sub in decomposition:
+            name = sub.get("name", "")
+            # 状态推导: 已有输出=completed; 否则查 subagent 运行态
+            if name in self._subtask_outputs:
+                status = "completed"
+            else:
+                status = "pending"
+                for m in self._subagents.values():
+                    if m.get("current_task") == name:
+                        raw = m.get("status", "pending")
+                        if raw in ("busy", "executing", "working"):
+                            status = "running"
+                        elif raw in ("completed", "failed"):
+                            status = raw
+                        else:
+                            status = "assigned"
+                        break
+            result.append({
+                "name": name,
+                "description": sub.get("description", ""),
+                "required_skill": sub.get("skill", ""),
+                "depends_on": sub.get("depends_on", []),
+                "status": status,
+            })
+        return result
 
     # ── 技能加载 ──────────────────────────────────────────────────
 

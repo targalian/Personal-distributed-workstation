@@ -678,6 +678,16 @@ class Database:
         )
         conn.commit()
 
+    def update_task_subtasks(self, task_id: str, subtasks: list):
+        """更新任务的子任务列表 (PM 同步进度用)。"""
+        import json
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE tasks SET subtasks = ? WHERE task_id = ?",
+            (json.dumps(subtasks, ensure_ascii=False), task_id),
+        )
+        conn.commit()
+
     def list_tasks(self, status: str = None, limit: int = 50) -> list[Task]:
         """列出任务,可按状态过滤。"""
         import json
