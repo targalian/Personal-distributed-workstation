@@ -283,6 +283,11 @@ class StationController:
             try:
                 self.activate_secretary()
                 logger.info("Secretary 选举: 本站当选 (网络中无其他 Secretary)")
+                # 通知前端 Secretary 已激活
+                self._queue_ws_broadcast("secretary_activated", {
+                    "message": "Secretary 自动选举激活",
+                    "device_id": self.state.device_id,
+                })
             except Exception as e:
                 logger.error("Secretary 自动激活失败: %s (可在 Web UI 手动激活)", e)
         else:
@@ -1276,8 +1281,12 @@ class StationController:
         # F3.1: 启动自动扩缩容监控
         self._start_autoscaler()
 
-        # Secretary 自动选举 (First-Station-Wins)
-        self._secretary_election()
+        # Secretary 自动选举 (First-Station-Wins, 后台线程不阻塞 API 启动)
+        election_thread = threading.Thread(
+            target=self._secretary_election, name="secretary-election", daemon=True
+        )
+        election_thread.start()
+        self._threads.append(election_thread)
 
         # 创建 FastAPI 应用
         app = self._create_app()
