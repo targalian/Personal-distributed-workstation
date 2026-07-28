@@ -422,6 +422,172 @@ class APITestSuite:
             self._record("BUG-005b", "Web UI首页可达", False, str(e), None, t0)
 
     # ═══════════════════════════════════════════════════════════
+    #  UI 按钮模拟测试 (每个按钮对应的 API 调用)
+    # ═══════════════════════════════════════════════════════════
+
+    def test_btn_refresh_pm(self):
+        """BTN-001: 团队管理「刷新」按钮 → GET /api/pm。"""
+        t0 = time.time()
+        try:
+            r = self._get("/api/pm")
+            d = r.json()
+            ok = r.status_code == 200 and "pm_agents" in d
+            self._record("BTN-001", "按钮:刷新PM列表", ok,
+                         f"pm_agents={len(d.get('pm_agents', []))}", r.status_code, t0)
+        except Exception as e:
+            self._record("BTN-001", "按钮:刷新PM列表", False, str(e), None, t0)
+
+    def test_btn_refresh_hosts(self):
+        """BTN-002: 主机面板「刷新」按钮 → GET /api/hosts。"""
+        t0 = time.time()
+        try:
+            r = self._get("/api/hosts")
+            d = r.json()
+            ok = r.status_code == 200 and "hosts" in d
+            self._record("BTN-002", "按钮:刷新主机列表", ok,
+                         f"hosts={len(d.get('hosts', []))}", r.status_code, t0)
+        except Exception as e:
+            self._record("BTN-002", "按钮:刷新主机列表", False, str(e), None, t0)
+
+    def test_btn_network_info(self):
+        """BTN-003: 主机面板「网络」按钮 → GET /api/network。"""
+        t0 = time.time()
+        try:
+            r = self._get("/api/network")
+            d = r.json()
+            ok = r.status_code == 200 and "local_ips" in d and "udp_port" in d
+            self._record("BTN-003", "按钮:网络信息", ok,
+                         f"ips={len(d.get('local_ips', []))}", r.status_code, t0)
+        except Exception as e:
+            self._record("BTN-003", "按钮:网络信息", False, str(e), None, t0)
+
+    def test_btn_refresh_tasks(self):
+        """BTN-004: 任务面板「刷新」按钮 → GET /api/tasks。"""
+        t0 = time.time()
+        try:
+            r = self._get("/api/tasks")
+            d = r.json()
+            ok = r.status_code == 200 and "tasks" in d
+            self._record("BTN-004", "按钮:刷新任务列表", ok,
+                         f"tasks={len(d.get('tasks', []))}", r.status_code, t0)
+        except Exception as e:
+            self._record("BTN-004", "按钮:刷新任务列表", False, str(e), None, t0)
+
+    def test_btn_refresh_agents(self):
+        """BTN-005: Agent面板「刷新」按钮 → GET /api/agents。"""
+        t0 = time.time()
+        try:
+            r = self._get("/api/agents")
+            d = r.json()
+            ok = r.status_code == 200 and "agents" in d
+            self._record("BTN-005", "按钮:刷新Agent列表", ok,
+                         f"agents={len(d.get('agents', []))}", r.status_code, t0)
+        except Exception as e:
+            self._record("BTN-005", "按钮:刷新Agent列表", False, str(e), None, t0)
+
+    def test_btn_refresh_tools(self):
+        """BTN-006: 工具面板「刷新」按钮 → GET /tools/list。"""
+        t0 = time.time()
+        try:
+            r = self._get("/tools/list")
+            d = r.json()
+            ok = r.status_code == 200 and "tools" in d
+            self._record("BTN-006", "按钮:刷新工具列表", ok,
+                         f"tools={len(d.get('tools', []))}", r.status_code, t0)
+        except Exception as e:
+            self._record("BTN-006", "按钮:刷新工具列表", False, str(e), None, t0)
+
+    def test_btn_refresh_projects(self):
+        """BTN-007: 项目面板「刷新」按钮 → GET /api/projects。"""
+        t0 = time.time()
+        try:
+            r = self._get("/api/projects")
+            d = r.json()
+            ok = r.status_code == 200 and "projects" in d
+            self._record("BTN-007", "按钮:刷新项目列表", ok,
+                         f"projects={len(d.get('projects', []))}", r.status_code, t0)
+        except Exception as e:
+            self._record("BTN-007", "按钮:刷新项目列表", False, str(e), None, t0)
+
+    def test_btn_load_history(self):
+        """BTN-008: 秘书聊天「加载历史」按钮 → GET /api/secretary/chat/history。"""
+        t0 = time.time()
+        try:
+            r = self._get("/api/secretary/chat/history")
+            d = r.json()
+            ok = r.status_code == 200 and "history" in d
+            self._record("BTN-008", "按钮:加载聊天历史", ok,
+                         f"history={len(d.get('history', []))}", r.status_code, t0)
+        except Exception as e:
+            self._record("BTN-008", "按钮:加载聊天历史", False, str(e), None, t0)
+
+    def test_btn_submit_task(self):
+        """BTN-009: 任务面板「提交任务」按钮 → POST /api/tasks。"""
+        t0 = time.time()
+        try:
+            # 提交任务可能触发 PM 派发 + LLM 调用, 给足超时
+            r = self._post("/api/tasks", json={
+                "name": "[LoopTest] 按钮测试任务",
+                "description": "自动化测试提交, 可安全删除",
+                "priority": "low",
+            }, timeout=120)
+            d = r.json()
+            ok = r.status_code in (200, 201) and d.get("task_id")
+            self._record("BTN-009", "按钮:提交任务", ok,
+                         f"task_id={d.get('task_id', '?')[:16]}", r.status_code, t0)
+        except Exception as e:
+            self._record("BTN-009", "按钮:提交任务", False, str(e), None, t0)
+
+    def test_btn_create_project(self):
+        """BTN-010: 项目面板「创建项目」按钮 → POST /api/projects。"""
+        t0 = time.time()
+        try:
+            r = self._post("/api/projects", json={
+                "name": f"[LoopTest] 按钮测试项目-{int(time.time())}",
+                "description": "自动化测试创建, 可安全删除",
+                "budget_limit_usd": 1.0,
+            })
+            d = r.json()
+            ok = r.status_code in (200, 201) and (d.get("project_id") or d.get("id"))
+            self._record("BTN-010", "按钮:创建项目", ok,
+                         f"project_id={d.get('project_id', d.get('id', '?'))[:16]}", r.status_code, t0)
+        except Exception as e:
+            self._record("BTN-010", "按钮:创建项目", False, str(e), None, t0)
+
+    def test_btn_probe_ip(self):
+        """BTN-011: 主机面板「探测IP」按钮 → POST /api/probe/{ip}。"""
+        t0 = time.time()
+        try:
+            r = self._post("/api/probe/127.0.0.1")
+            # 探测本机应该成功或返回已注册
+            ok = r.status_code in (200, 409)
+            self._record("BTN-011", "按钮:探测IP", ok,
+                         f"status={r.status_code}", r.status_code, t0)
+        except Exception as e:
+            self._record("BTN-011", "按钮:探测IP", False, str(e), None, t0)
+
+    def test_btn_dag_load(self):
+        """BTN-012: DAG面板「加载」按钮 → GET /api/tasks/{id}/graph。"""
+        t0 = time.time()
+        try:
+            # 先获取一个任务 ID
+            r = self._get("/api/tasks")
+            tasks = r.json().get("tasks", [])
+            if not tasks:
+                self._record("BTN-012", "按钮:DAG加载", True, "SKIP: 无任务可加载", 200, t0)
+                return
+            task_id = tasks[0].get("task_id", "")
+            r2 = self._get(f"/api/tasks/{task_id}/graph")
+            # 200=有图, 503=任务无子图(正常), 404=任务不存在
+            ok = r2.status_code in (200, 503)
+            detail = r2.json().get("detail", "") if r2.status_code == 503 else ""
+            self._record("BTN-012", "按钮:DAG加载", ok,
+                         f"task={task_id[:12]}, status={r2.status_code}{', ' + detail[:40] if detail else ''}",
+                         r2.status_code, t0)
+        except Exception as e:
+            self._record("BTN-012", "按钮:DAG加载", False, str(e), None, t0)
+
+    # ═══════════════════════════════════════════════════════════
     #  运行入口
     # ═══════════════════════════════════════════════════════════
 
@@ -448,6 +614,19 @@ class APITestSuite:
             self.test_p2p_messages,
             self.test_websocket,
             self.test_web_ui,
+            # UI 按钮模拟测试
+            self.test_btn_refresh_pm,
+            self.test_btn_refresh_hosts,
+            self.test_btn_network_info,
+            self.test_btn_refresh_tasks,
+            self.test_btn_refresh_agents,
+            self.test_btn_refresh_tools,
+            self.test_btn_refresh_projects,
+            self.test_btn_load_history,
+            self.test_btn_submit_task,
+            self.test_btn_create_project,
+            self.test_btn_probe_ip,
+            self.test_btn_dag_load,
         ]
 
         # 健康检查必须先行

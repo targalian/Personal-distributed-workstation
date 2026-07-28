@@ -58,12 +58,17 @@ STATUS_MAP = {
 
 
 def load_csv(csv_path: Path) -> list[dict]:
-    """加载测试清单 CSV。"""
+    """加载测试清单 CSV (带安全校验防截断)。"""
     if not csv_path.exists():
         return []
     with open(csv_path, "r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
-        return list(reader)
+        rows = list(reader)
+    # 安全校验: 如果只读到极少行, 可能是编码/格式问题, 返回空避免覆盖
+    if 0 < len(rows) < 3:
+        print(f"[WARN] CSV 只读到 {len(rows)} 行, 可能格式异常, 跳过更新")
+        return []
+    return rows
 
 
 def save_csv(csv_path: Path, rows: list[dict]):
