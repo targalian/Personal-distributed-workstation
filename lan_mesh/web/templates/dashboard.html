@@ -86,6 +86,38 @@
   .task-step{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px}
   .step-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
   .step-dot.pending{background:var(--dim)}.step-dot.assigned{background:var(--yellow)}.step-dot.completed{background:var(--green)}.step-dot.failed{background:var(--red)}
+  /* ── 项目工作台 (多维合一) ── */
+  .ws-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap}
+  .ws-proj-picker{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 16px;transition:border-color .2s}
+  .ws-proj-picker:hover{border-color:var(--accent)}
+  .ws-proj-picker select{background:transparent;border:none;color:var(--text);font-size:15px;font-weight:600;outline:none;cursor:pointer;max-width:300px}
+  .ws-proj-picker select option{background:var(--surface);color:var(--text)}
+  .ws-actions{display:flex;gap:10px;flex-wrap:wrap}
+  .ws-subnav{display:flex;gap:4px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:4px;margin-bottom:20px;overflow-x:auto}
+  .ws-subtab{padding:8px 18px;border-radius:8px;cursor:pointer;font-size:14px;color:var(--dim);white-space:nowrap;transition:all .18s;font-weight:500}
+  .ws-subtab:hover{color:var(--text);background:var(--surface2)}
+  .ws-subtab.active{background:var(--accent);color:#fff;font-weight:600;box-shadow:0 2px 10px rgba(91,140,255,.35)}
+  .ws-view{display:none;animation:wsFadeIn .25s ease}
+  .ws-view.active{display:block}
+  @keyframes wsFadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  .ring-wrap{position:relative;width:130px;height:130px;flex-shrink:0}
+  .ring-wrap svg{transform:rotate(-90deg)}
+  .ring-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .ring-center .pct{font-size:26px;font-weight:700;color:var(--accent)}
+  .ring-center .lbl{font-size:11px;color:var(--dim)}
+  .ws-overview-grid{display:grid;grid-template-columns:360px 1fr;gap:16px}
+  @media(max-width:900px){.ws-overview-grid{grid-template-columns:1fr}.ws-header{flex-direction:column;align-items:stretch}.ws-proj-picker{width:100%}.ws-proj-picker select{max-width:none;flex:1}.ws-actions{justify-content:stretch}.ws-actions .btn{flex:1}}
+  .ws-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
+  .ws-activity{max-height:360px;overflow-y:auto}
+  .activity-item{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);font-size:13px;align-items:flex-start}
+  .activity-item:last-child{border-bottom:none}
+  .activity-dot{width:8px;height:8px;border-radius:50%;margin-top:5px;flex-shrink:0}
+  .task-card{cursor:pointer}
+  .task-expand{max-height:0;overflow:hidden;transition:max-height .35s ease}
+  .task-card.open .task-expand{max-height:500px}
+  .subtask-row{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:13px;border-top:1px solid var(--border);background:var(--surface2)}
+  .task-toggle{transition:transform .25s;font-size:12px;color:var(--dim)}
+  .task-card.open .task-toggle{transform:rotate(90deg)}
   /* Station Director 样式 */
   .stat-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;margin-bottom:18px}
   .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;text-align:center}
@@ -243,13 +275,9 @@
   <div class="tab active" data-tab="station">🏢 Station</div>
   <div class="tab" data-tab="skills">📚 技能库</div>
   <div class="tab secretary-tab" data-tab="chat" style="display:none">💬 秘书对话</div>
-  <div class="tab secretary-tab" data-tab="tasks" style="display:none">📋 任务管理</div>
-  <div class="tab secretary-tab" data-tab="teams" style="display:none">👥 团队管理</div>
+  <div class="tab secretary-tab" data-tab="workspace" style="display:none">🗂️ 项目工作台</div>
   <div class="tab secretary-tab" data-tab="hosts" style="display:none">🖥️ Work Station</div>
-  <div class="tab secretary-tab" data-tab="agents" style="display:none">🤖 Agent状态</div>
   <div class="tab secretary-tab" data-tab="tools" style="display:none">🔧 MCP工具</div>
-  <div class="tab secretary-tab" data-tab="projects" style="display:none">📁 项目管理</div>
-  <div class="tab secretary-tab" data-tab="dag" style="display:none">📊 DAG 图</div>
   <div class="tab" data-tab="bot">📱 手机通道</div>
   <div class="tab" data-tab="p2p">📡 主机通讯</div>
 </div>
@@ -259,8 +287,7 @@
   <div class="mobile-nav-item active" data-tab="station"><span class="nav-icon">🏢</span><span>Station</span></div>
   <div class="mobile-nav-item" data-tab="skills"><span class="nav-icon">📚</span><span>技能</span></div>
   <div class="mobile-nav-item secretary-tab" data-tab="chat" style="display:none"><span class="nav-icon">💬</span><span>对话</span></div>
-  <div class="mobile-nav-item secretary-tab" data-tab="tasks" style="display:none"><span class="nav-icon">📋</span><span>任务</span></div>
-  <div class="mobile-nav-item secretary-tab" data-tab="teams" style="display:none"><span class="nav-icon">👥</span><span>团队</span></div>
+  <div class="mobile-nav-item secretary-tab" data-tab="workspace" style="display:none"><span class="nav-icon">🗂️</span><span>工作台</span></div>
   <div class="mobile-nav-item secretary-tab" data-tab="hosts" style="display:none"><span class="nav-icon">🖥️</span><span>WS</span></div>
   <div class="mobile-nav-item" data-tab="bot"><span class="nav-icon">📱</span><span>手机</span></div>
   <div class="mobile-nav-item" data-tab="p2p"><span class="nav-icon">📡</span><span>通讯</span></div>
@@ -298,17 +325,153 @@
 </div>
 
 <!-- 面板: 团队管理 -->
-<div class="panel" id="panel-teams">
-  <div class="toolbar">
-    <button class="btn primary" onclick="withFeedback(this,refreshPMAgents)">🔄 刷新</button>
-    <span style="margin-left:auto;font-size:14px;color:var(--dim)">
-      PM Agent <b id="pm-total" style="color:var(--text)">0</b> ·
-      团队 <b id="team-total" style="color:var(--accent)">0</b>
-    </span>
+<!-- 面板: 项目工作台 (任务/团队/项目/DAG/预算 多维合一) -->
+<div class="panel" id="panel-workspace">
+  <!-- 工作台头部: 项目选择器 + 快捷操作 -->
+  <div class="ws-header">
+    <div class="ws-proj-picker">
+      <span style="font-size:18px">📁</span>
+      <select id="ws-project-select" onchange="onWsProjectChange()">
+        <option value="">🌐 全部任务</option>
+      </select>
+    </div>
+    <div class="ws-actions">
+      <button class="btn primary" onclick="switchWsView('tasks');document.getElementById('task-name').focus()">📤 提交任务</button>
+      <button class="btn" onclick="showCreateProject()">➕ 新建项目</button>
+      <button class="btn" onclick="withFeedback(this,refreshWorkspace)">🔄 刷新</button>
+    </div>
   </div>
-  <div class="pm-tree" id="pm-tree"><div class="empty"><div class="icon">👥</div><p>暂无 PM Agent</p><p class="hint">提交任务后将自动分配 PM Agent</p></div></div>
-  <div class="stitle" style="margin-top:24px">📈 进度报告</div>
-  <div id="progress-reports" style="font-size:13px;color:var(--dim)"><p style="text-align:center;padding:20px">暂无进度报告</p></div>
+
+  <!-- 子导航 -->
+  <div class="ws-subnav" id="ws-subnav">
+    <div class="ws-subtab active" data-wsview="overview" onclick="switchWsView('overview')">📊 概览</div>
+    <div class="ws-subtab" data-wsview="tasks" onclick="switchWsView('tasks')">📋 任务</div>
+    <div class="ws-subtab" data-wsview="team" onclick="switchWsView('team')">👥 团队</div>
+    <div class="ws-subtab" data-wsview="dag" onclick="switchWsView('dag')">📈 DAG</div>
+    <div class="ws-subtab" data-wsview="budget" onclick="switchWsView('budget')">💰 预算</div>
+  </div>
+
+  <!-- 子视图: 概览 -->
+  <div class="ws-view active" id="ws-overview">
+    <div class="stat-cards" id="ws-stat-cards"></div>
+    <div id="ws-onboarding" style="display:none" class="ws-card">
+      <div style="font-size:16px;font-weight:700;margin-bottom:14px">🚀 开始使用项目工作台</div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px;background:var(--surface2);border-radius:10px;padding:16px">
+          <div style="font-size:22px;margin-bottom:6px">1️⃣</div>
+          <div style="font-weight:600;margin-bottom:4px">创建项目</div>
+          <div style="font-size:13px;color:var(--dim);margin-bottom:10px">启用预算控制与上下文隔离</div>
+          <button class="btn sm primary" onclick="showCreateProject()">➕ 新建项目</button>
+        </div>
+        <div style="flex:1;min-width:200px;background:var(--surface2);border-radius:10px;padding:16px">
+          <div style="font-size:22px;margin-bottom:6px">2️⃣</div>
+          <div style="font-weight:600;margin-bottom:4px">提交任务</div>
+          <div style="font-size:13px;color:var(--dim);margin-bottom:10px">描述需求, PM Agent 自动分解编排</div>
+          <button class="btn sm primary" onclick="switchWsView('tasks');document.getElementById('task-name').focus()">📤 提交任务</button>
+        </div>
+        <div style="flex:1;min-width:200px;background:var(--surface2);border-radius:10px;padding:16px">
+          <div style="font-size:22px;margin-bottom:6px">3️⃣</div>
+          <div style="font-weight:600;margin-bottom:4px">跟踪进度</div>
+          <div style="font-size:13px;color:var(--dim);margin-bottom:10px">回到概览查看进度环与实时动态</div>
+          <button class="btn sm" onclick="switchWsView('team')">👥 查看团队</button>
+        </div>
+      </div>
+    </div>
+    <div class="ws-overview-grid">
+      <div class="ws-card" style="display:flex;gap:20px;align-items:center">
+        <div class="ring-wrap">
+          <svg width="130" height="130">
+            <circle cx="65" cy="65" r="56" fill="none" stroke="var(--surface2)" stroke-width="12"/>
+            <circle id="ws-ring-fill" cx="65" cy="65" r="56" fill="none" stroke="var(--accent)" stroke-width="12" stroke-linecap="round" stroke-dasharray="351.8" stroke-dashoffset="351.8" style="transition:stroke-dashoffset .8s ease"/>
+          </svg>
+          <div class="ring-center"><span class="pct" id="ws-ring-pct">0%</span><span class="lbl">总体进度</span></div>
+        </div>
+        <div style="flex:1">
+          <div style="font-size:16px;font-weight:700;margin-bottom:8px" id="ws-proj-title">🌐 全部任务</div>
+          <div style="font-size:13px;color:var(--dim);line-height:1.8" id="ws-proj-meta">加载中...</div>
+        </div>
+      </div>
+      <div class="ws-card ws-activity">
+        <div style="font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">🕒 最近动态</div>
+        <div id="ws-activity-list"><p style="text-align:center;color:var(--dim);padding:20px">暂无动态</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 子视图: 任务 -->
+  <div class="ws-view" id="ws-tasks">
+    <div class="toolbar">
+      <input type="text" id="task-name" placeholder="任务名称">
+      <input type="text" id="task-desc" placeholder="任务描述" style="width:300px">
+      <select id="task-project"><option value="">不关联项目</option></select>
+      <button class="btn primary" onclick="submitTask()">📤 提交任务</button>
+    </div>
+    <div class="grid" id="task-grid"><div class="empty"><div class="icon">📋</div><p>暂无任务</p><p class="hint">提交一个任务来开始编排</p></div></div>
+  </div>
+
+  <!-- 子视图: 团队 -->
+  <div class="ws-view" id="ws-team">
+    <div class="toolbar">
+      <span style="font-size:14px;color:var(--dim)">
+        🧑‍💼 PM Agent <b id="pm-total" style="color:var(--text)">0</b> ·
+        👥 团队 <b id="team-total" style="color:var(--accent)">0</b> ·
+        🤖 Agent <b id="agent-total" style="color:var(--text)">0</b>
+        (空闲 <b id="agent-idle" style="color:var(--green)">0</b> / 忙碌 <b id="agent-busy" style="color:var(--yellow)">0</b>)
+      </span>
+    </div>
+    <div class="pm-tree" id="pm-tree"><div class="empty"><div class="icon">👥</div><p>暂无 PM Agent</p><p class="hint">提交任务后将自动分配 PM Agent</p></div></div>
+    <div class="stitle" style="margin-top:24px">🤖 Worker Agents</div>
+    <div class="grid" id="agent-grid"><div class="empty"><div class="icon">🤖</div><p>暂无Agent</p><p class="hint">启动Worker后Agent会自动注册</p></div></div>
+    <div class="stitle" style="margin-top:24px">📈 进度报告</div>
+    <div id="progress-reports" style="font-size:13px;color:var(--dim)"><p style="text-align:center;padding:20px">暂无进度报告</p></div>
+  </div>
+
+  <!-- 子视图: DAG -->
+  <div class="ws-view" id="ws-dag">
+    <div class="toolbar">
+      <select id="dag-task-select" onchange="loadDAGFromSelect()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;min-width:200px">
+        <option value="">选择任务...</option>
+      </select>
+      <button class="btn primary" onclick="loadDAGFromSelect()">📂 加载</button>
+      <button class="btn" onclick="saveDAG()">💾 保存</button>
+      <button class="btn" onclick="dagAddNode()">➕ 添加节点</button>
+      <button class="btn" id="dag-connect-btn" onclick="dagToggleConnect()">🔗 连线</button>
+      <button class="btn danger" onclick="dagDeleteSelected()">🗑️ 删除选中</button>
+      <span style="margin-left:auto;font-size:13px;color:var(--dim)" id="dag-status">未加载</span>
+    </div>
+    <div style="position:relative;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface);min-height:500px">
+      <svg id="dag-svg" width="100%" height="500" style="display:block;cursor:crosshair">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="var(--dim)"/>
+          </marker>
+          <marker id="arrowhead-cond" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="var(--yellow)"/>
+          </marker>
+        </defs>
+        <g id="dag-edges"></g>
+        <g id="dag-nodes"></g>
+      </svg>
+      <div id="dag-node-detail" style="display:none;position:absolute;top:10px;right:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;width:260px;font-size:13px;z-index:10">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b>节点详情</b><span style="cursor:pointer;color:var(--dim)" onclick="document.getElementById('dag-node-detail').style.display='none'">✖</span></div>
+        <div id="dag-detail-content"></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;font-size:12px;color:var(--dim)">
+      🟢 completed · 🔵 running/assigned · 🟡 pending · 🔴 failed · 虚线=条件边 · 点击节点查看详情 · 拖拽移动位置
+    </div>
+  </div>
+
+  <!-- 子视图: 预算 -->
+  <div class="ws-view" id="ws-budget">
+    <div class="toolbar">
+      <span style="margin-left:auto;font-size:14px;color:var(--dim)">
+        总计 <b id="proj-total" style="color:var(--text)">0</b> ·
+        活跃 <b id="proj-active" style="color:var(--green)">0</b>
+      </span>
+    </div>
+    <div class="grid" id="project-grid"><div class="empty"><div class="icon">📁</div><p>暂无项目</p><p class="hint">创建项目以启用预算控制与隔离</p></div></div>
+  </div>
 </div>
 
 <!-- 面板: 主机监控 -->
@@ -327,31 +490,6 @@
   <div class="grid" id="host-grid"><div class="empty"><div class="icon">⏳</div><p>正在搜索局域网内的 Work Station...</p><p class="hint">请确保各主机已运行 start_workstation 或 python main.py worker</p></div></div>
 </div>
 
-<!-- 面板: 任务管理 -->
-<div class="panel" id="panel-tasks">
-  <div class="toolbar">
-    <input type="text" id="task-name" placeholder="任务名称">
-    <input type="text" id="task-desc" placeholder="任务描述" style="width:300px">
-    <select id="task-project"><option value="">不关联项目</option></select>
-    <button class="btn primary" onclick="submitTask()">📤 提交任务</button>
-    <button class="btn" onclick="withFeedback(this,refreshTasks)">🔄 刷新</button>
-  </div>
-  <div class="grid" id="task-grid"><div class="empty"><div class="icon">📋</div><p>暂无任务</p><p class="hint">提交一个任务来开始编排</p></div></div>
-</div>
-
-<!-- 面板: Agent 状态 -->
-<div class="panel" id="panel-agents">
-  <div class="toolbar">
-    <button class="btn primary" onclick="withFeedback(this,refreshAgents)">🔄 刷新</button>
-    <span style="margin-left:auto;font-size:14px;color:var(--dim)">
-      总计 <b id="agent-total" style="color:var(--text)">0</b> ·
-      空闲 <b id="agent-idle" style="color:var(--green)">0</b> ·
-      忙碌 <b id="agent-busy" style="color:var(--yellow)">0</b>
-    </span>
-  </div>
-  <div class="grid" id="agent-grid"><div class="empty"><div class="icon">🤖</div><p>暂无Agent</p><p class="hint">启动Worker后Agent会自动注册</p></div></div>
-</div>
-
 <!-- 面板: MCP 工具 -->
 <div class="panel" id="panel-tools">
   <div class="toolbar">
@@ -366,55 +504,6 @@
   <div class="grid" id="server-grid"><div class="empty"><div class="icon">🔌</div><p>未注册任何MCP Server</p></div></div>
   <div class="stitle">工具列表</div>
   <div class="grid" id="tool-grid"></div>
-</div>
-
-<!-- 面板: 项目管理 -->
-<div class="panel" id="panel-projects">
-  <div class="toolbar">
-    <button class="btn primary" onclick="showCreateProject()">➕ 创建项目</button>
-    <button class="btn" onclick="withFeedback(this,refreshProjects)">🔄 刷新</button>
-    <span style="margin-left:auto;font-size:14px;color:var(--dim)">
-      总计 <b id="proj-total" style="color:var(--text)">0</b> ·
-      活跃 <b id="proj-active" style="color:var(--green)">0</b>
-    </span>
-  </div>
-  <div class="grid" id="project-grid"><div class="empty"><div class="icon">📁</div><p>暂无项目</p><p class="hint">创建项目以启用预算控制与隔离</p></div></div>
-</div>
-
-<!-- 面板: DAG 图编辑器 -->
-<div class="panel" id="panel-dag">
-  <div class="toolbar">
-    <select id="dag-task-select" onchange="loadDAGFromSelect()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;min-width:200px">
-      <option value="">选择任务...</option>
-    </select>
-    <button class="btn primary" onclick="loadDAGFromSelect()">📂 加载</button>
-    <button class="btn" onclick="saveDAG()">💾 保存</button>
-    <button class="btn" onclick="dagAddNode()">➕ 添加节点</button>
-    <button class="btn" id="dag-connect-btn" onclick="dagToggleConnect()">🔗 连线</button>
-    <button class="btn danger" onclick="dagDeleteSelected()">🗑️ 删除选中</button>
-    <span style="margin-left:auto;font-size:13px;color:var(--dim)" id="dag-status">未加载</span>
-  </div>
-  <div style="position:relative;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface);min-height:500px">
-    <svg id="dag-svg" width="100%" height="500" style="display:block;cursor:crosshair">
-      <defs>
-        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill="var(--dim)"/>
-        </marker>
-        <marker id="arrowhead-cond" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill="var(--yellow)"/>
-        </marker>
-      </defs>
-      <g id="dag-edges"></g>
-      <g id="dag-nodes"></g>
-    </svg>
-    <div id="dag-node-detail" style="display:none;position:absolute;top:10px;right:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;width:260px;font-size:13px;z-index:10">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b>节点详情</b><span style="cursor:pointer;color:var(--dim)" onclick="document.getElementById('dag-node-detail').style.display='none'">✖</span></div>
-      <div id="dag-detail-content"></div>
-    </div>
-  </div>
-  <div style="margin-top:10px;font-size:12px;color:var(--dim)">
-    🟢 completed · 🔵 running/assigned · 🟡 pending · 🔴 failed · 虚线=条件边 · 点击节点查看详情 · 拖拽移动位置
-  </div>
 </div>
 
 <!-- 面板: Station Director (默认显示) -->
@@ -601,17 +690,13 @@ function switchTab(tab){
   document.querySelectorAll('[data-tab="'+tab+'"]').forEach(x=>x.classList.add('active'));
   document.getElementById('panel-'+tab).classList.add('active');
   if(tab==='hosts')refreshHosts();
-  if(tab==='tasks')refreshTasks();
-  if(tab==='agents')refreshAgents();
+  if(tab==='workspace')refreshWorkspace();
   if(tab==='tools')refreshTools();
-  if(tab==='projects')refreshProjects();
   if(tab==='station')refreshStation();
   if(tab==='skills')refreshSkills();
   if(tab==='bot')refreshBotChannels();
   if(tab==='p2p')refreshP2PHosts();
   if(tab==='chat')loadConversations();
-  if(tab==='teams')refreshPMAgents();
-  if(tab==='dag')refreshDagTaskSelect();
 }
 document.querySelectorAll('.tab').forEach(t=>{
   t.addEventListener('click',()=>switchTab(t.dataset.tab));
@@ -640,7 +725,13 @@ function connectWS(){
     if(msg.type==='pm_registered'){refreshPMAgents();refreshTasks();}
     if(msg.type==='pm_status_change'){refreshPMAgents();}
     if(msg.type==='team_update'){refreshPMAgents();}
-    if(msg.type==='progress_report'){refreshPMAgents();}
+    if(msg.type==='progress_report'){
+      window._wsReports=window._wsReports||[];
+      window._wsReports.unshift(msg.data);
+      window._wsReports=window._wsReports.slice(0,20);
+      refreshPMAgents();renderWsActivity();
+    }
+    if(msg.type==='task_updated'){renderWsOverview();}
     if(msg.type==='p2p_chat'){onP2PChatMessage(msg.data);}
   };
   ws.onclose=()=>{document.getElementById('ws-dot').classList.add('offline');document.getElementById('ws-label').textContent='重连中...';setTimeout(connectWS,3000);};
@@ -693,20 +784,39 @@ async function showNetworkInfo(){try{const r=await fetch('/api/network');const d
 async function refreshTasks(){
   try{const r=await fetch('/api/tasks');const d=await r.json();allTasks=d.tasks||[];renderTasks();}catch(e){console.error(e);}
 }
+let wsSelectedProject='';  // 工作台当前选中的项目 ('' = 全部)
+function toggleTaskExpand(el){el.classList.toggle('open');}
+function getFilteredTasks(){
+  if(!wsSelectedProject)return allTasks;
+  return allTasks.filter(t=>t.project_id===wsSelectedProject);
+}
 function renderTasks(){
   const grid=document.getElementById('task-grid');
-  if(!allTasks.length){grid.innerHTML='<div class="empty"><div class="icon">📋</div><p>暂无任务</p></div>';return;}
-  grid.innerHTML=allTasks.map(t=>{
-    const sc=(t.subtasks||[]).length;const done=(t.subtasks||[]).filter(s=>s.status==='completed').length;
-    const pct=sc?Math.round(done/sc*100):0;
+  const tasks=getFilteredTasks();
+  if(!tasks.length){grid.innerHTML='<div class="empty"><div class="icon">📋</div><p>暂无任务</p><p class="hint">提交一个任务来开始编排</p></div>';return;}
+  grid.innerHTML=tasks.map(t=>{
+    const subs=t.subtasks||[];const sc=subs.length;const done=subs.filter(s=>s.status==='completed').length;
+    const pct=sc?Math.round(done/sc*100):(t.status==='completed'?100:0);
     const c=t.status==='completed'?'idle':t.status==='failed'?'archived':'busy';
     const pmInfo=t.pm_agent_id?` | 🧑‍💼 PM: ${esc(t.pm_agent_id.slice(0,12))}`:'';
-    return `<div class="card" onclick='showTaskDetail("${t.task_id}")'>
-      <div class="card-head"><div class="card-title">${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span></div></div>
-      <div class="card-meta">${esc(t.description||'-')}<br>📊 ${done}/${sc} 子任务 (${pct}%) ${t.project_id?'| 📁 '+esc(t.project_id.slice(0,8)):''}${pmInfo}</div>
+    const projName=t.project_id?projNameById(t.project_id):'';
+    const subRows=subs.map(s=>`<div class="subtask-row"><span class="step-dot ${s.status}"></span><span style="flex:1">${esc(s.name||s.description||'子任务')}</span><span style="color:var(--dim)">[${s.status}]</span>${s.assigned_agent_id?'<span style="color:var(--dim)"> → '+esc(s.assigned_agent_id.slice(0,8))+'</span>':''}</div>`).join('');
+    return `<div class="card task-card" onclick="toggleTaskExpand(this)">
+      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span></div></div>
+      <div class="card-meta">${esc(t.description||'-')}<br>📊 ${done}/${sc} 子任务 (${pct}%) ${projName?'| 📁 '+esc(projName):''}${pmInfo}</div>
       <div class="pbar"><div class="pfill ${pct>=100?'low':'mid'}" style="width:${pct}%"></div></div>
+      <div class="task-expand">${subRows||'<div class="subtask-row" style="color:var(--dim)">无子任务</div>'}
+        <div class="subtask-row"><button class="btn sm" onclick="event.stopPropagation();showTaskDetail('${t.task_id}')">🔍 查看详情</button>${t.task_id?`<button class="btn sm" onclick="event.stopPropagation();openDagForTask('${t.task_id}')">📈 DAG</button>`:''}</div>
+      </div>
     </div>`;
   }).join('');
+}
+function projNameById(pid){const p=allProjects.find(x=>x.project_id===pid);return p?p.name:pid.slice(0,8);}
+function openDagForTask(taskId){
+  switchWsView('dag');
+  const sel=document.getElementById('dag-task-select');
+  sel.value=taskId;
+  loadDAGFromSelect();
 }
 async function showTaskDetail(id){
   const t=allTasks.find(x=>x.task_id===id);if(!t)return;
@@ -850,6 +960,13 @@ function updateProjectSelect(){
   const sel=document.getElementById('task-project');
   sel.innerHTML='<option value="">不关联项目</option>';
   allProjects.filter(p=>p.status==='active').forEach(p=>{sel.innerHTML+=`<option value="${p.project_id}">${esc(p.name)}</option>`;});
+  // 同步工作台项目选择器
+  const wsSel=document.getElementById('ws-project-select');
+  if(wsSel){
+    wsSel.innerHTML='<option value="">🌐 全部任务</option>';
+    allProjects.forEach(p=>{wsSel.innerHTML+=`<option value="${p.project_id}">${esc(p.status==='active'?'📁':'📦')} ${esc(p.name)}</option>`;});
+    wsSel.value=wsSelectedProject;
+  }
 }
 async function showProjectDetail(id){
   try{const r=await fetch(`/api/projects/${id}`);const p=await r.json();
@@ -1128,6 +1245,74 @@ async function renderPMAgents(){
     const c=r.status==='completed'?'idle':r.status==='failed'?'archived':'busy';
     return `<div class="task-step"><span class="step-dot ${r.status==='completed'?'completed':r.status==='failed'?'failed':'assigned'}"></span><span>${esc(r.pm_name||r.pm_id)} → ${esc(r.reporter_id||'').slice(0,8)}: ${esc(r.task_name||'')} <span class="badge ${c}">${esc(r.status)} ${pct}%</span> ${esc(r.message||'').slice(0,80)}</span></div>`;
   }).join('');
+}
+
+// ── 项目工作台 (多维合一) ──
+function switchWsView(view){
+  document.querySelectorAll('.ws-subtab').forEach(x=>x.classList.toggle('active',x.dataset.wsview===view));
+  document.querySelectorAll('.ws-view').forEach(x=>x.classList.toggle('active',x.id==='ws-'+view));
+  if(view==='dag')refreshDagTaskSelect();
+  if(view==='team'){refreshPMAgents();refreshAgents();}
+  if(view==='budget')refreshProjects();
+  if(view==='overview')renderWsOverview();
+}
+function onWsProjectChange(){
+  wsSelectedProject=document.getElementById('ws-project-select').value;
+  renderTasks();
+  renderWsOverview();
+}
+async function refreshWorkspace(){
+  await Promise.all([refreshTasks(),refreshProjects(),refreshPMAgents(),refreshAgents()]);
+  renderWsOverview();
+}
+function renderWsOverview(){
+  const tasks=getFilteredTasks();
+  const total=tasks.length;
+  const completed=tasks.filter(t=>t.status==='completed').length;
+  const running=tasks.filter(t=>['running','assigned'].includes(t.status)).length;
+  const failed=tasks.filter(t=>t.status==='failed').length;
+  const pending=tasks.filter(t=>t.status==='pending').length;
+  // 空状态引导: 无任务且无项目时显示
+  const onb=document.getElementById('ws-onboarding');
+  if(onb)onb.style.display=(total===0&&allProjects.length===0)?'block':'none';
+  // 统计卡片
+  document.getElementById('ws-stat-cards').innerHTML=`
+    <div class="stat-card"><div class="num">${total}</div><div class="lbl">总任务</div></div>
+    <div class="stat-card online"><div class="num">${completed}</div><div class="lbl">已完成</div></div>
+    <div class="stat-card" style=""><div class="num" style="color:var(--yellow)">${running}</div><div class="lbl">进行中</div></div>
+    <div class="stat-card"><div class="num" style="color:var(--dim)">${pending}</div><div class="lbl">等待中</div></div>
+    <div class="stat-card offline"><div class="num">${failed}</div><div class="lbl">失败</div></div>`;
+  // 进度环 (基于子任务完成率)
+  let allSubs=0,doneSubs=0;
+  tasks.forEach(t=>{const s=t.subtasks||[];allSubs+=s.length;doneSubs+=s.filter(x=>x.status==='completed').length;});
+  const pct=allSubs?Math.round(doneSubs/allSubs*100):(total?Math.round(completed/total*100):0);
+  const circ=351.8;  // 2*PI*56
+  document.getElementById('ws-ring-fill').style.strokeDashoffset=circ*(1-pct/100);
+  document.getElementById('ws-ring-pct').textContent=pct+'%';
+  // 项目标题与元信息
+  const proj=wsSelectedProject?allProjects.find(p=>p.project_id===wsSelectedProject):null;
+  document.getElementById('ws-proj-title').textContent=proj?('📁 '+proj.name):'🌐 全部任务';
+  if(proj){
+    const bPct=proj.budget_limit_usd>0?Math.round(proj.budget_used_usd/proj.budget_limit_usd*100):0;
+    document.getElementById('ws-proj-meta').innerHTML=`💰 预算 $${(proj.budget_used_usd||0).toFixed(4)} / $${(proj.budget_limit_usd||0).toFixed(2)} (${bPct}%)<br>🎯 路由: ${esc(proj.routing_strategy)} · 状态: ${esc(proj.status)}<br>📋 任务 ${total} 个 · 完成 ${completed} 个`;
+  }else{
+    document.getElementById('ws-proj-meta').innerHTML=`📋 任务 ${total} 个 · 完成 ${completed} · 进行中 ${running}<br>📁 项目 ${allProjects.length} 个 · 🧑‍💼 PM Agent ${allPMAgents.length} 个`;
+  }
+  renderWsActivity();
+}
+function renderWsActivity(){
+  const list=document.getElementById('ws-activity-list');
+  // 从进度报告 + 任务状态构建动态流
+  const items=[];
+  (window._wsReports||[]).slice(0,8).forEach(r=>{
+    const color=r.status==='completed'?'var(--green)':r.status==='failed'?'var(--red)':'var(--yellow)';
+    items.push(`<div class="activity-item"><span class="activity-dot" style="background:${color}"></span><div style="flex:1"><b>${esc(r.task_name||'任务')}</b> · ${esc(r.message||'').slice(0,60)}<div style="color:var(--dim);font-size:12px">${esc(r.status)} ${Math.round((r.progress||0)*100)}% · ${fmtTime(r.timestamp)}</div></div></div>`);
+  });
+  getFilteredTasks().slice(0,5).forEach(t=>{
+    const color=t.status==='completed'?'var(--green)':t.status==='failed'?'var(--red)':'var(--accent)';
+    items.push(`<div class="activity-item"><span class="activity-dot" style="background:${color}"></span><div style="flex:1"><b>${esc(t.name||'未命名')}</b> · 状态 ${esc(t.status)}<div style="color:var(--dim);font-size:12px">创建于 ${fmtTime(t.created_at)}</div></div></div>`);
+  });
+  list.innerHTML=items.length?items.join(''):'<p style="text-align:center;color:var(--dim);padding:20px">暂无动态</p>';
 }
 
 // ── 通用工具 ──
@@ -1730,6 +1915,8 @@ document.addEventListener('DOMContentLoaded',()=>{
   connectWS();
   setInterval(refreshHosts,5000);
   refreshP2PHosts();
+  // 安全网: 选举窗口(5s)结束后复查 Secretary 状态, 防止 WS 事件丢失
+  setTimeout(checkSecretaryState, 6000);
 });
 </script>
 </body>
