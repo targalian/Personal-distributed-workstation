@@ -233,9 +233,9 @@ class BotGateway:
         }
         resp = requests.post(channel.webhook_url, json=payload, timeout=10)
         if resp.status_code != 200:
-            print(f"[BotGateway] 微信 webhook 返回 {resp.status_code}: {resp.text}")
+            logger.warning("微信 webhook 返回 %d: %s", resp.status_code, resp.text)
         elif resp.json().get("errcode", 0) != 0:
-            print(f"[BotGateway] 微信 webhook 错误: {resp.json()}")
+            logger.warning("微信 webhook 错误: %s", resp.json())
 
     # ── Telegram Bot ──
 
@@ -251,7 +251,7 @@ class BotGateway:
         }
         resp = requests.post(url, json=payload, timeout=10)
         if resp.status_code != 200:
-            print(f"[BotGateway] Telegram 返回 {resp.status_code}: {resp.text}")
+            logger.warning("Telegram 返回 %d: %s", resp.status_code, resp.text)
 
     def _start_telegram_polling(self, channel: BotChannel):
         """启动 Telegram Bot 长轮询（接收用户命令）。"""

@@ -34,3 +34,9 @@ cloud_storage:
   secure: true             # 是否使用 HTTPS
   auto_sync: true          # 启动时自动同步
   sync_interval: 300       # 自动同步间隔 (秒), 0 表示仅启动时同步一次
+
+# 安全配置
+security:
+  auth_enabled: false        # 是否启用节点间 Token 认证
+  # token 来源: 环境变量 LAN_MESH_TOKEN 或 ~/.lan_mesh/mesh_token
+  # 启用后所有内部 API 请求需携带 Authorization: Bearer <token>

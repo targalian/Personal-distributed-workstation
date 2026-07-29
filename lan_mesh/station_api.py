@@ -28,6 +28,9 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from .protocol import HostInfo, HostRecord, AgentCard, Task
 from .host_rating import rate_host
+from .logger import get_logger
+
+logger = get_logger("station_api")
 
 
 # ── F1.5: API 限流器 ─────────────────────────────────────────────
@@ -120,7 +123,7 @@ def _merge_db_and_udp_hosts(db, discovery):
         ))
         merged_count += 1
     if merged_count:
-        print(f"[Station] 合并列表: 补充 {merged_count} 台 UDP-only 设备")
+        logger.info("合并列表: 补充 %d 台 UDP-only 设备", merged_count)
     return db_hosts
 
 
@@ -379,7 +382,7 @@ def create_station_router(controller) -> APIRouter:
             time.sleep(1)  # 等待响应发送
             import os
             import sys
-            print(f"[Station] 正在执行自愈重启...")
+            logger.info("正在执行自愈重启...")
             os.execv(sys.executable, ['python'] + sys.argv)
         
         thread = threading.Thread(target=delayed_restart)
@@ -818,12 +821,28 @@ def create_station_router(controller) -> APIRouter:
         """
         _check_secretary()
         orchestrator = controller.orchestrator
-        if not orchestrator:
-            raise HTTPException(status_code=503, detail="编排器未初始化")
-        graph = orchestrator.get_task_graph(task_id)
-        if not graph:
-            raise HTTPException(status_code=404, detail="任务无 DAG 图数据")
-        return graph
+        if orchestrator:
+            graph = orchestrator.get_task_graph(task_id)
+            if not graph:
+                raise HTTPException(status_code=404, detail="任务无 DAG 图数据")
+            return graph
+        # BUG-009 fix: 编排器未初始化时直接从 DB 重建 DAG
+        import json as _json
+        from .task import SubTask, TaskDAG
+        ckpt = db.get_latest_checkpoint(task_id)
+        if ckpt:
+            try:
+                dag_data = _json.loads(ckpt.get("dag_json", "{}"))
+                if dag_data.get("nodes"):
+                    return dag_data
+            except (ValueError, TypeError):
+                pass
+        task = db.get_task(task_id)
+        if task and task.subtasks:
+            subtasks = [SubTask.from_dict(st) for st in task.subtasks]
+            dag = TaskDAG(subtasks)
+            return dag.to_graph_json()
+        raise HTTPException(status_code=404, detail="任务无 DAG 图数据")
 
     @router.put("/api/tasks/{task_id}/graph")
     async def update_task_graph(task_id: str, payload: dict):
@@ -942,7 +961,7 @@ def create_station_router(controller) -> APIRouter:
             "name": task_name, "task_id": task_id[:12] if task_id else "",
         })
 
-        print(f"[Station] PM {pm_id[:12]} 交付物已接收: {task_name}")
+        logger.info("PM %s 交付物已接收: %s", pm_id[:12], task_name)
         return {"ok": True, "task_id": task_id, "message": "交付物已接收, 等待 Boss 验收"}
 
     # ── 优化14: 任务记忆 ──
@@ -969,7 +988,7 @@ def create_station_router(controller) -> APIRouter:
             boss_feedback=payload.get("boss_feedback", ""),
             device_id=payload.get("device_id", ""),
         )
-        print(f"[Station] PM {pm_id[:12]} 任务记忆已存储 (type={payload.get('task_type', '')})")
+        logger.info("PM %s 任务记忆已存储 (type=%s)", pm_id[:12], payload.get('task_type', ''))
         return {"ok": True, "message": "任务记忆已存储"}
 
     @router.get("/api/task-memory/stats")
@@ -1100,9 +1119,9 @@ def create_station_router(controller) -> APIRouter:
                     task_id = row["task_id"]
                     new_status = "completed" if pm_status == "completed" else "failed"
                     db.update_task_status(task_id, new_status)
-                    print(f"[Station] 任务 {task_id[:16]} 状态同步: running → {new_status}")
+                    logger.info("任务 %s 状态同步: running → %s", task_id[:16], new_status)
             except Exception as e:
-                print(f"[Station] 任务状态同步失败: {e}")
+                logger.error("任务状态同步失败: %s", e)
 
         await _broadcast(state, "progress_report", {
             "pm_id": pm_id,
@@ -1322,7 +1341,7 @@ def create_station_router(controller) -> APIRouter:
 
         chat_id = payload.get("chat_id", "")
         platform = payload.get("platform", "unknown")
-        print(f"[Station] Bot 消息入口 ({platform}): {message[:50]} (from {chat_id})")
+        logger.info("Bot 消息入口 (%s): %s (from %s)", platform, message[:50], chat_id)
 
         # 统一转发给 ChatHandler
         result = chat_handler.chat(message)

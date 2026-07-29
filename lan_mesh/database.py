@@ -11,6 +11,48 @@ from pathlib import Path
 from typing import Optional
 
 from .protocol import HostRecord, HostEvent, AgentCard, Task, SubTask, PMAgent, AgentTeam, ProgressReport
+from .logger import get_logger
+
+logger = get_logger("database")
+
+# ── Schema 版本管理 ───────────────────────────────────────────
+# 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
+# 迁移函数签名: (conn: sqlite3.Connection) -> None
+
+SCHEMA_VERSION = 1
+
+
+def _migration_v1(conn: sqlite3.Connection):
+    """迁移 v1: 从旧版 ad-hoc ALTER TABLE 迁移到版本化管理。
+
+    包含历史兼容性列添加 (幂等操作)。
+    """
+    # tasks 表: project_id 列
+    try:
+        conn.execute("ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    # hosts 表: 评级列
+    for col, dtype, default in [
+        ("rating_tier", "TEXT", "''"),
+        ("rating_score", "INTEGER", "0"),
+        ("rating_summary", "TEXT", "''"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE hosts ADD COLUMN {col} {dtype} NOT NULL DEFAULT {default}")
+        except sqlite3.OperationalError:
+            pass
+    # tasks 表: pm_agent_id 列
+    try:
+        conn.execute("ALTER TABLE tasks ADD COLUMN pm_agent_id TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+
+# 迁移注册表: version → 迁移函数
+_MIGRATIONS: dict[int, callable] = {
+    1: _migration_v1,
+}
 
 
 class Database:
@@ -34,8 +76,18 @@ class Database:
         return self._local.conn
 
     def _init_db(self):
-        """初始化数据库表结构。"""
+        """初始化数据库表结构 + 版本化迁移。"""
         conn = self._get_conn()
+        # 创建 schema 元数据表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS schema_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        conn.commit()
+
+        # 创建所有表 (幂等)
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS hosts (
                 device_id     TEXT PRIMARY KEY,
@@ -171,26 +223,6 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_skill_assignments
                 ON skill_assignments(assignee_type, assignee_id);
         """)
-        # 兼容已有 tasks 表: 安全添加 project_id 列
-        try:
-            conn.execute("ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass  # 列已存在
-        # 兼容已有 hosts 表: 安全添加评级列
-        for col, dtype, default in [
-            ("rating_tier", "TEXT", "''"),
-            ("rating_score", "INTEGER", "0"),
-            ("rating_summary", "TEXT", "''"),
-        ]:
-            try:
-                conn.execute(f"ALTER TABLE hosts ADD COLUMN {col} {dtype} NOT NULL DEFAULT {default}")
-            except sqlite3.OperationalError:
-                pass  # 列已存在
-        # 兼容已有 tasks 表: 安全添加 pm_agent_id 列
-        try:
-            conn.execute("ALTER TABLE tasks ADD COLUMN pm_agent_id TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass  # 列已存在
         # PM Agent 架构演进: 新增表
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS pm_agents (
@@ -289,6 +321,42 @@ class Database:
                 ON graph_checkpoints(task_id, created_at);
         """)
         conn.commit()
+
+        # 执行版本化迁移
+        self._run_migrations(conn)
+
+    def _get_schema_version(self, conn: sqlite3.Connection) -> int:
+        """获取当前 schema 版本号。"""
+        row = conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'version'"
+        ).fetchone()
+        return int(row["value"]) if row else 0
+
+    def _set_schema_version(self, conn: sqlite3.Connection, version: int):
+        """设置 schema 版本号。"""
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', ?)",
+            (str(version),),
+        )
+        conn.commit()
+
+    def _run_migrations(self, conn: sqlite3.Connection):
+        """执行所有待应用的迁移。"""
+        current = self._get_schema_version(conn)
+        if current >= SCHEMA_VERSION:
+            return
+
+        for ver in range(current + 1, SCHEMA_VERSION + 1):
+            migration_fn = _MIGRATIONS.get(ver)
+            if migration_fn:
+                logger.info("执行 schema 迁移: v%d → v%d", ver - 1, ver)
+                migration_fn(conn)
+                self._set_schema_version(conn, ver)
+            else:
+                logger.warning("缺少迁移函数: v%d, 跳过", ver)
+                self._set_schema_version(conn, ver)
+
+        logger.info("数据库 schema 已更新到 v%d", SCHEMA_VERSION)
 
     # ── 主机记录 CRUD ───────────────────────────────────────────
 

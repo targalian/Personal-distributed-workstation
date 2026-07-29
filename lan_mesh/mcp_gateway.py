@@ -28,6 +28,9 @@ from typing import Optional
 import yaml
 
 from .mcp_client import create_mcp_client, MCPStdioClient, MCPHttpClient
+from .logger import get_logger
+
+logger = get_logger("mcp_gateway")
 
 
 class MCPGateway:
@@ -58,12 +61,12 @@ class MCPGateway:
         """
         with self._lock:
             if name in self._servers:
-                print(f"[Gateway] Server {name} 已存在,先断开旧连接")
+                logger.info("Server %s 已存在, 先断开旧连接", name)
                 self._disconnect_server(name)
 
             client = create_mcp_client(name, config)
             if not client.connect():
-                print(f"[Gateway] Server {name} 连接失败")
+                logger.error("Server %s 连接失败", name)
                 return False
 
             self._servers[name] = {
@@ -75,7 +78,7 @@ class MCPGateway:
 
             # 刷新工具索引
             self._refresh_tools(name)
-            print(f"[Gateway] Server '{name}' 已注册,工具数: {len(self._servers[name]['tools_cache'])}")
+            logger.info("Server '%s' 已注册, 工具数: %d", name, len(self._servers[name]['tools_cache']))
             return True
 
     def unregister_server(self, name: str):
@@ -199,14 +202,14 @@ class MCPGateway:
             for tool in tools:
                 self._tool_index[tool.get("name", "")] = server_name
         except Exception as e:
-            print(f"[Gateway] 刷新 {server_name} 工具列表失败: {e}")
+            logger.error("刷新 %s 工具列表失败: %s", server_name, e)
 
     def _reconnect(self, server_name: str) -> bool:
         """尝试重连断开的 Server。"""
         entry = self._servers.get(server_name)
         if not entry:
             return False
-        print(f"[Gateway] 尝试重连 {server_name}...")
+        logger.info("尝试重连 %s...", server_name)
         client = create_mcp_client(server_name, entry["config"])
         if client.connect():
             entry["client"] = client
@@ -219,7 +222,7 @@ class MCPGateway:
         with self._lock:
             for name, entry in list(self._servers.items()):
                 if not entry["client"].is_connected():
-                    print(f"[Gateway] {name} 已断开,尝试重连")
+                    logger.warning("%s 已断开, 尝试重连", name)
                     self._reconnect(name)
 
     def start_health_check_loop(self, interval: int = 30):

@@ -15,6 +15,7 @@ import json
 import time
 import uuid
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Optional, Callable
 
@@ -23,6 +24,15 @@ import requests
 from .database import Database
 from .protocol import Task, SubTask, AgentCard
 from .task import TaskDAG
+from .logger import get_logger
+
+logger = get_logger("orchestrator")
+
+# ── 子任务执行配置 ─────────────────────────────────────────────
+SUBTASK_TIMEOUT_SECS = 300        # 单个子任务最大执行时间
+SUBTASK_MAX_RETRIES = 2           # 最大重试次数
+SUBTASK_RETRY_BASE_DELAY = 3      # 重试基础延迟 (指数退避)
+EXECUTOR_MAX_WORKERS = 8          # 线程池最大并发数
 
 
 # ── 显式状态机定义 ─────────────────────────────────────────────
@@ -61,6 +71,9 @@ DECOMPOSITION_TEMPLATES = {
         {"name": "生成代码", "skill": "code_generation", "description": "根据需求生成代码", "depends_on_idx": [0]},
         {"name": "代码审查", "skill": "code_review", "description": "审查生成的代码", "depends_on_idx": [1]},
     ],
+    "code_task_cli": [
+        {"name": "CLI Agent 自主编码", "skill": "cli_agent", "description": "调用 CLI Agent 自主完成编码任务 (探索/编辑/测试/修复)"},
+    ],
     "document_task": [
         {"name": "检索资料", "skill": "rag_search", "description": "从知识库检索相关资料"},
         {"name": "生成摘要", "skill": "document_summary", "description": "基于检索结果生成摘要", "depends_on_idx": [0]},
@@ -76,9 +89,29 @@ DECOMPOSITION_TEMPLATES = {
 
 
 def _classify_task(task: Task) -> str:
-    """根据任务描述关键词分类 (规则驱动,未来可替换为 LLM)。"""
+    """根据任务描述关键词分类 (规则驱动,未来可替换为 LLM)。
+
+    复杂代码任务 (多文件/工程级) 优先路由到 CLI Agent 模板。
+    """
     desc = (task.name + " " + task.description).lower()
-    if any(k in desc for k in ["代码", "code", "函数", "function", "bug", "重构"]):
+
+    # 复杂代码任务 → CLI Agent (如果可用)
+    _CLI_KEYWORDS = ["工程", "项目", "多文件", "重构", "迁移", "开发一个", "实现一个",
+                     "project", "refactor", "migrate", "implement", "build"]
+    is_code = any(k in desc for k in ["代码", "code", "函数", "function", "bug", "重构"])
+    is_complex = any(k in desc for k in _CLI_KEYWORDS) or len(task.description) > 300
+
+    if is_code and is_complex:
+        # 检测 CLI Agent 是否可用
+        try:
+            from .agent_runtime import get_preferred_cli_agent
+            if get_preferred_cli_agent():
+                return "code_task_cli"
+        except ImportError:
+            pass
+        return "code_task"
+
+    if is_code:
         return "code_task"
     if any(k in desc for k in ["文档", "document", "摘要", "summary", "报告"]):
         return "document_task"
@@ -91,7 +124,7 @@ class Orchestrator:
     """任务编排器 (状态机驱动)。
 
     在 Secretary 端运行,负责任务分解、Agent 匹配、子任务分发与结果聚合。
-    增强: 显式状态机 + 自动 Checkpoint + 断点恢复。
+    增强: 显式状态机 + 自动 Checkpoint + 断点恢复 + 超时重试 + 线程池。
     """
 
     def __init__(self, db: Database, project_manager=None, model_router=None,
@@ -101,9 +134,47 @@ class Orchestrator:
         self.model_router = model_router
         self.skill_registry = skill_registry
         self.on_event = on_event  # 事件回调: on_event(event_type: str, data: dict)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # 保护 _active_dags / _active_states 的并发访问
         self._active_dags: dict[str, TaskDAG] = {}  # task_id → DAG
         self._active_states: dict[str, GraphState] = {}  # task_id → GraphState
+        self._executor = ThreadPoolExecutor(
+            max_workers=EXECUTOR_MAX_WORKERS, thread_name_prefix="orch"
+        )
+        self._task_events: dict[str, threading.Event] = {}  # task_id → 完成通知
+
+    # ── 线程安全的状态访问辅助方法 ─────────────────────────────
+
+    def _get_state(self, task_id: str) -> Optional[GraphState]:
+        """线程安全获取 GraphState。"""
+        with self._lock:
+            return self._active_states.get(task_id)
+
+    def _set_state(self, task_id: str, state: GraphState):
+        """线程安全设置 GraphState。"""
+        with self._lock:
+            self._active_states[task_id] = state
+
+    def _remove_state(self, task_id: str):
+        """线程安全移除活跃状态。"""
+        with self._lock:
+            self._active_states.pop(task_id, None)
+            self._active_dags.pop(task_id, None)
+            self._task_events.pop(task_id, None)
+
+    def _get_dag(self, task_id: str) -> Optional[TaskDAG]:
+        """线程安全获取 DAG。"""
+        with self._lock:
+            return self._active_dags.get(task_id)
+
+    def _set_dag(self, task_id: str, dag: TaskDAG):
+        """线程安全设置 DAG。"""
+        with self._lock:
+            self._active_dags[task_id] = dag
+
+    def _has_active_state(self, task_id: str) -> bool:
+        """线程安全检查任务是否活跃。"""
+        with self._lock:
+            return task_id in self._active_states
 
     # ── 状态机核心 ─────────────────────────────────────────────
 
@@ -120,7 +191,7 @@ class Orchestrator:
         """
         allowed = PHASE_TRANSITIONS.get(state.phase, [])
         if to_phase not in allowed:
-            print(f"[Orchestrator] 非法状态转换: {state.phase} → {to_phase} (允许: {allowed})")
+            logger.warning("非法状态转换: %s → %s (允许: %s)", state.phase, to_phase, allowed)
             return False
 
         from_phase = state.phase
@@ -130,7 +201,7 @@ class Orchestrator:
         # 自动保存 checkpoint
         self._save_checkpoint(state)
 
-        print(f"[Orchestrator] 状态转换: {from_phase} → {to_phase} ({reason})")
+        logger.info("状态转换: %s → %s (%s)", from_phase, to_phase, reason)
         if self.on_event:
             self.on_event("phase_transition", {
                 "task_id": state.task_id,
@@ -178,7 +249,7 @@ class Orchestrator:
         """
         ckpt = self.db.get_latest_checkpoint(task_id)
         if not ckpt:
-            print(f"[Orchestrator] 任务 {task_id} 无 checkpoint, 无法恢复")
+            logger.warning("任务 %s 无 checkpoint, 无法恢复", task_id)
             return False
 
         try:
@@ -186,7 +257,7 @@ class Orchestrator:
             context = json.loads(ckpt.get("context_json", "{}"))
             history = json.loads(ckpt.get("history_json", "[]"))
         except (json.JSONDecodeError, TypeError):
-            print(f"[Orchestrator] checkpoint 数据解析失败")
+            logger.error("checkpoint 数据解析失败")
             return False
 
         # 重建 DAG
@@ -202,10 +273,11 @@ class Orchestrator:
             checkpoint_id=ckpt.get("checkpoint_id", ""),
         )
 
-        # 注册到活跃状态
-        self._active_states[task_id] = state
-        if dag:
-            self._active_dags[task_id] = dag
+        # 线程安全注册到活跃状态
+        with self._lock:
+            self._active_states[task_id] = state
+            if dag:
+                self._active_dags[task_id] = dag
 
         # 更新任务状态
         task = self.db.get_task(task_id)
@@ -213,7 +285,7 @@ class Orchestrator:
             task.status = "running"
             self.db.save_task(task)
 
-        print(f"[Orchestrator] 任务已从 checkpoint 恢复: {task_id} (phase={state.phase})")
+        logger.info("任务已从 checkpoint 恢复: %s (phase=%s)", task_id, state.phase)
 
         # 启动状态机循环
         threading.Thread(
@@ -255,11 +327,15 @@ class Orchestrator:
         else:
             task.status = "running"
             state.dag = dag
-            self._active_dags[task.task_id] = dag
 
-        self._active_states[task.task_id] = state
+        # 线程安全注册活跃状态
+        with self._lock:
+            self._active_states[task.task_id] = state
+            if task.status == "running" and state.dag:
+                self._active_dags[task.task_id] = state.dag
+
         self.db.save_task(task)
-        print(f"[Orchestrator] 任务已提交: {task.task_id} ({name}) → {len(subtasks)} 个子任务")
+        logger.info("任务已提交: %s (%s) → %d 个子任务", task.task_id, name, len(subtasks))
 
         # 启动状态机循环
         if task.status == "running":
@@ -294,10 +370,26 @@ class Orchestrator:
 
     # ── 状态机循环 (替代原 _schedule_loop) ─────────────────────
 
+    def _get_task_event(self, task_id: str) -> threading.Event:
+        """获取或创建任务完成通知事件。"""
+        with self._lock:
+            if task_id not in self._task_events:
+                self._task_events[task_id] = threading.Event()
+            return self._task_events[task_id]
+
+    def _notify_task_event(self, task_id: str):
+        """通知状态机有子任务状态变更。"""
+        with self._lock:
+            evt = self._task_events.get(task_id)
+        if evt:
+            evt.set()
+
     def _state_machine_loop(self, task_id: str):
         """状态机驱动循环: 根据当前 phase 执行对应处理函数。"""
-        while task_id in self._active_states:
-            state = self._active_states[task_id]
+        while self._has_active_state(task_id):
+            state = self._get_state(task_id)
+            if not state:
+                break
 
             if state.phase == "route":
                 self._phase_route(state)
@@ -350,14 +442,19 @@ class Orchestrator:
         self.transition(state, "monitor", f"已分发 {len(ready)} 个子任务")
 
     def _phase_monitor(self, state: GraphState):
-        """监控阶段: 等待子任务完成, 根据结果决定下一步。"""
+        """监控阶段: 事件驱动等待子任务完成, 根据结果决定下一步。"""
         dag = state.dag
         if not dag:
             self.transition(state, "failed", "DAG 不存在")
             return
 
-        # 等待一段时间让子任务执行
-        time.sleep(3)
+        # 事件驱动: 等待子任务完成通知 (替代 time.sleep 轮询)
+        evt = self._get_task_event(state.task_id)
+        evt.clear()
+        evt.wait(timeout=5)  # 最多等 5s, 兼顾超时检测
+
+        # 超时检测: 标记超时子任务
+        self._check_subtask_timeouts(dag)
 
         # 收集已完成的子任务输出到 context
         for st in dag.to_subtask_list():
@@ -368,14 +465,16 @@ class Orchestrator:
         if dag.is_all_completed():
             self.transition(state, "aggregate", "所有子任务完成, 进入聚合")
         elif dag.has_failed():
-            self.transition(state, "failed", "子任务失败")
-            self._fail_task(state.task_id, "部分子任务失败")
+            # 尝试重试失败的子任务
+            if self._retry_failed_subtasks(state, dag):
+                self.transition(state, "dispatch", "重试失败子任务")
+            else:
+                self.transition(state, "failed", "子任务失败 (重试耗尽)")
+                self._fail_task(state.task_id, "部分子任务失败")
         elif dag.get_ready_subtasks(context=state.context):
             # 还有就绪子任务 (动态路由: 回到 dispatch)
             self.transition(state, "dispatch", "有新的就绪子任务 (动态路由)")
-        else:
-            # 仍在执行中, 继续监控
-            time.sleep(2)
+        # else: 仍在执行中, 下次循环继续等待事件
 
     def _phase_aggregate(self, state: GraphState):
         """聚合阶段: 收集所有子任务结果。"""
@@ -391,9 +490,8 @@ class Orchestrator:
         """交付阶段: 标记任务完成。"""
         self._complete_task(state.task_id, state.dag)
         self.transition(state, "completed", "任务交付完成")
-        # 清理活跃状态
-        self._active_states.pop(state.task_id, None)
-        self._active_dags.pop(state.task_id, None)
+        # 线程安全清理活跃状态
+        self._remove_state(state.task_id)
 
     # ── 兼容旧接口 (保留 _schedule_loop 作为别名) ─────────────
 
@@ -402,7 +500,7 @@ class Orchestrator:
         self._state_machine_loop(task_id)
 
     def _dispatch_subtask(self, task_id: str, subtask: SubTask, agent: AgentCard, dag: TaskDAG):
-        """分发子任务到目标 Agent (HTTP 调用)。
+        """分发子任务到目标 Agent (HTTP 调用, 线程池执行, 含超时控制)。
 
         在分发前调用 ModelRouter 确定推荐模型和降级链,
         将 model_preference 和 fallback_models 写入 payload。
@@ -426,9 +524,10 @@ class Orchestrator:
             )
             model_preference = routing.selected_model
             fallback_models = routing.fallback_chain
-            print(
-                f"[Router] {subtask.name} → {routing.selected_model} "
-                f"(难度={routing.difficulty}, 评分={routing.score:.3f}, 策略={routing.strategy})"
+            logger.info(
+                "[Router] %s → %s (难度=%s, 评分=%.3f, 策略=%s)",
+                subtask.name, routing.selected_model,
+                routing.difficulty, routing.score, routing.strategy,
             )
 
         # HTTP 调用 Worker 执行
@@ -446,7 +545,7 @@ class Orchestrator:
 
         def _execute_and_collect():
             try:
-                resp = requests.post(url, json=payload, timeout=300)
+                resp = requests.post(url, json=payload, timeout=SUBTASK_TIMEOUT_SECS)
                 if resp.status_code == 200:
                     result = resp.json()
                     dag.update_subtask(
@@ -469,23 +568,31 @@ class Orchestrator:
                                     input_tokens=usage.get("input_tokens", 0),
                                     output_tokens=usage.get("output_tokens", 0),
                                 )
-                    print(f"[Orchestrator] 子任务完成: {subtask.name} → {agent.agent_name}")
+                    logger.info("子任务完成: %s → %s", subtask.name, agent.agent_name)
                 else:
                     dag.update_subtask(
                         subtask.subtask_id,
                         status="failed",
-                        error=f"HTTP {resp.status_code}: {resp.text}",
+                        error=f"HTTP {resp.status_code}: {resp.text[:200]}",
                         completed_at=time.time(),
                     )
-                    print(f"[Orchestrator] 子任务失败: {subtask.name} → HTTP {resp.status_code}")
+                    logger.error("子任务失败: %s → HTTP %d", subtask.name, resp.status_code)
+            except requests.Timeout:
+                dag.update_subtask(
+                    subtask.subtask_id,
+                    status="failed",
+                    error=f"执行超时 ({SUBTASK_TIMEOUT_SECS}s)",
+                    completed_at=time.time(),
+                )
+                logger.error("子任务超时: %s (%ds)", subtask.name, SUBTASK_TIMEOUT_SECS)
             except requests.RequestException as e:
                 dag.update_subtask(
                     subtask.subtask_id,
                     status="failed",
-                    error=str(e),
+                    error=str(e)[:200],
                     completed_at=time.time(),
                 )
-                print(f"[Orchestrator] 子任务异常: {subtask.name} → {e}")
+                logger.error("子任务异常: %s → %s", subtask.name, e)
             finally:
                 # 恢复 Agent 状态
                 current = self.db.get_agent(agent.agent_id)
@@ -493,8 +600,59 @@ class Orchestrator:
                 new_status = "idle" if new_count < agent.max_concurrent_tasks else "busy"
                 self.db.update_agent_status(agent.agent_id, new_status, new_count)
                 self._sync_dag_to_db(task_id, dag)
+                # 事件通知: 唤醒状态机循环
+                self._notify_task_event(task_id)
 
-        threading.Thread(target=_execute_and_collect, daemon=True).start()
+        # 使用线程池替代裸线程
+        self._executor.submit(_execute_and_collect)
+
+    def _check_subtask_timeouts(self, dag: TaskDAG):
+        """检测并标记超时的子任务 (assigned/running 状态超过 SUBTASK_TIMEOUT_SECS)。"""
+        now = time.time()
+        for st in dag.to_subtask_list():
+            if st.status in ("assigned", "running"):
+                # 使用 assigned_at 或 created_at 作为起始时间
+                start = getattr(st, "assigned_at", None) or getattr(st, "created_at", None) or 0
+                if start and (now - start) > SUBTASK_TIMEOUT_SECS:
+                    dag.update_subtask(
+                        st.subtask_id,
+                        status="failed",
+                        error=f"监控超时 ({SUBTASK_TIMEOUT_SECS}s 无响应)",
+                        completed_at=now,
+                    )
+                    logger.warning("子任务监控超时: %s", st.name)
+
+    def _retry_failed_subtasks(self, state: GraphState, dag: TaskDAG) -> bool:
+        """尝试重试失败的子任务 (指数退避)。
+
+        Returns:
+            True 如果有子任务被重置为 pending 等待重新分发, False 重试耗尽。
+        """
+        retried = False
+        for st in dag.to_subtask_list():
+            if st.status != "failed":
+                continue
+            retry_count = getattr(st, "retry_count", 0)
+            if retry_count >= SUBTASK_MAX_RETRIES:
+                continue  # 重试次数耗尽
+            # 指数退避延迟检查
+            last_failed_at = getattr(st, "completed_at", 0) or 0
+            delay = SUBTASK_RETRY_BASE_DELAY * (2 ** retry_count)
+            if time.time() - last_failed_at < delay:
+                continue  # 还没到重试时间
+            # 重置为 pending, 等待重新分发
+            dag.update_subtask(
+                st.subtask_id,
+                status="pending",
+                error="",
+                output_data=None,
+                completed_at=None,
+            )
+            # 记录重试次数 (通过 input_data 携带)
+            st.retry_count = retry_count + 1
+            logger.info("子任务重试 (%d/%d): %s", retry_count + 1, SUBTASK_MAX_RETRIES, st.name)
+            retried = True
+        return retried
 
     def _sync_dag_to_db(self, task_id: str, dag: TaskDAG):
         """将 DAG 状态同步到数据库。"""
@@ -514,9 +672,8 @@ class Orchestrator:
                 for st in dag.to_subtask_list()
             } if dag else {}
             self.db.save_task(task)
-            self._active_dags.pop(task_id, None)
-            self._active_states.pop(task_id, None)
-            print(f"[Orchestrator] 任务完成: {task_id}")
+            self._remove_state(task_id)
+            logger.info("任务完成: %s", task_id)
             if self.on_event:
                 self.on_event("task_completed", {
                     "task_id": task_id,
@@ -530,9 +687,8 @@ class Orchestrator:
             task.status = "failed"
             task.output_data = {"error": reason}
             self.db.save_task(task)
-            self._active_dags.pop(task_id, None)
-            self._active_states.pop(task_id, None)
-            print(f"[Orchestrator] 任务失败: {task_id} ({reason})")
+            self._remove_state(task_id)
+            logger.error("任务失败: %s (%s)", task_id, reason)
             if self.on_event:
                 self.on_event("task_failed", {
                     "task_id": task_id,
@@ -550,7 +706,7 @@ class Orchestrator:
         Returns:
             {phase, history, checkpoint_id, dag_json} 或 None
         """
-        state = self._active_states.get(task_id)
+        state = self._get_state(task_id)
         if state:
             return {
                 "task_id": task_id,
@@ -577,7 +733,7 @@ class Orchestrator:
         优先从活跃状态获取, 否则从 DB 中的 task.subtasks 重建。
         """
         # 优先活跃 DAG
-        dag = self._active_dags.get(task_id)
+        dag = self._get_dag(task_id)
         if dag:
             return dag.to_graph_json()
 
@@ -613,11 +769,12 @@ class Orchestrator:
         if new_dag.has_cycle():
             return {"ok": False, "message": "图结构存在循环依赖, 无法保存"}
 
-        # 更新活跃 DAG
-        if task_id in self._active_dags:
-            self._active_dags[task_id] = new_dag
-        if task_id in self._active_states:
-            self._active_states[task_id].dag = new_dag
+        # 线程安全更新活跃 DAG
+        with self._lock:
+            if task_id in self._active_dags:
+                self._active_dags[task_id] = new_dag
+            if task_id in self._active_states:
+                self._active_states[task_id].dag = new_dag
 
         # 同步到 DB
         task = self.db.get_task(task_id)
@@ -626,3 +783,9 @@ class Orchestrator:
             self.db.save_task(task)
 
         return {"ok": True, "message": "DAG 图结构已更新"}
+
+    def shutdown(self, wait: bool = True, timeout: float = 10):
+        """优雅关闭编排器: 等待线程池中正在执行的子任务完成。"""
+        logger.info("编排器关闭中 (wait=%s)...", wait)
+        self._executor.shutdown(wait=wait)
+        logger.info("编排器线程池已关闭")

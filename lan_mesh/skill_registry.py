@@ -38,6 +38,9 @@ import yaml
 
 from .database import Database
 from .protocol import SkillRecord
+from .logger import get_logger
+
+logger = get_logger("skill_registry")
 
 
 class SkillRegistry:
@@ -64,7 +67,7 @@ class SkillRegistry:
         results = []
         if not self.skills_dir.is_dir():
             self.skills_dir.mkdir(parents=True, exist_ok=True)
-            print(f"[SkillRegistry] skills 目录已创建: {self.skills_dir}")
+            logger.info("skills 目录已创建: %s", self.skills_dir)
             return results
 
         for entry in sorted(self.skills_dir.iterdir()):
@@ -93,7 +96,7 @@ class SkillRegistry:
                 version=meta.get("version", "1.0"),
             )
             results.append({"skill_id": skill_id, "action": action})
-            print(f"[SkillRegistry] {action}: {skill_id} ({entry.name})")
+            logger.info("%s: %s (%s)", action, skill_id, entry.name)
 
         # 清除内容缓存（文件可能已变更）
         self._content_cache.clear()
@@ -108,7 +111,7 @@ class SkillRegistry:
         try:
             content = filepath.read_text(encoding="utf-8")
         except Exception as e:
-            print(f"[SkillRegistry] 读取文件失败 {filepath}: {e}")
+            logger.error("读取文件失败 %s: %s", filepath, e)
             return {}
 
         if not content.startswith("---"):
@@ -122,7 +125,7 @@ class SkillRegistry:
             meta = yaml.safe_load(parts[1]) or {}
             return meta
         except yaml.YAMLError as e:
-            print(f"[SkillRegistry] YAML 解析失败 {filepath}: {e}")
+            logger.error("YAML 解析失败 %s: %s", filepath, e)
             return {}
 
     # ── 技能查询 ──────────────────────────────────────────────────
@@ -189,12 +192,12 @@ class SkillRegistry:
             assignee_id: 角色名 / agent_id / device_id
         """
         self.db.assign_skill(skill_id, assignee_type, assignee_id)
-        print(f"[SkillRegistry] 技能 {skill_id} 已分配给 {assignee_type}:{assignee_id}")
+        logger.info("技能 %s 已分配给 %s:%s", skill_id, assignee_type, assignee_id)
 
     def revoke_skill(self, skill_id: str, assignee_type: str, assignee_id: str):
         """撤销技能分配。"""
         self.db.revoke_skill(skill_id, assignee_type, assignee_id)
-        print(f"[SkillRegistry] 技能 {skill_id} 已从 {assignee_type}:{assignee_id} 撤销")
+        logger.info("技能 %s 已从 %s:%s 撤销", skill_id, assignee_type, assignee_id)
 
     def get_skill_assignments(self, skill_id: str) -> list[dict]:
         """查询技能的所有分配记录。"""

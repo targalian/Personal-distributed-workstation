@@ -18,6 +18,10 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from .logger import get_logger
+
+logger = get_logger("cloud_sync")
+
 
 class CloudSyncManager:
     """云存储同步管理器。
@@ -149,9 +153,9 @@ class CloudSyncManager:
             }
 
             if uploaded or downloaded:
-                print(f"[CloudSync] 同步完成: 上传 {uploaded}, 下载 {downloaded}, 耗时 {duration:.1f}s")
+                logger.info("同步完成: 上传 %d, 下载 %d, 耗时 %.1fs", uploaded, downloaded, duration)
             elif errors:
-                print(f"[CloudSync] 同步完成 (有错误): {len(errors)} 个错误")
+                logger.warning("同步完成 (有错误): %d 个错误", len(errors))
 
             return self._last_sync_result
 
@@ -285,9 +289,9 @@ class CloudSyncManager:
         # 启动时立即同步一次
         try:
             result = self.sync()
-            print(f"[CloudSync] 首次同步: 上传 {result['uploaded']}, 下载 {result['downloaded']}")
+            logger.info("首次同步: 上传 %d, 下载 %d", result['uploaded'], result['downloaded'])
         except Exception as e:
-            print(f"[CloudSync] 首次同步失败: {e}")
+            logger.error("首次同步失败: %s", e)
 
         # 定时同步 (sync_interval > 0)
         if self.sync_interval > 0:
@@ -295,7 +299,7 @@ class CloudSyncManager:
                 target=self._sync_loop, name="cloud-sync", daemon=True
             )
             self._sync_thread.start()
-            print(f"[CloudSync] 定时同步已启动: 间隔 {self.sync_interval}s")
+            logger.info("定时同步已启动: 间隔 %ds", self.sync_interval)
 
     def _sync_loop(self):
         """定时同步循环。"""
@@ -304,7 +308,7 @@ class CloudSyncManager:
             try:
                 self.sync()
             except Exception as e:
-                print(f"[CloudSync] 定时同步异常: {e}")
+                logger.error("定时同步异常: %s", e)
 
     def stop(self):
         """停止自动同步。"""

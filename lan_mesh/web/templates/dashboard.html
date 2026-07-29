@@ -289,6 +289,7 @@
   <div class="mobile-nav-item secretary-tab" data-tab="chat" style="display:none"><span class="nav-icon">💬</span><span>对话</span></div>
   <div class="mobile-nav-item secretary-tab" data-tab="workspace" style="display:none"><span class="nav-icon">🗂️</span><span>工作台</span></div>
   <div class="mobile-nav-item secretary-tab" data-tab="hosts" style="display:none"><span class="nav-icon">🖥️</span><span>WS</span></div>
+  <div class="mobile-nav-item secretary-tab" data-tab="tools" style="display:none"><span class="nav-icon">🔧</span><span>工具</span></div>
   <div class="mobile-nav-item" data-tab="bot"><span class="nav-icon">📱</span><span>手机</span></div>
   <div class="mobile-nav-item" data-tab="p2p"><span class="nav-icon">📡</span><span>通讯</span></div>
 </div>
@@ -625,6 +626,26 @@ async function withFeedback(btn,fn){
   finally{if(btn){btn.disabled=false;btn.textContent=orig;}}
 }
 
+// ── 自定义输入对话框 (替代原生 prompt) ──
+function showInputDialog(title,defaultVal=''){
+  return new Promise(resolve=>{
+    const ov=document.getElementById('overlay');
+    const md=document.getElementById('modal');
+    md.innerHTML=`<span class="modal-close" id="input-dlg-close">&times;</span><h2>${title}</h2>
+<div style="margin-top:16px"><input id="input-dlg-field" class="input" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px" value="${defaultVal.replace(/"/g,'&quot;')}" /></div>
+<div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="btn" id="input-dlg-cancel">取消</button><button class="btn primary" id="input-dlg-ok">确定</button></div>`;
+    ov.classList.add('show');
+    const field=document.getElementById('input-dlg-field');
+    field.focus();field.select();
+    const cleanup=()=>{ov.classList.remove('show');field.removeEventListener('keydown',onKey);};
+    const onKey=e=>{if(e.key==='Enter'){cleanup();resolve(field.value);}if(e.key==='Escape'){cleanup();resolve(null);}};
+    field.addEventListener('keydown',onKey);
+    document.getElementById('input-dlg-ok').onclick=()=>{cleanup();resolve(field.value);};
+    document.getElementById('input-dlg-cancel').onclick=()=>{cleanup();resolve(null);};
+    document.getElementById('input-dlg-close').onclick=()=>{cleanup();resolve(null);};
+  });
+}
+
 let allHosts=[],allTasks=[],allAgents=[],allProjects=[];
 let ws=null;
 let secretaryActive=false;
@@ -777,7 +798,7 @@ async function browseFiles(ip,port){
     document.getElementById('modal').insertAdjacentHTML('beforeend',h);
   }catch(e){alert('无法访问:'+e.message);}
 }
-function probeIP(){const ip=prompt('输入要探测的 Work Station IP:');if(!ip)return;fetch(`/api/probe/${ip}`,{method:'POST'}).then(r=>r.json()).then(d=>{alert(d.message||'已发送');setTimeout(refreshHosts,2000);}).catch(e=>alert('失败:'+e.message));}
+async function probeIP(){const ip=await showInputDialog('输入要探测的 Work Station IP:');if(!ip)return;fetch(`/api/probe/${ip}`,{method:'POST'}).then(r=>r.json()).then(d=>{showToast(d.message||'已发送','ok');setTimeout(refreshHosts,2000);}).catch(e=>showToast('失败:'+e.message,'err'));}
 async function showNetworkInfo(){try{const r=await fetch('/api/network');const d=await r.json();alert(`UDP端口: ${d.udp_port}\nAPI端口: ${d.api_port}\n\n本地IP:\n${d.local_ips.join('\n')}\n\n广播目标:\n${d.broadcast_targets.join('\n')}`);}catch(e){alert('失败:'+e.message);}}
 
 // ── 任务面板 ──
@@ -1159,7 +1180,7 @@ async function switchConversation(convId){
   await loadChatHistory();
 }
 async function createConversation(){
-  const title=prompt('对话标题:','新对话');
+  const title=await showInputDialog('对话标题:','新对话');
   if(!title)return;
   try{
     const r=await fetch('/api/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})});
@@ -1486,8 +1507,8 @@ async function viewSkill(skillId){
   }catch(e){alert('失败:'+e.message);}
 }
 async function assignSkill(skillId){
-  const type=prompt('分配类型 (role/agent/host):','role');if(!type)return;
-  const id=prompt('分配目标 ID (如: worker, secretary, agent_id, device_id):');if(!id)return;
+  const type=await showInputDialog('分配类型 (role/agent/host):','role');if(!type)return;
+  const id=await showInputDialog('分配目标 ID (如: worker, secretary, agent_id, device_id):');if(!id)return;
   try{
     const r=await fetch(`/api/station/skills/${skillId}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({assignee_type:type,assignee_id:id})});
     const d=await r.json();if(d.ok){refreshSkills();viewSkill(skillId);}else{alert('失败: '+(d.detail||'未知错误'));}
@@ -1860,10 +1881,10 @@ function dagToggleConnect(){
   showToast(dagConnectMode?'连线模式: 依次点击源节点和目标节点':'连线模式已关闭','info');
 }
 
-function dagAddNode(){
-  const name=prompt('节点名称:','新子任务');
+async function dagAddNode(){
+  const name=await showInputDialog('节点名称:','新子任务');
   if(!name)return;
-  const skill=prompt('技能 (code_generation/code_review/shell_exec/...):','code_generation')||'code_generation';
+  const skill=await showInputDialog('技能 (code_generation/code_review/shell_exec/...):','code_generation')||'code_generation';
   const id='node-'+Date.now().toString(36);
   dagNodes.push({id,name,status:'pending',skill,description:'',input_data:{},output_data:{},assigned_agent_id:'',condition_expr:'',x:100+Math.random()*200,y:100+Math.random()*200});
   renderDAG();

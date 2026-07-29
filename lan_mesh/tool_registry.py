@@ -22,6 +22,9 @@ from typing import Any, Callable, Optional
 import yaml
 
 from .protocol import ToolDef
+from .logger import get_logger
+
+logger = get_logger("tool_registry")
 
 
 # ── 工具执行处理器 ──────────────────────────────────────────────
@@ -362,9 +365,9 @@ class ToolRegistry:
                     input_schema=item.get("input_schema", {}),
                 )
                 self.register_tool(tool, handler)
-                print(f"[ToolRegistry] 插件工具已加载: {name} ({module_name}.{func_name})")
+                logger.info("插件工具已加载: %s (%s.%s)", name, module_name, func_name)
             except (ImportError, AttributeError) as e:
-                print(f"[ToolRegistry] 插件加载失败: {name} → {e}")
+                logger.error("插件加载失败: %s → %s", name, e)
 
     def tool_count(self) -> int:
         """返回已注册工具数量。"""

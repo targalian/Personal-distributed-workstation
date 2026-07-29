@@ -23,6 +23,9 @@ from .host_info import collect_host_info
 from .host_rating import rate_host, HostRating, TIER_ORDER
 from .protocol import HostInfo, HostRecord
 from .shared_folder import SharedFolderManager
+from .logger import get_logger
+
+logger = get_logger("station_director")
 
 
 class StationDirector:
@@ -96,14 +99,15 @@ class StationDirector:
             if is_new:
                 self.db.log_host_event(info.device_id, "join",
                                        f"{info.hostname} ({info.platform}) {rating.tier}级")
-                print(f"[Station] 新主机入站: {info.device_name} [{rating.tier}级] "
-                      f"{info.cpu_count}核/{info.memory_total_mb // 1024}GB")
+                logger.info("新主机入站: %s [%s级] %d核/%dGB",
+                            info.device_name, rating.tier,
+                            info.cpu_count, info.memory_total_mb // 1024)
             else:
                 self.db.log_host_event(info.device_id, "register", "重新注册")
                 # 检查评级变化
                 if existing and existing.rating_tier != rating.tier:
-                    print(f"[Station] 主机评级变更: {info.device_name} "
-                          f"{existing.rating_tier}->{rating.tier}")
+                    logger.info("主机评级变更: %s %s->%s",
+                                info.device_name, existing.rating_tier, rating.tier)
 
             return record
 
@@ -155,7 +159,7 @@ class StationDirector:
             self.db.log_host_event(device_id, "leave", "超时未心跳, 标记离线")
             record = self.db.get_host(device_id)
             name = record.device_name if record else device_id[:8]
-            print(f"[Station] 主机离线: {name}")
+            logger.info("主机离线: %s", name)
         return gone_ids
 
     # ── 舰队查询 ─────────────────────────────────────────────────
@@ -224,7 +228,7 @@ class StationDirector:
                         h.device_id, rating.tier, rating.score, rating.summary
                     )
                     updated += 1
-            print(f"[Station] 评级重算完成: {updated}/{len(hosts)} 台主机评级变更")
+            logger.info("评级重算完成: %d/%d 台主机评级变更", updated, len(hosts))
             return updated
 
     def bind_discovery(self, discovery: DiscoveryService):

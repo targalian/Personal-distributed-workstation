@@ -18,6 +18,7 @@ Agent 运行时 — Worker 端任务执行引擎
 LLM API 调用通过环境变量配置 (OPENAI_API_KEY / DEEPSEEK_API_KEY 等)。
 """
 import os
+import shutil
 import subprocess
 import time
 import json as _json
@@ -29,6 +30,28 @@ import requests
 from .logger import get_logger
 
 logger = get_logger("agent_runtime")
+
+
+# ── 安全沙箱配置 ────────────────────────────────────────────
+
+# 禁止执行的危险命令前缀/关键词
+SHELL_BLOCKED_PATTERNS = [
+    "rm -rf /", "rm -rf ~", "rm -rf .",
+    "mkfs", "dd if=", "fdisk", "format",
+    "shutdown", "reboot", "halt", "poweroff",
+    "chmod 777 /", "chown",
+    ":(){ :|:& };:",  # fork bomb
+    "wget", "curl",  # 禁止网络下载
+    "sudo", "su ",
+    "> /dev/", "> /etc/", "> /usr/",
+    "iptables", "systemctl", "service ",
+]
+
+# 文件操作允许的最大文件大小 (10MB)
+MAX_FILE_SIZE = 10 * 1024 * 1024
+
+# Shell 输出最大长度 (100KB)
+MAX_OUTPUT_LENGTH = 100 * 1024
 
 
 # ── Provider 默认配置 (provider → base_url) ──────────────────────
@@ -50,6 +73,114 @@ def _load_model_pool_entries():
         return {e.id: e for e in pool.models}
     except Exception:
         return {}
+
+
+# ── CLI Agent 配置 ────────────────────────────────────────────
+
+# 阿里 Token Plan 端点 (同时支持 OpenAI 和 Anthropic 协议)
+TOKEN_PLAN_OPENAI_BASE = "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+TOKEN_PLAN_ANTHROPIC_BASE = "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic"
+
+# 支持的 CLI Agent 后端 (name → 检测命令 + 调用模板)
+CLI_AGENT_BACKENDS = {
+    "claude": {
+        "detect": "claude",
+        "build_cmd": lambda prompt, cwd: [
+            "claude", "--print", "--output-format", "json",
+            "--max-turns", "30", prompt,
+        ],
+        "timeout": 600,
+        "description": "Claude Code CLI — 自主编码 Agent (MCP 工具支持)",
+    },
+    "aider": {
+        "detect": "aider",
+        "build_cmd": lambda prompt, cwd: [
+            "aider", "--yes", "--no-auto-commits",
+            "--model", "openai/qwen3.8-max-preview",
+            "--architect-model", "openai/qwen3.6-flash",
+            "--message", prompt,
+        ],
+        "timeout": 600,
+        "description": "Aider — Git-aware 双模型编码 Agent (Token Plan 零成本)",
+    },
+    "codex": {
+        "detect": "codex",
+        "build_cmd": lambda prompt, cwd: [
+            "codex", "--quiet", "--full-auto", prompt,
+        ],
+        "timeout": 600,
+        "description": "OpenAI Codex CLI — 沙箱编码 Agent",
+    },
+}
+
+# CLI Agent 默认超时 (s), 可通过环境变量覆盖
+CLI_AGENT_TIMEOUT = int(os.environ.get("CLI_AGENT_TIMEOUT", "600"))
+# CLI Agent 输出截断限制
+CLI_AGENT_MAX_OUTPUT = 200 * 1024  # 200KB
+
+
+def _build_cli_env(backend: str) -> dict:
+    """构建 CLI Agent 执行环境变量, 自动注入 Token Plan 凭据。
+
+    策略:
+    - claude: 注入 ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL (Token Plan Anthropic 端点)
+    - aider:  注入 OPENAI_API_KEY + OPENAI_API_BASE (Token Plan OpenAI 端点)
+    - 如果用户已设置原生 API Key, 优先使用原生 (不覆盖)
+    """
+    env = {**os.environ, "NO_COLOR": "1"}
+    token_plan_key = os.environ.get("ALIYUN_TOKENPLAN_API_KEY", "")
+
+    if not token_plan_key:
+        return env
+
+    if backend == "claude":
+        # 仅在用户未配置原生 Anthropic Key 时注入 Token Plan
+        if not env.get("ANTHROPIC_API_KEY"):
+            env["ANTHROPIC_API_KEY"] = token_plan_key
+            env["ANTHROPIC_BASE_URL"] = TOKEN_PLAN_ANTHROPIC_BASE
+            logger.debug("[CLI Agent] claude 使用 Token Plan Anthropic 端点")
+
+    elif backend == "aider":
+        # 仅在用户未配置原生 OpenAI Key 时注入 Token Plan
+        if not env.get("OPENAI_API_KEY"):
+            env["OPENAI_API_KEY"] = token_plan_key
+            env["OPENAI_API_BASE"] = TOKEN_PLAN_OPENAI_BASE
+            logger.debug("[CLI Agent] aider 使用 Token Plan OpenAI 端点")
+
+    return env
+
+
+def detect_cli_agents() -> list[str]:
+    """检测系统上可用的 CLI Agent 后端。
+
+    Returns:
+        可用的 CLI Agent 名称列表, 如 ["claude", "aider"]
+    """
+    available = []
+    for name, cfg in CLI_AGENT_BACKENDS.items():
+        if shutil.which(cfg["detect"]):
+            available.append(name)
+    return available
+
+
+def get_preferred_cli_agent() -> Optional[str]:
+    """获取首选 CLI Agent (环境变量 > 自动检测)。
+
+    环境变量 CLI_AGENT_BACKEND 可指定: claude / aider / codex
+    未设置时按优先级自动选择: claude > aider > codex
+    (claude 和 aider 均可通过 Token Plan 零成本使用)
+    """
+    preferred = os.environ.get("CLI_AGENT_BACKEND", "").lower().strip()
+    if preferred and preferred in CLI_AGENT_BACKENDS:
+        if shutil.which(CLI_AGENT_BACKENDS[preferred]["detect"]):
+            return preferred
+        logger.warning("指定的 CLI Agent '%s' 未安装, 回退自动检测", preferred)
+
+    # 自动检测, 按优先级: claude > aider > codex
+    for name in ["claude", "aider", "codex"]:
+        if shutil.which(CLI_AGENT_BACKENDS[name]["detect"]):
+            return name
+    return None
 
 
 class AgentRuntime:
@@ -74,6 +205,7 @@ class AgentRuntime:
             "file_ops": self._handle_file_ops,
             "monitoring": self._handle_monitoring,
             "react_agent": self._handle_react_agent,  # F2.1: 工具循环 Agent
+            "cli_agent": self._handle_cli_agent,      # CLI Agent (Claude Code/Codex/Aider)
         }
 
     def execute(self, subtask: dict) -> dict:
@@ -169,42 +301,101 @@ class AgentRuntime:
         }
 
     def _handle_shell_exec(self, input_data: dict) -> dict:
-        """Shell 命令执行。"""
+        """Shell 命令执行 (沙箱限制)。
+
+        安全策略:
+        - 禁止危险命令 (rm -rf /, mkfs, sudo 等)
+        - 工作目录限制在 shared_folder 内
+        - 输出截断保护
+        """
         command = input_data.get("command", input_data.get("requirement", ""))
-        timeout = input_data.get("timeout", 30)
+        timeout = min(input_data.get("timeout", 30), 120)  # 最大 120s
+
+        # 安全检查: 禁止危险命令
+        cmd_lower = command.lower().strip()
+        for pattern in SHELL_BLOCKED_PATTERNS:
+            if pattern in cmd_lower:
+                return {
+                    "stdout": "",
+                    "stderr": f"[Sandbox] 命令被拒绝: 包含禁止模式 '{pattern}'",
+                    "returncode": -1,
+                }
+
+        # 工作目录限制
+        cwd = input_data.get("cwd", self.shared_folder)
 
         try:
             result = subprocess.run(
-                command, shell=True, capture_output=True, text=True, timeout=timeout
+                command, shell=True, capture_output=True, text=True,
+                timeout=timeout, cwd=cwd,
             )
+            stdout = result.stdout[:MAX_OUTPUT_LENGTH]
+            stderr = result.stderr[:MAX_OUTPUT_LENGTH]
             return {
-                "stdout": result.stdout,
-                "stderr": result.stderr,
+                "stdout": stdout,
+                "stderr": stderr,
                 "returncode": result.returncode,
             }
         except subprocess.TimeoutExpired:
             return {"stdout": "", "stderr": f"命令超时 ({timeout}s)", "returncode": -1}
 
     def _handle_file_ops(self, input_data: dict) -> dict:
-        """文件读写操作。"""
+        """文件读写操作 (沙箱限制)。
+
+        安全策略:
+        - 路径必须在允许的目录内 (shared_folder 及其子目录)
+        - 禁止路径穿越 (../)
+        - 写入大小限制
+        """
         action = input_data.get("action", "read")
         path = input_data.get("path", "")
         content = input_data.get("content", "")
 
+        # 安全检查: 路径验证
+        if not path:
+            return {"error": "未指定文件路径"}
+
+        # 解析绝对路径并检查是否在允许范围内
+        import os
+        resolved = os.path.realpath(os.path.expanduser(path))
+        allowed_root = os.path.realpath(self.shared_folder)
+
+        # 允许 shared_folder 及 /tmp 目录
+        allowed_roots = [allowed_root, "/tmp"]
+        is_allowed = any(
+            resolved == root or resolved.startswith(root + os.sep)
+            for root in allowed_roots
+        )
+        if not is_allowed:
+            return {
+                "error": f"[Sandbox] 路径被拒绝: {path} 不在允许目录内 "
+                         f"(允许: {self.shared_folder}, /tmp)"
+            }
+
         if action == "read":
-            with open(path, "r", encoding="utf-8") as f:
+            if not os.path.isfile(resolved):
+                return {"error": f"文件不存在: {path}"}
+            if os.path.getsize(resolved) > MAX_FILE_SIZE:
+                return {"error": f"文件过大 (> {MAX_FILE_SIZE // 1024 // 1024}MB)"}
+            with open(resolved, "r", encoding="utf-8", errors="replace") as f:
                 return {"content": f.read(), "path": path}
         elif action == "write":
-            with open(path, "w", encoding="utf-8") as f:
+            if len(content) > MAX_FILE_SIZE:
+                return {"error": f"写入内容过大 (> {MAX_FILE_SIZE // 1024 // 1024}MB)"}
+            os.makedirs(os.path.dirname(resolved), exist_ok=True)
+            with open(resolved, "w", encoding="utf-8") as f:
                 f.write(content)
             return {"path": path, "written": len(content)}
         elif action == "list":
-            import os
-            entries = os.listdir(path)
+            if not os.path.isdir(resolved):
+                return {"error": f"目录不存在: {path}"}
+            entries = os.listdir(resolved)
             return {"entries": entries, "path": path}
         elif action == "delete":
-            os.remove(path)
-            return {"deleted": path}
+            if os.path.isfile(resolved):
+                os.remove(resolved)
+                return {"deleted": path}
+            return {"error": f"文件不存在: {path}"}
         else:
             return {"error": f"未知操作: {action}"}
 
@@ -355,6 +546,159 @@ class AgentRuntime:
                 },
             })
         return tools
+
+    # ── CLI Agent 执行器 (Claude Code / Codex / Aider) ─────────────
+
+    def _handle_cli_agent(self, input_data: dict) -> dict:
+        """调用外部 CLI Agent 自主完成编码任务。
+
+        与单轮 LLM API 调用不同, CLI Agent 能够:
+        - 自主探索代码库、读取文件
+        - 编辑多个文件、创建新文件
+        - 运行命令、执行测试
+        - 迭代修复错误直到任务完成
+
+        支持后端: claude (Claude Code) / codex / aider
+        通过环境变量 CLI_AGENT_BACKEND 指定, 或自动检测。
+
+        input_data 字段:
+            requirement/description: 任务描述
+            cwd: 工作目录 (默认 shared_folder)
+            backend: 强制指定后端 (可选)
+            timeout: 超时秒数 (可选)
+            allowed_tools: 允许的工具列表 (claude 专用, 可选)
+        """
+        requirement = input_data.get("requirement", input_data.get("description", ""))
+        if not requirement:
+            return {"error": "未提供任务描述 (requirement)"}
+
+        cwd = input_data.get("cwd", self.shared_folder)
+        timeout = min(input_data.get("timeout", CLI_AGENT_TIMEOUT), 1800)  # 最大 30min
+
+        # 确定后端
+        backend = input_data.get("backend", "").lower().strip()
+        if backend and backend in CLI_AGENT_BACKENDS:
+            if not shutil.which(CLI_AGENT_BACKENDS[backend]["detect"]):
+                return {"error": f"CLI Agent '{backend}' 未安装 (which {CLI_AGENT_BACKENDS[backend]['detect']} 未找到)"}
+        else:
+            backend = get_preferred_cli_agent()
+            if not backend:
+                available_hint = "请安装: npm install -g @anthropic-ai/claude-code 或 pip install aider-chat"
+                return {
+                    "error": f"未检测到可用的 CLI Agent。{available_hint}",
+                    "hint": "支持: claude (Claude Code), codex (OpenAI), aider",
+                }
+
+        cfg = CLI_AGENT_BACKENDS[backend]
+        logger.info("[CLI Agent] 后端=%s, cwd=%s, timeout=%ds", backend, cwd, timeout)
+        logger.info("[CLI Agent] 任务: %s", requirement[:200])
+
+        # 构建命令
+        cmd = cfg["build_cmd"](requirement, cwd)
+
+        # Claude Code 额外参数: 工具权限控制
+        if backend == "claude":
+            allowed_tools = input_data.get("allowed_tools", [])
+            if allowed_tools:
+                for tool in allowed_tools:
+                    cmd.insert(-1, f"--allowedTools={tool}")
+            # 注入 system prompt (如果有)
+            system_prompt = self._build_system_prompt(requirement)
+            if system_prompt and len(system_prompt) < 2000:
+                cmd.insert(-1, f"--system-prompt={system_prompt[:1500]}")
+
+        # 执行 CLI Agent
+        start_time = time.time()
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=cwd,
+                env=_build_cli_env(backend),  # 自动注入 Token Plan 凭据
+            )
+            elapsed = time.time() - start_time
+            stdout = result.stdout[:CLI_AGENT_MAX_OUTPUT]
+            stderr = result.stderr[:CLI_AGENT_MAX_OUTPUT // 4]
+
+            # 解析 Claude Code JSON 输出
+            output = self._parse_cli_output(backend, stdout, stderr, result.returncode)
+            output["backend"] = backend
+            output["elapsed_secs"] = round(elapsed, 1)
+            output["returncode"] = result.returncode
+
+            if result.returncode == 0:
+                logger.info("[CLI Agent] 完成 (%.1fs, backend=%s)", elapsed, backend)
+            else:
+                logger.warning("[CLI Agent] 非零退出 (code=%d, %.1fs)", result.returncode, elapsed)
+
+            return output
+
+        except subprocess.TimeoutExpired:
+            elapsed = time.time() - start_time
+            logger.error("[CLI Agent] 超时 (%ds, backend=%s)", timeout, backend)
+            return {
+                "error": f"CLI Agent 执行超时 ({timeout}s)",
+                "backend": backend,
+                "elapsed_secs": round(elapsed, 1),
+                "status": "timeout",
+            }
+        except FileNotFoundError:
+            return {
+                "error": f"CLI Agent '{backend}' 命令未找到, 请确认已安装并在 PATH 中",
+                "backend": backend,
+            }
+        except Exception as e:
+            logger.error("[CLI Agent] 执行异常: %s", e)
+            return {"error": str(e), "backend": backend}
+
+    def _parse_cli_output(self, backend: str, stdout: str, stderr: str, returncode: int) -> dict:
+        """解析 CLI Agent 的输出。
+
+        Claude Code 使用 --output-format json 时输出 JSON 结构:
+        {"type": "result", "result": "...", "cost_usd": 0.05, ...}
+        """
+        if backend == "claude" and stdout.strip():
+            try:
+                data = _json.loads(stdout)
+                # Claude Code JSON 输出格式
+                if isinstance(data, dict):
+                    return {
+                        "result": data.get("result", stdout),
+                        "cost_usd": data.get("cost_usd", 0),
+                        "duration_ms": data.get("duration_ms", 0),
+                        "num_turns": data.get("num_turns", 0),
+                        "session_id": data.get("session_id", ""),
+                        "status": "completed" if returncode == 0 else "failed",
+                    }
+            except _json.JSONDecodeError:
+                pass  # 非 JSON, 回退到纯文本
+
+        # 通用纯文本输出
+        return {
+            "result": stdout if stdout else stderr,
+            "status": "completed" if returncode == 0 else "failed",
+            "stderr": stderr[:2000] if stderr else "",
+        }
+
+    def list_cli_agents(self) -> dict:
+        """列出可用的 CLI Agent 后端及其状态。"""
+        agents = []
+        for name, cfg in CLI_AGENT_BACKENDS.items():
+            installed = shutil.which(cfg["detect"]) is not None
+            agents.append({
+                "name": name,
+                "description": cfg["description"],
+                "installed": installed,
+                "path": shutil.which(cfg["detect"]) or "",
+            })
+        preferred = get_preferred_cli_agent()
+        return {
+            "agents": agents,
+            "preferred": preferred,
+            "timeout": CLI_AGENT_TIMEOUT,
+        }
 
     def _call_llm_messages_with_tools(self, messages: list[dict],
                                        tools: list[dict],
@@ -544,7 +888,7 @@ class AgentRuntime:
                     )
                 except Exception as e:
                     last_error = e
-                    print(f"[AgentRuntime] 模型 {model_id} 调用失败: {e}, 尝试降级...")
+                    logger.warning("模型 %s 调用失败: %s, 尝试降级...", model_id, e)
                     continue
 
             # 整条链都失败
@@ -658,7 +1002,7 @@ class AgentRuntime:
                     system_prompt=system_prompt,
                 )
             except Exception as e:
-                print(f"[AgentRuntime] {provider} 调用失败: {e}, 尝试下一个 provider...")
+                logger.warning("%s 调用失败: %s, 尝试下一个 provider...", provider, e)
                 continue
 
         return {

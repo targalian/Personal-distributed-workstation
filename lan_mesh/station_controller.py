@@ -243,6 +243,9 @@ class StationController:
             self.bot_gateway.set_chat_handler(self.chat_handler)
 
         self.secretary_active = True
+        # BUG-004 fix: 统一状态源 — 激活时同步设置 host_id/port
+        self.secretary_host_id = self.state.device_id
+        self.secretary_host_port = self.state.api_port
         logger.info("Secretary 模式已激活 — 聊天处理器/模型路由/MCP工具 已就绪 (PM Agent 架构)")
 
         return {
@@ -257,6 +260,9 @@ class StationController:
             return {"ok": True, "message": "Secretary 未激活"}
 
         self.secretary_active = False
+        # BUG-004 fix: 统一状态源 — 停用时同步清除 host_id/port
+        self.secretary_host_id = None
+        self.secretary_host_port = None
         self.project_manager = None
         self.orchestrator = None
         self.model_router = None
@@ -326,7 +332,7 @@ class StationController:
         task.input_data = task.input_data or {}
         task.input_data["_priority"] = priority
         self.db.save_task(task)
-        print(f"[Station] 对话提交任务: {task.task_id} ({name}) 优先级={priority}")
+        logger.info("对话提交任务: %s (%s) 优先级=%s", task.task_id, name, priority)
         # WS 广播: 通知前端任务面板刷新
         self._queue_ws_broadcast("task_submitted", task.to_dict())
 
@@ -392,7 +398,7 @@ class StationController:
                     "device_id": self.state.device_id,
                     "local": True,
                 }
-                print(f"[Station] PM Agent 本机启动: {pm_id[:12]}")
+                logger.info("PM Agent 本机启动: %s", pm_id[:12])
                 # WS 广播: 通知前端 PM 面板 + 任务面板刷新
                 self._queue_ws_broadcast("pm_registered", {
                     "pm_id": pm_id, "agent_name": f"PM-{pm_id[:8]}",
@@ -405,7 +411,7 @@ class StationController:
                 })
                 return task.to_dict()
             else:
-                print(f"[Station] 本机 PM 启动失败: {result.get('message')}, 尝试远程派发")
+                logger.warning("本机 PM 启动失败: %s, 尝试远程派发", result.get('message'))
 
         # 回退: POST 到远程 Worker 启动 PM Agent
         try:
@@ -443,7 +449,7 @@ class StationController:
                     "api_port": target_host.api_port,
                     "device_id": target_host.device_id,
                 }
-                print(f"[Station] PM Agent 已启动: {pm_id[:12]} → {target_host.device_name}")
+                logger.info("PM Agent 已启动: %s → %s", pm_id[:12], target_host.device_name)
                 self.bot_gateway.notify("pm_registered", {
                     "pm_id": pm_id[:12], "task": task.name,
                     "station": target_host.device_name or target_host.hostname,
@@ -559,7 +565,7 @@ class StationController:
         if worker and worker.get("local") and self._local_pm_agent:
             result = self._local_inject_input(input_data)
             if result.get("ok"):
-                print(f"[Station] 已注入回复到本机 PM {pm_id[:12]}")
+                logger.info("已注入回复到本机 PM %s", pm_id[:12])
                 return {"ok": True, "message": "回复已发送到 PM Agent"}
             return result
 
@@ -580,7 +586,7 @@ class StationController:
             )
             if resp.status_code == 200:
                 result = resp.json()
-                print(f"[Station] 已注入回复到 PM {pm_id[:12]}")
+                logger.info("已注入回复到 PM %s", pm_id[:12])
                 return {"ok": True, "message": "回复已发送到 PM Agent"}
             else:
                 return {"ok": False, "message": f"Worker 返回错误: {resp.text[:200]}"}
@@ -620,7 +626,7 @@ class StationController:
             self._local_cancel_pm()
             self.db.update_task_status(task_id, "cancelled")
             self.db.update_pm_status(pm_id, "cancelled")
-            print(f"[Station] 本机任务已取消: {task_id}")
+            logger.info("本机任务已取消: %s", task_id)
             self.bot_gateway.notify("task_cancelled", {"task_id": task_id, "name": task.name})
             return {"ok": True, "message": "任务已取消"}
 
@@ -638,7 +644,7 @@ class StationController:
             if resp.status_code == 200:
                 self.db.update_task_status(task_id, "cancelled")
                 self.db.update_pm_status(pm_id, "cancelled")
-                print(f"[Station] 任务已取消: {task_id}")
+                logger.info("任务已取消: %s", task_id)
                 self.bot_gateway.notify("task_cancelled", {
                     "task_id": task_id, "name": task.name,
                 })
@@ -674,7 +680,7 @@ class StationController:
             self._local_pause_pm()
             self.db.update_task_status(task_id, "paused")
             self.db.update_pm_status(pm_id, "paused")
-            print(f"[Station] 本机任务已暂停: {task_id}")
+            logger.info("本机任务已暂停: %s", task_id)
             self.bot_gateway.notify("task_paused", {"task_id": task_id, "name": task.name})
             return {"ok": True, "message": "任务已暂停"}
 
@@ -692,7 +698,7 @@ class StationController:
             if resp.status_code == 200:
                 self.db.update_task_status(task_id, "paused")
                 self.db.update_pm_status(pm_id, "paused")
-                print(f"[Station] 任务已暂停: {task_id}")
+                logger.info("任务已暂停: %s", task_id)
                 self.bot_gateway.notify("task_paused", {
                     "task_id": task_id, "name": task.name,
                 })
@@ -722,14 +728,14 @@ class StationController:
         self.bot_gateway.set_command_handler(self._on_bot_command)
         enabled_count = sum(1 for c in bot_cfg.channels if c.enabled)
         if enabled_count:
-            print(f"[Station] Bot 通道已加载: {enabled_count} 个启用")
+            logger.info("Bot 通道已加载: %d 个启用", enabled_count)
 
     def _on_orchestrator_event(self, event_type: str, data: dict):
         """Orchestrator 事件回调 → 转发到 Bot 通道。"""
         try:
             self.bot_gateway.notify(event_type, data)
         except Exception as e:
-            print(f"[Station] Bot 事件转发失败: {e}")
+            logger.error("Bot 事件转发失败: %s", e)
 
     def _on_bot_command(self, command: str, args: str, chat_id: str) -> str:
         """处理来自 Telegram 的命令。"""
@@ -842,9 +848,9 @@ class StationController:
                     loop.call_soon_threadsafe(self._ws_push_event.set)
                 except Exception:
                     pass
-            print(f"[Station] UDP 自动注册: {packet.device_name} ({ip})")
+            logger.info("UDP 自动注册: %s (%s)", packet.device_name, ip)
         except Exception as e:
-            print(f"[Station] UDP 自动注册异常: {e}")
+            logger.error("UDP 自动注册异常: %s", e)
 
     def _deploy_config_script(self):
         """将独立采集脚本部署到共享文件夹,供其他主机使用。"""
@@ -859,7 +865,7 @@ class StationController:
             info = self._collect_info()
             self.state.shared_folder.write_host_config(info)
         except Exception as e:
-            print(f"[Station] 配置报告刷新异常: {e}")
+            logger.error("配置报告刷新异常: %s", e)
 
     def _config_refresh_loop(self):
         """定期刷新共享文件夹中的配置报告 + 自身心跳 + 优化12: 定期汇报。"""
@@ -1206,7 +1212,7 @@ class StationController:
         # 启动前自检 (复用 secretary 自检: 含 DB 路径 + Web 模板检查)
         from .preflight import run_preflight
         if not run_preflight("secretary", self.cfg):
-            print("[Station] 自检未通过,启动中止。请根据上述提示修复后重试。")
+            logger.critical("自检未通过, 启动中止。请根据上述提示修复后重试。")
             sys.exit(1)
 
         self.state.api_port = self._find_available_port(self.cfg.secretary.api_port)
@@ -1236,9 +1242,9 @@ class StationController:
         try:
             self_info = self._collect_info()
             self.station_director.on_host_registered(self_info)
-            print(f"[Station] 自注册完成: {self_info.device_name} ({self_info.ip_addresses})")
+            logger.info("自注册完成: %s (%s)", self_info.device_name, self_info.ip_addresses)
         except Exception as e:
-            print(f"[Station] [WARNING] 自注册失败: {e} (服务器仍将启动)")
+            logger.warning("自注册失败: %s (服务器仍将启动)", e)
 
         # 云存储同步 (如果启用)
         cloud_cfg = self.cfg.cloud_storage
@@ -1257,12 +1263,12 @@ class StationController:
                 sync_interval=cloud_cfg.sync_interval,
             )
             self.state.cloud_sync.start_auto_sync()
-            print(f"[Station] 云存储同步已启动: {cloud_cfg.endpoint}/{cloud_cfg.bucket}")
+            logger.info("云存储同步已启动: %s/%s", cloud_cfg.endpoint, cloud_cfg.bucket)
 
         # 部署采集脚本并生成初始配置报告
         self._deploy_config_script()
         self._refresh_host_config()
-        print(f"[Station] 配置报告已生成: {self.state.shared_folder.path}/host_config.json")
+        logger.info("配置报告已生成: %s/host_config.json", self.state.shared_folder.path)
 
         # 启动配置刷新线程
         config_thread = threading.Thread(
@@ -1305,16 +1311,16 @@ class StationController:
         server = uvicorn.Server(config)
 
         local_ips = self._collect_info().ip_addresses
-        print(f"\n[Station] 服务已启动!")
-        print(f"  Web UI:  http://localhost:{self.state.api_port}")
+        logger.info("服务已启动!")
+        logger.info("  Web UI:  http://localhost:%d", self.state.api_port)
         for ip in local_ips:
-            print(f"  局域网:  http://{ip}:{self.state.api_port}")
-        print(f"\n[Station] Secretary 已就绪, 可直接通过聊天窗口下发任务\n")
+            logger.info("  局域网:  http://%s:%d", ip, self.state.api_port)
+        logger.info("Secretary 已就绪, 可直接通过聊天窗口下发任务")
 
         try:
             server.run()
         except KeyboardInterrupt:
-            print("\n[Station] 正在停止...")
+            logger.info("正在停止...")
             self.stop()
 
     def stop(self):

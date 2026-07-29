@@ -19,6 +19,7 @@ from dataclasses import asdict
 from typing import Callable, Optional
 
 from .host_info import get_local_ipv4_addresses, get_broadcast_targets
+from .logger import get_logger
 from .protocol import (
     APP_NAME,
     PROTOCOL_VERSION,
@@ -28,6 +29,8 @@ from .protocol import (
     DiscoveryPacket,
     NetworkStatus,
 )
+
+logger = get_logger("discovery")
 
 
 class DiscoveryService:
@@ -159,7 +162,7 @@ class DiscoveryService:
         try:
             sock.bind(("", self.discovery_port))
         except OSError as e:
-            print(f"[发现] UDP 绑定端口 {self.discovery_port} 失败: {e}")
+            logger.error("UDP 绑定端口 %d 失败: %s", self.discovery_port, e)
             # 尝试 SO_REUSEPORT (Linux/macOS 支持, Windows 不存在该选项)
             reuse_port = getattr(socket, "SO_REUSEPORT", None)
             if reuse_port is not None:
@@ -167,10 +170,10 @@ class DiscoveryService:
                     sock.setsockopt(socket.SOL_SOCKET, reuse_port, 1)
                     sock.bind(("", self.discovery_port))
                 except OSError:
-                    print(f"[发现] 端口 {self.discovery_port} 仍被占用,发现服务降级运行")
+                    logger.warning("端口 %d 仍被占用, 发现服务降级运行", self.discovery_port)
                     return
             else:
-                print(f"[发现] 端口 {self.discovery_port} 仍被占用,发现服务降级运行")
+                logger.warning("端口 %d 仍被占用, 发现服务降级运行", self.discovery_port)
                 return
 
         sock.settimeout(2.0)
@@ -202,7 +205,7 @@ class DiscoveryService:
                     try:
                         self._on_device_seen(packet, addr[0])
                     except Exception as e:
-                        print(f"[发现] on_device_seen 回调异常: {e}")
+                        logger.error("on_device_seen 回调异常: %s", e)
 
             except socket.timeout:
                 continue

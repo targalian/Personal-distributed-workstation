@@ -47,6 +47,9 @@ from .agent_card import generate_agent_card
 from .agent_runtime import AgentRuntime
 from .pm_agent import ProjectManagerAgent
 from .cloud_sync import CloudSyncManager
+from .logger import get_logger
+
+logger = get_logger("worker")
 
 
 @dataclass
@@ -149,14 +152,14 @@ class WorkerAgent:
                 timeout=5,
             )
             if resp.status_code == 200:
-                print(f"[Worker] 主机信息已注册到 Secretary {self.state.secretary_ip}:{self.state.secretary_port}")
+                logger.info("主机信息已注册到 Secretary %s:%s", self.state.secretary_ip, self.state.secretary_port)
                 # 2. 注册 Agent Card
                 self._register_agent_card()
                 # 3. 拉取已授权技能到本地缓存
                 self._pull_skills()
                 return True
         except requests.RequestException as e:
-            print(f"[Worker] 注册失败: {e}")
+            logger.error("注册失败: %s", e)
         return False
 
     def _register_agent_card(self):
@@ -179,9 +182,9 @@ class WorkerAgent:
                 timeout=5,
             )
             if resp.status_code == 200:
-                print(f"[Worker] Agent Card 已注册: {len(card.skills)} 技能, {len(card.tools)} 工具")
+                logger.info("Agent Card 已注册: %d 技能, %d 工具", len(card.skills), len(card.tools))
         except requests.RequestException as e:
-            print(f"[Worker] Agent Card 注册失败: {e}")
+            logger.error("Agent Card 注册失败: %s", e)
 
     def _pull_skills(self):
         """向 Station Director 拉取已授权技能并缓存到本地。"""
@@ -207,9 +210,9 @@ class WorkerAgent:
                         (skill_dir / "reference.md").write_text(
                             skill["reference"], encoding="utf-8"
                         )
-                print(f"[Worker] 已拉取 {len(skills)} 个技能到本地缓存")
+                logger.info("已拉取 %d 个技能到本地缓存", len(skills))
         except Exception as e:
-            print(f"[Worker] 技能拉取失败: {e}")
+            logger.error("技能拉取失败: %s", e)
 
     def _send_heartbeat(self) -> bool:
         """向 Secretary 发送心跳 (携带实时资源使用率)。"""
@@ -252,7 +255,7 @@ class WorkerAgent:
                 continue
 
             if not self._send_heartbeat():
-                print("[Worker] 心跳失败,尝试重新注册...")
+                logger.warning("心跳失败, 尝试重新注册...")
                 registered = False
             time.sleep(HEARTBEAT_INTERVAL_SECS)
 
@@ -286,10 +289,10 @@ class WorkerAgent:
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             self._secretary_port = port
-            print(f"[Worker] Secretary 子进程已启动: PID={self._secretary_process.pid}, port={port}")
+            logger.info("Secretary 子进程已启动: PID=%d, port=%d", self._secretary_process.pid, port)
             return {"ok": True, "pid": self._secretary_process.pid, "port": port}
         except Exception as e:
-            print(f"[Worker] 启动 Secretary 失败: {e}")
+            logger.error("启动 Secretary 失败: %s", e)
             return {"ok": False, "message": str(e)}
 
     def stop_secretary(self) -> dict:
@@ -308,7 +311,7 @@ class WorkerAgent:
         except Exception:
             pass
 
-        print(f"[Worker] Secretary 子进程已停止")
+        logger.info("Secretary 子进程已停止")
         self._secretary_process = None
         self._secretary_port = None
         return {"ok": True, "message": "Secretary 已停止"}
@@ -365,7 +368,7 @@ class WorkerAgent:
 
         # 启动任务 (异步)
         self.state.pm_agent.start_task(task_data)
-        print(f"[Worker] PM Agent 已启动: {pm_id}, 任务: {task_id}")
+        logger.info("PM Agent 已启动: %s, 任务: %s", pm_id, task_id)
 
         return {"ok": True, "pm_id": pm_id, "device_id": self.state.device_id}
 
@@ -379,7 +382,7 @@ class WorkerAgent:
         self.state.pm_agent = None
         # 清理子 Agent
         self.state.sub_agents.clear()
-        print(f"[Worker] PM Agent 已停止: {pm_id}")
+        logger.info("PM Agent 已停止: %s", pm_id)
         return {"ok": True, "pm_id": pm_id}
 
     def cancel_pm(self) -> dict:
@@ -457,7 +460,7 @@ class WorkerAgent:
             "has_custom_prompt": bool(system_prompt),
         }
 
-        print(f"[Worker] 子 Agent 已创建: {agent_id} ({agent_name})")
+        logger.info("子 Agent 已创建: %s (%s)", agent_id, agent_name)
         return {"agent_id": agent_id, "agent_name": agent_name}
 
     def forward_progress_report(self, report: dict) -> dict:
@@ -509,7 +512,7 @@ class WorkerAgent:
             return {"ok": False, "message": "子 Agent runtime 不可用"}
         runtime.set_custom_prompt(new_prompt)
         info["has_custom_prompt"] = bool(new_prompt)
-        print(f"[Worker] 子 Agent {agent_id} prompt 已更新 ({len(new_prompt)} 字符)")
+        logger.info("子 Agent %s prompt 已更新 (%d 字符)", agent_id, len(new_prompt))
         return {"ok": True, "agent_id": agent_id}
 
     # ── FastAPI 应用 ─────────────────────────────────────────────
@@ -556,16 +559,16 @@ class WorkerAgent:
         # 启动前自检
         from .preflight import run_preflight
         if not run_preflight("worker", self.cfg):
-            print("[Worker] 自检未通过,启动中止。请根据上述提示修复后重试。")
+            logger.critical("自检未通过, 启动中止。请根据上述提示修复后重试。")
             sys.exit(1)
 
-        print(f"[Worker] 设备 ID: {self.state.device_id}")
-        print(f"[Worker] 设备名称: {self.state.device_name}")
-        print(f"[Worker] 共享目录: {self.state.shared_folder.path}")
+        logger.info("设备 ID: %s", self.state.device_id)
+        logger.info("设备名称: %s", self.state.device_name)
+        logger.info("共享目录: %s", self.state.shared_folder.path)
 
         # 查找可用端口
         self.state.api_port = self._find_available_port(self.cfg.worker.api_port)
-        print(f"[Worker] HTTP API 端口: {self.state.api_port}")
+        logger.info("HTTP API 端口: %d", self.state.api_port)
 
         # 启动 UDP 发现服务
         self.discovery = DiscoveryService(
@@ -598,13 +601,13 @@ class WorkerAgent:
                 sync_interval=cloud_cfg.sync_interval,
             )
             self.state.cloud_sync.start_auto_sync()
-            print(f"[Worker] 云存储同步已启动: {cloud_cfg.endpoint}/{cloud_cfg.bucket}")
+            logger.info("云存储同步已启动: %s/%s", cloud_cfg.endpoint, cloud_cfg.bucket)
 
         # 部署采集脚本并生成初始配置报告
         self._deploy_config_script()
         initial_info = self._collect_info()
         self.state.shared_folder.write_host_config(initial_info)
-        print(f"[Worker] 配置报告已生成: {self.state.shared_folder.path}/host_config.json")
+        logger.info("配置报告已生成: %s/host_config.json", self.state.shared_folder.path)
 
         # 创建 Agent 运行时
         self.state.agent_runtime = AgentRuntime(
@@ -628,11 +631,11 @@ class WorkerAgent:
             log_level="warning",
         )
         server = uvicorn.Server(config)
-        print(f"[Worker] 服务已启动 → http://0.0.0.0:{self.state.api_port}")
+        logger.info("服务已启动 → http://0.0.0.0:%d", self.state.api_port)
         try:
             server.run()
         except KeyboardInterrupt:
-            print("\n[Worker] 正在停止...")
+            logger.info("正在停止...")
             self.stop()
 
     def stop(self):
@@ -644,6 +647,6 @@ class WorkerAgent:
         # 停止 PM Agent
         if self.state.pm_agent:
             self.state.pm_agent.stop()
-            print("[Worker] PM Agent 已停止")
+            logger.info("PM Agent 已停止")
         if self.discovery:
             self.discovery.stop()

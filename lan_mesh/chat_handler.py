@@ -13,6 +13,10 @@
 import time
 from typing import Optional
 
+from .logger import get_logger
+
+logger = get_logger("chat_handler")
+
 
 # ── 操作意图关键词映射 ──────────────────────────────────────────
 
@@ -432,10 +436,10 @@ class ChatHandler:
                 if r.get("action_taken"):
                     entry["action_taken"] = r["action_taken"]
                 history.append(entry)
-            print(f"[ChatHandler] 从 DB 加载 {len(history)} 条历史对话")
+            logger.info("从 DB 加载 %d 条历史对话", len(history))
             return history
         except Exception as e:
-            print(f"[ChatHandler] 加载 DB 聊天历史异常: {e}")
+            logger.error("加载 DB 聊天历史异常: %s", e)
             return []
 
     def _save_to_db(self, role: str, content: str, action_taken: str = "", timestamp: float = 0):
@@ -445,7 +449,7 @@ class ChatHandler:
         try:
             self._db.save_chat_message(role, content, action_taken, timestamp)
         except Exception as e:
-            print(f"[ChatHandler] 保存聊天记录异常: {e}")
+            logger.error("保存聊天记录异常: %s", e)
 
     # ── 内部方法 ──────────────────────────────────────────────────
 

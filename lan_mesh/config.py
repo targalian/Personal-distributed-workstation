@@ -105,6 +105,13 @@ class AppConfig(BaseModel):
     secretary: SecretaryConfig = Field(default_factory=SecretaryConfig)
     bot: BotConfig = Field(default_factory=BotConfig)
     cloud_storage: CloudStorageConfig = Field(default_factory=CloudStorageConfig)
+    security: "SecurityConfig" = Field(default_factory=lambda: SecurityConfig())
+
+
+class SecurityConfig(BaseModel):
+    """安全配置。"""
+    auth_enabled: bool = False   # 是否启用节点间 Token 认证
+    # token 通过环境变量 LAN_MESH_TOKEN 或 ~/.lan_mesh/mesh_token 提供
 
 
 def _expand(path_str: str) -> str:

@@ -18,6 +18,10 @@ from typing import Optional
 
 import requests
 
+from .logger import get_logger
+
+logger = get_logger("mcp_client")
+
 
 class MCPStdioClient:
     """stdio 传输 — 启动本地 MCP Server 子进程并通过 stdin/stdout 通信。
@@ -50,7 +54,7 @@ class MCPStdioClient:
                 bufsize=1,
             )
         except FileNotFoundError as e:
-            print(f"[MCP:{self.name}] 命令不存在: {self.command} — {e}")
+            logger.error("[MCP:%s] 命令不存在: %s — %s", self.name, self.command, e)
             return False
 
         # 发送 initialize
@@ -60,13 +64,13 @@ class MCPStdioClient:
             "clientInfo": {"name": "lan-mesh-gateway", "version": "0.1.0"},
         })
         if resp is None:
-            print(f"[MCP:{self.name}] initialize 握手失败")
+            logger.error("[MCP:%s] initialize 握手失败", self.name)
             return False
 
         # 发送 initialized 通知
         self._notify("notifications/initialized", {})
         self._initialized = True
-        print(f"[MCP:{self.name}] 已连接 (stdio)")
+        logger.info("[MCP:%s] 已连接 (stdio)", self.name)
         return True
 
     def list_tools(self) -> list:
@@ -166,10 +170,10 @@ class MCPHttpClient:
             "clientInfo": {"name": "lan-mesh-gateway", "version": "0.1.0"},
         })
         if resp is None:
-            print(f"[MCP:{self.name}] HTTP 连接失败: {self.url}")
+            logger.error("[MCP:%s] HTTP 连接失败: %s", self.name, self.url)
             return False
         self._initialized = True
-        print(f"[MCP:{self.name}] 已连接 (http: {self.url})")
+        logger.info("[MCP:%s] 已连接 (http: %s)", self.name, self.url)
         return True
 
     def list_tools(self) -> list:

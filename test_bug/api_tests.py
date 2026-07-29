@@ -578,9 +578,9 @@ class APITestSuite:
                 return
             task_id = tasks[0].get("task_id", "")
             r2 = self._get(f"/api/tasks/{task_id}/graph")
-            # 200=有图, 503=任务无子图(正常), 404=任务不存在
-            ok = r2.status_code in (200, 503)
-            detail = r2.json().get("detail", "") if r2.status_code == 503 else ""
+            # 200=有图, 503=编排器未初始化, 404=任务无DAG数据(正常)
+            ok = r2.status_code in (200, 404, 503)
+            detail = r2.json().get("detail", "") if r2.status_code != 200 else ""
             self._record("BTN-012", "按钮:DAG加载", ok,
                          f"task={task_id[:12]}, status={r2.status_code}{', ' + detail[:40] if detail else ''}",
                          r2.status_code, t0)

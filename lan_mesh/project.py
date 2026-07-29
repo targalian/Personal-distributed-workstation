@@ -20,6 +20,9 @@ from typing import Optional
 
 from .database import Database
 from .protocol import Project, ProjectStatus
+from .logger import get_logger
+
+logger = get_logger("project")
 
 
 # ── 模型定价表 (美元 / 1K tokens) ────────────────────────────────
@@ -119,7 +122,7 @@ class ProjectManager:
             updated_at=now,
         )
         self.db.upsert_project(project)
-        print(f"[ProjectManager] 项目已创建: {name} ({project_id[:8]}) 预算=${budget_limit_usd}")
+        logger.info("项目已创建: %s (%s) 预算=$%s", name, project_id[:8], budget_limit_usd)
         return project
 
     def get_project(self, project_id: str) -> Optional[Project]:
@@ -168,7 +171,7 @@ class ProjectManager:
         if not project:
             return False
         self.db.delete_project(project_id)
-        print(f"[ProjectManager] 项目已归档: {project.name} ({project_id[:8]})")
+        logger.info("项目已归档: %s (%s)", project.name, project_id[:8])
         return True
 
     # ── 预算控制 ─────────────────────────────────────────────────
@@ -283,9 +286,9 @@ class ProjectManager:
             return False
         if project.budget_used_usd >= project.budget_limit_usd:
             self.db.update_project_status(project_id, ProjectStatus.SUSPENDED)
-            print(
-                f"[ProjectManager] 项目超支已暂停: {project.name} "
-                f"(已用 ${project.budget_used_usd:.4f} / 预算 ${project.budget_limit_usd:.2f})"
+            logger.warning(
+                "项目超支已暂停: %s (已用 $%.4f / 预算 $%.2f)",
+                project.name, project.budget_used_usd, project.budget_limit_usd,
             )
             return True
         return False

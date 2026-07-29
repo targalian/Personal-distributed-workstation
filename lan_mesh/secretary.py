@@ -20,6 +20,7 @@ import socket
 import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Set
@@ -45,6 +46,9 @@ from .mcp_gateway import MCPGateway
 from .project import ProjectManager
 from .model_router import ModelRouter
 from .station_director import StationDirector
+from .logger import get_logger
+
+logger = get_logger("secretary")
 
 
 # ── Web UI 模板路径 ─────────────────────────────────────────────
@@ -108,7 +112,7 @@ class SecretaryController:
         model_pool = load_model_pool()
         self.model_router = ModelRouter(model_pool.models, self.project_manager) if model_pool.models else None
         if self.model_router:
-            print(f"[Secretary] 模型路由器已加载: {self.model_router.pool_size} 个模型")
+            logger.info("模型路由器已加载: %d 个模型", self.model_router.pool_size)
 
         # 工作站主管 (Station Director) — 管理主机出入站/评级/资源池
         self.station_director = StationDirector(
@@ -149,13 +153,10 @@ class SecretaryController:
     def _on_device_seen(self, packet: DiscoveryPacket, ip: str):
         """UDP 发现到新设备时的回调。
 
-        如果是 Worker,自动更新 UDP 发现列表。
-        Worker 会通过 HTTP 主动注册。
+        Worker 会通过 HTTP 主动注册, 此处仅记录日志。
         """
-        # 这里只做日志,实际注册由 Worker 主动发起 HTTP 请求
         if packet.role == "worker" and packet.device_id:
-            # 如果 Worker 尚未通过 HTTP 注册,先在 UDP 层记录
-            pass
+            logger.debug("UDP 发现 Worker: %s (%s)", packet.device_name, ip)
 
     def _deploy_config_script(self):
         """将独立采集脚本部署到共享文件夹,供其他主机使用。"""
@@ -170,22 +171,48 @@ class SecretaryController:
             info = self._collect_info()
             self.state.shared_folder.write_host_config(info)
         except Exception as e:
-            print(f"[Secretary] 配置报告刷新异常: {e}")
+            logger.error("配置报告刷新异常: %s", e)
 
     def _config_refresh_loop(self):
         """定期刷新共享文件夹中的配置报告。"""
         while self._running:
             time.sleep(HEARTBEAT_INTERVAL_SECS)
+            if not self._running:
+                break
             self._refresh_host_config()
 
     def _prune_loop(self):
         """定期清理超时离线主机。"""
         while self._running:
             time.sleep(PRUNE_INTERVAL_SECS)
+            if not self._running:
+                break
             try:
                 self.station_director.prune_offline(self.cfg.discovery.device_ttl)
             except Exception as e:
-                print(f"[Secretary] 清理离线主机异常: {e}")
+                logger.error("清理离线主机异常: %s", e)
+
+    def _background_scheduler(self):
+        """统一后台调度器: 合并配置刷新 + 离线清理, 减少线程数。
+
+        以 HEARTBEAT_INTERVAL_SECS 为基本周期,
+        每轮执行配置刷新, 每 N 轮执行一次离线清理。
+        """
+        prune_every_n = max(1, PRUNE_INTERVAL_SECS // HEARTBEAT_INTERVAL_SECS)
+        tick = 0
+        while self._running:
+            time.sleep(HEARTBEAT_INTERVAL_SECS)
+            if not self._running:
+                break
+            tick += 1
+            # 每轮: 刷新配置报告
+            self._refresh_host_config()
+            # 每 N 轮: 清理离线主机
+            if tick % prune_every_n == 0:
+                try:
+                    self.station_director.prune_offline(self.cfg.discovery.device_ttl)
+                except Exception as e:
+                    logger.error("清理离线主机异常: %s", e)
 
     async def _ws_push_loop(self):
         """定期向 WebSocket 客户端推送最新主机状态。"""
@@ -200,8 +227,23 @@ class SecretaryController:
     # ── FastAPI 应用 ─────────────────────────────────────────────
 
     def _create_app(self) -> FastAPI:
-        """创建 Secretary 的 FastAPI 应用 (含 API + Web UI)。"""
-        app = FastAPI(title="LAN Mesh Secretary", version="0.1.0")
+        """创建 Secretary 的 FastAPI 应用 (含 API + Web UI, 使用 lifespan 管理生命周期)。"""
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            """FastAPI lifespan: 启动时创建 WS 推送任务, 关闭时优雅停止。"""
+            ws_task = asyncio.create_task(self._ws_push_loop())
+            yield
+            # shutdown: 取消 WS 推送 + 停止编排器线程池
+            ws_task.cancel()
+            try:
+                await ws_task
+            except asyncio.CancelledError:
+                pass
+            self.orchestrator.shutdown(wait=False)
+            logger.info("FastAPI lifespan 关闭完成")
+
+        app = FastAPI(title="LAN Mesh Secretary", version="0.2.0", lifespan=lifespan)
 
         # Secretary API 路由
         secretary_router = create_secretary_router(
@@ -259,16 +301,16 @@ class SecretaryController:
         # 启动前自检
         from .preflight import run_preflight
         if not run_preflight("secretary", self.cfg):
-            print("[Secretary] 自检未通过,启动中止。请根据上述提示修复后重试。")
+            logger.critical("自检未通过, 启动中止。请根据上述提示修复后重试。")
             sys.exit(1)
 
         self.state.api_port = self._find_available_port(self.cfg.secretary.api_port)
 
-        print(f"[Secretary] 设备 ID: {self.state.device_id}")
-        print(f"[Secretary] 设备名称: {self.state.device_name}")
-        print(f"[Secretary] 共享目录: {self.state.shared_folder.path}")
-        print(f"[Secretary] 数据库: {get_db_path(self.cfg)}")
-        print(f"[Secretary] HTTP API + Web UI 端口: {self.state.api_port}")
+        logger.info("设备 ID: %s", self.state.device_id)
+        logger.info("设备名称: %s", self.state.device_name)
+        logger.info("共享目录: %s", self.state.shared_folder.path)
+        logger.info("数据库: %s", get_db_path(self.cfg))
+        logger.info("HTTP API + Web UI 端口: %d", self.state.api_port)
 
         # 启动 UDP 发现服务
         self.discovery = DiscoveryService(
@@ -289,29 +331,17 @@ class SecretaryController:
         # 部署采集脚本并生成初始配置报告
         self._deploy_config_script()
         self._refresh_host_config()
-        print(f"[Secretary] 配置报告已生成: {self.state.shared_folder.path}/host_config.json")
+        logger.info("配置报告已生成: %s/host_config.json", self.state.shared_folder.path)
 
-        # 启动配置刷新线程
-        config_thread = threading.Thread(
-            target=self._config_refresh_loop, name="secretary-config-refresh", daemon=True
+        # 启动统一后台调度线程 (配置刷新 + 离线清理)
+        scheduler_thread = threading.Thread(
+            target=self._background_scheduler, name="secretary-scheduler", daemon=True
         )
-        config_thread.start()
-        self._threads.append(config_thread)
+        scheduler_thread.start()
+        self._threads.append(scheduler_thread)
 
-        # 启动离线清理线程
-        prune_thread = threading.Thread(
-            target=self._prune_loop, name="secretary-prune", daemon=True
-        )
-        prune_thread.start()
-        self._threads.append(prune_thread)
-
-        # 创建 FastAPI 应用
+        # 创建 FastAPI 应用 (lifespan 已内置 WS 推送任务)
         app = self._create_app()
-
-        # 添加 WS 推送后台任务
-        @app.on_event("startup")
-        async def startup_event():
-            asyncio.create_task(self._ws_push_loop())
 
         config = uvicorn.Config(
             app,
@@ -322,20 +352,39 @@ class SecretaryController:
         server = uvicorn.Server(config)
 
         local_ips = self._collect_info().ip_addresses
-        print(f"\n[Secretary] 服务已启动!")
-        print(f"  Web UI:  http://localhost:{self.state.api_port}")
+        logger.info("服务已启动!")
+        logger.info("  Web UI:  http://localhost:%d", self.state.api_port)
         for ip in local_ips:
-            print(f"  局域网:  http://{ip}:{self.state.api_port}")
-        print(f"\n[Secretary] 等待 Worker 节点注册...\n")
+            logger.info("  局域网:  http://%s:%d", ip, self.state.api_port)
+        logger.info("等待 Worker 节点注册...")
 
         try:
             server.run()
         except KeyboardInterrupt:
-            print("\n[Secretary] 正在停止...")
+            logger.info("正在停止...")
             self.stop()
 
     def stop(self):
-        """停止 Secretary。"""
+        """优雅停止 Secretary: 停止发现服务 → 等待后台线程 → 关闭编排器 → 关闭 DB。"""
+        logger.info("正在停止 Secretary...")
         self._running = False
+
+        # 1. 停止 UDP 发现
         if self.discovery:
             self.discovery.stop()
+
+        # 2. 等待后台线程结束 (最多 5s)
+        for t in self._threads:
+            t.join(timeout=5)
+            if t.is_alive():
+                logger.warning("线程 %s 未能在超时内结束", t.name)
+        self._threads.clear()
+
+        # 3. 关闭编排器线程池
+        self.orchestrator.shutdown(wait=False)
+
+        # 4. 关闭数据库连接
+        if hasattr(self.db, 'close'):
+            self.db.close()
+
+        logger.info("Secretary 已停止")

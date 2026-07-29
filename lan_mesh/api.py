@@ -21,7 +21,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import (
     APIRouter, WebSocket, WebSocketDisconnect, HTTPException,
@@ -29,9 +29,111 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from .protocol import HostInfo, HostRecord, NetworkStatus, AgentCard
 from .shared_folder import SharedFolderManager
+from .logger import get_logger
+
+logger = get_logger("api")
+
+
+# ── Pydantic 请求模型 ─────────────────────────────────────────────
+
+class RegisterPayload(BaseModel):
+    """Worker 注册请求体 (完整 HostInfo 字段)。"""
+    device_id: str
+    device_name: str = ""
+    role: str = "worker"
+    hostname: str = ""
+    platform: str = ""
+    api_port: int = 0
+    cpu_count: int = 0
+    memory_total_mb: int = 0
+    disk_total_gb: float = 0
+    cpu_percent: float = 0
+    memory_percent: float = 0
+    disk_percent: float = 0
+    shared_folder: str = ""
+    shared_file_count: int = 0
+    ip_addresses: List[str] = Field(default_factory=list)
+
+    class Config:
+        extra = "allow"  # 允许额外字段, 兼容 HostInfo.from_dict
+
+
+class HeartbeatPayload(BaseModel):
+    """Worker 心跳请求体。"""
+    device_id: str
+    cpu_percent: Optional[float] = None
+    memory_percent: Optional[float] = None
+    disk_percent: Optional[float] = None
+    shared_file_count: Optional[int] = None
+
+
+class TaskSubmitPayload(BaseModel):
+    """任务提交请求体。"""
+    name: str
+    description: str = ""
+    input_data: dict = Field(default_factory=dict)
+    created_by: str = "user"
+    project_id: str = ""
+
+
+class ProjectCreatePayload(BaseModel):
+    """项目创建请求体。"""
+    name: str
+    description: str = ""
+    budget_limit_usd: float = 10.0
+    allowed_models: List[str] = Field(default_factory=list)
+    routing_strategy: str = "balanced"
+    workspace_base: str = ""
+
+
+class ProjectUpdatePayload(BaseModel):
+    """项目更新请求体 (所有字段可选)。"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    budget_limit_usd: Optional[float] = None
+    allowed_models: Optional[List[str]] = None
+    routing_strategy: Optional[str] = None
+    status: Optional[str] = None
+
+
+class ToolCallPayload(BaseModel):
+    """MCP 工具调用请求体。"""
+    tool_name: str
+    arguments: dict = Field(default_factory=dict)
+    server_name: Optional[str] = None
+
+
+class MCPServerRegisterPayload(BaseModel):
+    """MCP Server 注册请求体。"""
+    name: str
+    config: dict = Field(default_factory=dict)
+
+
+class RouteDryRunPayload(BaseModel):
+    """模型路由 dry-run 请求体。"""
+    text: str = ""
+    description: str = ""  # text 的别名
+    skill: str = ""
+    project_id: str = ""
+
+
+class AgentRegisterPayload(BaseModel):
+    """Agent Card 注册请求体。"""
+    agent_id: str = ""
+    agent_name: str = ""
+    device_id: str = ""
+    ip: str = ""
+    api_port: int = 0
+    skills: List[str] = Field(default_factory=list)
+    max_concurrent_tasks: int = 1
+    status: str = "idle"
+
+    class Config:
+        extra = "allow"
 
 
 # ── Worker 路由 ─────────────────────────────────────────────────
@@ -59,6 +161,13 @@ def create_worker_router(
             raise HTTPException(status_code=503, detail="Agent 运行时未初始化")
         result = agent_runtime.execute(payload)
         return result
+
+    @router.get("/agents/cli-status")
+    async def cli_agent_status():
+        """查询本机可用的 CLI Agent 后端状态。"""
+        if not agent_runtime:
+            return {"agents": [], "preferred": None, "error": "Agent 运行时未初始化"}
+        return agent_runtime.list_cli_agents()
 
     @router.get("/shared")
     async def list_shared():
@@ -300,7 +409,7 @@ def create_worker_router(
             _p2p_store[from_device_id] = []
         _p2p_store[from_device_id].append(msg)
 
-        print(f"[P2P] 收到来自 {from_name} ({from_device_id[:8]}) 的消息: {message[:80]}")
+        logger.info("[P2P] 收到来自 %s (%s) 的消息: %s", from_name, from_device_id[:8], message[:80])
 
         return {"ok": True}
 
@@ -325,9 +434,9 @@ def create_secretary_router(
     router = APIRouter()
 
     @router.post("/api/register")
-    async def register_worker(payload: dict):
+    async def register_worker(payload: RegisterPayload):
         """接收 Worker 的注册请求 (完整 HostInfo)。"""
-        info = HostInfo.from_dict(payload)
+        info = HostInfo.from_dict(payload.model_dump())
         if station_director:
             record = station_director.on_host_registered(info)
         else:
@@ -350,15 +459,15 @@ def create_secretary_router(
         return {"ok": True, "device_id": info.device_id}
 
     @router.post("/api/heartbeat")
-    async def heartbeat(payload: dict):
+    async def heartbeat(payload: HeartbeatPayload):
         """接收 Worker 心跳 (实时资源使用率)。"""
-        device_id = payload.get("device_id", "")
+        device_id = payload.device_id
         if station_director:
             record = station_director.on_heartbeat(device_id, {
-                "cpu_percent": payload.get("cpu_percent"),
-                "memory_percent": payload.get("memory_percent"),
-                "disk_percent": payload.get("disk_percent"),
-                "shared_file_count": payload.get("shared_file_count"),
+                "cpu_percent": payload.cpu_percent,
+                "memory_percent": payload.memory_percent,
+                "disk_percent": payload.disk_percent,
+                "shared_file_count": payload.shared_file_count,
             })
             if not record:
                 raise HTTPException(status_code=404, detail="设备未注册")
@@ -366,10 +475,10 @@ def create_secretary_router(
             record = db.get_host(device_id)
             if not record:
                 raise HTTPException(status_code=404, detail="设备未注册")
-            record.cpu_percent = payload.get("cpu_percent", record.cpu_percent)
-            record.memory_percent = payload.get("memory_percent", record.memory_percent)
-            record.disk_percent = payload.get("disk_percent", record.disk_percent)
-            record.shared_file_count = payload.get("shared_file_count", record.shared_file_count)
+            record.cpu_percent = payload.cpu_percent if payload.cpu_percent is not None else record.cpu_percent
+            record.memory_percent = payload.memory_percent if payload.memory_percent is not None else record.memory_percent
+            record.disk_percent = payload.disk_percent if payload.disk_percent is not None else record.disk_percent
+            record.shared_file_count = payload.shared_file_count if payload.shared_file_count is not None else record.shared_file_count
             record.online = True
             record.last_seen = time.time()
             dev = discovery.find_device(device_id)
@@ -479,9 +588,9 @@ def create_secretary_router(
     # ── Agent 管理端点 ─────────────────────────────────────
 
     @router.post("/api/agents/register")
-    async def register_agent(payload: dict):
+    async def register_agent(payload: AgentRegisterPayload):
         """接收 Worker 的 Agent Card 注册。"""
-        card = AgentCard.from_dict(payload)
+        card = AgentCard.from_dict(payload.model_dump())
         card.last_seen = time.time()
         # 尝试从 UDP 发现列表获取真实 IP
         dev = discovery.find_device(card.device_id)
@@ -513,14 +622,14 @@ def create_secretary_router(
     # ── 任务管理端点 ─────────────────────────────────────────
 
     @router.post("/api/tasks")
-    async def submit_task(payload: dict):
+    async def submit_task(payload: TaskSubmitPayload):
         """提交新任务,自动分解并调度。
 
         请求体可选 project_id 字段,关联到指定项目进行预算控制。
         """
         if not orchestrator:
             raise HTTPException(status_code=503, detail="编排器未初始化")
-        project_id = payload.get("project_id", "")
+        project_id = payload.project_id
         # 如果关联了项目,检查预算
         if project_id and project_manager:
             if not project_manager.check_budget(project_id):
@@ -529,10 +638,10 @@ def create_secretary_router(
                     detail="项目预算已起支或已暂停,无法提交任务",
                 )
         task = orchestrator.submit_task(
-            name=payload.get("name", ""),
-            description=payload.get("description", ""),
-            input_data=payload.get("input_data", {}),
-            created_by=payload.get("created_by", "user"),
+            name=payload.name,
+            description=payload.description,
+            input_data=payload.input_data,
+            created_by=payload.created_by,
             project_id=project_id,
         )
         await broadcast_ws(state, "task_submitted", task.to_dict())
@@ -558,17 +667,17 @@ def create_secretary_router(
     # ── 项目管理端点 ─────────────────────────────────────────
 
     @router.post("/api/projects")
-    async def create_project(payload: dict):
+    async def create_project(payload: ProjectCreatePayload):
         """创建新项目。"""
         if not project_manager:
             raise HTTPException(status_code=503, detail="项目管理器未初始化")
         project = project_manager.create_project(
-            name=payload.get("name", ""),
-            description=payload.get("description", ""),
-            budget_limit_usd=payload.get("budget_limit_usd", 10.0),
-            allowed_models=payload.get("allowed_models", []),
-            routing_strategy=payload.get("routing_strategy", "balanced"),
-            workspace_base=payload.get("workspace_base", ""),
+            name=payload.name,
+            description=payload.description,
+            budget_limit_usd=payload.budget_limit_usd,
+            allowed_models=payload.allowed_models,
+            routing_strategy=payload.routing_strategy,
+            workspace_base=payload.workspace_base,
         )
         await broadcast_ws(state, "project_created", project.to_dict())
         return project.to_dict()
@@ -595,18 +704,18 @@ def create_secretary_router(
         return status_info
 
     @router.put("/api/projects/{project_id}")
-    async def update_project(project_id: str, payload: dict):
+    async def update_project(project_id: str, payload: ProjectUpdatePayload):
         """更新项目字段 (预算/模型/策略/状态)。"""
         if not project_manager:
             raise HTTPException(status_code=503, detail="项目管理器未初始化")
         project = project_manager.update_project(
             project_id,
-            name=payload.get("name"),
-            description=payload.get("description"),
-            budget_limit_usd=payload.get("budget_limit_usd"),
-            allowed_models=payload.get("allowed_models"),
-            routing_strategy=payload.get("routing_strategy"),
-            status=payload.get("status"),
+            name=payload.name,
+            description=payload.description,
+            budget_limit_usd=payload.budget_limit_usd,
+            allowed_models=payload.allowed_models,
+            routing_strategy=payload.routing_strategy,
+            status=payload.status,
         )
         if not project:
             raise HTTPException(status_code=404, detail="项目不存在")
@@ -654,30 +763,13 @@ def create_secretary_router(
         }
 
     @router.post("/tools/call")
-    async def call_tool(payload: dict):
-        """调用工具 — 路由到正确的 MCP Server 执行。
-
-        请求体:
-            {
-                "tool_name": "read_file",
-                "arguments": {"path": "/tmp/test.txt"},
-                "server_name": null  // 可选,指定 Server
-            }
-
-        返回:
-            {
-                "content": [{"type": "text", "text": "..."}],
-                "isError": false
-            }
-        """
+    async def call_tool(payload: ToolCallPayload):
+        """调用工具 — 路由到正确的 MCP Server 执行。"""
         if not mcp_gateway:
             raise HTTPException(status_code=503, detail="MCP 网关未初始化")
-        tool_name = payload.get("tool_name", "")
-        arguments = payload.get("arguments", {})
-        server_name = payload.get("server_name")
-        if not tool_name:
+        if not payload.tool_name:
             raise HTTPException(status_code=400, detail="缺少 tool_name")
-        result = mcp_gateway.call_tool(tool_name, arguments, server_name)
+        result = mcp_gateway.call_tool(payload.tool_name, payload.arguments, payload.server_name)
         return result
 
     @router.get("/tools/servers")
@@ -691,16 +783,14 @@ def create_secretary_router(
         }
 
     @router.post("/tools/servers")
-    async def register_mcp_server(payload: dict):
+    async def register_mcp_server(payload: MCPServerRegisterPayload):
         """动态注册新的 MCP Server。"""
         if not mcp_gateway:
             raise HTTPException(status_code=503, detail="MCP 网关未初始化")
-        name = payload.get("name", "")
-        config = payload.get("config", {})
-        if not name:
+        if not payload.name:
             raise HTTPException(status_code=400, detail="缺少 name")
-        ok = mcp_gateway.register_server(name, config)
-        return {"ok": ok, "name": name}
+        ok = mcp_gateway.register_server(payload.name, payload.config)
+        return {"ok": ok, "name": payload.name}
 
     @router.delete("/tools/servers/{name}")
     async def unregister_mcp_server(name: str):
@@ -713,7 +803,7 @@ def create_secretary_router(
     # ── 模型路由 API (Phase 2) ───────────────────────────────────
 
     @router.post("/api/route/dry-run")
-    async def route_dry_run(payload: dict):
+    async def route_dry_run(payload: RouteDryRunPayload):
         """模型路由决策预览 (dry-run)。
 
         输入任务描述, 返回路由器推荐模型、难度分级和评分详情。
@@ -722,14 +812,11 @@ def create_secretary_router(
         if not model_router:
             raise HTTPException(status_code=503, detail="模型路由器未加载")
 
-        text = payload.get("text", payload.get("description", ""))
-        skill = payload.get("skill", "")
-        project_id = payload.get("project_id", "")
-
+        text = payload.text or payload.description
         routing = model_router.route(
             text=text,
-            skill=skill,
-            project_id=project_id,
+            skill=payload.skill,
+            project_id=payload.project_id,
         )
         return routing.to_dict()
 
@@ -817,12 +904,15 @@ def create_secretary_router(
 
 
 async def broadcast_ws(state, msg_type: str, data):
-    """向所有 WebSocket 客户端广播消息。"""
-    message = json.dumps({"type": msg_type, "data": data})
+    """向所有 WebSocket 客户端广播消息 (并发安全: 快照遍历)。"""
+    message = json.dumps({"type": msg_type, "data": data}, ensure_ascii=False, default=str)
+    # 快照遍历, 避免迭代中 set 被修改导致 RuntimeError
+    clients = set(state.ws_clients)
     dead = set()
-    for ws in state.ws_clients:
+    for ws in clients:
         try:
             await ws.send_text(message)
         except Exception:
             dead.add(ws)
-    state.ws_clients -= dead
+    if dead:
+        state.ws_clients -= dead
