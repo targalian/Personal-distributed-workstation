@@ -46,28 +46,35 @@ def get_mesh_token(cfg=None) -> str:
     """获取或创建 mesh token。
 
     优先级:
-    1. 环境变量 LAN_MESH_TOKEN
-    2. 持久化文件 ~/.lan_mesh/mesh_token
-    3. 自动生成并持久化
+    1. config.security.mesh_token (config.yaml 显式配置, 全网共享)
+    2. 环境变量 LAN_MESH_TOKEN
+    3. 持久化文件 ~/.lan_mesh/mesh_token
+    4. 自动生成并持久化
 
     Args:
-        cfg: AppConfig (可选, 未来支持从 config.yaml 读取)
+        cfg: AppConfig (可选, 支持从 config.yaml 读取显式 token)
 
     Returns:
         64 字符 hex token
     """
-    # 1. 环境变量
+    # 1. config.yaml 显式配置 (全网共享同一 token)
+    if cfg is not None:
+        explicit = getattr(getattr(cfg, "security", None), "mesh_token", "") or ""
+        if explicit.strip():
+            return explicit.strip()
+
+    # 2. 环境变量
     env_token = os.environ.get("LAN_MESH_TOKEN", "").strip()
     if env_token:
         return env_token
 
-    # 2. 持久化文件
+    # 3. 持久化文件
     if _TOKEN_FILE.is_file():
         stored = _TOKEN_FILE.read_text(encoding="utf-8").strip()
         if len(stored) >= 32:
             return stored
 
-    # 3. 生成新 token
+    # 4. 生成新 token
     token = generate_token()
     try:
         _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)

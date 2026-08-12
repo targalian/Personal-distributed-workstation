@@ -107,6 +107,12 @@ class PMPlanner:
             logger.debug("[%s] 模板匹配异常, 回退 LLM: %s", self._pm_id[:8], e)
 
         # LLM 规划
+        # F4.1: 查询历史任务记忆, 注入同类任务经验 (失败不影响主流程)
+        memory_hint = self._build_memory_hint(task)
+        memory_section = (
+            f"\n## 历史任务经验 (同类任务, 来自 task_memory 表)\n{memory_hint}\n"
+            if memory_hint else ""
+        )
         prompt = f"""你是项目经理 Agent。请分析以下任务并给出架构决策。
 
 ## 任务信息
@@ -116,7 +122,7 @@ class PMPlanner:
 
 ## 决策框架 (multi-agent-architect skill)
 {self._skill_content[:8000]}
-
+{memory_section}
 ## 输出要求
 请严格输出 JSON 格式 (不要 markdown 代码块):
 {{
@@ -170,6 +176,51 @@ class PMPlanner:
             }
 
         return plan
+
+    # ── F4.1: 任务记忆驱动规划 ────────────────────────────────────
+
+    def _build_memory_hint(self, task: dict) -> str:
+        """F4.1: 查询 Secretary 任务记忆统计, 生成历史经验提示。
+
+        通过 agent 的 secretary_url 调用 /api/task-memory/stats,
+        失败或数据为空时返回空串 (不影响规划主流程)。
+        """
+        try:
+            task_type = PMPlanner.infer_task_type(
+                task.get("name", ""), task.get("description", ""))
+            agent = getattr(self, "_agent", None)
+            secretary_url = getattr(agent, "secretary_url", "")
+            if not secretary_url:
+                return ""
+            from .http_retry import http_post
+            resp = http_post(f"{secretary_url}/api/task-memory/stats",
+                             params={"task_type": task_type}, timeout=5, retries=1)
+            if resp is None or resp.status_code != 200:
+                return ""
+            stats = resp.json()
+            if not stats.get("total"):
+                return ""
+            lines = [
+                f"- 同类历史任务: {stats['total']} 条, 成功率 {stats.get('success_rate', 0) * 100:.0f}%",
+                f"- 平均耗时: {stats.get('avg_duration', 0):.0f}s",
+            ]
+            mode = stats.get("recommended_mode", "")
+            if mode:
+                lines.append(f"- 历史推荐协作模式: {mode}")
+            errors = stats.get("common_errors", [])[:2]
+            err_str = "; ".join(
+                f"{e[0]} (x{e[1]})" for e in errors
+                if isinstance(e, (list, tuple)) and len(e) >= 2
+            )
+            if err_str:
+                lines.append(f"- 常见错误预警: {err_str}")
+            hint = "\n".join(lines)
+            logger.info("[%s] 任务记忆提示注入 (type=%s, %d 条)",
+                        self._pm_id[:8], task_type, stats["total"])
+            return hint
+        except Exception as e:
+            logger.debug("[%s] 任务记忆查询失败: %s", self._pm_id[:8], e)
+            return ""
 
     # ── 简单任务直接执行 ──────────────────────────────────────────
 

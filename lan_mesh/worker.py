@@ -63,6 +63,7 @@ class WorkerState:
     shared_folder: SharedFolderManager = None
     secretary_ip: Optional[str] = None
     secretary_port: Optional[int] = None
+    mesh_token: str = ""             # Phase 0: Secretary 注册时下发的节点认证 token
     agent_card: dict = None          # Agent Card 快照
     agent_runtime: AgentRuntime = None
     pm_agent: ProjectManagerAgent = None  # 内嵌 PM Agent
@@ -152,6 +153,14 @@ class WorkerAgent:
                 timeout=5,
             )
             if resp.status_code == 200:
+                # Phase 0: 保存 Secretary 下发的 mesh token (认证启用时)
+                body = resp.json()
+                issued = body.get("mesh_token", "")
+                if issued:
+                    self.state.mesh_token = issued
+                    from .http_retry import set_auth_token
+                    set_auth_token(issued)
+                    logger.info("已接收 Secretary 下发的 mesh token (节点认证启用)")
                 logger.info("主机信息已注册到 Secretary %s:%s", self.state.secretary_ip, self.state.secretary_port)
                 # 2. 注册 Agent Card
                 self._register_agent_card()
@@ -520,6 +529,13 @@ class WorkerAgent:
     def _create_app(self) -> FastAPI:
         """创建 Worker 的 FastAPI 应用。"""
         app = FastAPI(title="LAN Mesh Worker", version="0.1.0")
+
+        # Phase 0: 节点间 mesh token 认证 (与 Station 同一中间件, auth_enabled 时启用)
+        from .station_api import api_guard_middleware, configure_mesh_auth, mesh_auth_enabled
+        if mesh_auth_enabled():
+            configure_mesh_auth(True, self.state.mesh_token)
+        app.middleware("http")(api_guard_middleware)
+
         router = create_worker_router(
             collect_info_fn=self._collect_info,
             shared_folder=self.state.shared_folder,

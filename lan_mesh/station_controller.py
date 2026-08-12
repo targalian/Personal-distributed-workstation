@@ -180,6 +180,19 @@ class StationController:
         self._autoscale_up_threshold: int = 2    # 队列积压 >= 2 时扩容
         self._autoscale_down_threshold: int = 0  # 队列清空时记录缩容观察
 
+        # ── Phase 0: 节点间 mesh token 认证 ──
+        # 出站请求自动携带 token, 入站由 api_guard_middleware 校验
+        from .auth import get_mesh_token
+        from .http_retry import http_post, set_auth_token
+        self._mesh_auth_enabled = bool(cfg.security.auth_enabled)
+        self._mesh_token = get_mesh_token(cfg) if self._mesh_auth_enabled else ""
+        if self._mesh_auth_enabled:
+            set_auth_token(self._mesh_token)
+            logger.info("节点间认证已启用 (auth_enabled=true), 出站请求将携带 mesh token")
+        else:
+            set_auth_token("")
+            logger.info("节点间认证未启用 (config.yaml security.auth_enabled=false)")
+
     # ── F1.2: 自愈重启 ─────────────────────────────────────────
 
     def request_restart(self, reason: str = ""):
@@ -459,8 +472,7 @@ class StationController:
         if target_host.device_id == self.state.device_id:
             target_ip = "127.0.0.1"
         try:
-            import requests as _requests
-            resp = _requests.post(
+            resp = http_post(
                 f"http://{target_ip}:{target_host.api_port}/role/start-pm",
                 json={
                     "task_id": task.task_id,
@@ -684,8 +696,7 @@ class StationController:
             return {"ok": False, "message": "Worker 地址信息不完整"}
 
         try:
-            import requests as _req
-            resp = _req.post(
+            resp = http_post(
                 f"http://{ip}:{port}/pm/inject-input",
                 json=input_data,
                 timeout=10,
@@ -742,8 +753,7 @@ class StationController:
             return {"ok": False, "message": "Worker 地址信息不完整"}
 
         try:
-            import requests as _req
-            resp = _req.post(
+            resp = http_post(
                 f"http://{ip}:{port}/role/cancel-pm",
                 timeout=10,
             )
@@ -796,8 +806,7 @@ class StationController:
             return {"ok": False, "message": "Worker 地址信息不完整"}
 
         try:
-            import requests as _req
-            resp = _req.post(
+            resp = http_post(
                 f"http://{ip}:{port}/role/pause-pm",
                 timeout=10,
             )
@@ -1214,8 +1223,7 @@ class StationController:
             return
 
         try:
-            import requests as req
-            resp = req.post(
+            resp = http_post(
                 f"http://{ip}:{port}/role/start-pm",
                 json={"task_id": task_id, "secretary_url": f"http://127.0.0.1:{self.state.api_port}"},
                 timeout=10,
@@ -1270,7 +1278,9 @@ class StationController:
         app = FastAPI(title="LAN Mesh Station Director", version="0.1.0")
 
         # F1.5: 注册限流 + 认证中间件
-        from .station_api import api_guard_middleware
+        from .station_api import api_guard_middleware, configure_mesh_auth
+        # Phase 0: 将节点认证配置同步给中间件 (auth_enabled 时才校验)
+        configure_mesh_auth(self._mesh_auth_enabled, self._mesh_token)
         app.middleware("http")(api_guard_middleware)
 
         # Station 路由 (含全部 API, Secretary 路由会检查 active 状态)

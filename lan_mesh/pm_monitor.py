@@ -17,6 +17,7 @@ from typing import Optional
 import requests
 
 from .agent_prompt import build_aggregation_prompt
+from .http_retry import auth_headers
 from .logger import get_logger
 from .pm_state import PMState
 
@@ -407,6 +408,7 @@ class PMMonitor:
             requests.post(
                 f"{self._secretary_url}/api/pm/{self._pm_id}/status",
                 json={"status": "escalated", "escalation": escalation},
+                headers=auth_headers(),
                 timeout=5,
             )
         except Exception:

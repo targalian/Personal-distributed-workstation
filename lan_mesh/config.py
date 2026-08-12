@@ -123,7 +123,8 @@ class AppConfig(BaseModel):
 class SecurityConfig(BaseModel):
     """安全配置。"""
     auth_enabled: bool = False   # 是否启用节点间 Token 认证
-    # token 通过环境变量 LAN_MESH_TOKEN 或 ~/.lan_mesh/mesh_token 提供
+    mesh_token: str = ""        # 显式指定全网共享 token (留空则自动生成/持久化)
+    # token 来源优先级: security.mesh_token > 环境变量 LAN_MESH_TOKEN > ~/.lan_mesh/mesh_token
 
 
 def _expand(path_str: str) -> str:

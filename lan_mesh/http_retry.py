@@ -8,9 +8,9 @@
 4. 线程安全, 无全局状态
 
 用法:
-    from .http_retry import http_post, http_get
+    from .http_retry import http_post, http_get, set_auth_token
 
-    # 简单 POST (自动重试)
+    # 简单 POST (自动重试 + 自动附加 mesh token)
     resp = http_post(url, json=payload, timeout=5)
 
     # 自定义重试策略
@@ -18,7 +18,45 @@
 
     # GET
     data = http_get(url, params={"key": "val"})
+
+节点认证 (Phase 0):
+    - set_auth_token(token) 注册本节点 mesh token
+    - 注册后所有 http_* 请求自动携带 Authorization: Bearer <token>
+    - 未注册 token 时不附加任何头 (向后兼容, 认证关闭时透明)
 """
+
+# ── 节点间 mesh token 认证 ──────────────────────────────────────
+
+_auth_token: str = ""  # 本节点持有的 mesh token (空 = 未启用认证)
+
+
+def set_auth_token(token: str):
+    """注册本节点的 mesh token, 后续所有请求自动携带。
+
+    传空字符串则清除 (认证关闭)。
+    """
+    global _auth_token
+    _auth_token = (token or "").strip()
+
+
+def get_auth_token() -> str:
+    """返回当前注册的 mesh token (空字符串 = 未启用)。"""
+    return _auth_token
+
+
+def auth_headers() -> dict:
+    """生成携带 mesh token 的请求头 (无 token 时返回空 dict)。"""
+    if _auth_token:
+        return {"Authorization": f"Bearer {_auth_token}"}
+    return {}
+
+
+def _merge_auth_headers(kwargs: dict) -> dict:
+    """将 mesh token 头合并进 kwargs (调用方显式传入的 headers 优先)。"""
+    headers = dict(kwargs.get("headers") or {})
+    if _auth_token:
+        headers.setdefault("Authorization", f"Bearer {_auth_token}")
+    return headers
 import time
 from typing import Optional
 
@@ -89,6 +127,8 @@ def _request_with_retry(
         requests.Response 或 None (所有重试失败且 raise_on_error=False)
     """
     kwargs.setdefault("timeout", timeout)
+    # Phase 0: 自动附加 mesh token (认证启用时)
+    kwargs["headers"] = _merge_auth_headers(kwargs)
     last_error: Optional[Exception] = None
 
     for attempt in range(retries + 1):

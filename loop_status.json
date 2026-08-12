@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "last_run": "2026-07-29T16:26:54.928128Z",
-  "current_phase": "F3.4",
+  "last_run": "2026-08-13T00:35:00Z",
+  "current_phase": "F4.1",
   "phase_status": "closed",
   "completed": [
     "F1.1",
@@ -16,13 +16,24 @@
     "F2.5",
     "F3.1",
     "F3.2",
-    "F3.3"
+    "F3.3",
+    "F3.4",
+    "P0-auth",
+    "P0-secretary",
+    "P0-pm-memory"
   ],
   "failed": [],
   "blocked": [],
-  "next_tasks": [],
-  "iteration_count": 8,
-  "total_files_modified": 22,
+  "next_tasks": [
+    "M1: station /tasks/execute 调用方校验",
+    "M2: _dev_file_watcher 端口竞态",
+    "M3: CLI Agent 检测函数不一致",
+    "M4: Telegram 分片切断 HTML 标签",
+    "M5: Secretary 事件总线 (替换 HTTP 轮询上报)",
+    "M6: 角色卡统一化 (Secretary/PM/Worker 单文件定义)"
+  ],
+  "iteration_count": 11,
+  "total_files_modified": 35,
   "last_error": "",
-  "notes": "路线图全部完成 (14/14项)。F3.4 多Secretary联邦经评估后关闭: 当前单机/少量机器场景下First-Station-Wins+远程Secretary分配已覆盖多机需求,联邦引入的状态同步/冲突解决复杂度过高且收益有限。"
+  "notes": "2026-08-13 会话完成三项迭代: (1) P0-auth: mesh token 节点间认证接线 (http_retry 出站自动携带 + api_guard 中间件入站校验 + Worker 注册引导下发 + Web UI apiFetch 封装, auth_enabled 默认 false 向后兼容); (2) P0-secretary: PM 线程消息裁剪 (_max_history*2 窗口 + JSONL 原子重写, 4 路径统一) + 状态上下文增强 (主机评级/任务记忆/技能库) + delete_task 收尾清理 (线程文件 + 本机 PM stop); (3) P0-pm-memory: 任务记忆驱动规划 (F4.1 轻量版: analyze_with_skill 注入 /api/task-memory/stats 历史经验) + 修复记忆记录缺陷 (collaboration_mode 误读 collaboration_mode 字段→pattern; duration 误读 task._start_time→st.start_time)。验证: 编译 OK + 专项 10/10 + 44 单测全过。"
 }

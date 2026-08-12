@@ -6,8 +6,6 @@ import threading
 import time
 from typing import Optional
 
-import requests
-
 from .http_retry import http_post, http_get
 from .logger import get_logger
 from .pm_state import PMState
@@ -199,7 +197,7 @@ class ProjectManagerAgent:
                              reporter_type="pm_clarification", task_name=question[:100])
         if options:
             try:
-                requests.post(f"{self.secretary_url}/api/pm/{self.pm_id}/status",
+                http_post(f"{self.secretary_url}/api/pm/{self.pm_id}/status",
                               json={"status": "awaiting_input", "clarification_question": question,
                                     "clarification_options": options}, timeout=5)
             except Exception:
@@ -346,7 +344,7 @@ class ProjectManagerAgent:
         }
 
         try:
-            resp = requests.post(
+            resp = http_post(
                 f"{self.secretary_url}/api/pm/{self.pm_id}/deliver",
                 json=delivery,
                 timeout=10,
@@ -391,7 +389,7 @@ class ProjectManagerAgent:
         st = self._state
         keywords = [w for w in f"{task_name} {task_desc[:100]}".replace(":", " ").split() if len(w) >= 2][:10]
         task_type = PMPlanner.infer_task_type(task_name, task_desc)
-        duration = time.time() - st.task.get("_start_time", time.time())
+        duration = time.time() - getattr(st, "start_time", time.time())
         completed_count = sum(1 for r in subtask_results if r.get("status") == "completed")
         success = completed_count >= len(subtask_results) * 0.5 if subtask_results else True
         error_pattern = next((r["error"][:100] for r in subtask_results
@@ -399,13 +397,14 @@ class ProjectManagerAgent:
         memory_data = {
             "pm_id": self.pm_id, "task_name": task_name, "task_keywords": keywords,
             "task_type": task_type,
-            "collaboration_mode": st.plan.get("collaboration_mode", "") if st.plan else "",
+            # 修复: plan 中的协作模式字段是 pattern (非 collaboration_mode)
+            "collaboration_mode": (st.plan or {}).get("pattern", ""),
             "team_size": len(st.subagents) + len(st.teams),
             "duration_secs": duration, "success": success,
             "error_pattern": error_pattern, "device_id": self.device_id,
         }
         try:
-            resp = requests.post(f"{self.secretary_url}/api/pm/{self.pm_id}/task-memory",
+            resp = http_post(f"{self.secretary_url}/api/pm/{self.pm_id}/task-memory",
                                  json=memory_data, timeout=10)
             if resp.status_code == 200:
                 logger.info("[%s] 任务记忆已记录 (type=%s, success=%s)", self.pm_id[:8], task_type, success)

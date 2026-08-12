@@ -28,6 +28,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from .protocol import HostInfo, HostRecord, AgentCard, Task
 from .host_rating import rate_host
+from .http_retry import auth_headers
 from .logger import get_logger
 
 logger = get_logger("station_api")
@@ -65,11 +66,32 @@ import os as _os
 _API_KEY = _os.environ.get("LAN_MESH_API_KEY", "")  # 空 = 不启用认证
 
 # 无需认证的白名单路径
-_AUTH_WHITELIST = {"/health", "/api/register", "/api/heartbeat", "/ws"}
+#   /api/register, /api/heartbeat: 节点引导注册 (注册响应中下发 mesh token)
+#   /health, /api/health: 健康探活 (限流除外)
+#   /ws: WebSocket 实时推送 (会话建立后由 UI 持有 token)
+#   /api/station/auth-token: Web UI 引导获取 token (信任根: 能访问 UI 者视为内网成员)
+_AUTH_WHITELIST = {"/health", "/api/register", "/api/heartbeat", "/ws", "/api/station/auth-token"}
+
+
+# Phase 0: 节点间 mesh token 认证 (默认关闭, config.yaml security.auth_enabled 开启)
+_mesh_auth_enabled = False
+_mesh_auth_token = ""
+
+
+def configure_mesh_auth(enabled: bool, token: str):
+    """配置节点间 mesh token 认证 (由 StationController 启动时调用)。"""
+    global _mesh_auth_enabled, _mesh_auth_token
+    _mesh_auth_enabled = bool(enabled)
+    _mesh_auth_token = (token or "").strip()
+
+
+def mesh_auth_enabled() -> bool:
+    """查询节点认证是否启用。"""
+    return _mesh_auth_enabled
 
 
 async def api_guard_middleware(request: Request, call_next):
-    """F1.5: 全局限流 + API Key 认证中间件。"""
+    """F1.5: 全局限流 + API Key 认证 + Phase 0 mesh token 节点认证中间件。"""
     path = request.url.path
 
     # 限流
@@ -82,6 +104,16 @@ async def api_guard_middleware(request: Request, call_next):
         provided = request.headers.get("X-API-Key", "") or request.query_params.get("api_key", "")
         if provided != _API_KEY:
             return JSONResponse(status_code=401, content={"detail": "未授权: 缺少有效的 API Key"})
+
+    # Phase 0: mesh token 节点认证 (auth_enabled 时启用)
+    if _mesh_auth_enabled and path not in _AUTH_WHITELIST and not path.startswith("/static"):
+        from .auth import verify_token
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return JSONResponse(status_code=401, content={"detail": "缺少认证 token"})
+        provided = auth_header[7:]
+        if not verify_token(provided, _mesh_auth_token):
+            return JSONResponse(status_code=403, content={"detail": "token 无效"})
 
     return await call_next(request)
 
@@ -294,7 +326,21 @@ def create_station_router(controller) -> APIRouter:
         record = station_director.on_host_registered(info)
         await _broadcast(state, "host_registered", record.to_dict())
         controller.bot_gateway.notify("host_online", {"device_name": record.device_name or record.hostname or "未知", "ip": record.ip or ""})
-        return {"ok": True, "device_id": info.device_id}
+        result = {"ok": True, "device_id": info.device_id}
+        # Phase 0: 认证启用时向新节点下发 mesh token (引导注册)
+        if mesh_auth_enabled():
+            result["mesh_token"] = _mesh_auth_token
+            logger.info("已向新节点下发 mesh token: %s", info.device_id[:8])
+        return result
+
+    @router.get("/api/station/auth-token")
+    async def get_auth_token():
+        """Phase 0: Web UI 引导获取 mesh token (认证启用时)。
+
+        信任根: 能访问 Web UI 的局域网成员视为内网成员, 凭此 token 操作 API。
+        认证关闭时返回空字符串 (前端不附加认证头)。
+        """
+        return {"auth_enabled": mesh_auth_enabled(), "mesh_token": _mesh_auth_token if mesh_auth_enabled() else ""}
 
     @router.post("/api/heartbeat")
     async def heartbeat(payload: dict):
@@ -488,6 +534,7 @@ def create_station_router(controller) -> APIRouter:
             resp = http_requests.post(
                 f"http://{host.ip}:{host.api_port}/role/start-secretary",
                 json={"port": port} if port else {},
+                headers=auth_headers(),
                 timeout=10,
             )
             if resp.status_code == 200:
@@ -527,6 +574,7 @@ def create_station_router(controller) -> APIRouter:
         try:
             resp = http_requests.post(
                 f"http://{host.ip}:{host.api_port}/role/stop-secretary",
+                headers=auth_headers(),
                 timeout=10,
             )
             if resp.status_code == 200:
@@ -584,6 +632,7 @@ def create_station_router(controller) -> APIRouter:
             try:
                 resp = http_requests.get(
                     f"http://{host.ip}:{host.api_port}/role/status",
+                    headers=auth_headers(),
                     timeout=5,
                 )
                 if resp.status_code == 200:
@@ -756,6 +805,7 @@ def create_station_router(controller) -> APIRouter:
                     "secretary_url": secretary_url,
                     "task_data": task.to_dict(),
                 },
+                headers=auth_headers(),
                 timeout=15,
             )
             if resp.status_code == 200:
@@ -864,6 +914,11 @@ def create_station_router(controller) -> APIRouter:
                 conv_id = ch.find_conv_by_pm(pm_id)
                 if conv_id:
                     ch.detach_pm_thread(conv_id, pm_id)
+                # 清理 PM 线程消息 (内存 + JSONL 文件)
+                ch.delete_pm_thread(pm_id)
+            # 清理本机 PM Agent 残留 (含子 Agent 与线程)
+            if getattr(controller, '_local_pm_agent', None) and controller._local_pm_agent.pm_id == pm_id:
+                controller._local_stop_pm()
         ok = db.delete_task(task_id)
         if ok:
             await _broadcast(state, "task_deleted", {"task_id": task_id, "name": task.name})
@@ -1951,6 +2006,7 @@ def create_station_router(controller) -> APIRouter:
                     "message": message,
                     "timestamp": msg["timestamp"],
                 },
+                headers=auth_headers(),
                 timeout=10,
             )
             if resp.status_code != 200:
@@ -2038,6 +2094,7 @@ def create_station_router(controller) -> APIRouter:
             resp = http_requests.post(
                 f"http://{target_ip}:{target_port}/shared",
                 files={"file": (filename, data)},
+                headers=auth_headers(),
                 timeout=120,
             )
             result = resp.json()

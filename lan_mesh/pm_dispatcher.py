@@ -16,7 +16,7 @@ from typing import Optional
 import requests
 
 from .agent_prompt import build_subagent_prompt, build_dispatch_context
-from .http_retry import http_get
+from .http_retry import auth_headers, http_get
 from .logger import get_logger
 from .pm_state import PMState
 
@@ -193,6 +193,7 @@ class PMDispatcher:
                     "pm_id": self._pm_id,
                     "reporter_id": agent_info.get("agent_id", ""),
                 },
+                headers=auth_headers(),
                 timeout=15,  # 新端点已异步, 应立即返回
             )
             if resp.status_code == 200:
@@ -297,6 +298,7 @@ class PMDispatcher:
                     "system_prompt": system_prompt,
                     "preferred_agent_id": preferred_agent_id,
                 },
+                headers=auth_headers(),
                 timeout=10,
             )
             if resp.status_code == 200:
@@ -316,6 +318,7 @@ class PMDispatcher:
             resp = requests.post(
                 f"http://{ip}:{port}/pm/update-prompt",
                 json={"agent_id": agent_id, "system_prompt": new_prompt},
+                headers=auth_headers(),
                 timeout=10,
             )
             if resp.status_code == 200:

@@ -662,6 +662,29 @@
 </div>
 
 <script>
+// ── Phase 0: 节点认证 fetch 封装 ──
+// 认证启用时自动携带 Authorization: Bearer <token> (首次加载时引导获取)
+let _meshToken=localStorage.getItem('lan_mesh_token')||'';
+let _meshAuthChecked=false;
+async function _ensureMeshToken(){
+  if(_meshAuthChecked)return;
+  _meshAuthChecked=true;
+  try{
+    const r=await fetch('/api/station/auth-token');
+    const d=await r.json();
+    if(d.auth_enabled&&d.mesh_token){_meshToken=d.mesh_token;localStorage.setItem('lan_mesh_token',_meshToken);}
+  }catch(e){/* 认证未启用或网络异常, 忽略 */}
+}
+function apiFetch(url,opts){
+  opts=opts||{};
+  if(_meshToken){
+    const h=Object.assign({},opts.headers||{});
+    h['Authorization']='Bearer '+_meshToken;
+    opts.headers=h;
+  }
+  return fetch(url,opts);
+}
+_ensureMeshToken();
 // ── Toast 通知 + 按钮反馈 ──
 function showToast(msg,type='info'){
   const c=document.getElementById('toast-container');
@@ -707,7 +730,7 @@ let secretaryActive=false;
 // ── Secretary 激活/停用 ──
 async function checkSecretaryState(){
   try{
-    const r=await fetch('/api/station/roles');const d=await r.json();
+    const r=await apiFetch('/api/station/roles');const d=await r.json();
     secretaryActive=(d.secretary==='active');
     updateSecretaryUI();
   }catch(e){console.error('查询 Secretary 状态失败:',e);}
@@ -744,13 +767,13 @@ async function toggleSecretary(){
   if(secretaryActive){
     if(!confirm('确定要停用 Secretary 模式吗？\n停用后将无法使用任务/项目/Agent 功能。'))return;
     btn.disabled=true;btn.textContent='停用中...';
-    try{const r=await fetch('/api/station/deactivate-secretary',{method:'POST'});const d=await r.json();
+    try{const r=await apiFetch('/api/station/deactivate-secretary',{method:'POST'});const d=await r.json();
       secretaryActive=false;updateSecretaryUI();
       alert(d.message||'Secretary 已停用');
     }catch(e){alert('失败:'+e.message);}finally{btn.disabled=false;}
   }else{
     btn.disabled=true;btn.textContent='启动中...';
-    try{const r=await fetch('/api/station/activate-secretary',{method:'POST'});const d=await r.json();
+    try{const r=await apiFetch('/api/station/activate-secretary',{method:'POST'});const d=await r.json();
       if(d.ok){secretaryActive=true;updateSecretaryUI();alert('Secretary 已激活!\n对话/任务/团队/Agent/MCP工具 已就绪 (PM Agent 架构)');}
       else{alert('激活失败: '+(d.detail||d.message||'未知错误'));}
     }catch(e){alert('失败:'+e.message);}finally{btn.disabled=false;}
@@ -831,7 +854,7 @@ function refreshAllState(){
 // ── 主机面板 ──
 async function refreshHosts(){
   try{
-    const r=await fetch('/api/hosts');const d=await r.json();allHosts=d.hosts||[];renderHosts();
+    const r=await apiFetch('/api/hosts');const d=await r.json();allHosts=d.hosts||[];renderHosts();
   }catch(e){console.error('刷新主机失败:',e);}
 }
 function renderHosts(){
@@ -868,12 +891,12 @@ async function browseFiles(ip,port){
     document.getElementById('modal').insertAdjacentHTML('beforeend',h);
   }catch(e){alert('无法访问:'+e.message);}
 }
-async function probeIP(){const ip=await showInputDialog('输入要探测的 Work Station IP:');if(!ip)return;fetch(`/api/probe/${ip}`,{method:'POST'}).then(r=>r.json()).then(d=>{showToast(d.message||'已发送','ok');setTimeout(refreshHosts,2000);}).catch(e=>showToast('失败:'+e.message,'err'));}
-async function showNetworkInfo(){try{const r=await fetch('/api/network');const d=await r.json();alert(`UDP端口: ${d.udp_port}\nAPI端口: ${d.api_port}\n\n本地IP:\n${d.local_ips.join('\n')}\n\n广播目标:\n${d.broadcast_targets.join('\n')}`);}catch(e){alert('失败:'+e.message);}}
+async function probeIP(){const ip=await showInputDialog('输入要探测的 Work Station IP:');if(!ip)return;apiFetch(`/api/probe/${ip}`,{method:'POST'}).then(r=>r.json()).then(d=>{showToast(d.message||'已发送','ok');setTimeout(refreshHosts,2000);}).catch(e=>showToast('失败:'+e.message,'err'));}
+async function showNetworkInfo(){try{const r=await apiFetch('/api/network');const d=await r.json();alert(`UDP端口: ${d.udp_port}\nAPI端口: ${d.api_port}\n\n本地IP:\n${d.local_ips.join('\n')}\n\n广播目标:\n${d.broadcast_targets.join('\n')}`);}catch(e){alert('失败:'+e.message);}}
 
 // ── 任务面板 ──
 async function refreshTasks(){
-  try{const r=await fetch('/api/tasks');const d=await r.json();allTasks=d.tasks||[];renderTasks();}catch(e){console.error(e);}
+  try{const r=await apiFetch('/api/tasks');const d=await r.json();allTasks=d.tasks||[];renderTasks();}catch(e){console.error(e);}
 }
 let wsSelectedProject='';  // 工作台当前选中的项目 ('' = 全部)
 function toggleTaskExpand(el){el.classList.toggle('open');}
@@ -936,7 +959,7 @@ async function showTaskDetail(id){
 async function deleteTask(taskId, name){
   if(!confirm(`确定删除任务 "${name}" 及其 PM 记录？此操作不可恢复。`))return;
   try{
-    const resp=await fetch(`/api/tasks/${taskId}`,{method:'DELETE'});
+    const resp=await apiFetch(`/api/tasks/${taskId}`,{method:'DELETE'});
     if(resp.ok){
       allTasks=allTasks.filter(t=>t.task_id!==taskId);
       renderTasks();
@@ -958,7 +981,7 @@ async function submitTask(){
   if(!name){showToast('请输入任务名称','err');return;}
   const btn=event&&event.target;try{
     if(btn){btn.disabled=true;btn.textContent='⏳ 提交中...';}
-    const r=await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:desc,project_id:proj})});
+    const r=await apiFetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:desc,project_id:proj})});
     if(r.status===402){const d=await r.json();showToast('预算超支: '+d.detail,'err');return;}
     const t=await r.json();document.getElementById('task-name').value='';document.getElementById('task-desc').value='';refreshTasks();
     if(t.pm_agent_id){showToast(`✅ 任务已提交，PM: ${t.pm_agent_id.slice(0,12)}`,'ok');}
@@ -969,13 +992,13 @@ async function submitTask(){
 }
 async function cancelTask(taskId,name){
   if(!confirm(`确定取消任务「${name}」？PM Agent 将被停止。`))return;
-  try{const r=await fetch(`/api/tasks/${taskId}/cancel`,{method:'POST'});
+  try{const r=await apiFetch(`/api/tasks/${taskId}/cancel`,{method:'POST'});
     if(r.ok){showToast(`任务「${name}」已取消`,'info');refreshTasks();refreshPMAgents();}
     else{const d=await r.json();showToast('取消失败: '+(d.detail||'未知错误'),'err');}
   }catch(e){showToast('取消请求异常: '+e.message,'err');}
 }
 async function pauseTask(taskId,name){
-  try{const r=await fetch(`/api/tasks/${taskId}/pause`,{method:'POST'});
+  try{const r=await apiFetch(`/api/tasks/${taskId}/pause`,{method:'POST'});
     if(r.ok){showToast(`任务「${name}」已暂停`,'info');refreshTasks();}
     else{const d=await r.json();showToast('暂停失败: '+(d.detail||'未知错误'),'err');}
   }catch(e){showToast('暂停请求异常: '+e.message,'err');}
@@ -997,7 +1020,7 @@ function showDelivery(taskId){
   document.getElementById('overlay').classList.add('show');
 }
 async function acceptDelivery(taskId){
-  try{const r=await fetch(`/api/tasks/${taskId}/accept`,{method:'POST'});
+  try{const r=await apiFetch(`/api/tasks/${taskId}/accept`,{method:'POST'});
     if(r.ok){showToast('✅ 已验收','ok');closeOverlayForce();refreshTasks();}
     else{const d=await r.json();showToast('验收失败: '+(d.detail||''),'err');}
   }catch(e){showToast('请求异常: '+e.message,'err');}
@@ -1005,7 +1028,7 @@ async function acceptDelivery(taskId){
 async function rejectDelivery(taskId){
   const reason=await showInputDialog('退回原因 (可选):');
   if(reason===null)return;
-  try{const r=await fetch(`/api/tasks/${taskId}/reject`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason})});
+  try{const r=await apiFetch(`/api/tasks/${taskId}/reject`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason})});
     if(r.ok){showToast('已退回交付物','info');closeOverlayForce();refreshTasks();}
     else{const d=await r.json();showToast('退回失败: '+(d.detail||''),'err');}
   }catch(e){showToast('请求异常: '+e.message,'err');}
@@ -1013,7 +1036,7 @@ async function rejectDelivery(taskId){
 async function resubmitTask(taskId){
   const t=allTasks.find(x=>x.task_id===taskId);if(!t)return;
   try{
-    const r=await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:t.name,description:t.description||'',project_id:t.project_id||''})});
+    const r=await apiFetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:t.name,description:t.description||'',project_id:t.project_id||''})});
     if(r.ok){const nt=await r.json();showToast(`✅ 任务已重新提交: ${nt.task_id.slice(0,8)}`,'ok');refreshTasks();}
     else{const d=await r.json();showToast('重新提交失败: '+(d.detail||''),'err');}
   }catch(e){showToast('请求异常: '+e.message,'err');}
@@ -1021,7 +1044,7 @@ async function resubmitTask(taskId){
 
 // ── Agent面板 ──
 async function refreshAgents(){
-  try{const r=await fetch('/api/agents');const d=await r.json();allAgents=d.agents||[];renderAgents();}catch(e){console.error(e);}
+  try{const r=await apiFetch('/api/agents');const d=await r.json();allAgents=d.agents||[];renderAgents();}catch(e){console.error(e);}
 }
 function renderAgents(){
   const grid=document.getElementById('agent-grid');
@@ -1052,7 +1075,7 @@ function showAgentDetail(id){
 
 // ── MCP工具面板 ──
 async function refreshTools(){
-  try{const r=await fetch('/tools/list');const d=await r.json();renderTools(d);renderServers(d.servers||[]);}catch(e){console.error(e);}
+  try{const r=await apiFetch('/tools/list');const d=await r.json();renderTools(d);renderServers(d.servers||[]);}catch(e){console.error(e);}
 }
 function renderServers(servers){
   const grid=document.getElementById('server-grid');
@@ -1075,7 +1098,7 @@ function renderTools(data){
 }
 function showServerDetail(name){
   document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🔌 ${esc(name)}</h2>
-  <div class="modal-sec"><h3>操作</h3><button class="btn" onclick="fetch('/tools/servers/${encodeURIComponent(name)}',{method:'DELETE'}).then(()=>{refreshTools();closeOverlayForce();})">🗑️ 注销Server</button></div>`;
+  <div class="modal-sec"><h3>操作</h3><button class="btn" onclick="apiFetch('/tools/servers/${encodeURIComponent(name)}',{method:'DELETE'}).then(()=>{refreshTools();closeOverlayForce();})">🗑️ 注销Server</button></div>`;
   document.getElementById('overlay').classList.add('show');
 }
 function showRegisterServer(){
@@ -1096,7 +1119,7 @@ async function registerServer(){
   const config={transport};
   if(transport==='stdio'){config.command=document.getElementById('srv-command').value.trim();const args=document.getElementById('srv-args').value.trim();config.args=args?args.split(',').map(s=>s.trim()):[];}
   else{config.url=document.getElementById('srv-url').value.trim();}
-  try{const r=await fetch('/tools/servers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,config})});const d=await r.json();if(d.ok){refreshTools();closeOverlayForce();}else{alert('注册失败');}}catch(e){alert('失败:'+e.message);}
+  try{const r=await apiFetch('/tools/servers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,config})});const d=await r.json();if(d.ok){refreshTools();closeOverlayForce();}else{alert('注册失败');}}catch(e){alert('失败:'+e.message);}
 }
 function callTool(name){
   document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🔧 调用 ${esc(name)}</h2>
@@ -1108,7 +1131,7 @@ function callTool(name){
 async function execTool(name){
   const argsText=document.getElementById('tool-args').value.trim();
   let args={};try{args=argsText?JSON.parse(argsText):{};}catch(e){alert('JSON格式错误');return;}
-  try{const r=await fetch('/tools/call',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tool_name:name,arguments:args})});const d=await r.json();
+  try{const r=await apiFetch('/tools/call',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tool_name:name,arguments:args})});const d=await r.json();
     document.getElementById('tool-result').style.display='block';
     document.getElementById('tool-output').textContent=JSON.stringify(d,null,2);
   }catch(e){alert('调用失败:'+e.message);}
@@ -1116,7 +1139,7 @@ async function execTool(name){
 
 // ── 项目面板 ──
 async function refreshProjects(){
-  try{const r=await fetch('/api/projects');const d=await r.json();allProjects=d.projects||[];renderProjects();updateProjectSelect();}catch(e){console.error(e);}
+  try{const r=await apiFetch('/api/projects');const d=await r.json();allProjects=d.projects||[];renderProjects();updateProjectSelect();}catch(e){console.error(e);}
 }
 function renderProjects(){
   const grid=document.getElementById('project-grid');
@@ -1146,7 +1169,7 @@ function updateProjectSelect(){
   }
 }
 async function showProjectDetail(id){
-  try{const r=await fetch(`/api/projects/${id}`);const p=await r.json();
+  try{const r=await apiFetch(`/api/projects/${id}`);const p=await r.json();
     const ratio=p.budget_ratio||0;const pct=Math.round(ratio*100);
     let models=(p.allowed_models||[]).map(m=>`<code>${esc(m)}</code>`).join(' ')||'<span style="color:var(--dim)">全部允许</span>';
     document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>📁 ${esc(p.name)}</h2><p style="color:var(--dim);font-size:13px">${p.status} · ${esc(p.routing_strategy)} · ${fmtTime(p.created_at)}</p>
@@ -1159,7 +1182,7 @@ async function showProjectDetail(id){
   }catch(e){alert('失败:'+e.message);}
 }
 async function showUsageLog(pid){
-  try{const r=await fetch(`/api/projects/${pid}/usage`);const d=await r.json();
+  try{const r=await apiFetch(`/api/projects/${pid}/usage`);const d=await r.json();
     let rows=(d.records||[]).map(r=>`<div class="task-step"><span class="step-dot completed"></span><span>${esc(r.model)} · ${r.input_tokens}+${r.output_tokens}tokens · $${(r.cost_usd||0).toFixed(6)} · ${fmtTime(r.timestamp)}</span></div>`).join('');
     document.getElementById('modal').insertAdjacentHTML('beforeend',`<div class="modal-sec"><h3>消费记录 (${d.total})</h3>${rows||'<p style="color:var(--dim)">无记录</p>'}</div>`);
   }catch(e){alert('失败:'+e.message);}
@@ -1183,7 +1206,7 @@ async function createProject(){
   const strategy=document.getElementById('proj-strategy').value;
   const modelsText=document.getElementById('proj-models').value.trim();
   const allowed_models=modelsText?modelsText.split(',').map(s=>s.trim()):[];
-  try{const r=await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:desc,budget_limit_usd:budget,routing_strategy:strategy,allowed_models})});
+  try{const r=await apiFetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:desc,budget_limit_usd:budget,routing_strategy:strategy,allowed_models})});
     const d=await r.json();refreshProjects();closeOverlayForce();alert('项目已创建: '+d.name);}
   catch(e){alert('失败:'+e.message);}
 }
@@ -1224,7 +1247,7 @@ async function sendChatMessage(){
   const abortCtrl=new AbortController();
   const timeout=setTimeout(()=>abortCtrl.abort(),60000);
   try{
-    const r=await fetch('/api/secretary/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conv_id:_activeConvId}),signal:abortCtrl.signal});
+    const r=await apiFetch('/api/secretary/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conv_id:_activeConvId}),signal:abortCtrl.signal});
     clearTimeout(timeout);
     const d=await r.json();
     _hideTyping();
@@ -1275,7 +1298,7 @@ function appendChatMessage(role,content,timestamp,extra){
 async function l1QuickReply(pmId,option){
   if(!pmId)return;
   try{
-    const r=await fetch(`/api/pm-threads/${pmId}/messages`,{
+    const r=await apiFetch(`/api/pm-threads/${pmId}/messages`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:option,conv_id:_activeConvId})
     });
@@ -1312,7 +1335,7 @@ async function loadChatHistory(){
   // 加载当前活跃对话的消息
   if(!_activeConvId){return;}
   try{
-    const r=await fetch(`/api/conversations/${_activeConvId}/messages?limit=100`);
+    const r=await apiFetch(`/api/conversations/${_activeConvId}/messages?limit=100`);
     const d=await r.json();
     const container=document.getElementById('chat-messages');
     container.innerHTML='';
@@ -1328,7 +1351,7 @@ async function loadChatHistory(){
 }
 function clearChat(){
   if(!confirm('确定要清空当前对话记录吗？'))return;
-  fetch('/api/secretary/chat/history',{method:'DELETE'})
+  apiFetch('/api/secretary/chat/history',{method:'DELETE'})
     .then(r=>r.json())
     .then(()=>{
       document.getElementById('chat-messages').innerHTML='<div class="empty"><div class="icon">💬</div><p>向秘书发送消息开始对话</p></div>';
@@ -1343,7 +1366,7 @@ let _convList=[];
 
 async function loadConversations(){
   try{
-    const r=await fetch('/api/conversations');
+    const r=await apiFetch('/api/conversations');
     const d=await r.json();
     _convList=d.conversations||[];
     renderConvList();
@@ -1377,7 +1400,7 @@ async function createConversation(){
   const title=await showInputDialog('对话标题:','新对话');
   if(!title)return;
   try{
-    const r=await fetch('/api/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})});
+    const r=await apiFetch('/api/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})});
     const conv=await r.json();
     if(conv.id){
       await loadConversations();
@@ -1390,7 +1413,7 @@ async function deleteCurrentConv(){
   if(!_activeConvId)return;
   if(!confirm('确定删除当前对话?'))return;
   try{
-    await fetch(`/api/conversations/${_activeConvId}`,{method:'DELETE'});
+    await apiFetch(`/api/conversations/${_activeConvId}`,{method:'DELETE'});
     _activeConvId='';
     await loadConversations();
     if(_convList.length)switchConversation(_convList[0].id);
@@ -1412,7 +1435,7 @@ const _PM_STATUS_LABEL={starting:'启动中',planning:'规划中',executing:'执
 async function loadPMThreads(){
   if(!_activeConvId){_pmThreads=[];renderPMThreadDock();return;}
   try{
-    const r=await fetch(`/api/conversations/${_activeConvId}/pm-threads`);
+    const r=await apiFetch(`/api/conversations/${_activeConvId}/pm-threads`);
     const d=await r.json();
     _pmThreads=d.threads||[];
   }catch(e){_pmThreads=[];}
@@ -1461,7 +1484,7 @@ async function openPMThread(pmId){
   // 加载线程消息
   let msgs=[];
   try{
-    const r=await fetch(`/api/pm-threads/${pmId}/messages?limit=80`);
+    const r=await apiFetch(`/api/pm-threads/${pmId}/messages?limit=80`);
     const d=await r.json();
     msgs=d.messages||[];
   }catch(e){}
@@ -1512,7 +1535,7 @@ async function sendThreadMessage(pmId){
   // 立即显示用户消息
   appendThreadMsgLocal(pmId,{role:'user',content:text,timestamp:Date.now()/1000});
   try{
-    const r=await fetch(`/api/pm-threads/${pmId}/messages`,{
+    const r=await apiFetch(`/api/pm-threads/${pmId}/messages`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:text,conv_id:_activeConvId})
     });
@@ -1535,7 +1558,7 @@ async function sendThreadQuickReply(pmId,option){
   const chips=document.getElementById(`thread-chips-${pmId}`);
   if(chips)chips.remove();
   try{
-    const r=await fetch(`/api/pm-threads/${pmId}/messages`,{
+    const r=await apiFetch(`/api/pm-threads/${pmId}/messages`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:option,conv_id:_activeConvId})
     });
@@ -1598,7 +1621,7 @@ function onPMThreadAttached(data){
 let allPMAgents=[];
 async function refreshPMAgents(){
   try{
-    const r=await fetch('/api/pm');const d=await r.json();
+    const r=await apiFetch('/api/pm');const d=await r.json();
     allPMAgents=d.pm_agents||[];
     renderPMAgents();
   }catch(e){console.error('刷新 PM Agent 失败:',e);}
@@ -1612,8 +1635,8 @@ async function renderPMAgents(){
   const pmDetails=await Promise.all(allPMAgents.map(async pm=>{
     try{
       const [teamsR,progressR]=await Promise.all([
-        fetch(`/api/pm/${pm.pm_id}/teams`),
-        fetch(`/api/pm/${pm.pm_id}/progress?limit=5`)
+        apiFetch(`/api/pm/${pm.pm_id}/teams`),
+        apiFetch(`/api/pm/${pm.pm_id}/progress?limit=5`)
       ]);
       const teamsD=await teamsR.json();const progressD=await progressR.json();
       totalTeams+=(teamsD.teams||[]).length;
@@ -1740,9 +1763,9 @@ let secretaryHostId=null,secretaryHostPort=null,secretaryIsLocal=false;
 async function refreshStation(){
   try{
     const [fleetR,eventsR,secR]=await Promise.all([
-      fetch('/api/station/fleet'),
-      fetch('/api/station/events?limit=30'),
-      fetch('/api/station/secretary-status')
+      apiFetch('/api/station/fleet'),
+      apiFetch('/api/station/events?limit=30'),
+      apiFetch('/api/station/secretary-status')
     ]);
     const fleet=await fleetR.json();const evts=await eventsR.json();const sec=await secR.json();
     stationHosts=fleet.hosts||[];stationEvents=evts.events||[];
@@ -1809,7 +1832,7 @@ async function assignSecretary(deviceId){
   if(secretaryHostId){alert('已有 Work Station 在运行 Secretary,请先取消');return;}
   if(!confirm('确定要在此 Work Station 上启动 Secretary 吗？'))return;
   try{
-    const r=await fetch(`/api/station/hosts/${deviceId}/assign-secretary`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+    const r=await apiFetch(`/api/station/hosts/${deviceId}/assign-secretary`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
     const d=await r.json();
     if(d.ok){
       alert('Secretary 已分配!\n'+(d.message||'')+(d.port?'\n端口: '+d.port:''));
@@ -1822,7 +1845,7 @@ async function assignSecretary(deviceId){
 async function revokeSecretary(deviceId){
   if(!confirm('确定要取消此 Work Station 的 Secretary 角色吗？'))return;
   try{
-    const r=await fetch(`/api/station/hosts/${deviceId}/revoke-secretary`,{method:'POST'});
+    const r=await apiFetch(`/api/station/hosts/${deviceId}/revoke-secretary`,{method:'POST'});
     const d=await r.json();
     alert(d.message||'已取消');
     refreshStation();
@@ -1830,7 +1853,7 @@ async function revokeSecretary(deviceId){
 }
 async function showHostStationDetail(id){
   try{
-    const r=await fetch(`/api/station/hosts/${id}/events`);const d=await r.json();
+    const r=await apiFetch(`/api/station/hosts/${id}/events`);const d=await r.json();
     const h=stationHosts.find(x=>x.device_id===id);
     let eventsHtml=(d.events||[]).map(e=>`<div class="event-item"><span class="event-type ${e.event_type}">${e.event_type}</span><span>${esc(e.detail||'')}</span><span class="event-time">${fmtTime(e.timestamp)}</span></div>`).join('');
     document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>${esc(h.device_name||h.hostname||'Work Station')}</h2><p style="color:var(--dim);font-size:13px">${h.online?'在线':'离线'} · <span class="badge-tier ${h.rating_tier||'D'}">${h.rating_tier||'-'}</span> ${h.rating_score||0}分</p>
@@ -1842,7 +1865,7 @@ async function showHostStationDetail(id){
 }
 async function recomputeRatings(){
   if(!confirm('确定要重新评级所有主机吗？'))return;
-  try{const r=await fetch('/api/station/rate',{method:'POST'});const d=await r.json();refreshStation();alert(`已重算 ${d.updated||0} 台主机评级`);}catch(e){alert('失败:'+e.message);}
+  try{const r=await apiFetch('/api/station/rate',{method:'POST'});const d=await r.json();refreshStation();alert(`已重算 ${d.updated||0} 台主机评级`);}catch(e){alert('失败:'+e.message);}
 }
 
 // ── 技能库管理 ──
@@ -1852,7 +1875,7 @@ async function refreshSkills(){
   const cat=filter?filter.value:'';
   try{
     const url=cat?`/api/station/skills?category=${cat}`:'/api/station/skills';
-    const r=await fetch(url);const skills=await r.json();
+    const r=await apiFetch(url);const skills=await r.json();
     allSkills=skills;
     const body=document.getElementById('skill-body');
     document.getElementById('skill-total').textContent=skills.length;
@@ -1877,7 +1900,7 @@ async function refreshSkills(){
 }
 async function viewSkill(skillId){
   try{
-    const r=await fetch(`/api/station/skills/${skillId}`);const d=await r.json();
+    const r=await apiFetch(`/api/station/skills/${skillId}`);const d=await r.json();
     const assignsHtml=(d.assignments||[]).map(a=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)"><span style="font-size:12px;color:var(--accent)">${esc(a.assignee_type)}</span><span>${esc(a.assignee_id)}</span><button class="btn sm danger" onclick="revokeSkill('${skillId}','${a.assignee_type}','${a.assignee_id}')">撤销</button></div>`).join('');
     document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span>
       <h2>${esc(d.name||skillId)}</h2>
@@ -1899,20 +1922,20 @@ async function assignSkill(skillId){
   const type=await showInputDialog('分配类型 (role/agent/host):','role');if(!type)return;
   const id=await showInputDialog('分配目标 ID (如: worker, secretary, agent_id, device_id):');if(!id)return;
   try{
-    const r=await fetch(`/api/station/skills/${skillId}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({assignee_type:type,assignee_id:id})});
+    const r=await apiFetch(`/api/station/skills/${skillId}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({assignee_type:type,assignee_id:id})});
     const d=await r.json();if(d.ok){refreshSkills();viewSkill(skillId);}else{alert('失败: '+(d.detail||'未知错误'));}
   }catch(e){alert('失败:'+e.message);}
 }
 async function revokeSkill(skillId,assigneeType,assigneeId){
   if(!confirm(`确定要撤销 ${assigneeType}:${assigneeId} 对技能 ${skillId} 的访问权限吗？`))return;
   try{
-    const r=await fetch(`/api/station/skills/${skillId}/assign?assignee_type=${assigneeType}&assignee_id=${assigneeId}`,{method:'DELETE'});
+    const r=await apiFetch(`/api/station/skills/${skillId}/assign?assignee_type=${assigneeType}&assignee_id=${assigneeId}`,{method:'DELETE'});
     const d=await r.json();if(d.ok){refreshSkills();viewSkill(skillId);}else{alert('失败: '+(d.detail||'未知错误'));}
   }catch(e){alert('失败:'+e.message);}
 }
 async function scanSkills(){
   try{
-    const r=await fetch('/api/station/skills/scan');const d=await r.json();
+    const r=await apiFetch('/api/station/skills/scan');const d=await r.json();
     refreshSkills();
     alert(`扫描完成: ${d.scanned||0} 个技能已注册/更新`);
   }catch(e){alert('失败:'+e.message);}
@@ -1922,7 +1945,7 @@ async function scanSkills(){
 let botChannels=[];
 async function refreshBotChannels(){
   try{
-    const r=await fetch('/api/station/bot/channels');botChannels=await r.json();
+    const r=await apiFetch('/api/station/bot/channels');botChannels=await r.json();
     const list=document.getElementById('bot-channel-list');
     document.getElementById('bot-channel-count').textContent=`共 ${botChannels.length} 个通道`;
     if(!botChannels.length){list.innerHTML='<div class="empty"><div class="icon">📱</div><p>暂无通道配置</p><p class="hint">添加企业微信群机器人或 Telegram Bot</p></div>';return;}
@@ -1995,20 +2018,20 @@ async function saveBotChannel(existingType){
     min_priority:document.getElementById('bot-priority').value,
   };
   try{
-    const r=await fetch('/api/station/bot/channels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const r=await apiFetch('/api/station/bot/channels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const d=await r.json();if(d.ok){closeOverlayForce();refreshBotChannels();alert(d.message||'已保存');}else{alert('失败: '+(d.detail||'未知错误'));}
   }catch(e){alert('失败:'+e.message);}
 }
 async function removeBotChannel(type){
   if(!confirm(`确定要删除 ${type} 通道吗？`))return;
   try{
-    const r=await fetch(`/api/station/bot/channels/${type}`,{method:'DELETE'});
+    const r=await apiFetch(`/api/station/bot/channels/${type}`,{method:'DELETE'});
     const d=await r.json();if(d.ok){refreshBotChannels();}else{alert('失败: '+(d.detail||'未知错误'));}
   }catch(e){alert('失败:'+e.message);}
 }
 async function testBotChannel(type){
   try{
-    const r=await fetch(`/api/station/bot/test/${type}`,{method:'POST'});
+    const r=await apiFetch(`/api/station/bot/test/${type}`,{method:'POST'});
     const d=await r.json();
     alert(d.ok?d.message||'测试成功':d.detail||'测试失败');
   }catch(e){alert('失败:'+e.message);}
@@ -2018,7 +2041,7 @@ async function testBotChannel(type){
 let p2pCurrentTarget=null;
 async function refreshP2PHosts(){
   try{
-    const r=await fetch('/api/hosts');const d=await r.json();
+    const r=await apiFetch('/api/hosts');const d=await r.json();
     const hosts=(d.hosts||[]).filter(h=>h.online&&h.device_id!=='');
     const sel=document.getElementById('p2p-host-select');
     const currentVal=sel.value;
@@ -2044,7 +2067,7 @@ async function loadP2PMessages(){
   const host=allHosts.find(h=>h.device_id===deviceId);
   info.textContent=host?`目标: ${host.device_name||host.hostname||'未知'} (${host.ip||'-'})`:'';
   try{
-    const r=await fetch(`/api/p2p/messages/${encodeURIComponent(deviceId)}`);
+    const r=await apiFetch(`/api/p2p/messages/${encodeURIComponent(deviceId)}`);
     const d=await r.json();
     container.innerHTML='';
     const msgs=d.messages||[];
@@ -2095,7 +2118,7 @@ async function sendP2PMessage(){
   if(!p2pCurrentTarget){alert('请先选择目标主机');return;}
   input.value='';
   try{
-    const r=await fetch('/api/p2p/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_device_id:p2pCurrentTarget,message:text})});
+    const r=await apiFetch('/api/p2p/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_device_id:p2pCurrentTarget,message:text})});
     const d=await r.json();
     if(!d.ok){alert('发送失败: '+(d.detail||'未知错误'));}
   }catch(e){alert('发送失败: '+e.message);}
@@ -2117,7 +2140,7 @@ async function sendP2PFile(){
   formData.append('file',file);
   formData.append('target_device_id',p2pCurrentTarget);
   try{
-    const r=await fetch('/api/p2p/transfer',{method:'POST',body:formData});
+    const r=await apiFetch('/api/p2p/transfer',{method:'POST',body:formData});
     const d=await r.json();
     uploadDiv.remove();
     if(!d.ok&&d.detail){alert('传输失败: '+d.detail);}
@@ -2148,7 +2171,7 @@ async function loadDAGFromSelect(){
   if(!tid){showToast('请先选择任务','err');return;}
   dagTaskId=tid;
   try{
-    const r=await fetch(`/api/tasks/${tid}/graph`);
+    const r=await apiFetch(`/api/tasks/${tid}/graph`);
     if(!r.ok){const e=await r.json();showToast(e.detail||'加载失败','err');return;}
     const data=await r.json();
     dagNodes=data.nodes||[];dagEdges=data.edges||[];
@@ -2294,7 +2317,7 @@ function dagDeleteSelected(){
 async function saveDAG(){
   if(!dagTaskId){showToast('请先加载任务','err');return;}
   try{
-    const r=await fetch(`/api/tasks/${dagTaskId}/graph`,{
+    const r=await apiFetch(`/api/tasks/${dagTaskId}/graph`,{
       method:'PUT',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({nodes:dagNodes,edges:dagEdges})
     });
@@ -2306,7 +2329,7 @@ async function saveDAG(){
 
 async function refreshDagTaskSelect(){
   try{
-    const r=await fetch('/api/tasks?limit=50');
+    const r=await apiFetch('/api/tasks?limit=50');
     const d=await r.json();
     const sel=document.getElementById('dag-task-select');
     sel.innerHTML='<option value="">选择任务...</option>';

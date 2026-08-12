@@ -382,6 +382,18 @@ class ChatHandler:
                 return meta["id"]
         return ""
 
+    def delete_pm_thread(self, pm_id: str):
+        """彻底删除 PM 线程 (内存消息 + JSONL 文件), 任务删除时调用。"""
+        self._pm_thread_messages.pop(pm_id, None)
+        import os
+        safe_id = pm_id.replace("/", "_").replace("\\", "_")
+        filepath = os.path.join(self._get_thread_dir(), f"{safe_id}.jsonl")
+        try:
+            if os.path.isfile(filepath):
+                os.remove(filepath)
+        except Exception:
+            pass
+
     # ── 方案C: PM 线程消息 (L2 层存储) ─────────────────────
 
     def send_to_pm_thread(self, conv_id: str, pm_id: str, message: str) -> dict:
@@ -394,6 +406,7 @@ class ChatHandler:
         user_msg = {"role": "user", "content": message, "timestamp": now, "layer": "L2"}
         self._pm_thread_messages.setdefault(pm_id, []).append(user_msg)
         self._save_thread_message_to_file(pm_id, user_msg)
+        self._trim_pm_thread(pm_id)
 
         # 注入到 PM Agent
         result = self.controller.inject_input_to_pm(pm_id, {
@@ -412,6 +425,7 @@ class ChatHandler:
             }
             self._pm_thread_messages[pm_id].append(ack_msg)
             self._save_thread_message_to_file(pm_id, ack_msg)
+            self._trim_pm_thread(pm_id)
             self.update_pm_thread_status(pm_id, "executing")
             return {"ok": True, "reply": ack_msg["content"], "timestamp": now, "pm_id": pm_id}
 
@@ -422,6 +436,7 @@ class ChatHandler:
         """获取 PM 线程的历史消息 (懒加载)。"""
         if pm_id not in self._pm_thread_messages:
             self._pm_thread_messages[pm_id] = self._load_thread_messages_from_file(pm_id)
+            self._trim_pm_thread(pm_id)
         return self._pm_thread_messages.get(pm_id, [])[-limit:]
 
     def append_pm_thread_message(self, pm_id: str, role: str, content: str, **kwargs):
@@ -435,9 +450,27 @@ class ChatHandler:
         }
         self._pm_thread_messages.setdefault(pm_id, []).append(msg)
         self._save_thread_message_to_file(pm_id, msg)
-        # 裁剪过长线程
-        if len(self._pm_thread_messages[pm_id]) > self._max_history * 2:
-            self._pm_thread_messages[pm_id] = self._pm_thread_messages[pm_id][-(self._max_history * 2):]
+        self._trim_pm_thread(pm_id)
+
+    def _trim_pm_thread(self, pm_id: str):
+        """裁剪 PM 线程消息 (内存 + 文件原子重写), 防止无限增长。"""
+        msgs = self._pm_thread_messages.get(pm_id, [])
+        if len(msgs) <= self._max_history * 2:
+            return
+        trimmed = msgs[-(self._max_history * 2):]
+        self._pm_thread_messages[pm_id] = trimmed
+        # 同步重写 JSONL 文件, 避免文件无限增长 (原子写防损坏)
+        import json, os
+        safe_id = pm_id.replace("/", "_").replace("\\", "_")
+        filepath = os.path.join(self._get_thread_dir(), f"{safe_id}.jsonl")
+        try:
+            tmp = filepath + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                for m in trimmed:
+                    f.write(json.dumps(m, ensure_ascii=False) + "\n")
+            os.replace(tmp, filepath)
+        except Exception:
+            pass
 
     def notify_pm_clarification(self, pm_id: str, question: str, options: list = None):
         """方案C 双写: PM 请求决策时同时写入 L1 通知 + L2 线程消息。
@@ -458,6 +491,7 @@ class ChatHandler:
         }
         self._pm_thread_messages.setdefault(pm_id, []).append(clarification_msg)
         self._save_thread_message_to_file(pm_id, clarification_msg)
+        self._trim_pm_thread(pm_id)
 
         # ── L1: 写入主对话流 (作为系统通知卡片) ──
         conv_id = self.find_conv_by_pm(pm_id)
@@ -731,6 +765,15 @@ class ChatHandler:
             if online_hosts:
                 host_names = [h.device_name or h.hostname or h.device_id[:8] for h in online_hosts[:5]]
                 lines.append(f"- 在线主机名: {', '.join(host_names)}")
+            # 主机评级分布 (S/A/B/C/D)
+            if hosts:
+                tiers = {}
+                for h in hosts:
+                    tier = getattr(h, 'rating_tier', '') or '?'
+                    tiers[tier] = tiers.get(tier, 0) + 1
+                tier_summary = ", ".join(f"{t}级:{c}台" for t, c in sorted(tiers.items()))
+                if tier_summary:
+                    lines.append(f"- 主机评级分布: {tier_summary}")
 
             # Secretary 状态
             secretary_status = "已激活" if self.controller.secretary_active else "未激活"
@@ -781,6 +824,23 @@ class ChatHandler:
                 teams = self.controller.db.list_teams()
                 active_teams = [t for t in teams if t.status in ("active", "pending")]
                 lines.append(f"- Agent 团队: {len(active_teams)} 个")
+            except Exception:
+                pass
+
+            # 任务记忆统计 (历史经验参考)
+            try:
+                stats = self.controller.db.get_task_memory_stats()
+                if stats.get("total", 0) > 0:
+                    rate = round(stats["success_rate"] * 100)
+                    lines.append(f"- 历史任务记忆: {stats['total']} 条, 成功率 {rate}%")
+            except Exception:
+                pass
+
+            # 技能库状态
+            try:
+                skills = self.controller.db.list_skills()
+                if skills:
+                    lines.append(f"- 技能库: {len(skills)} 个技能")
             except Exception:
                 pass
 

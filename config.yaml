@@ -38,8 +38,11 @@ cloud_storage:
 # 安全配置
 security:
   auth_enabled: false        # 是否启用节点间 Token 认证
-  # token 来源: 环境变量 LAN_MESH_TOKEN 或 ~/.lan_mesh/mesh_token
+  # mesh_token: ""          # 显式指定全网共享 token (留空则自动生成/持久化)
+  # token 来源优先级: security.mesh_token > 环境变量 LAN_MESH_TOKEN > ~/.lan_mesh/mesh_token
   # 启用后所有内部 API 请求需携带 Authorization: Bearer <token>
+  # Worker 首次注册时由 Secretary 自动下发 token (免手工配置)
+  # 提示: 同一局域网内所有节点应共享同一 token, 推荐显式配置或统一环境变量
 
 # Bot 手机通道配置
 bot:
