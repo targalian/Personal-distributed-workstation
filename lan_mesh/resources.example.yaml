@@ -1,0 +1,75 @@
+# 模型资源管理配置 (Model Resources)
+# 复制为 resources.yaml 并填写你的实际资源池, 即可启用预算跟踪
+# resources.yaml 已在 .gitignore 中排除, 请勿提交到版本库
+#
+# 核心概念: 资源池 = 一个可计量的预算来源, 三种计划类型:
+#   payg        按量付费:  quota 为预算金额 (默认 USD), 消耗按 model_pool.yaml 价格实时折算
+#   token_plan  token 包:  quota 为 token 数, 一次性额度 (可带 expire_at 有效期)
+#   coding_plan 编程订阅:  quota 为每周期包含 token 数, 以 renew_at 为锚点周期重置
+#
+# 模型与资源池的关联规则:
+#   - models 列表显式列出关联的模型 id (推荐, 精确控制)
+#   - models 留空 → 该 provider 下所有模型自动关联 (按 model_pool.yaml 的 provider 匹配)
+# 未关联任何资源池的模型: 默认放行 (宽松), 开启 strict: true 后禁用
+
+# strict: true   # 取消注释后, 未关联资源池的模型将从路由中剔除
+
+# ── 定价覆盖 (可选) ──────────────────────────────────────────────
+# model_pool.yaml 已收录模型的单价自动生效, 无需重复填写。
+# 仅当你的模型不在 model_pool.yaml 中时才需要在此补充 (单位: USD / 1K tokens)。
+# 主流服务商按量参考价 (2026, 单位 USD/M tokens, 输入/输出, 以官方为准):
+#   OpenAI    gpt-4o: 2.5/10,  gpt-4o-mini: 0.15/0.6, gpt-4.1: 2/8
+#   Anthropic claude-sonnet-4: 3/15, claude-opus-4: 15/75, claude-haiku-4.5: 1/5
+#   DeepSeek  deepseek-chat: 0.27/1.1 (cache miss/out), deepseek-reasoner: 0.55/2.19
+#   Google    gemini-2.5-pro: 1.25/10, gemini-2.5-flash: 0.3/2.5
+#   月之暗面  kimi-k2: 0.6/2.5, 智谱 glm-4.6: 0.6/2.6, 通义 qwen-max: 2.4/9.6
+pricing:
+  # gemini-2.5-pro:
+  #   input_per_1k: 0.00125
+  #   output_per_1k: 0.01
+
+# ── 资源池定义 ───────────────────────────────────────────────────
+resources:
+  # 示例 1: 按量付费预算池 (OpenAI, 月度预算 $10)
+  # - id: openai-payg
+  #   provider: openai
+  #   plan_type: payg
+  #   quota: 10.0
+  #   unit: usd
+  #   billing_period: monthly          # 每月 1 号重置
+  #   api_key_env: OPENAI_API_KEY
+  #   models: [gpt-4o, gpt-4o-mini]
+  #   alert_threshold: 0.8             # 使用率达 80% 告警
+  #   note: "日常开发预算"
+
+  # 示例 2: token 包 (一次性额度, 带有效期)
+  # - id: deepseek-token-pack
+  #   provider: deepseek
+  #   plan_type: token_plan
+  #   quota: 100000000                 # 1 亿 token
+  #   billing_period: one_time
+  #   expire_at: 1815868800            # unix 时间戳 (2027-07-01), 0 = 不过期
+  #   api_key_env: DEEPSEEK_API_KEY
+  #   models: [deepseek-chat, deepseek-coder, deepseek-reasoner]
+
+  # 示例 3: 编程订阅 (每 30 天重置, renew_at 为续费锚点)
+  # - id: ark-coding-plan
+  #   provider: volcengine-ark
+  #   plan_type: coding_plan
+  #   quota: 50000000                  # 每周期 5 千万 token
+  #   billing_period: renew
+  #   renew_at: 1815868800             # 上次续费日 (unix 时间戳)
+  #   period_days: 30                  # 重置周期
+  #   api_key_env: ARK_API_KEY
+  #   models: [ark-code-latest, doubao-seed-2.1-turbo]
+  #   alert_threshold: 0.9
+
+  # 示例 4: token plan 订阅 (阿里百炼 Credits, 按月重置)
+  # - id: aliyun-tokenplan
+  #   provider: aliyun-tokenplan
+  #   plan_type: token_plan
+  #   quota: 30000000
+  #   billing_period: monthly
+  #   api_key_env: ALIYUN_TOKENPLAN_API_KEY
+  #   models: [qwen3.7-max, qwen3.6-flash, deepseek-v4-pro, glm-5.2]
+  #   note: "百炼个人版 Lite"

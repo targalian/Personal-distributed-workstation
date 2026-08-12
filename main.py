@@ -6,11 +6,13 @@ LAN Mesh - 统一入口
   python main.py station             # 启动 Station Director (推荐, 含 Web UI)
   python main.py secretary           # 启动 Secretary 节点 (向后兼容)
   python main.py worker              # 启动 Worker 节点
+  python main.py resources           # 查看模型资源用量报告
+  python main.py resources --init    # 生成 resources.yaml 配置模板
   python main.py station --port 8080 # 指定端口
   python main.py --config config.yaml worker
 
 参数:
-  role              station | secretary | worker
+  role              station | secretary | worker | resources
   --port, -p        指定 API 端口
   --name, -n        指定设备名称
   --shared          指定共享文件夹路径
@@ -53,14 +55,15 @@ def main():
     )
     parser.add_argument(
         "role",
-        choices=["station", "secretary", "worker"],
-        help="节点角色: station (推荐) | secretary | worker",
+        choices=["station", "secretary", "worker", "resources"],
+        help="节点角色: station (推荐) | secretary | worker | resources (资源管理)",
     )
     parser.add_argument("--port", "-p", type=int, default=None, help="HTTP API 端口")
     parser.add_argument("--name", "-n", type=str, default=None, help="设备名称")
     parser.add_argument("--shared", type=str, default=None, help="共享文件夹路径")
     parser.add_argument("--config", "-c", type=str, default=None, help="配置文件路径")
     parser.add_argument("--dev", action="store_true", help="开发模式: 文件变动自动重载")
+    parser.add_argument("--init", action="store_true", help="resources: 生成配置模板")
     parser.add_argument("--version", "-v", action="version", version=f"LAN Mesh v{__version__}")
 
     args = parser.parse_args()
@@ -95,10 +98,51 @@ def main():
         from lan_mesh.secretary import SecretaryController
         controller = SecretaryController(cfg)
         controller.start()
+    elif args.role == "resources":
+        _run_resources_cli(cfg, args)
     else:
         from lan_mesh.worker import WorkerAgent
         agent = WorkerAgent(cfg)
         agent.start()
+
+
+def _run_resources_cli(cfg, args):
+    """模型资源管理 CLI: 生成模板 / 查看用量报告。"""
+    from pathlib import Path
+
+    from lan_mesh.config import get_db_path, load_model_pool
+    from lan_mesh.database import Database
+    from lan_mesh.model_resources import ModelResourceManager
+
+    target = Path(__file__).parent / "lan_mesh" / "resources.yaml"
+    if args.init:
+        example = Path(__file__).parent / "lan_mesh" / "resources.example.yaml"
+        if target.exists():
+            print(f"resources.yaml 已存在, 跳过生成: {target.resolve()}")
+        else:
+            target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+            print(f"已生成配置模板: {target.resolve()}")
+            print("请编辑填写资源池 (按量预算 / token 包 / 编程订阅) 后重新运行:")
+            print("  python main.py resources")
+        return
+
+    model_pool = load_model_pool()
+    db = Database(str(get_db_path(cfg)))
+    mgr = ModelResourceManager()
+    enabled = mgr.load(target, model_pool.models if model_pool.models else None, db)
+    if not enabled:
+        print("模型资源管理未启用: 未找到 lan_mesh/resources.yaml")
+        print("提示: 运行 `python main.py resources --init` 生成配置模板")
+        return
+
+    summary = mgr.summarize()
+    print(f"模型资源管理已启用 (strict={summary.get('strict', False)})")
+    for res in summary.get("resources", []):
+        rate = round((res.get("rate") or 0) * 100)
+        print(f"  [{res.get('resource_id')}] {res.get('provider')} "
+              f"{res.get('plan_type')} | 已用 {res.get('used')} / {res.get('quota')} "
+              f"{res.get('unit')} ({rate}%) | 状态: {res.get('status')} "
+              f"{('- ' + res.get('note')) if res.get('note') else ''}")
 
 
 if __name__ == "__main__":

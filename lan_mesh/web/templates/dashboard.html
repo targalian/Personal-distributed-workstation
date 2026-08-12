@@ -328,6 +328,7 @@
   <div class="tab secretary-tab" data-tab="workspace" style="display:none">🗂️ 项目工作台</div>
   <div class="tab secretary-tab" data-tab="hosts" style="display:none">🖥️ Work Station</div>
   <div class="tab secretary-tab" data-tab="tools" style="display:none">🔧 MCP工具</div>
+  <div class="tab secretary-tab" data-tab="resources" style="display:none">💰 模型资源</div>
   <div class="tab" data-tab="bot">📱 手机通道</div>
   <div class="tab" data-tab="p2p">📡 主机通讯</div>
 </div>
@@ -340,6 +341,7 @@
   <div class="mobile-nav-item secretary-tab" data-tab="workspace" style="display:none"><span class="nav-icon">🗂️</span><span>工作台</span></div>
   <div class="mobile-nav-item secretary-tab" data-tab="hosts" style="display:none"><span class="nav-icon">🖥️</span><span>WS</span></div>
   <div class="mobile-nav-item secretary-tab" data-tab="tools" style="display:none"><span class="nav-icon">🔧</span><span>工具</span></div>
+  <div class="mobile-nav-item secretary-tab" data-tab="resources" style="display:none"><span class="nav-icon">💰</span><span>资源</span></div>
   <div class="mobile-nav-item" data-tab="bot"><span class="nav-icon">📱</span><span>手机</span></div>
   <div class="mobile-nav-item" data-tab="p2p"><span class="nav-icon">📡</span><span>通讯</span></div>
 </div>
@@ -559,6 +561,28 @@
   <div class="grid" id="server-grid"><div class="empty"><div class="icon">🔌</div><p>未注册任何MCP Server</p></div></div>
   <div class="stitle">工具列表</div>
   <div class="grid" id="tool-grid"></div>
+</div>
+
+<!-- 面板: 模型资源 -->
+<div class="panel" id="panel-resources">
+  <div class="toolbar">
+    <button class="btn primary" onclick="withFeedback(this,refreshResources)">🔄 刷新</button>
+    <span style="margin-left:auto;font-size:14px;color:var(--dim)">
+      资源池 <b id="res-total" style="color:var(--accent)">0</b> · 状态 <b id="res-state" style="color:var(--dim)">未启用</b>
+    </span>
+  </div>
+  <div class="table-wrap">
+  <table class="fleet-table">
+    <thead><tr><th>资源池</th><th>服务商</th><th>计划类型</th><th>额度</th><th>已用</th><th>剩余</th><th>使用率</th><th>状态</th><th>备注</th></tr></thead>
+    <tbody id="res-body"></tbody>
+  </table>
+  </div>
+  <div class="stitle">使用说明</div>
+  <div style="color:var(--dim);font-size:13px;line-height:1.7;padding:0 4px">
+    在 <code>lan_mesh/resources.yaml</code> 中配置资源池 (按量预算 / token 包 / 编程订阅) 后自动启用预算跟踪。
+    每次 LLM 调用自动记账; 资源耗尽/过期/暂停后相关模型自动从路由候选中剔除。
+    运行 <code>python main.py resources --init</code> 可生成配置模板。
+  </div>
 </div>
 
 <!-- 面板: Station Director (默认显示) -->
@@ -790,6 +814,7 @@ function switchTab(tab){
   if(tab==='hosts')refreshHosts();
   if(tab==='workspace')refreshWorkspace();
   if(tab==='tools')refreshTools();
+  if(tab==='resources')refreshResources();
   if(tab==='station')refreshStation();
   if(tab==='skills')refreshSkills();
   if(tab==='bot')refreshBotChannels();
@@ -1076,6 +1101,43 @@ function showAgentDetail(id){
 // ── MCP工具面板 ──
 async function refreshTools(){
   try{const r=await apiFetch('/tools/list');const d=await r.json();renderTools(d);renderServers(d.servers||[]);}catch(e){console.error(e);}
+}
+
+// ── 模型资源面板 ──
+async function refreshResources(){
+  try{
+    const r=await apiFetch('/api/resources');const d=await r.json();
+    document.getElementById('res-total').textContent=(d.resources||[]).length;
+    const stateEl=document.getElementById('res-state');
+    stateEl.textContent=d.enabled?'已启用':'未启用';
+    stateEl.style.color=d.enabled?'var(--green)':'var(--dim)';
+    const body=document.getElementById('res-body');
+    if(!(d.resources||[]).length){
+      body.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--dim);padding:20px">未配置资源池 — 编辑 lan_mesh/resources.yaml 启用预算跟踪</td></tr>';
+      return;
+    }
+    body.innerHTML=(d.resources||[]).map(res=>{
+      const pct=Math.min(100,Math.round((res.rate||0)*100));
+      const color=pct>=90?'var(--red)':pct>=70?'#e6a23c':'var(--green)';
+      return `<tr>
+        <td><b>${esc(res.resource_id)}</b></td>
+        <td>${esc(res.provider||'')}</td>
+        <td>${esc(res.plan_type||'')}</td>
+        <td>${fmtQuota(res.quota,res.unit)}</td>
+        <td>${fmtQuota(res.used,res.unit)}</td>
+        <td>${fmtQuota(res.remaining,res.unit)}</td>
+        <td style="color:${color}">${pct}%</td>
+        <td>${esc(res.status||'')}</td>
+        <td style="color:var(--dim)">${esc(res.note||'')}</td>
+      </tr>`;
+    }).join('');
+  }catch(e){console.error(e);}
+}
+function fmtQuota(v,unit){
+  if(unit==='token'){if(v>=1e8)return (v/1e8).toFixed(1)+'亿';if(v>=1e4)return (v/1e4).toFixed(1)+'万';return Number(v).toLocaleString();}
+  if(unit==='usd')return '$'+Number(v).toFixed(2);
+  if(unit==='cny')return '¥'+Number(v).toFixed(2);
+  return v;
 }
 function renderServers(servers){
   const grid=document.getElementById('server-grid');

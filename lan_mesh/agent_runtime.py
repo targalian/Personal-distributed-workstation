@@ -858,12 +858,19 @@ class AgentRuntime:
         usage = data.get("usage", {})
         choice_msg = data["choices"][0]["message"]
 
-        return {
+        result = {
             "message": choice_msg,  # 含 content + tool_calls
             "model": model_id,
             "input_tokens": usage.get("prompt_tokens", 0),
             "output_tokens": usage.get("completion_tokens", 0),
         }
+        # R1: 模型资源记账 (未启用时 no-op, 异常不影响主流程)
+        try:
+            from .model_resources import record_usage_global
+            record_usage_global(model_id, result["input_tokens"], result["output_tokens"])
+        except Exception:
+            pass
+        return result
 
     # ── LLM API 调用 (支持多 Provider + 降级链重试) ──────────────────
 
@@ -1142,12 +1149,19 @@ class AgentRuntime:
         if not full_content:
             raise TimeoutError(f"{model_id} 未返回任何内容 (首 token 超时 {FIRST_TOKEN_TIMEOUT}s)")
 
-        return {
+        result = {
             "content": full_content,
             "model": model_id,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens or len(full_content) // 4,  # 估算
         }
+        # R1: 模型资源记账 (未启用时 no-op, 异常不影响主流程)
+        try:
+            from .model_resources import record_usage_global
+            record_usage_global(model_id, result["input_tokens"], result["output_tokens"])
+        except Exception:
+            pass
+        return result
 
     def _call_llm_full(self, prompt: str, system_prompt: str = "") -> dict:
         """调用外部 LLM API (回退逻辑, 无路由器时使用)。

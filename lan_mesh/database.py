@@ -306,6 +306,21 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_task_memory_ts
                 ON task_memory(created_at);
 
+            -- R1: 模型资源用量日志 (每次 LLM 调用一行, 可审计可聚合)
+            CREATE TABLE IF NOT EXISTS resource_usage_log (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                resource_id     TEXT NOT NULL DEFAULT '',
+                model_id        TEXT NOT NULL DEFAULT '',
+                plan_type       TEXT NOT NULL DEFAULT '',
+                input_tokens    INTEGER NOT NULL DEFAULT 0,
+                output_tokens   INTEGER NOT NULL DEFAULT 0,
+                cost            REAL NOT NULL DEFAULT 0,
+                created_at      REAL NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_resource_usage_rid_ts
+                ON resource_usage_log(resource_id, created_at);
+
             -- Graph Engine: 图执行检查点表
             CREATE TABLE IF NOT EXISTS graph_checkpoints (
                 checkpoint_id  TEXT PRIMARY KEY,
@@ -1381,6 +1396,36 @@ class Database:
             "recommended_mode": recommended_mode,
             "common_errors": sorted(error_patterns.items(), key=lambda x: -x[1])[:3],
         }
+
+    # ── R1: 模型资源用量 ────────────────────────────────────────
+
+    def insert_resource_usage(self, resource_id: str, model_id: str,
+                              plan_type: str, input_tokens: int,
+                              output_tokens: int, cost: float):
+        """写入一条 LLM 调用用量记录。"""
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO resource_usage_log
+                (resource_id, model_id, plan_type, input_tokens, output_tokens, cost, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (resource_id, model_id, plan_type, int(input_tokens),
+              int(output_tokens), cost, time.time()))
+        conn.commit()
+
+    def sum_resource_usage(self, resource_id: str, since_ts: float) -> dict:
+        """聚合指定资源池在窗口内的用量。
+
+        Returns:
+            {"tokens": 输入+输出 token 总数, "cost": 折算金额总数}
+        """
+        conn = self._get_conn()
+        row = conn.execute("""
+            SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens,
+                   COALESCE(SUM(cost), 0) AS cost
+            FROM resource_usage_log
+            WHERE resource_id = ? AND created_at >= ?
+        """, (resource_id, since_ts)).fetchone()
+        return {"tokens": row["tokens"], "cost": row["cost"]}
 
     # ── Graph Checkpoint CRUD ───────────────────────────────────
 

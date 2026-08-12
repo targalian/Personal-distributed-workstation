@@ -247,6 +247,19 @@ class StationController:
                 model_info += f", 默认: {self._default_model}"
             logger.info("模型路由器已加载: %s", model_info)
 
+        # R1: 模型资源管理 (resources.yaml 不存在时 no-op, 不影响功能)
+        try:
+            from .model_resources import init_resource_manager
+            resources_path = self._find_resources_path()
+            if resources_path:
+                init_resource_manager(
+                    resources_path,
+                    model_pool.models if model_pool.models else None,
+                    self.db,
+                )
+        except Exception as e:
+            logger.warning("模型资源管理初始化失败 (no-op): %s", e)
+
         # MCP 工具网关
         self.mcp_gateway = MCPGateway()
 
@@ -282,6 +295,22 @@ class StationController:
             "message": "Secretary 已激活",
             "models": self.model_router.pool_size if self.model_router else 0,
         }
+
+    def _find_resources_path(self) -> str:
+        """查找 resources.yaml (与 model_pool.yaml 同目录约定)。"""
+        candidates = []
+        env_path = os.environ.get("LAN_MESH_RESOURCES")
+        if env_path:
+            candidates.append(Path(env_path))
+        candidates.append(Path(__file__).parent / "resources.yaml")
+        candidates.append(Path("resources.yaml"))
+        for c in candidates:
+            try:
+                if c.is_file():
+                    return str(c)
+            except Exception:
+                continue
+        return ""
 
     def deactivate_secretary(self) -> dict:
         """停用 Secretary 模式, 回到纯 Station 模式。"""

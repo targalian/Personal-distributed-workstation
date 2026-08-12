@@ -17,7 +17,11 @@
 import os
 from typing import Optional
 
+from .logger import get_logger
 from .protocol import DifficultyLevel, RoutingResult
+from .model_resources import resource_available
+
+logger = get_logger("model_router")
 
 
 # ── 难度 → 所需能力映射 ────────────────────────────────────────
@@ -296,6 +300,10 @@ class ModelRouter:
             api_key = os.environ.get(entry.api_key_env, "")
             if not api_key:
                 continue
+            # R1: 资源池可用性 (耗尽/过期/暂停 → 剔除; 未启用时放行)
+            if not resource_available(entry.id):
+                logger.debug("模型 %s 资源池不可用, 从候选剔除", entry.id)
+                continue
             candidates.append(entry)
         return candidates
 
@@ -320,6 +328,9 @@ class ModelRouter:
                 continue
             api_key = os.environ.get(fb_entry.api_key_env, "")
             if not api_key:
+                continue
+            # R1: 资源池可用性
+            if not resource_available(fb_entry.id):
                 continue
             chain.append(fb_entry.id)
 

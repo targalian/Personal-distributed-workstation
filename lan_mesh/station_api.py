@@ -1146,6 +1146,29 @@ def create_station_router(controller) -> APIRouter:
         stats = db.get_task_memory_stats(task_type=task_type)
         return stats
 
+    # ── R1: 模型资源管理 ──
+
+    @router.get("/api/resources")
+    async def get_model_resources():
+        """查询模型资源池汇总 (额度/已用/剩余/状态)。未启用时返回空列表。"""
+        _check_secretary()
+        from .model_resources import resource_summary
+        return resource_summary()
+
+    @router.post("/api/resources/usage")
+    async def record_model_usage(payload: dict):
+        """记录一次 LLM 调用消耗 (模型 → 资源池自动匹配)。
+
+        供 Worker 侧上报用量 (跨主机场景), 或补记历史消耗。
+        """
+        _check_secretary()
+        from .model_resources import record_usage_global
+        return record_usage_global(
+            payload.get("model", ""),
+            payload.get("input_tokens", 0),
+            payload.get("output_tokens", 0),
+        )
+
     # ── PM Agent 管理 ──
 
     @router.get("/api/pm")
