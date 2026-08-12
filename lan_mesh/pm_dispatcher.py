@@ -9,6 +9,7 @@ PM 分发器 — 团队创建与子任务分发
 5. 本地执行回退
 """
 import time
+import threading
 import uuid
 from typing import Optional
 
@@ -105,6 +106,13 @@ class PMDispatcher:
                 preferred_agent_id=agent_id,
             )
 
+            if not agent_info:
+                # 修复: 远程创建失败时回退到本地执行
+                logger.warning("[%s] 子任务 '%s' 远程创建子Agent失败, 回退本地执行",
+                              self._pm_id[:8], sub_name)
+                self.execute_subtask_locally(task, sub)
+                continue
+
             if agent_info:
                 member = {
                     "member_id": str(uuid.uuid4()),
@@ -136,7 +144,15 @@ class PMDispatcher:
 
                 if not sub.get("depends_on"):
                     self._record_subtask_start(sub_name)
-                    self.dispatch_subtask(station, agent_info, task, sub, plan=plan)
+                    # 非阻塞分发: 独立子任务并行执行
+                    t = threading.Thread(
+                        target=self.dispatch_subtask,
+                        args=(station, agent_info, task, sub),
+                        kwargs={"plan": plan},
+                        daemon=True,
+                        name=f"dispatch-{sub_name[:16]}",
+                    )
+                    t.start()
 
         # 上报团队结构到 Secretary
         st.teams[team_id] = team
@@ -147,9 +163,15 @@ class PMDispatcher:
 
     def dispatch_subtask(self, station: dict, agent_info: dict, task: dict,
                          sub: dict, plan: dict = None):
-        """向目标 work_station 的子 Agent 分发任务。"""
+        """向目标 work_station 的子 Agent 分发任务。
+
+        端点已改为异步 (立即返回 started), 实际执行在远程后台线程完成,
+        完成后通过 receive_subtask_result 回调 PM Monitor。
+        分发失败时自动回退到本地执行。
+        """
         ip = station.get("ip", "")
         port = station.get("api_port", 0)
+        sub_name = sub.get("name", "")
 
         input_data = dict(task.get("input_data", {}))
         if plan:
@@ -162,7 +184,7 @@ class PMDispatcher:
                 json={
                     "subtask_id": str(uuid.uuid4()),
                     "parent_task_id": task.get("task_id", ""),
-                    "name": sub.get("name", ""),
+                    "name": sub_name,
                     "description": sub.get("description", ""),
                     "required_skill": sub.get("skill", "code_generation"),
                     "input_data": input_data,
@@ -171,17 +193,36 @@ class PMDispatcher:
                     "pm_id": self._pm_id,
                     "reporter_id": agent_info.get("agent_id", ""),
                 },
-                timeout=300,
+                timeout=15,  # 新端点已异步, 应立即返回
             )
             if resp.status_code == 200:
-                result = resp.json()
-                status = "completed" if result.get("status") == "completed" else "failed"
-                self._agent.report_progress(
-                    0.5, status if status == "completed" else "in_progress",
-                    f"子任务 {sub.get('name', '')}: {result.get('error', '已分发')[:200]}"
-                )
+                body = resp.json()
+                if body.get("status") == "started":
+                    # 新端点 (station 内嵌): 已异步启动, 结果通过回调上报
+                    logger.info("[%s] 子任务 '%s' 已分发到 %s:%s (异步)",
+                                self._pm_id[:8], sub_name, ip, port)
+                else:
+                    # 旧端点 (独立 Worker): 同步执行完, 结果直接回注 Monitor
+                    logger.warning("[%s] 子任务 '%s' 由旧版端点同步执行完成, 结果回注",
+                                   self._pm_id[:8], sub_name)
+                    status = "completed" if body.get("status") == "completed" else "failed"
+                    self._agent.receive_subtask_result(
+                        task_name=sub_name,
+                        status=status,
+                        output_data=body.get("output", {}),
+                        agent_id=agent_info.get("agent_id", ""),
+                    )
+            else:
+                raise RuntimeError(f"HTTP {resp.status_code}")
+        except requests.exceptions.ReadTimeout:
+            # 超时无法确认远端状态 (旧版同步端点可能仍在执行), 不能本地回退
+            # 否则同一子任务会被执行两份; 交由 Monitor 超时保护接管
+            logger.warning("[%s] 分发子任务 '%s' 超时未确认, 远端可能仍在执行, 等待超时保护",
+                           self._pm_id[:8], sub_name)
         except Exception as e:
-            logger.error("[%s] 分发子任务失败: %s", self._pm_id[:8], e)
+            logger.warning("[%s] 分发子任务 '%s' 失败: %s, 回退本地执行",
+                          self._pm_id[:8], sub_name, e)
+            self.execute_subtask_locally(task, sub)
 
     # ── 依赖就绪分发 ──────────────────────────────────────────────
 
@@ -289,26 +330,44 @@ class PMDispatcher:
     # ── 本地执行 ──────────────────────────────────────────────────
 
     def execute_subtask_locally(self, task: dict, sub: dict):
-        """在本地执行子任务 (无可用远程站点时)。"""
-        sub_desc = sub.get("description", sub.get("name", ""))
+        """在本地执行子任务 (无可用远程站点时)。
+
+        修复: 执行完成后注入 Monitor 进度追踪, 触发依赖链分发和结果聚合。
+        """
+        sub_name = sub.get("name", "")
+        sub_desc = sub.get("description", sub_name)
         input_data = dict(task.get("input_data", {}))
         if not input_data.get("requirement") and not input_data.get("description"):
             input_data["requirement"] = sub_desc
         subtask = {
             "subtask_id": str(uuid.uuid4()),
             "parent_task_id": task.get("task_id", ""),
-            "name": sub.get("name", ""),
+            "name": sub_name,
             "description": sub_desc,
             "required_skill": sub.get("skill", "code_generation"),
             "input_data": input_data,
             "model_preference": "",
             "fallback_models": [],
         }
+
+        logger.info("[%s] 本地执行子任务: %s (skill=%s)",
+                   self._pm_id[:8], sub_name, sub.get("skill", ""))
         result = self._runtime.execute(subtask)
         status = "completed" if result.get("status") == "completed" else "failed"
+        output = result.get("output", {})
+
+        # 注入 Monitor 进度追踪 (触发依赖链分发 + 结果聚合)
+        self._agent.receive_subtask_result(
+            task_name=sub_name,
+            status=status,
+            output_data=output if isinstance(output, dict) else {"result": str(output)},
+            agent_id=f"local-{self._pm_id[:8]}",
+        )
+
         self._agent.report_progress(
-            0.5, status,
-            f"子任务 {sub.get('name', '')} {status}: {result.get('error', '')[:200]}"
+            1.0 if status == "completed" else 0.0, status,
+            f"子任务 {sub_name} {status}: {result.get('error', '')[:200]}",
+            reporter_type="pm", task_name=sub_name,
         )
 
     # ── Prompt 构建 ───────────────────────────────────────────────

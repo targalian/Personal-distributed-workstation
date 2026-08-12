@@ -251,6 +251,56 @@
   .typing-label{font-size:12px;color:var(--dim);margin-left:4px}
   .chat-input-bar input:disabled{opacity:.5;cursor:not-allowed}
   .chat-input-bar button:disabled{opacity:.5;cursor:wait}
+  /* ── 方案C: PM 线程 (L2) ── */
+  .pm-thread-dock{display:flex;gap:10px;padding:10px 2px 4px;overflow-x:auto;flex-shrink:0}
+  .pm-thread-chip{display:flex;align-items:center;gap:9px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:9px 14px;cursor:pointer;white-space:nowrap;transition:all .2s ease;position:relative;flex-shrink:0}
+  .pm-thread-chip:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 4px 14px rgba(91,140,255,.15)}
+  .pm-thread-chip.active{border-color:var(--accent);background:rgba(91,140,255,.08);box-shadow:0 0 0 1px var(--accent)}
+  .pm-thread-chip.awaiting{border-color:var(--yellow);animation:awaitGlow 1.8s ease-in-out infinite}
+  @keyframes awaitGlow{0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,0)}50%{box-shadow:0 0 12px 2px rgba(251,191,36,.35)}}
+  .pm-chip-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;transition:background .3s}
+  .pm-chip-dot.starting{background:var(--dim)}
+  .pm-chip-dot.planning{background:var(--yellow)}
+  .pm-chip-dot.executing{background:var(--green);animation:pulse 1.6s infinite}
+  .pm-chip-dot.monitoring{background:var(--green);animation:pulse 1.6s infinite}
+  .pm-chip-dot.awaiting_input{background:var(--yellow);animation:pulse 1s infinite}
+  .pm-chip-dot.completed{background:var(--accent)}
+  .pm-chip-dot.failed{background:var(--red)}
+  .pm-chip-dot.cancelled{background:var(--red)}
+  .pm-chip-dot.paused{background:var(--yellow)}
+  .pm-chip-name{font-size:13px;font-weight:600}
+  .pm-chip-task{font-size:11px;color:var(--dim);max-width:130px;overflow:hidden;text-overflow:ellipsis}
+  .pm-chip-status{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:600;background:var(--surface2);color:var(--dim)}
+  .pm-chip-status.awaiting_input{background:rgba(251,191,36,.15);color:var(--yellow)}
+  .pm-chip-status.executing,.pm-chip-status.monitoring{background:rgba(74,222,128,.12);color:var(--green)}
+  .pm-chip-status.failed{background:rgba(248,113,113,.12);color:var(--red)}
+  .pm-chip-badge{position:absolute;top:-5px;right:-5px;background:var(--yellow);color:#000;font-size:10px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0 4px}
+  /* 线程展开面板 */
+  .pm-thread-panel{background:var(--surface);border:1px solid var(--accent);border-radius:var(--radius);margin:8px 0;display:flex;flex-direction:column;max-height:320px;animation:threadSlide .25s ease;overflow:hidden;flex-shrink:0}
+  @keyframes threadSlide{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+  .thread-header{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--surface2)}
+  .thread-header .th-name{font-size:14px;font-weight:700}
+  .thread-header .th-task{font-size:12px;color:var(--dim)}
+  .thread-header .th-close{margin-left:auto;cursor:pointer;color:var(--dim);font-size:18px;line-height:1;transition:color .15s}
+  .thread-header .th-close:hover{color:var(--text)}
+  .thread-messages{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-height:80px}
+  .thread-msg{max-width:85%;padding:8px 12px;border-radius:10px;font-size:13px;line-height:1.45;word-break:break-word;white-space:pre-wrap}
+  .thread-msg.user{align-self:flex-end;background:rgba(91,140,255,.18);border:1px solid rgba(91,140,255,.3);border-bottom-right-radius:3px}
+  .thread-msg.pm{align-self:flex-start;background:var(--surface2);border:1px solid var(--border);border-bottom-left-radius:3px}
+  .thread-msg.system{align-self:center;background:transparent;color:var(--dim);font-size:11px;padding:2px 0}
+  .thread-msg .t-meta{font-size:10px;opacity:.55;margin-top:3px}
+  .thread-msg.clarification{border-color:var(--yellow);background:rgba(251,191,36,.06)}
+  .thread-input-bar{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--border);background:var(--surface2)}
+  .thread-input-bar input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:13px;outline:none}
+  .thread-input-bar input:focus{border-color:var(--accent)}
+  .thread-input-bar .btn{padding:8px 16px;font-size:13px}
+  .quick-chips{display:flex;gap:6px;flex-wrap:wrap;padding:6px 12px 10px}
+  .quick-chip{background:rgba(251,191,36,.12);border:1px solid var(--yellow);color:var(--yellow);border-radius:16px;padding:5px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+  .quick-chip:hover{background:var(--yellow);color:#000;transform:scale(1.05)}
+  /* L1 系统通知卡片 */
+  .chat-msg.sys-card{align-self:stretch;max-width:100%;background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--yellow);border-radius:8px;padding:12px 16px;font-size:13px;line-height:1.6}
+  .chat-msg.sys-card .sys-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+  .chat-msg.sys-card .sys-actions .quick-chip{font-size:11px;padding:4px 12px}
   /* ── P2P 主机通讯 ── */
   .chat-msg .file-info{display:flex;align-items:center;gap:8px;padding:4px 0}
   .chat-msg .file-info .file-icon{font-size:20px}
@@ -312,6 +362,10 @@
         <button class="btn" onclick="clearChat()" title="清空当前对话">🗑️</button>
         <button class="btn" onclick="deleteCurrentConv()" title="删除对话">❌</button>
       </div>
+      <!-- 方案C: PM 线程停靠区 (L2) -->
+      <div class="pm-thread-dock" id="pm-thread-dock" style="display:none"></div>
+      <!-- 方案C: 展开的 PM 线程面板 -->
+      <div id="pm-thread-panel-wrap"></div>
       <div class="chat-container">
         <div class="chat-messages" id="chat-messages">
           <div class="empty"><div class="icon">💬</div><p>向秘书发送消息开始对话</p><p class="hint">例如: "当前状态如何?" 或 "提交一个代码审查任务"</p></div>
@@ -730,11 +784,14 @@ document.querySelectorAll('.mobile-nav-item').forEach(t=>{
 function connectWS(){
   const proto=location.protocol==='https:'?'wss':'ws';
   ws=new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen=()=>{document.getElementById('ws-dot').classList.remove('offline');document.getElementById('ws-label').textContent='已连接';};
+  ws.onopen=()=>{document.getElementById('ws-dot').classList.remove('offline');document.getElementById('ws-label').textContent='已连接';refreshAllState();};
   ws.onmessage=(e)=>{
     const msg=JSON.parse(e.data);
     if(msg.type==='hosts'||msg.type==='heartbeat'||msg.type==='host_registered')refreshHosts();
-    if(msg.type==='task_submitted'||msg.type==='task_updated')refreshTasks();
+    if(msg.type==='task_submitted'||msg.type==='task_updated'||msg.type==='task_deleted')refreshTasks();
+    if(msg.type==='task_delivered'){showToast(`📦 任务「${msg.data.task_name||''}」已交付，等待验收`,'ok');refreshTasks();}
+    if(msg.type==='task_cancelled'){showToast(`🚫 任务已取消: ${msg.data.message||''}`,'info');refreshTasks();refreshPMAgents();}
+    if(msg.type==='task_paused'){showToast(`⏸️ 任务已暂停: ${msg.data.message||''}`,'info');refreshTasks();}
     if(msg.type==='agent_registered')refreshAgents();
     if(msg.type==='project_created'||msg.type==='project_updated'||msg.type==='project_archived')refreshProjects();
     if(msg.type==='secretary_activated'){secretaryActive=true;updateSecretaryUI();document.getElementById('role-badge').textContent='Station + Secretary';document.getElementById('role-badge').style.color='var(--green)';document.getElementById('role-badge').style.borderColor='var(--green)';}
@@ -743,19 +800,32 @@ function connectWS(){
     if(msg.type==='skill_assigned'||msg.type==='skill_revoked'||msg.type==='skills_scanned')refreshSkills();
     // PM Agent 架构: 新消息类型
     if(msg.type==='chat_reply'){appendChatMessage('assistant',msg.data.reply,msg.data.timestamp);}
-    if(msg.type==='pm_registered'){refreshPMAgents();refreshTasks();}
-    if(msg.type==='pm_status_change'){refreshPMAgents();}
+    if(msg.type==='pm_registered'){refreshPMAgents();refreshTasks();loadPMThreads();}
+    if(msg.type==='pm_status_change'){
+      refreshPMAgents();onPMThreadStatusChange(msg.data);
+      const st=msg.data.status||'';
+      if(st==='failed'){showToast(`❌ PM Agent 执行失败: ${msg.data.message||msg.data.pm_id||''}`,'err');refreshTasks();}
+      if(st==='cancelled'){showToast(`🚫 PM 任务已取消`,'info');refreshTasks();}
+      if(st==='awaiting_input'){showToast(`❓ PM 请求决策: ${msg.data.clarification_question||'请查看 PM 线程'}`,'info');}
+    }
     if(msg.type==='team_update'){refreshPMAgents();}
+    if(msg.type==='pm_thread_attached'){onPMThreadAttached(msg.data);}
+    if(msg.type==='pm_thread_message'){/* 线程消息已通过 API 响应处理 */}
     if(msg.type==='progress_report'){
       window._wsReports=window._wsReports||[];
       window._wsReports.unshift(msg.data);
       window._wsReports=window._wsReports.slice(0,20);
       refreshPMAgents();renderWsActivity();
     }
-    if(msg.type==='task_updated'){renderWsOverview();}
+    if(msg.type==='task_updated'||msg.type==='task_deleted'){renderWsOverview();}
     if(msg.type==='p2p_chat'){onP2PChatMessage(msg.data);}
   };
   ws.onclose=()=>{document.getElementById('ws-dot').classList.add('offline');document.getElementById('ws-label').textContent='重连中...';setTimeout(connectWS,3000);};
+  ws.onerror=()=>{};
+}
+function refreshAllState(){
+  refreshHosts();refreshTasks();refreshAgents();refreshProjects();
+  checkSecretaryState();refreshPMAgents();loadPMThreads();renderWsOverview();
 }
 
 // ── 主机面板 ──
@@ -818,16 +888,21 @@ function renderTasks(){
   grid.innerHTML=tasks.map(t=>{
     const subs=t.subtasks||[];const sc=subs.length;const done=subs.filter(s=>s.status==='completed').length;
     const pct=sc?Math.round(done/sc*100):(t.status==='completed'?100:0);
-    const c=t.status==='completed'?'idle':t.status==='failed'?'archived':'busy';
+    const c=t.status==='completed'?'idle':t.status==='failed'?'archived':t.status==='interrupted'?'archived':'busy';
     const pmInfo=t.pm_agent_id?` | 🧑‍💼 PM: ${esc(t.pm_agent_id.slice(0,12))}`:'';
     const projName=t.project_id?projNameById(t.project_id):'';
     const subRows=subs.map(s=>`<div class="subtask-row"><span class="step-dot ${s.status}"></span><span style="flex:1">${esc(s.name||s.description||'子任务')}</span><span style="color:var(--dim)">[${s.status}]</span>${s.assigned_agent_id?'<span style="color:var(--dim)"> → '+esc(s.assigned_agent_id.slice(0,8))+'</span>':''}</div>`).join('');
+    const canCancel=['running','monitoring','planning','executing'].includes(t.status);
+    const canResubmit=t.status==='interrupted'||t.status==='failed'||t.status==='cancelled';
+    const actionBtns=(canCancel?`<button class="btn sm" style="background:#e5a33c;color:#fff;border:none" onclick="event.stopPropagation();pauseTask('${t.task_id}','${escJs(t.name||'')}')">&#10074;&#10074; 暂停</button><button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="event.stopPropagation();cancelTask('${t.task_id}','${escJs(t.name||'')}')">&#9724; 取消</button>`:'')+(canResubmit?`<button class="btn sm primary" onclick="event.stopPropagation();resubmitTask('${t.task_id}')">🔄 重新提交</button>`:'');
+    const hasDelivery=t.output_data&&t.output_data._delivery;
+    const deliveryBadge=hasDelivery?`<span class="badge" style="background:${t.output_data._delivery.accepted===true?'var(--green)':t.output_data._delivery.accepted===false?'#e5533c':'var(--yellow)'};color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">${t.output_data._delivery.accepted===true?'✅ 已验收':t.output_data._delivery.accepted===false?'❌ 已退回':'📦 待验收'}</span>`:'';
     return `<div class="card task-card" onclick="toggleTaskExpand(this)">
-      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span></div></div>
+      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span>${deliveryBadge}</div></div>
       <div class="card-meta">${esc(t.description||'-')}<br>📊 ${done}/${sc} 子任务 (${pct}%) ${projName?'| 📁 '+esc(projName):''}${pmInfo}</div>
       <div class="pbar"><div class="pfill ${pct>=100?'low':'mid'}" style="width:${pct}%"></div></div>
       <div class="task-expand">${subRows||'<div class="subtask-row" style="color:var(--dim)">无子任务</div>'}
-        <div class="subtask-row"><button class="btn sm" onclick="event.stopPropagation();showTaskDetail('${t.task_id}')">🔍 查看详情</button>${t.task_id?`<button class="btn sm" onclick="event.stopPropagation();openDagForTask('${t.task_id}')">📈 DAG</button>`:''}</div>
+        <div class="subtask-row" style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" onclick="event.stopPropagation();showTaskDetail('${t.task_id}')">🔍 查看详情</button>${hasDelivery?`<button class="btn sm primary" onclick="event.stopPropagation();showDelivery('${t.task_id}')">📦 查看交付物</button>`:''}${t.task_id?`<button class="btn sm" onclick="event.stopPropagation();openDagForTask('${t.task_id}')">📈 DAG</button>`:''}${actionBtns}</div>
       </div>
     </div>`;
   }).join('');
@@ -842,25 +917,106 @@ function openDagForTask(taskId){
 async function showTaskDetail(id){
   const t=allTasks.find(x=>x.task_id===id);if(!t)return;
   let steps=(t.subtasks||[]).map(s=>`<div class="task-step"><span class="step-dot ${s.status}"></span><span>${esc(s.name||s.description||'子任务')} <span style="color:var(--dim)">[${s.status}]</span>${s.assigned_agent_id?' → '+esc(s.assigned_agent_id.slice(0,8)):''}</span></div>`).join('');
-  let out=t.output_data&&Object.keys(t.output_data).length?`<pre>${esc(JSON.stringify(t.output_data,null,2))}</pre>`:'<p style="color:var(--dim)">暂无输出</p>';
+  let out=t.output_data&&Object.keys(t.output_data).length?`<pre style="max-height:200px;overflow:auto">${esc(JSON.stringify(t.output_data,null,2))}</pre>`:'<p style="color:var(--dim)">暂无输出</p>';
+  const d=t.output_data&&t.output_data._delivery;
+  const deliverySec=d?`<div class="modal-sec" style="border:1px solid var(--yellow);border-radius:8px;padding:12px"><h3>📦 交付物 ${d.accepted===true?'<span style="color:var(--green)">(已验收)</span>':d.accepted===false?'<span style="color:#e5533c">(已退回)</span>':'<span style="color:var(--yellow)">(待验收)</span>'}</h3><p style="font-size:13px;white-space:pre-wrap;max-height:150px;overflow:auto">${esc(d.summary||d.deliverable||'').slice(0,500)}</p><button class="btn sm primary" onclick="closeOverlayForce();showDelivery('${t.task_id}')">查看完整交付物</button></div>`:'';
+  const canAct=['running','monitoring','planning','executing'].includes(t.status);
   document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>${esc(t.name)}</h2><p style="color:var(--dim);font-size:13px">${t.status} · ${fmtTime(t.created_at)}${t.completed_at?' → '+fmtTime(t.completed_at):''}</p>
   <div class="modal-sec"><h3>描述</h3><p style="font-size:14px">${esc(t.description||'-')}</p></div>
+  ${deliverySec}
   <div class="modal-sec"><h3>子任务 (${(t.subtasks||[]).length})</h3>${steps||'<p style="color:var(--dim)">无子任务</p>'}</div>
-  <div class="modal-sec"><h3>输出结果</h3>${out}</div>`;
+  <div class="modal-sec"><h3>输出结果</h3>${out}</div>
+  <div style="margin-top:18px;display:flex;gap:10px;justify-content:flex-end">
+    ${canAct?`<button class="btn sm" style="background:#e5a33c;color:#fff;border:none" onclick="closeOverlayForce();pauseTask('${t.task_id}','${escJs(t.name||'')}')">&#10074;&#10074; 暂停</button><button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="closeOverlayForce();cancelTask('${t.task_id}','${escJs(t.name||'')}')">&#9724; 取消任务</button>`:''}
+    <button class="btn sm" onclick="closeOverlayForce()">关闭</button>
+    <button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="deleteTask('${t.task_id}','${escJs(t.name||'')}')">🗑️ 删除任务</button>
+  </div>`;
   document.getElementById('overlay').classList.add('show');
+}
+async function deleteTask(taskId, name){
+  if(!confirm(`确定删除任务 "${name}" 及其 PM 记录？此操作不可恢复。`))return;
+  try{
+    const resp=await fetch(`/api/tasks/${taskId}`,{method:'DELETE'});
+    if(resp.ok){
+      allTasks=allTasks.filter(t=>t.task_id!==taskId);
+      renderTasks();
+      renderWsOverview();
+      refreshPMAgents();
+      loadPMThreads();
+      closeOverlayForce();
+      showToast(`任务「${name}」已删除`,'info');
+    }else{
+      const err=await resp.json();
+      alert('删除失败: '+(err.detail||'未知错误'));
+    }
+  }catch(e){alert('删除请求异常: '+e.message);}
 }
 async function submitTask(){
   const name=document.getElementById('task-name').value.trim();
   const desc=document.getElementById('task-desc').value.trim();
   const proj=document.getElementById('task-project').value;
-  if(!name){alert('请输入任务名称');return;}
-  try{const r=await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:desc,project_id:proj})});
-    if(r.status===402){const d=await r.json();alert('预算超支: '+d.detail);return;}
+  if(!name){showToast('请输入任务名称','err');return;}
+  const btn=event&&event.target;try{
+    if(btn){btn.disabled=true;btn.textContent='⏳ 提交中...';}
+    const r=await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:desc,project_id:proj})});
+    if(r.status===402){const d=await r.json();showToast('预算超支: '+d.detail,'err');return;}
     const t=await r.json();document.getElementById('task-name').value='';document.getElementById('task-desc').value='';refreshTasks();
-    if(t.pm_agent_id){alert(`任务已提交: ${t.task_id.slice(0,8)}\n已分配 PM Agent: ${t.pm_agent_id.slice(0,12)}\n状态: ${t.status}`);}
-    else if(t.status==='failed'){alert(`任务提交失败: ${(t.output_data||{}).error||'未知错误'}`);}
-    else{alert('任务已提交: '+t.task_id.slice(0,8));}
-  }catch(e){alert('提交失败:'+e.message);}
+    if(t.pm_agent_id){showToast(`✅ 任务已提交，PM: ${t.pm_agent_id.slice(0,12)}`,'ok');}
+    else if(t.status==='failed'){showToast(`❌ 任务提交失败: ${(t.output_data||{}).error||'未知错误'}`,'err');}
+    else{showToast('✅ 任务已提交: '+t.task_id.slice(0,8),'ok');}
+  }catch(e){showToast('提交失败: '+e.message,'err');}
+  finally{if(btn){btn.disabled=false;btn.textContent='📤 提交任务';}}
+}
+async function cancelTask(taskId,name){
+  if(!confirm(`确定取消任务「${name}」？PM Agent 将被停止。`))return;
+  try{const r=await fetch(`/api/tasks/${taskId}/cancel`,{method:'POST'});
+    if(r.ok){showToast(`任务「${name}」已取消`,'info');refreshTasks();refreshPMAgents();}
+    else{const d=await r.json();showToast('取消失败: '+(d.detail||'未知错误'),'err');}
+  }catch(e){showToast('取消请求异常: '+e.message,'err');}
+}
+async function pauseTask(taskId,name){
+  try{const r=await fetch(`/api/tasks/${taskId}/pause`,{method:'POST'});
+    if(r.ok){showToast(`任务「${name}」已暂停`,'info');refreshTasks();}
+    else{const d=await r.json();showToast('暂停失败: '+(d.detail||'未知错误'),'err');}
+  }catch(e){showToast('暂停请求异常: '+e.message,'err');}
+}
+function showDelivery(taskId){
+  const t=allTasks.find(x=>x.task_id===taskId);if(!t||!t.output_data||!t.output_data._delivery)return;
+  const d=t.output_data._delivery;
+  const stats=d.subtask_stats||{};
+  const statusHtml=d.accepted===true?'<span style="color:var(--green)">✅ 已验收</span>':d.accepted===false?'<span style="color:#e5533c">❌ 已退回'+(d.reject_reason?' — '+esc(d.reject_reason):'')+'</span>':'<span style="color:var(--yellow)">📦 待验收</span>';
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>📦 交付物 — ${esc(t.name||'')}</h2>
+  <p style="color:var(--dim);font-size:13px">状态: ${statusHtml} · 交付时间: ${d.delivered_at?fmtTime(d.delivered_at):'-'}</p>
+  <div class="modal-sec"><h3>摘要</h3><p style="font-size:14px;white-space:pre-wrap">${esc(d.summary||'无摘要')}</p></div>
+  <div class="modal-sec"><h3>子任务统计</h3><p>总计: ${stats.total||0} · 完成: <span style="color:var(--green)">${stats.completed||0}</span> · 失败: <span style="color:#e5533c">${stats.failed||0}</span></p></div>
+  <div class="modal-sec"><h3>完整交付内容</h3><pre style="max-height:400px;overflow:auto;white-space:pre-wrap;font-size:13px;background:var(--bg);padding:12px;border-radius:8px;border:1px solid var(--border)">${esc(d.deliverable||'无内容')}</pre></div>
+  <div style="margin-top:18px;display:flex;gap:10px;justify-content:flex-end">
+    <button class="btn sm" onclick="closeOverlayForce()">关闭</button>
+    ${d.accepted===null?`<button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="rejectDelivery('${taskId}')">❌ 退回</button><button class="btn sm" style="background:var(--green);color:#fff;border:none" onclick="acceptDelivery('${taskId}')">✅ 验收</button>`:''}
+  </div>`;
+  document.getElementById('overlay').classList.add('show');
+}
+async function acceptDelivery(taskId){
+  try{const r=await fetch(`/api/tasks/${taskId}/accept`,{method:'POST'});
+    if(r.ok){showToast('✅ 已验收','ok');closeOverlayForce();refreshTasks();}
+    else{const d=await r.json();showToast('验收失败: '+(d.detail||''),'err');}
+  }catch(e){showToast('请求异常: '+e.message,'err');}
+}
+async function rejectDelivery(taskId){
+  const reason=await showInputDialog('退回原因 (可选):');
+  if(reason===null)return;
+  try{const r=await fetch(`/api/tasks/${taskId}/reject`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason})});
+    if(r.ok){showToast('已退回交付物','info');closeOverlayForce();refreshTasks();}
+    else{const d=await r.json();showToast('退回失败: '+(d.detail||''),'err');}
+  }catch(e){showToast('请求异常: '+e.message,'err');}
+}
+async function resubmitTask(taskId){
+  const t=allTasks.find(x=>x.task_id===taskId);if(!t)return;
+  try{
+    const r=await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:t.name,description:t.description||'',project_id:t.project_id||''})});
+    if(r.ok){const nt=await r.json();showToast(`✅ 任务已重新提交: ${nt.task_id.slice(0,8)}`,'ok');refreshTasks();}
+    else{const d=await r.json();showToast('重新提交失败: '+(d.detail||''),'err');}
+  }catch(e){showToast('请求异常: '+e.message,'err');}
 }
 
 // ── Agent面板 ──
@@ -1087,17 +1243,53 @@ async function sendChatMessage(){
     document.getElementById('chat-input').focus();
   }
 }
-function appendChatMessage(role,content,timestamp){
+function appendChatMessage(role,content,timestamp,extra){
   const container=document.getElementById('chat-messages');
   const empty=container.querySelector('.empty');
   if(empty)empty.remove();
   const msg=document.createElement('div');
-  msg.className='chat-msg '+role;
-  const rendered=role==='assistant'?renderMarkdown(content):esc(content);
-  msg.innerHTML=rendered+'<div class="msg-meta">'+(role==='user'?'Boss':'秘书')+' · '+fmtTime(timestamp)+'</div>';
+  // 方案C: L1 系统通知卡片 (PM 决策请求)
+  const msgType=extra&&extra.type?extra.type:'';
+  if(role==='system'&&msgType==='pm_clarification'){
+    msg.className='chat-msg sys-card';
+    const pmId=extra.pm_id||'';
+    const options=extra.options||[];
+    let html=renderMarkdown(content);
+    if(options.length||pmId){
+      html+='<div class="sys-actions">';
+      options.forEach(o=>{html+=`<span class="quick-chip" onclick="l1QuickReply('${pmId}','${escJs(o)}')">${esc(o)}</span>`;});
+      if(pmId)html+=`<span class="quick-chip" style="border-color:var(--accent);color:var(--accent);background:rgba(91,140,255,.1)" onclick="openThreadFromL1('${pmId}')">💬 展开线程对话</span>`;
+      html+='</div>';
+    }
+    msg.innerHTML=html;
+  }else{
+    msg.className='chat-msg '+role;
+    const rendered=role==='assistant'?renderMarkdown(content):esc(content);
+    msg.innerHTML=rendered+'<div class="msg-meta">'+(role==='user'?'Boss':(role==='system'?'':('秘书')))+' · '+fmtTime(timestamp)+'</div>';
+  }
   container.appendChild(msg);
   container.scrollTop=container.scrollHeight;
   chatMessages.push({role,content,timestamp});
+}
+// 方案C: L1 快捷回复 → 直接注入 PM 线程
+async function l1QuickReply(pmId,option){
+  if(!pmId)return;
+  try{
+    const r=await fetch(`/api/pm-threads/${pmId}/messages`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:option,conv_id:_activeConvId})
+    });
+    const d=await r.json();
+    showToast(d.ok?`✅ 决策「${option}」已发送给 PM`:(d.reply||'发送失败'),d.ok?'ok':'err');
+    if(_openThreadId===pmId)appendThreadMsgLocal(pmId,{role:'user',content:option,timestamp:Date.now()/1000});
+  }catch(e){showToast('发送失败:'+e.message,'err');}
+}
+// 方案C: 从 L1 通知卡片展开对应 PM 线程
+async function openThreadFromL1(pmId){
+  if(!_pmThreads.find(t=>t.pm_id===pmId)){await loadPMThreads();}
+  _openThreadId=pmId;
+  renderPMThreadDock();
+  await openPMThread(pmId);
 }
 function renderMarkdown(text){
   // 简易 Markdown 渲染: 代码块 + 行内代码 + 加粗 + 列表
@@ -1131,7 +1323,7 @@ async function loadChatHistory(){
       return;
     }
     chatMessages=[];
-    msgs.forEach(m=>appendChatMessage(m.role,m.content,m.timestamp));
+    msgs.forEach(m=>appendChatMessage(m.role,m.content,m.timestamp,{type:m.type,pm_id:m.pm_id,options:m.options}));
   }catch(e){console.error('加载对话消息失败:',e);}
 }
 function clearChat(){
@@ -1172,12 +1364,14 @@ function renderConvList(){
 }
 async function switchConversation(convId){
   _activeConvId=convId;
+  closePMThread();
   renderConvList();
   // 更新标题
   const meta=_convList.find(c=>c.id===convId);
   document.getElementById('chat-conv-title').textContent=meta?meta.title:'对话';
   document.getElementById('chat-conv-project').textContent=meta&&meta.project_id?`项目: ${meta.project_id}`:'';
   await loadChatHistory();
+  loadPMThreads();
 }
 async function createConversation(){
   const title=await showInputDialog('对话标题:','新对话');
@@ -1206,6 +1400,198 @@ async function deleteCurrentConv(){
     }
     showToast('对话已删除','info');
   }catch(e){showToast('删除失败:'+e.message,'err');}
+}
+
+// ── 方案C: PM 线程 (L2 层) ──
+let _pmThreads=[];          // 当前对话的 PM 线程列表
+let _openThreadId='';       // 当前展开的线程 pm_id
+let _threadMessages={};     // pm_id → messages 缓存
+
+const _PM_STATUS_LABEL={starting:'启动中',planning:'规划中',executing:'执行中',monitoring:'监控中',awaiting_input:'⚠️ 等待决策',completed:'已完成',failed:'已失败',cancelled:'已取消',paused:'已暂停'};
+
+async function loadPMThreads(){
+  if(!_activeConvId){_pmThreads=[];renderPMThreadDock();return;}
+  try{
+    const r=await fetch(`/api/conversations/${_activeConvId}/pm-threads`);
+    const d=await r.json();
+    _pmThreads=d.threads||[];
+  }catch(e){_pmThreads=[];}
+  renderPMThreadDock();
+}
+
+function renderPMThreadDock(){
+  const dock=document.getElementById('pm-thread-dock');
+  if(!_pmThreads.length){dock.style.display='none';dock.innerHTML='';return;}
+  dock.style.display='flex';
+  dock.innerHTML=_pmThreads.map(t=>{
+    const st=t.status||'starting';
+    const isAwait=st==='awaiting_input';
+    const isActive=t.pm_id===_openThreadId;
+    const label=_PM_STATUS_LABEL[st]||st;
+    return `<div class="pm-thread-chip ${isActive?'active':''} ${isAwait?'awaiting':''}" onclick="togglePMThread('${t.pm_id}')" title="${esc(t.task_name||'')}">
+      ${isAwait?'<span class="pm-chip-badge">!</span>':''}
+      <span class="pm-chip-dot ${st}"></span>
+      <span class="pm-chip-name">🧑‍💼 ${esc(t.agent_name||'PM')}</span>
+      <span class="pm-chip-task">${esc(t.task_name||'')}</span>
+      <span class="pm-chip-status ${st}">${label}</span>
+    </div>`;
+  }).join('');
+}
+
+async function togglePMThread(pmId){
+  if(_openThreadId===pmId){closePMThread();return;}
+  _openThreadId=pmId;
+  renderPMThreadDock();
+  await openPMThread(pmId);
+}
+
+function closePMThread(){
+  _openThreadId='';
+  document.getElementById('pm-thread-panel-wrap').innerHTML='';
+  renderPMThreadDock();
+}
+
+async function openPMThread(pmId){
+  const thread=_pmThreads.find(t=>t.pm_id===pmId);
+  if(!thread){closePMThread();return;}
+  const wrap=document.getElementById('pm-thread-panel-wrap');
+  const st=thread.status||'starting';
+  const isAwait=st==='awaiting_input';
+
+  // 加载线程消息
+  let msgs=[];
+  try{
+    const r=await fetch(`/api/pm-threads/${pmId}/messages?limit=80`);
+    const d=await r.json();
+    msgs=d.messages||[];
+  }catch(e){}
+  _threadMessages[pmId]=msgs;
+
+  // 查找最新的澄清请求 (用于快捷回复)
+  const lastClarification=[...msgs].reverse().find(m=>m.type==='clarification');
+  const showChips=isAwait&&lastClarification&&lastClarification.options&&lastClarification.options.length;
+
+  wrap.innerHTML=`<div class="pm-thread-panel" id="thread-panel-${pmId}">
+    <div class="thread-header">
+      <span class="pm-chip-dot ${st}"></span>
+      <span class="th-name">🧑‍💼 ${esc(thread.agent_name||'PM')}</span>
+      <span class="th-task">${esc(thread.task_name||'')} · ${_PM_STATUS_LABEL[st]||st}</span>
+      <span class="th-close" onclick="closePMThread()" title="收起线程">✕</span>
+    </div>
+    <div class="thread-messages" id="thread-msgs-${pmId}">
+      ${msgs.length?msgs.map(m=>renderThreadMsg(m)).join(''):'<div style="text-align:center;color:var(--dim);font-size:12px;padding:16px">线程暂无消息，直接输入即可与 PM 对话</div>'}
+    </div>
+    ${showChips?`<div class="quick-chips" id="thread-chips-${pmId}">${lastClarification.options.map(o=>`<span class="quick-chip" onclick="sendThreadQuickReply('${pmId}','${esc(o)}')">${esc(o)}</span>`).join('')}</div>`:''}
+    <div class="thread-input-bar">
+      <input type="text" id="thread-input-${pmId}" placeholder="直接发送给 ${esc(thread.agent_name||'PM')}…" onkeydown="if(event.key==='Enter')sendThreadMessage('${pmId}')">
+      <button class="btn primary" onclick="sendThreadMessage('${pmId}')">发送</button>
+    </div>
+  </div>`;
+
+  // 滚动到底部
+  const msgEl=document.getElementById(`thread-msgs-${pmId}`);
+  if(msgEl)msgEl.scrollTop=msgEl.scrollHeight;
+  const inp=document.getElementById(`thread-input-${pmId}`);
+  if(inp)inp.focus();
+}
+
+function renderThreadMsg(m){
+  const role=m.role||'system';
+  const cls=role==='user'?'user':(role==='pm'?'pm'+(m.type==='clarification'?' clarification':''):'system');
+  const label=role==='user'?'Boss':(role==='pm'?'PM':'');
+  const meta=label?`<div class="t-meta">${label} · ${fmtTime(m.timestamp)}</div>`:'';
+  return `<div class="thread-msg ${cls}">${role==='user'?esc(m.content):renderMarkdown(m.content||'')}${meta}</div>`;
+}
+
+async function sendThreadMessage(pmId){
+  const inp=document.getElementById(`thread-input-${pmId}`);
+  if(!inp)return;
+  const text=inp.value.trim();
+  if(!text)return;
+  inp.value='';
+  // 立即显示用户消息
+  appendThreadMsgLocal(pmId,{role:'user',content:text,timestamp:Date.now()/1000});
+  try{
+    const r=await fetch(`/api/pm-threads/${pmId}/messages`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:text,conv_id:_activeConvId})
+    });
+    const d=await r.json();
+    if(d.ok){
+      appendThreadMsgLocal(pmId,{role:'system',content:'✅ 已发送给 PM Agent',timestamp:Date.now()/1000});
+      // 发送成功后清除快捷回复 chips
+      const chips=document.getElementById(`thread-chips-${pmId}`);
+      if(chips)chips.remove();
+    }else{
+      appendThreadMsgLocal(pmId,{role:'system',content:d.reply||'发送失败',timestamp:Date.now()/1000});
+    }
+  }catch(e){
+    appendThreadMsgLocal(pmId,{role:'system',content:'[通信失败] '+e.message,timestamp:Date.now()/1000});
+  }
+}
+
+async function sendThreadQuickReply(pmId,option){
+  appendThreadMsgLocal(pmId,{role:'user',content:option,timestamp:Date.now()/1000});
+  const chips=document.getElementById(`thread-chips-${pmId}`);
+  if(chips)chips.remove();
+  try{
+    const r=await fetch(`/api/pm-threads/${pmId}/messages`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:option,conv_id:_activeConvId})
+    });
+    const d=await r.json();
+    appendThreadMsgLocal(pmId,{role:'system',content:d.ok?'✅ 决策已发送':(d.reply||'发送失败'),timestamp:Date.now()/1000});
+  }catch(e){
+    appendThreadMsgLocal(pmId,{role:'system',content:'[通信失败] '+e.message,timestamp:Date.now()/1000});
+  }
+}
+
+function appendThreadMsgLocal(pmId,m){
+  const el=document.getElementById(`thread-msgs-${pmId}`);
+  if(!el)return;
+  // 清除空状态提示
+  const placeholder=el.querySelector('div[style]');
+  if(placeholder&&!placeholder.classList.contains('thread-msg'))placeholder.remove();
+  el.insertAdjacentHTML('beforeend',renderThreadMsg(m));
+  el.scrollTop=el.scrollHeight;
+  if(_threadMessages[pmId])_threadMessages[pmId].push(m);
+}
+
+// WS 事件: PM 状态变更时刷新线程卡片
+function onPMThreadStatusChange(data){
+  const pmId=data.pm_id||'';
+  const st=data.status||'';
+  const t=_pmThreads.find(x=>x.pm_id===pmId);
+  if(t){
+    t.status=st;
+    renderPMThreadDock();
+    // 如果该线程正在展开, 更新头部状态
+    if(_openThreadId===pmId){
+      const panel=document.getElementById(`thread-panel-${pmId}`);
+      if(panel){
+        const dot=panel.querySelector('.pm-chip-dot');
+        if(dot)dot.className='pm-chip-dot '+st;
+        const task=panel.querySelector('.th-task');
+        if(task)task.textContent=(t.task_name||'')+' · '+(_PM_STATUS_LABEL[st]||st);
+      }
+      // awaiting_input 且有选项时动态插入快捷回复
+      if(st==='awaiting_input'&&data.clarification_options&&data.clarification_options.length){
+        appendThreadMsgLocal(pmId,{role:'pm',content:data.clarification_question||'',timestamp:Date.now()/1000,type:'clarification',options:data.clarification_options});
+        let chips=document.getElementById(`thread-chips-${pmId}`);
+        if(!chips){
+          const inputBar=panel.querySelector('.thread-input-bar');
+          if(inputBar){
+            inputBar.insertAdjacentHTML('beforebegin',`<div class="quick-chips" id="thread-chips-${pmId}">${data.clarification_options.map(o=>`<span class="quick-chip" onclick="sendThreadQuickReply('${pmId}','${escJs(o)}')">${esc(o)}</span>`).join('')}</div>`);
+          }
+        }
+      }
+    }
+  }
+}
+
+// WS 事件: PM 线程新绑定
+function onPMThreadAttached(data){
+  if(data.conv_id===_activeConvId)loadPMThreads();
 }
 
 // ── PM Agent / 团队管理 ──
@@ -1340,6 +1726,9 @@ function renderWsActivity(){
 function closeOverlay(e){if(e.target===e.currentTarget)document.getElementById('overlay').classList.remove('show');}
 function closeOverlayForce(){document.getElementById('overlay').classList.remove('show');}
 function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+// JS 字符串上下文转义 (onclick 属性内): HTML 属性先解码实体再执行 JS,
+// 故必须先转义 & 与 " 保住属性边界, 再用 \ 转义 ' 与 \ 防止 JS 字符串提前终止
+function escJs(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r?\n/g,'\\n');}
 function fmtMem(mb){if(!mb)return'-';return mb>=1024?(mb/1024).toFixed(1)+' GB':mb+' MB';}
 function fmtSize(b){if(!b)return'0 B';const u=['B','KB','MB','GB','TB'];const i=Math.floor(Math.log(b)/Math.log(1024));return(b/Math.pow(1024,i)).toFixed(1)+' '+u[i];}
 function fmtTime(ts){if(!ts)return'-';return new Date(ts*1000).toLocaleString('zh-CN');}

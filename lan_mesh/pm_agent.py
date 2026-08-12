@@ -118,11 +118,34 @@ class ProjectManagerAgent:
                     }]
                 self.sync_subtasks()
                 result = self._planner.execute_directly(task)
+
+                # 校验: 如果执行结果是错误信息, 不能当作完成交付
+                summary = result.get("summary", "")
+                if result.get("status") == "failed" or summary.startswith(("[未配置", "[LLM 调用失败", "[模型调用失败")):
+                    error_msg = summary or "执行失败"
+                    logger.error("[%s] 任务执行失败 (LLM 错误): %s", self.pm_id[:8], error_msg)
+                    self.report_status("failed")
+                    self.report_progress(0.0, "failed", error_msg)
+                    return
+
                 for sub in plan.get("decomposition", []):
                     st.subtask_outputs[sub.get("name", "")] = result
                 self.sync_subtasks()
-                self.report_status("completed", task_list=[{"name": task.get("name", ""), "status": "completed"}])
-                self.report_progress(1.0, "completed", f"任务完成: {result.get('summary', '')}")
+
+                # 构建交付物并上报 (修复: single 模式也必须创建交付记录)
+                task_name = task.get("name", "")
+                task_desc = task.get("description", "")
+                deliverable = result.get("summary", "")
+                # 尝试从 runtime 结果中提取完整代码
+                full_output = st.subtask_outputs.get(plan["decomposition"][0].get("name", ""), {})
+                if isinstance(full_output, dict) and full_output.get("summary"):
+                    deliverable = full_output["summary"]
+                subtask_results = [{"name": s.get("name", ""), "status": "completed", "output": result}
+                                   for s in plan.get("decomposition", [])]
+                self.deliver_result(task_name, task_desc, deliverable, subtask_results)
+
+                self.report_status("completed", task_list=[{"name": task_name, "status": "completed"}])
+                self.report_progress(1.0, "completed", f"任务完成: {result.get('summary', '')[:100]}")
             else:
                 self.report_status("executing", collaboration_mode=pattern,
                                    task_list=plan.get("decomposition", []))
@@ -139,6 +162,23 @@ class ProjectManagerAgent:
             self._running = False
 
     def receive_progress_report(self, report: dict):
+        self._monitor.receive_progress_report(report)
+
+    def receive_subtask_result(self, task_name: str, status: str,
+                               output_data: dict, agent_id: str = ""):
+        """接收本机子 Agent 执行结果，转化为进度报告注入 Monitor。
+
+        Station 内嵌模式下，子任务执行完成后由 station_controller 调用此方法，
+        让 PM Monitor 感知子任务完成/失败，触发依赖链分发或失败接管。
+        """
+        report = {
+            "reporter_id": agent_id,
+            "task_name": task_name,
+            "status": status,
+            "progress": 1.0 if status == "completed" else 0.0,
+            "output": output_data,
+            "message": f"子任务 {task_name} {status}",
+        }
         self._monitor.receive_progress_report(report)
 
     def receive_input(self, input_data: dict):

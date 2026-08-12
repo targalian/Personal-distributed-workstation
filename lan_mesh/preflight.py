@@ -12,6 +12,7 @@
 8. HTTP API 端口是否可用
 9. Secretary 专属: 数据库路径目录是否可写
 10. Secretary 专属: Web UI 模板是否存在
+11. CLI Agent 后端检测 (claude/aider/codex, 非致命)
 
 自检流程:
   run_preflight(role, cfg) → 打印检查报告 → 返回是否全部通过
@@ -236,6 +237,39 @@ def _check_web_template() -> Optional[CheckResult]:
     return CheckResult("Web UI 模板", False, f"未找到: {template}", critical=False)
 
 
+def _check_cli_agents() -> CheckResult:
+    """检查 CLI Agent 后端是否可用 (claude / aider / codex)。
+
+    非致命项: 缺失时 PM Agent 仍可通过 LLM API 执行任务,
+    但无法使用 CLI Agent 自主编码能力 (多文件探索/编辑/测试/修复)。
+    """
+    backends = {
+        "claude": {"detect": "claude", "install": "npm install -g @anthropic-ai/claude-code"},
+        "aider": {"detect": "aider", "install": "pip install aider-chat"},
+        "codex": {"detect": "codex", "install": "npm install -g @openai/codex"},
+    }
+    available = []
+    for name, cfg in backends.items():
+        if shutil.which(cfg["detect"]):
+            available.append(name)
+
+    if available:
+        return CheckResult(
+            "CLI Agent", True,
+            f"可用后端: {', '.join(available)}",
+            critical=False,
+        )
+
+    # 未检测到任何 CLI Agent
+    hints = " | ".join(f"{n}: {c['install']}" for n, c in backends.items())
+    return CheckResult(
+        "CLI Agent", False,
+        f"未检测到 CLI Agent (子 Agent 将使用 LLM API 单轮模式)\n"
+        f"  安装任一即可启用自主编码: {hints}",
+        critical=False,
+    )
+
+
 # ── 主入口 ──────────────────────────────────────────────────────
 
 def run_preflight(
@@ -264,6 +298,9 @@ def run_preflight(
     if role == "secretary":
         checks.append(_check_db_path(cfg))
         checks.append(_check_web_template())
+
+    # CLI Agent 检测 (所有角色通用, 非致命)
+    checks.append(_check_cli_agents())
 
     # 打印报告
     role_label = "Secretary" if role == "secretary" else "Worker"

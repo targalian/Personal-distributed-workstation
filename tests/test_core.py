@@ -394,10 +394,20 @@ class TestClassifyTask:
     def _make_task(self, name: str, desc: str = "") -> Task:
         return Task(task_id="t1", name=name, description=desc)
 
-    def test_code_task(self):
+    def test_code_task(self, monkeypatch):
+        # 无 CLI Agent 环境: 复杂代码任务回退普通 code_task
+        monkeypatch.setattr("lan_mesh.agent_runtime.get_preferred_cli_agent", lambda: "")
         assert _classify_task(self._make_task("修复登录bug")) == "code_task"
         assert _classify_task(self._make_task("代码重构")) == "code_task"
         assert _classify_task(self._make_task("implement function")) == "code_task"
+
+    def test_code_task_cli(self, monkeypatch):
+        # CLI Agent 可用时: 复杂代码任务路由到 CLI Agent 模板
+        monkeypatch.setattr("lan_mesh.agent_runtime.get_preferred_cli_agent", lambda: "claude")
+        assert _classify_task(self._make_task("代码重构")) == "code_task_cli"
+        assert _classify_task(self._make_task("implement function")) == "code_task_cli"
+        # 简单代码任务不路由 CLI Agent
+        assert _classify_task(self._make_task("修复登录bug")) == "code_task"
 
     def test_document_task(self):
         assert _classify_task(self._make_task("撰写项目文档")) == "document_task"

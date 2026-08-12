@@ -26,7 +26,6 @@ _ACTION_KEYWORDS = {
     "创建任务": "submit_task",
     "新任务": "submit_task",
     "下发任务": "submit_task",
-    "下发": "submit_task",
     "激活下发": "submit_task",
     "立即下发": "submit_task",
     "分配任务": "submit_task",
@@ -34,15 +33,21 @@ _ACTION_KEYWORDS = {
     "做一个": "submit_task",
     "写一个": "submit_task",
     "开发一个": "submit_task",
+    "创建一个": "submit_task",
+    "搭建一个": "submit_task",
+    "设计一个": "submit_task",
+    "生成一个": "submit_task",
     "帮我做": "submit_task",
     "帮我写": "submit_task",
     "帮我开发": "submit_task",
+    "帮我创建": "submit_task",
     "实现一个": "submit_task",
     "制作一个": "submit_task",
     "搞一个": "submit_task",
     "弄一个": "submit_task",
     "做个": "submit_task",
     "写个": "submit_task",
+    "整一个": "submit_task",
     "启动秘书": "activate_secretary",
     "激活秘书": "activate_secretary",
     "停止秘书": "deactivate_secretary",
@@ -64,7 +69,8 @@ _ACTION_KEYWORDS = {
     "告知PM": "respond_to_pm",
     # 优化9: 验收/退回交付物
     "验收": "accept_delivery",
-    "通过": "accept_delivery",
+    "验收通过": "accept_delivery",
+    "确认通过": "accept_delivery",
     "退回": "reject_delivery",
     "重新做": "reject_delivery",
     # 项目管理
@@ -99,9 +105,13 @@ class ChatHandler:
         self._max_history = 50
 
         # ── 多对话状态 ──
-        self._conv_index: list[dict] = []       # [{id, title, project_id, created_at, updated_at}]
+        self._conv_index: list[dict] = []       # [{id, title, project_id, pm_threads, created_at, updated_at}]
         self._conversations: dict[str, list] = {}  # conv_id → messages
         self._active_conv_id: str = ""
+
+        # ── 方案C: PM 线程 (L2 层) ──
+        # pm_id → [{role, content, timestamp, ...}]  线程消息独立存储
+        self._pm_thread_messages: dict[str, list] = {}
 
         # 加载对话索引
         self._load_conv_index()
@@ -114,18 +124,25 @@ class ChatHandler:
         if not self._active_conv_id and self._conv_index:
             self._active_conv_id = self._conv_index[0]["id"]
 
+        # 向后兼容: 为旧对话补充 pm_threads 字段
+        for c in self._conv_index:
+            if "pm_threads" not in c:
+                c["pm_threads"] = []
+
         # ── 优化7: 反向沟通跟踪 ──
         self._last_awaiting_pm: str = ""
 
     # ── 公开接口 ──────────────────────────────────────────────────
 
-    def chat(self, message: str, conv_id: str = "", history: Optional[list] = None) -> dict:
+    def chat(self, message: str, conv_id: str = "", history: Optional[list] = None,
+             pm_thread_id: str = "") -> dict:
         """处理用户消息, 返回回复。
 
         Args:
             message: 用户输入文本
             conv_id: 对话 ID (留空则用当前活跃对话)
             history: 可选外部历史 (向后兼容)
+            pm_thread_id: 方案C — 若指定, 消息直接路由到 PM 线程 (L2), 跳过秘书 LLM
 
         Returns:
             {"reply": str, "action_taken": str, "timestamp": float, "conv_id": str}
@@ -135,6 +152,18 @@ class ChatHandler:
         if not cid or cid not in self._conversations:
             cid = self._conv_index[0]["id"] if self._conv_index else self._create_conversation("默认对话")
         self._active_conv_id = cid
+
+        # ── 方案C: L2 路由 — PM 线程内直接对话 ──
+        if pm_thread_id:
+            result = self.send_to_pm_thread(cid, pm_thread_id, message)
+            return {
+                "reply": result.get("reply", ""),
+                "action_taken": "pm_thread_direct",
+                "timestamp": result.get("timestamp", time.time()),
+                "conv_id": cid,
+                "pm_id": pm_thread_id,
+                "layer": "L2",
+            }
 
         # 获取对话历史
         chat_history = history if history is not None else self._conversations.get(cid, [])
@@ -283,6 +312,191 @@ class ChatHandler:
             return True
         return False
 
+    # ── 方案C: PM 线程管理 (L2 层) ───────────────────────
+
+    def attach_pm_thread(self, conv_id: str, pm_id: str, task_name: str = "",
+                         agent_name: str = "") -> dict:
+        """将 PM Agent 绑定到对话的线程列表。
+
+        当任务创建并分配 PM 后调用, 在对应项目对话中注册线程卡片。
+        """
+        meta = self._get_conv_meta(conv_id)
+        if not meta:
+            return {"ok": False, "message": "对话不存在"}
+
+        threads = meta.setdefault("pm_threads", [])
+        # 避免重复绑定
+        if any(t["pm_id"] == pm_id for t in threads):
+            return {"ok": True, "message": "PM 线程已存在", "pm_id": pm_id}
+
+        thread_info = {
+            "pm_id": pm_id,
+            "task_name": task_name,
+            "agent_name": agent_name or f"PM-{pm_id[:8]}",
+            "status": "starting",
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        }
+        threads.append(thread_info)
+        self._pm_thread_messages.setdefault(pm_id, [])
+        self._save_conv_index()
+        self._save_thread_index(conv_id)
+        logger.info("[方案C] PM %s 已绑定到对话 %s", pm_id[:8], conv_id)
+        return {"ok": True, "pm_id": pm_id, "thread": thread_info}
+
+    def detach_pm_thread(self, conv_id: str, pm_id: str) -> bool:
+        """从对话中移除 PM 线程。"""
+        meta = self._get_conv_meta(conv_id)
+        if not meta:
+            return False
+        threads = meta.get("pm_threads", [])
+        meta["pm_threads"] = [t for t in threads if t["pm_id"] != pm_id]
+        self._save_conv_index()
+        self._save_thread_index(conv_id)
+        return True
+
+    def update_pm_thread_status(self, pm_id: str, status: str, **kwargs):
+        """更新 PM 线程状态 (在所有关联对话中查找)。"""
+        for meta in self._conv_index:
+            for t in meta.get("pm_threads", []):
+                if t["pm_id"] == pm_id:
+                    t["status"] = status
+                    t["updated_at"] = time.time()
+                    if kwargs.get("task_name"):
+                        t["task_name"] = kwargs["task_name"]
+                    self._save_conv_index()
+                    self._save_thread_index(meta["id"])
+                    return
+
+    def get_pm_threads(self, conv_id: str) -> list[dict]:
+        """获取对话关联的所有 PM 线程。"""
+        meta = self._get_conv_meta(conv_id)
+        if not meta:
+            return []
+        return meta.get("pm_threads", [])
+
+    def find_conv_by_pm(self, pm_id: str) -> str:
+        """根据 pm_id 反查所属对话 ID。"""
+        for meta in self._conv_index:
+            if any(t["pm_id"] == pm_id for t in meta.get("pm_threads", [])):
+                return meta["id"]
+        return ""
+
+    # ── 方案C: PM 线程消息 (L2 层存储) ─────────────────────
+
+    def send_to_pm_thread(self, conv_id: str, pm_id: str, message: str) -> dict:
+        """L2 路由: 用户在 PM 线程内直接发消息给 PM Agent。
+
+        跳过秘书 LLM, 直接注入到 PM 的 receive_input。
+        """
+        now = time.time()
+        # 记录用户消息到线程
+        user_msg = {"role": "user", "content": message, "timestamp": now, "layer": "L2"}
+        self._pm_thread_messages.setdefault(pm_id, []).append(user_msg)
+        self._save_thread_message_to_file(pm_id, user_msg)
+
+        # 注入到 PM Agent
+        result = self.controller.inject_input_to_pm(pm_id, {
+            "response": message,
+            "choice": message,
+            "source": "pm_thread",  # 标记来源为线程直发
+        })
+
+        if result.get("ok"):
+            # 记录系统确认消息
+            ack_msg = {
+                "role": "system",
+                "content": f"✅ 已发送给 PM Agent",
+                "timestamp": time.time(),
+                "layer": "L2",
+            }
+            self._pm_thread_messages[pm_id].append(ack_msg)
+            self._save_thread_message_to_file(pm_id, ack_msg)
+            self.update_pm_thread_status(pm_id, "executing")
+            return {"ok": True, "reply": ack_msg["content"], "timestamp": now, "pm_id": pm_id}
+
+        return {"ok": False, "reply": f"❌ 发送失败: {result.get('message', '未知错误')}",
+                "timestamp": now, "pm_id": pm_id}
+
+    def get_pm_thread_messages(self, pm_id: str, limit: int = 100) -> list[dict]:
+        """获取 PM 线程的历史消息 (懒加载)。"""
+        if pm_id not in self._pm_thread_messages:
+            self._pm_thread_messages[pm_id] = self._load_thread_messages_from_file(pm_id)
+        return self._pm_thread_messages.get(pm_id, [])[-limit:]
+
+    def append_pm_thread_message(self, pm_id: str, role: str, content: str, **kwargs):
+        """向 PM 线程追加消息 (PM 回复/状态变更等)。"""
+        msg = {
+            "role": role,
+            "content": content,
+            "timestamp": time.time(),
+            "layer": "L2",
+            **kwargs,
+        }
+        self._pm_thread_messages.setdefault(pm_id, []).append(msg)
+        self._save_thread_message_to_file(pm_id, msg)
+        # 裁剪过长线程
+        if len(self._pm_thread_messages[pm_id]) > self._max_history * 2:
+            self._pm_thread_messages[pm_id] = self._pm_thread_messages[pm_id][-(self._max_history * 2):]
+
+    def notify_pm_clarification(self, pm_id: str, question: str, options: list = None):
+        """方案C 双写: PM 请求决策时同时写入 L1 通知 + L2 线程消息。
+
+        由 station_api 的 /api/pm/{pm_id}/status 端点在检测到 awaiting_input 时调用。
+        """
+        now = time.time()
+        options = options or []
+
+        # ── L2: 写入 PM 线程 ──
+        clarification_msg = {
+            "role": "pm",
+            "content": question,
+            "timestamp": now,
+            "layer": "L2",
+            "type": "clarification",
+            "options": options,
+        }
+        self._pm_thread_messages.setdefault(pm_id, []).append(clarification_msg)
+        self._save_thread_message_to_file(pm_id, clarification_msg)
+
+        # ── L1: 写入主对话流 (作为系统通知卡片) ──
+        conv_id = self.find_conv_by_pm(pm_id)
+        if conv_id:
+            # 获取 PM 名称
+            agent_name = f"PM-{pm_id[:8]}"
+            meta = self._get_conv_meta(conv_id)
+            if meta:
+                for t in meta.get("pm_threads", []):
+                    if t["pm_id"] == pm_id:
+                        agent_name = t.get("agent_name", agent_name)
+                        break
+
+            options_hint = ""
+            if options:
+                options_hint = "\n可选项: " + " | ".join(options)
+
+            notify_content = (
+                f"⚠️ **{agent_name} 等待您的决策**\n"
+                f"问题: {question}{options_hint}\n"
+                f"→ 展开 PM 线程直接回复, 或在此输入「告诉PM {pm_id[:12]} <您的决策>」"
+            )
+            notify_msg = {
+                "role": "system",
+                "content": notify_content,
+                "timestamp": now,
+                "layer": "L1",
+                "type": "pm_clarification",
+                "pm_id": pm_id,
+                "options": options,
+            }
+            self._conversations.setdefault(conv_id, []).append(notify_msg)
+            self._save_message_to_file(conv_id, notify_msg)
+            self._touch_conv(conv_id)
+
+        # 更新线程状态
+        self.update_pm_thread_status(pm_id, "awaiting_input")
+        logger.info("[方案C] PM %s 决策请求已双写 L1+L2", pm_id[:8])
+
     # ── 对话持久化 (共享文件夹) ─────────────────────────────────
 
     def _get_conv_dir(self):
@@ -334,6 +548,7 @@ class ChatHandler:
             "id": cid,
             "title": title,
             "project_id": project_id,
+            "pm_threads": [],  # 方案C: 关联的 PM 线程列表
             "created_at": now,
             "updated_at": now,
         }
@@ -402,6 +617,56 @@ class ChatHandler:
                 os.remove(filepath)
         except Exception:
             pass
+
+    # ── 方案C: PM 线程持久化 ───────────────────────────────
+
+    def _get_thread_dir(self):
+        """获取 PM 线程存储目录。"""
+        import os
+        thread_dir = os.path.join(self._get_conv_dir(), "pm_threads")
+        os.makedirs(thread_dir, exist_ok=True)
+        return thread_dir
+
+    def _save_thread_index(self, conv_id: str):
+        """保存对话的 PM 线程索引到独立文件 (pm_threads/{conv_id}.json)。"""
+        import json, os
+        meta = self._get_conv_meta(conv_id)
+        if not meta:
+            return
+        filepath = os.path.join(self._get_thread_dir(), f"{conv_id}.json")
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(meta.get("pm_threads", []), f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _save_thread_message_to_file(self, pm_id: str, msg: dict):
+        """追加写入 PM 线程消息到 JSONL 文件。"""
+        import json, os
+        safe_id = pm_id.replace("/", "_").replace("\\", "_")
+        filepath = os.path.join(self._get_thread_dir(), f"{safe_id}.jsonl")
+        try:
+            with open(filepath, "a", encoding="utf-8") as f:
+                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+    def _load_thread_messages_from_file(self, pm_id: str) -> list[dict]:
+        """从 JSONL 文件加载 PM 线程消息。"""
+        import json, os
+        safe_id = pm_id.replace("/", "_").replace("\\", "_")
+        filepath = os.path.join(self._get_thread_dir(), f"{safe_id}.jsonl")
+        messages = []
+        if os.path.isfile(filepath):
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            messages.append(json.loads(line))
+            except Exception:
+                pass
+        return messages
 
     def _auto_title(self, conv_id: str, first_message: str):
         """O1: 根据首条消息自动生成对话标题 (5字内)。"""

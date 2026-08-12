@@ -40,3 +40,25 @@ security:
   auth_enabled: false        # 是否启用节点间 Token 认证
   # token 来源: 环境变量 LAN_MESH_TOKEN 或 ~/.lan_mesh/mesh_token
   # 启用后所有内部 API 请求需携带 Authorization: Bearer <token>
+
+# Bot 手机通道配置
+bot:
+  aggregate_window: 30     # 消息聚合窗口 (秒), 0=禁用聚合直接推送
+  max_retry: 3             # 发送失败最大重试次数
+  retry_backoff: 2.0       # 重试退避基数 (秒), 实际等待 = backoff^attempt
+  quiet_hours:             # 免打扰时段
+    enabled: false
+    start: "23:00"         # 开始时间
+    end: "08:00"           # 结束时间
+    override_priority: high  # 此级别及以上可穿透免打扰
+  channels: []
+  # 通道示例:
+  # - channel_type: telegram
+  #   enabled: true
+  #   bot_token: "123456:ABC-DEF"
+  #   chat_id: "987654321"
+  #   min_priority: normal
+  # - channel_type: wechat_webhook
+  #   enabled: true
+  #   webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx"
+  #   min_priority: high

@@ -746,6 +746,22 @@ class Database:
         )
         conn.commit()
 
+    def delete_task(self, task_id: str) -> bool:
+        """彻底删除任务及关联的 PM Agent 和 Checkpoint 记录。"""
+        conn = self._get_conn()
+        conn.execute("DELETE FROM pm_agents WHERE task_id = ?", (task_id,))
+        conn.execute("DELETE FROM graph_checkpoints WHERE task_id = ?", (task_id,))
+        cursor = conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_pm_agent(self, pm_id: str) -> bool:
+        """删除指定 PM Agent 记录。"""
+        conn = self._get_conn()
+        cursor = conn.execute("DELETE FROM pm_agents WHERE pm_id = ?", (pm_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
     def update_task_subtasks(self, task_id: str, subtasks: list):
         """更新任务的子任务列表 (PM 同步进度用)。"""
         import json

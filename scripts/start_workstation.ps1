@@ -20,6 +20,12 @@ $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
+# ── 追加 CLI Agent 工具路径 (npm global + Node.js) ──
+$npmGlobal = Join-Path $env:APPDATA "npm"
+$nodeDir = "C:\Program Files\nodejs"
+if ((Test-Path $npmGlobal) -and $env:PATH -notlike "*$npmGlobal*") { $env:PATH += ";$npmGlobal" }
+if ((Test-Path $nodeDir) -and $env:PATH -notlike "*$nodeDir*") { $env:PATH += ";$nodeDir" }
+
 function Write-Step([string]$msg) { Write-Host "[step] $msg" -ForegroundColor Cyan }
 function Write-Ok([string]$msg)   { Write-Host "  -> $msg" -ForegroundColor Green }
 function Write-Skip([string]$msg) { Write-Host "  -> $msg (skip)" -ForegroundColor DarkGray }

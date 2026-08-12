@@ -20,6 +20,7 @@ LLM API 调用通过环境变量配置 (OPENAI_API_KEY / DEEPSEEK_API_KEY 等)�
 import os
 import shutil
 import subprocess
+import threading
 import time
 import json as _json
 from pathlib import Path
@@ -30,6 +31,65 @@ import requests
 from .logger import get_logger
 
 logger = get_logger("agent_runtime")
+
+
+_env_lock = threading.Lock()
+_env_loaded = False
+
+
+def _ensure_env_loaded():
+    """确保 API Key 环境变量已加载。
+
+    如果检测到没有任何 API Key 环境变量, 尝试从常见路径加载 .env 文件。
+    解决: 进程从非项目根目录启动时 load_dotenv() 找不到 .env 的问题。
+    线程安全: 使用 Lock + 标志位防止多线程重复加载。
+    """
+    global _env_loaded
+    key_envs = ["ALIYUN_TOKENPLAN_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
+                "ANTHROPIC_API_KEY", "QWEN_API_KEY"]
+    if any(os.environ.get(k) for k in key_envs):
+        _env_loaded = True
+        return  # 已有 key, 无需加载
+    with _env_lock:
+        if _env_loaded:
+            return  # 另一线程已完成加载
+        # 尝试从多个路径加载 .env
+        candidates = [
+            Path(__file__).parent.parent / ".env",   # 项目根目录
+            Path.cwd() / ".env",                      # 当前工作目录
+            Path.home() / ".lan_mesh" / ".env",       # 用户数据目录
+        ]
+        for p in candidates:
+            if p.is_file():
+                try:
+                    from dotenv import load_dotenv
+                    load_dotenv(p, override=False)
+                    if any(os.environ.get(k) for k in key_envs):
+                        logger.info("已从 %s 加载 API Key 环境变量", p)
+                        _env_loaded = True
+                        return
+                except ImportError:
+                    # 手动解析 .env
+                    for line in p.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" in line:
+                            k, v = line.split("=", 1)
+                            k, v = k.strip(), v.strip()
+                            if k and v and not os.environ.get(k):
+                                os.environ[k] = v
+                    if any(os.environ.get(k) for k in key_envs):
+                        logger.info("已从 %s 手动解析 API Key", p)
+                        _env_loaded = True
+                        return
+                except Exception as e:
+                    logger.debug("加载 %s 失败: %s", p, e)
+        _env_loaded = True  # 标记已尝试, 避免反复扫描文件系统
+
+
+# 模块加载时立即检查
+_ensure_env_loaded()
 
 
 # ── 安全沙箱配置 ────────────────────────────────────────────
@@ -87,10 +147,11 @@ CLI_AGENT_BACKENDS = {
         "detect": "claude",
         "build_cmd": lambda prompt, cwd: [
             "claude", "--print", "--output-format", "json",
+            "--model", "qwen3.8-max-preview",
             "--max-turns", "30", prompt,
         ],
         "timeout": 600,
-        "description": "Claude Code CLI — 自主编码 Agent (MCP 工具支持)",
+        "description": "Claude Code CLI — 自主编码 Agent (Token Plan qwen3.8-max)",
     },
     "aider": {
         "detect": "aider",
@@ -150,6 +211,26 @@ def _build_cli_env(backend: str) -> dict:
     return env
 
 
+def _which_with_fallback(cmd: str) -> Optional[str]:
+    """shutil.which 增强: PATH 找不到时回退常见安装目录。"""
+    found = shutil.which(cmd)
+    if found:
+        return found
+    # Windows 常见全局安装路径
+    extra_dirs = [
+        os.path.join(os.environ.get("APPDATA", ""), "npm"),
+        r"C:\Program Files\nodejs",
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "nodejs"),
+    ]
+    for d in extra_dirs:
+        if not d or not os.path.isdir(d):
+            continue
+        candidate = os.path.join(d, f"{cmd}.cmd" if os.name == "nt" else cmd)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def detect_cli_agents() -> list[str]:
     """检测系统上可用的 CLI Agent 后端。
 
@@ -158,7 +239,7 @@ def detect_cli_agents() -> list[str]:
     """
     available = []
     for name, cfg in CLI_AGENT_BACKENDS.items():
-        if shutil.which(cfg["detect"]):
+        if _which_with_fallback(cfg["detect"]):
             available.append(name)
     return available
 
@@ -172,13 +253,13 @@ def get_preferred_cli_agent() -> Optional[str]:
     """
     preferred = os.environ.get("CLI_AGENT_BACKEND", "").lower().strip()
     if preferred and preferred in CLI_AGENT_BACKENDS:
-        if shutil.which(CLI_AGENT_BACKENDS[preferred]["detect"]):
+        if _which_with_fallback(CLI_AGENT_BACKENDS[preferred]["detect"]):
             return preferred
         logger.warning("指定的 CLI Agent '%s' 未安装, 回退自动检测", preferred)
 
     # 自动检测, 按优先级: claude > aider > codex
     for name in ["claude", "aider", "codex"]:
-        if shutil.which(CLI_AGENT_BACKENDS[name]["detect"]):
+        if _which_with_fallback(CLI_AGENT_BACKENDS[name]["detect"]):
             return name
     return None
 
@@ -194,7 +275,9 @@ class AgentRuntime:
         self.agent_id = agent_id
         self.shared_folder = shared_folder_path
         self._custom_system_prompt = custom_system_prompt  # PM 注入的定制 prompt
-        self._current_skill = ""  # 优化3: 当前执行的技能类型 (供选择性加载)
+        # 优化3: 当前执行的技能类型 (供选择性加载)
+        # 用线程局部变量: 并行分发场景下多个线程共享同一 runtime, 实例属性会互相覆盖
+        self._local = threading.local()
         self._skills_cache_dir = Path.home() / ".lan_mesh" / "skills_cache"
         self._handlers = {
             "code_generation": self._handle_code_generation,
@@ -231,8 +314,8 @@ class AgentRuntime:
                 "error": f"未知的技能类型: {skill}",
             }
 
-        # 优化3: 记录当前技能类型, 供 _build_system_prompt 选择性加载
-        self._current_skill = skill
+        # 优化3: 记录当前技能类型, 供 _build_system_prompt 选择性加载 (线程局部, 防并行覆盖)
+        self._local.current_skill = skill
 
         # 提取路由器注入的模型偏好 (由 orchestrator 写入 payload)
         input_data = dict(subtask.get("input_data", {}))
@@ -425,7 +508,7 @@ class AgentRuntime:
         from .tool_registry import ToolRegistry
 
         requirement = input_data.get("requirement", input_data.get("description", ""))
-        max_iterations = input_data.get("max_iterations", 10)
+        max_iterations = input_data.get("max_iterations", 30)
         cwd = input_data.get("cwd", self.shared_folder)
 
         # 初始化工具注册表
@@ -444,6 +527,8 @@ class AgentRuntime:
             "- 任务完成后直接输出最终结果 (不再调用工具)\n"
             "- 如果工具执行失败, 尝试替代方案\n"
             f"- 工作目录: {cwd}\n"
+            "- 禁止: 不要执行进度上报/curl/HTTP POST 到任何 progress-report 端点, 框架会自动处理\n"
+            "- 禁止: 不要浪费轮次做网络请求上报状态, 专注于任务本身\n"
         )
 
         # 对话历史
@@ -578,7 +663,7 @@ class AgentRuntime:
         # 确定后端
         backend = input_data.get("backend", "").lower().strip()
         if backend and backend in CLI_AGENT_BACKENDS:
-            if not shutil.which(CLI_AGENT_BACKENDS[backend]["detect"]):
+            if not _which_with_fallback(CLI_AGENT_BACKENDS[backend]["detect"]):
                 return {"error": f"CLI Agent '{backend}' 未安装 (which {CLI_AGENT_BACKENDS[backend]['detect']} 未找到)"}
         else:
             backend = get_preferred_cli_agent()
@@ -686,12 +771,13 @@ class AgentRuntime:
         """列出可用的 CLI Agent 后端及其状态。"""
         agents = []
         for name, cfg in CLI_AGENT_BACKENDS.items():
-            installed = shutil.which(cfg["detect"]) is not None
+            path = _which_with_fallback(cfg["detect"])
+            installed = path is not None
             agents.append({
                 "name": name,
                 "description": cfg["description"],
                 "installed": installed,
-                "path": shutil.which(cfg["detect"]) or "",
+                "path": path or "",
             })
         preferred = get_preferred_cli_agent()
         return {
@@ -804,9 +890,10 @@ class AgentRuntime:
             return ""
 
         # 优化3: 如果有当前技能, 只加载匹配的技能文件; 否则加载全部
+        current_skill = getattr(self._local, 'current_skill', '')
         target_skill_dir = None
-        if self._current_skill:
-            target_skill_dir = self._skills_cache_dir / self._current_skill
+        if current_skill:
+            target_skill_dir = self._skills_cache_dir / current_skill
 
         prompts = []
         if target_skill_dir and target_skill_dir.is_dir():
@@ -951,12 +1038,25 @@ class AgentRuntime:
         self, prompt: str, model_id: str, base_url: str, api_key: str,
         system_prompt: str = "",
     ) -> dict:
-        """通用 OpenAI 兼容 API 调用 — 支持所有厂商 (DeepSeek/OpenAI/Qwen/...)。"""
+        """通用 OpenAI 兼容 API 调用 — 流式输出 + 活性检测。
+
+        超时策略 (替代盲等):
+        - 首 token 超时 60s: 模型无反应 → 立即降级
+        - 流间超时 90s: 输出中断 → 判定卡死
+        - 总时长上限 600s: 兆底保护
+        """
+        import time as _time
+
         url = f"{base_url.rstrip('/')}/chat/completions"
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
+
+        FIRST_TOKEN_TIMEOUT = 60   # 首 token 超时 (s)
+        INTER_CHUNK_TIMEOUT = 90   # 流间超时 (s)
+        TOTAL_TIMEOUT = 600        # 总时长上限 (s)
+
         resp = requests.post(
             url,
             headers={
@@ -967,70 +1067,162 @@ class AgentRuntime:
                 "model": model_id,
                 "messages": messages,
                 "max_tokens": 4096,
+                "stream": True,
             },
-            timeout=120,
+            timeout=(10, FIRST_TOKEN_TIMEOUT),  # (connect_timeout, 首包超时)
+            stream=True,
         )
         resp.raise_for_status()
-        data = resp.json()
-        usage = data.get("usage", {})
+
+        # 流式读取 + 活性检测
+        collected = []
+        input_tokens = 0
+        output_tokens = 0
+        start_time = _time.time()
+        last_chunk_time = start_time
+        first_token_received = False
+
+        try:
+            for line in resp.iter_lines(decode_unicode=True):
+                now = _time.time()
+
+                # 总时长保护
+                if now - start_time > TOTAL_TIMEOUT:
+                    logger.warning("%s 输出超过总时长上限 %ds, 截断", model_id, TOTAL_TIMEOUT)
+                    break
+
+                if not line:
+                    # 空行 — 检查流间超时
+                    if first_token_received and (now - last_chunk_time) > INTER_CHUNK_TIMEOUT:
+                        logger.warning("%s 流间超时 %ds, 截断已收集内容",
+                                      model_id, INTER_CHUNK_TIMEOUT)
+                        break
+                    continue
+
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        chunk = _json.loads(data_str)
+                    except (ValueError, TypeError):
+                        continue
+
+                    # 提取增量内容
+                    choices = chunk.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content", "")
+                        # 跳过 reasoning_content (思考过程, 不计入输出)
+                        if content:
+                            if not first_token_received:
+                                first_token_received = True
+                                ttft = now - start_time
+                                logger.debug("%s 首 token 延迟: %.1fs", model_id, ttft)
+                            collected.append(content)
+                            last_chunk_time = now
+
+                    # 提取 usage (部分厂商在最后一个 chunk 返回)
+                    u = chunk.get("usage")
+                    if u:
+                        input_tokens = u.get("prompt_tokens", 0)
+                        output_tokens = u.get("completion_tokens", 0)
+
+        except requests.exceptions.ChunkedEncodingError:
+            # 连接中断 — 如果已有内容则返回已收集部分
+            if collected:
+                logger.warning("%s 连接中断, 返回已收集内容 (%d 字符)",
+                              model_id, sum(len(c) for c in collected))
+            else:
+                raise  # 无内容则抛异常触发降级
+        finally:
+            resp.close()
+
+        full_content = "".join(collected)
+        if not full_content:
+            raise TimeoutError(f"{model_id} 未返回任何内容 (首 token 超时 {FIRST_TOKEN_TIMEOUT}s)")
+
         return {
-            "content": data["choices"][0]["message"]["content"],
+            "content": full_content,
             "model": model_id,
-            "input_tokens": usage.get("prompt_tokens", 0),
-            "output_tokens": usage.get("completion_tokens", 0),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens or len(full_content) // 4,  # 估算
         }
 
     def _call_llm_full(self, prompt: str, system_prompt: str = "") -> dict:
         """调用外部 LLM API (回退逻辑, 无路由器时使用)。
 
-        遍历所有已配置 API Key 的 provider, 依次尝试:
-        DeepSeek → OpenAI → 阿里云 Token Plan → Anthropic → 通义千问。
+        遍历所有已配置 API Key 的 provider, 每个 provider 内按 quality_score
+        从高到低尝试多个模型 (超时/失败自动降级到更快的模型)。
         """
+        # 确保环境变量已加载
+        _ensure_env_loaded()
+
         # 按优先级遍历所有 provider
+        errors = []  # 记录每个 provider 的失败原因
         for provider, cfg in PROVIDER_CONFIG.items():
             api_key = os.environ.get(cfg["api_key_env"], "")
             if not api_key:
                 continue
-            # 选择该 provider 下的默认模型
-            default_model = self._get_default_model(provider)
-            if not default_model:
+            # 获取该 provider 下所有可用模型 (按 quality 降序)
+            models = self._get_provider_models(provider)
+            if not models:
+                errors.append(f"{provider}: 未找到可用模型配置")
                 continue
-            try:
-                return self._call_openai_compatible(
-                    prompt, default_model,
-                    cfg["base_url"], api_key,
-                    system_prompt=system_prompt,
-                )
-            except Exception as e:
-                logger.warning("%s 调用失败: %s, 尝试下一个 provider...", provider, e)
-                continue
+            # 同 provider 内逐模型降级尝试
+            for model_id in models:
+                try:
+                    return self._call_openai_compatible(
+                        prompt, model_id,
+                        cfg["base_url"], api_key,
+                        system_prompt=system_prompt,
+                    )
+                except Exception as e:
+                    logger.warning("%s(%s) 调用失败: %s, 尝试下一模型...",
+                                  provider, model_id, e)
+                    errors.append(f"{provider}({model_id}): {e}")
+                    continue
 
+        # 区分 "无 key" 和 "调用失败"
+        if errors:
+            detail = "; ".join(errors[-3:])  # 只显示最新 3 条避免过长
+            return {
+                "content": f"[LLM 调用失败] 已配置 Key 的 Provider 均调用失败: {detail}",
+                "model": "none",
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "_error": True,
+            }
         return {
             "content": "[未配置 LLM API Key] 请设置 ALIYUN_TOKENPLAN_API_KEY、DEEPSEEK_API_KEY 或 OPENAI_API_KEY 环境变量。",
             "model": "none",
             "input_tokens": 0,
             "output_tokens": 0,
+            "_error": True,
         }
 
-    def _get_default_model(self, provider: str) -> Optional[str]:
-        """获取指定 provider 的默认模型 ID (从 model_pool.yaml 查找)。"""
+    def _get_provider_models(self, provider: str) -> list:
+        """获取指定 provider 下所有模型 ID, 按 quality_score 降序排列。
+
+        同 provider 内尝试多个模型实现自动降级:
+        qwen3.8-max-preview → qwen3.7-max → qwen3.7-plus → qwen3.6-flash
+        """
         pool = _load_model_pool_entries()
-        # 找该 provider 下 quality_score 最高的模型
         candidates = [
             e for e in pool.values() if e.provider == provider
         ]
         if candidates:
-            best = max(candidates, key=lambda e: e.quality_score)
-            return best.id
+            candidates.sort(key=lambda e: e.quality_score, reverse=True)
+            return [e.id for e in candidates]
         # 回退到硬编码默认值
         defaults = {
-            "deepseek": "deepseek-chat",
-            "openai": "gpt-4o-mini",
-            "anthropic": "claude-3-haiku",
-            "qwen": "qwen-turbo",
-            "aliyun-tokenplan": None,  # 必须从 model_pool 查找
+            "deepseek": ["deepseek-chat"],
+            "openai": ["gpt-4o-mini"],
+            "anthropic": ["claude-3-haiku"],
+            "qwen": ["qwen-turbo"],
+            "aliyun-tokenplan": [],
         }
-        return defaults.get(provider)
+        return defaults.get(provider, [])
 
     def _call_llm(self, prompt: str) -> str:
         """调用外部 LLM API 生成回复 (仅返回文本内容)。"""

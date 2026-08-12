@@ -18,6 +18,7 @@ Station Director 独立控制器 — 基础设施管理入口
 - 停用 Secretary 后卸载上述组件, 回到纯基础设施管理模式
 """
 import asyncio
+import os
 import shutil
 import socket
 import sys
@@ -127,8 +128,20 @@ class StationController:
         self.skill_registry = SkillRegistry(self.db, skills_dir)
         self.skill_registry.scan_and_register()
 
-        # Bot 通道 (手机消息推送)
-        self.bot_gateway = BotGateway()
+        # Bot 通道 (手机消息推送) — 传入聚合/重试/免打扰配置
+        bot_cfg = self.cfg.bot
+        qh = bot_cfg.quiet_hours
+        self.bot_gateway = BotGateway(
+            aggregate_window=bot_cfg.aggregate_window,
+            max_retry=bot_cfg.max_retry,
+            retry_backoff=bot_cfg.retry_backoff,
+            quiet_hours={
+                "enabled": qh.enabled,
+                "start": qh.start,
+                "end": qh.end,
+                "override_priority": qh.override_priority,
+            },
+        )
         self._load_bot_config()
 
         # Secretary 组件 (初始未加载, activate_secretary() 时创建)
@@ -248,6 +261,9 @@ class StationController:
         self.secretary_host_port = self.state.api_port
         logger.info("Secretary 模式已激活 — 聊天处理器/模型路由/MCP工具 已就绪 (PM Agent 架构)")
 
+        # 任务断点恢复: 将上次运行中断的任务标记为 interrupted
+        self._recover_stale_tasks()
+
         return {
             "ok": True,
             "message": "Secretary 已激活",
@@ -276,6 +292,34 @@ class StationController:
 
         logger.info("Secretary 模式已停用 — 回到纯基础设施管理")
         return {"ok": True, "message": "Secretary 已停用"}
+
+    def _recover_stale_tasks(self):
+        """任务断点恢复: 将上次运行中断的任务标记为 interrupted。
+
+        系统重启后, 之前处于 running/monitoring/planning/executing 的任务
+        其 PM Agent 进程已不存在, 无法继续执行。
+        将这些任务标记为 interrupted, 用户可在 UI 中看到并决定重新提交或删除。
+        """
+        stale_statuses = ("running", "monitoring", "planning", "executing")
+        recovered = 0
+        for status in stale_statuses:
+            try:
+                tasks = self.db.list_tasks(status=status, limit=100)
+                for task in tasks:
+                    task.status = "interrupted"
+                    if not task.output_data:
+                        task.output_data = {}
+                    task.output_data["_interrupted"] = {
+                        "reason": "系统重启, PM Agent 进程已丢失",
+                        "original_status": status,
+                        "interrupted_at": time.time(),
+                    }
+                    self.db.save_task(task)
+                    recovered += 1
+            except Exception as e:
+                logger.warning("恢复中断任务失败 (status=%s): %s", status, e)
+        if recovered:
+            logger.info("任务断点恢复: %d 个中断任务已标记为 interrupted", recovered)
 
     # ── Secretary 自动选举 ─────────────────────────────────────
 
@@ -366,12 +410,8 @@ class StationController:
         online_hosts.sort(key=_host_sort_key)
         target_host = online_hosts[0]
 
-        # 构造 Secretary URL
-        local_ips = self._collect_info().ip_addresses
-        secretary_url = (
-            f"http://{local_ips[0]}:{self.state.api_port}" if local_ips
-            else f"http://127.0.0.1:{self.state.api_port}"
-        )
+        # 构造 Secretary URL (始终用 localhost, 避免 Tailscale IP 不可达)
+        secretary_url = f"http://127.0.0.1:{self.state.api_port}"
 
         # 优先本机派发 (内嵌 Worker, 无需单独 Worker 进程)
         if self.secretary_active and self.chat_runtime:
@@ -387,7 +427,7 @@ class StationController:
                     task_id=task.task_id,
                     device_id=self.state.device_id,
                     hostname=self.state.device_name,
-                    ip=local_ips[0] if local_ips else "127.0.0.1",
+                    ip="127.0.0.1",
                     api_port=self.state.api_port,
                     status="starting",
                 )
@@ -414,10 +454,14 @@ class StationController:
                 logger.warning("本机 PM 启动失败: %s, 尝试远程派发", result.get('message'))
 
         # 回退: POST 到远程 Worker 启动 PM Agent
+        # 修复: 如果目标就是本机 (Tailscale IP 不可达), 直接用 127.0.0.1
+        target_ip = target_host.ip
+        if target_host.device_id == self.state.device_id:
+            target_ip = "127.0.0.1"
         try:
             import requests as _requests
             resp = _requests.post(
-                f"http://{target_host.ip}:{target_host.api_port}/role/start-pm",
+                f"http://{target_ip}:{target_host.api_port}/role/start-pm",
                 json={
                     "task_id": task.task_id,
                     "secretary_url": secretary_url,
@@ -454,6 +498,8 @@ class StationController:
                     "pm_id": pm_id[:12], "task": task.name,
                     "station": target_host.device_name or target_host.hostname,
                 })
+                # 方案C: 自动将 PM 绑定到当前活跃对话的线程
+                self._auto_attach_pm_thread(pm_id, task.name, f"PM-{pm_id[:8]}")
             else:
                 task.status = "failed"
                 task.output_data = {"error": f"PM 启动失败: {resp.text}"}
@@ -490,6 +536,9 @@ class StationController:
         )
         self._local_pm_agent.start_task(task_data)
         logger.info("本机 PM Agent 已启动: %s, 任务: %s", pm_id, task_id)
+        # 方案C: 自动将 PM 绑定到当前活跃对话的线程
+        task_name = task_data.get("name", task_id)
+        self._auto_attach_pm_thread(pm_id, task_name, f"PM-{pm_id[:8]}")
         return {"ok": True, "pm_id": pm_id, "device_id": self.state.device_id}
 
     def _local_stop_pm(self) -> dict:
@@ -521,6 +570,19 @@ class StationController:
         self._local_pm_agent.receive_input(input_data)
         return {"ok": True, "pm_id": self._local_pm_agent.pm_id}
 
+    def _auto_attach_pm_thread(self, pm_id: str, task_name: str, agent_name: str):
+        """方案C: PM 启动后自动绑定到当前活跃对话的线程列表。"""
+        ch = self.chat_handler
+        if not ch:
+            return
+        conv_id = ch._active_conv_id
+        if not conv_id:
+            return
+        try:
+            ch.attach_pm_thread(conv_id, pm_id, task_name=task_name, agent_name=agent_name)
+        except Exception as e:
+            logger.debug("方案C 自动绑定 PM 线程失败 (non-critical): %s", e)
+
     def _local_pm_status(self) -> dict:
         if not self._local_pm_agent:
             return {"running": False}
@@ -551,6 +613,50 @@ class StationController:
             return {"ok": False, "message": "PM Agent 未运行"}
         self._local_pm_agent.receive_progress_report(report)
         return {"ok": True}
+
+    def _local_execute_task(self, payload: dict) -> dict:
+        """本机执行 PM 分发的子任务。
+
+        根据 reporter_id 定位子 Agent Runtime，找不到则回退到 chat_runtime。
+        执行期间更新子 Agent 状态 (idle → executing → idle)。
+        """
+        reporter_id = payload.get("reporter_id", "")
+        sub_info = self._local_sub_agents.get(reporter_id)
+
+        if sub_info:
+            runtime = sub_info["runtime"]
+            sub_info["status"] = "executing"
+            sub_info["current_task"] = payload.get("name", "")
+            logger.info("本机子 Agent 执行任务: %s (%s)", reporter_id, payload.get("name", ""))
+        else:
+            # 回退: 使用通用 runtime
+            runtime = self.chat_runtime
+            if not runtime:
+                return {"output": {}, "status": "failed", "error": "Agent 运行时未初始化"}
+            logger.warning("子 Agent %s 未找到, 回退到通用 Runtime", reporter_id)
+
+        try:
+            result = runtime.execute(payload)
+        except Exception as e:
+            logger.error("本机子任务执行异常: %s", e)
+            result = {"output": {}, "status": "failed", "error": str(e)}
+        finally:
+            if sub_info:
+                sub_info["status"] = "idle"
+
+        # 执行完成后向 PM 上报
+        if self._local_pm_agent and self._local_pm_agent.running:
+            task_name = payload.get("name", "")
+            status = result.get("status", "failed")
+            output_data = result.get("output", {})
+            self._local_pm_agent.receive_subtask_result(
+                task_name=task_name,
+                status=status,
+                output_data=output_data,
+                agent_id=reporter_id,
+            )
+
+        return result
 
     # ── 优化7: 反向沟通 ──
 
@@ -1205,8 +1311,12 @@ class StationController:
 
     # ── 生命周期 ───────────────────────────────────────────────────
 
-    def start(self):
-        """启动 Station Director。"""
+    def start(self, dev_reload: bool = False):
+        """启动 Station Director。
+
+        Args:
+            dev_reload: 开发模式, 监控 lan_mesh/ 文件变动自动重启进程。
+        """
         self._running = True
 
         # 启动前自检 (复用 secretary 自检: 含 DB 路径 + Web 模板检查)
@@ -1310,6 +1420,14 @@ class StationController:
         )
         server = uvicorn.Server(config)
 
+        # 开发模式: 启动文件监控线程, 变动时自动重启进程
+        if dev_reload:
+            watch_thread = threading.Thread(
+                target=self._dev_file_watcher, daemon=True, name="dev-reload"
+            )
+            watch_thread.start()
+            logger.info("🔁 开发模式已启用: lan_mesh/ 文件变动将自动重启")
+
         local_ips = self._collect_info().ip_addresses
         logger.info("服务已启动!")
         logger.info("  Web UI:  http://localhost:%d", self.state.api_port)
@@ -1330,3 +1448,44 @@ class StationController:
             self.state.cloud_sync.stop()
         if self.discovery:
             self.discovery.stop()
+
+    def _dev_file_watcher(self):
+        """开发模式: 监控 lan_mesh/ 目录文件变动, 检测到修改后自动重启进程。"""
+        watch_dir = Path(__file__).parent
+        extensions = {".py", ".html", ".yaml"}
+        # 初始快照
+        snapshot = {}
+        for f in watch_dir.rglob("*"):
+            if f.suffix in extensions and "__pycache__" not in str(f):
+                try:
+                    snapshot[str(f)] = f.stat().st_mtime
+                except OSError:
+                    pass
+        logger.info("[dev-reload] 监控 %d 个文件 (%s)", len(snapshot), watch_dir)
+
+        while self._running:
+            time.sleep(1.5)
+            changed = []
+            for f in watch_dir.rglob("*"):
+                if f.suffix not in extensions or "__pycache__" in str(f):
+                    continue
+                try:
+                    mtime = f.stat().st_mtime
+                except OSError:
+                    continue
+                old = snapshot.get(str(f))
+                if old is None or mtime > old:
+                    changed.append(f.name)
+                    snapshot[str(f)] = mtime
+            if changed:
+                logger.info("🔁 [dev-reload] 检测到变动: %s → 重启中...", ", ".join(changed[:5]))
+                time.sleep(0.5)  # 等待文件写入完成
+                # Windows 兼容: os.execv 在 Windows 上不会替换进程,
+                # 且 uvicorn 占用端口会导致新进程绑定失败。
+                # 改用 subprocess 启动新进程 + os._exit 终止当前进程。
+                self._running = False  # 通知主循环停止
+                import subprocess as _sp
+                _sp.Popen([sys.executable] + sys.argv)
+                logger.info("🔁 [dev-reload] 新进程已启动, 当前进程退出")
+                time.sleep(0.3)  # 等待日志刷新
+                os._exit(0)

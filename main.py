@@ -60,6 +60,7 @@ def main():
     parser.add_argument("--name", "-n", type=str, default=None, help="设备名称")
     parser.add_argument("--shared", type=str, default=None, help="共享文件夹路径")
     parser.add_argument("--config", "-c", type=str, default=None, help="配置文件路径")
+    parser.add_argument("--dev", action="store_true", help="开发模式: 文件变动自动重载")
     parser.add_argument("--version", "-v", action="version", version=f"LAN Mesh v{__version__}")
 
     args = parser.parse_args()
@@ -89,7 +90,7 @@ def main():
     if args.role == "station":
         from lan_mesh.station_controller import StationController
         controller = StationController(cfg)
-        controller.start()
+        controller.start(dev_reload=args.dev)
     elif args.role == "secretary":
         from lan_mesh.secretary import SecretaryController
         controller = SecretaryController(cfg)

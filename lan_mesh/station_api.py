@@ -703,17 +703,54 @@ def create_station_router(controller) -> APIRouter:
         )
         target_host = online_hosts[0]
 
-        # 3. 构造 Secretary URL
-        secretary_url = f"http://{state.device_id}:{state.api_port}"
-        # 使用本机 IP 更准确
-        local_ips = controller._collect_info().ip_addresses
-        if local_ips:
-            secretary_url = f"http://{local_ips[0]}:{state.api_port}"
+        # 3. 构造 Secretary URL (始终用 localhost, 避免 Tailscale IP 不可达)
+        secretary_url = f"http://127.0.0.1:{state.api_port}"
 
-        # 4. POST 到目标 Worker 启动 PM Agent
+        # 4. 优先本机派发 (内嵌 Worker, 无需网络往返)
+        if controller.secretary_active and controller.chat_runtime:
+            result = controller._local_start_pm(task.task_id, secretary_url, task.to_dict())
+            if result.get("ok"):
+                pm_id = result["pm_id"]
+                task.pm_agent_id = pm_id
+                task.status = "running"
+                db.save_task(task)
+                pm_agent = PMAgent(
+                    pm_id=pm_id,
+                    agent_name=f"PM-{pm_id[:8]}",
+                    task_id=task.task_id,
+                    project_id=project_id,
+                    device_id=state.device_id,
+                    hostname=state.device_name,
+                    ip="127.0.0.1",
+                    api_port=state.api_port,
+                    status="starting",
+                )
+                db.upsert_pm_agent(pm_agent)
+                controller._pm_worker_map[pm_id] = {
+                    "ip": "127.0.0.1",
+                    "api_port": state.api_port,
+                    "device_id": state.device_id,
+                    "local": True,
+                }
+                await _broadcast(state, "pm_registered", {
+                    "pm_id": pm_id, "task_id": task.task_id,
+                    "device_id": state.device_id, "device_name": state.device_name,
+                })
+                controller.bot_gateway.notify("pm_registered", {
+                    "pm_id": pm_id[:12], "task": task.name, "station": state.device_name,
+                })
+                await _broadcast(state, "task_updated", task.to_dict())
+                return task.to_dict()
+            else:
+                logger.warning("本机 PM 启动失败: %s, 尝试远程派发", result.get('message'))
+
+        # 5. 回退: POST 到远程 Worker 启动 PM Agent
+        target_ip = target_host.ip
+        if target_host.device_id == state.device_id:
+            target_ip = "127.0.0.1"
         try:
             resp = http_requests.post(
-                f"http://{target_host.ip}:{target_host.api_port}/role/start-pm",
+                f"http://{target_ip}:{target_host.api_port}/role/start-pm",
                 json={
                     "task_id": task.task_id,
                     "secretary_url": secretary_url,
@@ -724,12 +761,10 @@ def create_station_router(controller) -> APIRouter:
             if resp.status_code == 200:
                 pm_data = resp.json()
                 pm_id = pm_data.get("pm_id", "")
-                # 5. 更新 Task
                 task.pm_agent_id = pm_id
                 task.status = "running"
                 db.save_task(task)
 
-                # 在 DB 中创建 PM Agent 记录
                 pm_agent = PMAgent(
                     pm_id=pm_id,
                     agent_name=f"PM-{pm_id[:8]}",
@@ -737,14 +772,13 @@ def create_station_router(controller) -> APIRouter:
                     project_id=project_id,
                     device_id=target_host.device_id,
                     hostname=target_host.hostname or target_host.device_name,
-                    ip=target_host.ip,
+                    ip=target_ip,
                     api_port=target_host.api_port,
                     status="starting",
                 )
                 db.upsert_pm_agent(pm_agent)
-                # 优化7: 记录 PM→Worker 映射
                 controller._pm_worker_map[pm_id] = {
-                    "ip": target_host.ip,
+                    "ip": target_ip,
                     "api_port": target_host.api_port,
                     "device_id": target_host.device_id,
                 }
@@ -810,6 +844,31 @@ def create_station_router(controller) -> APIRouter:
             })
             return result
         raise HTTPException(status_code=409, detail=result.get("message", "暂停失败"))
+
+    @router.delete("/api/tasks/{task_id}")
+    async def delete_task(task_id: str):
+        """彻底删除任务及关联 PM Agent 记录。若任务仍在运行, 先取消再删除。"""
+        _check_secretary()
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        if task.status in ("running", "monitoring"):
+            controller.cancel_task(task_id)
+        if task.pm_agent_id and task.pm_agent_id in controller._pm_worker_map:
+            del controller._pm_worker_map[task.pm_agent_id]
+        # 联动清理: 从对话中解绑 PM 线程
+        pm_id = task.pm_agent_id or ""
+        if pm_id:
+            ch = getattr(controller, 'chat_handler', None)
+            if ch:
+                conv_id = ch.find_conv_by_pm(pm_id)
+                if conv_id:
+                    ch.detach_pm_thread(conv_id, pm_id)
+        ok = db.delete_task(task_id)
+        if ok:
+            await _broadcast(state, "task_deleted", {"task_id": task_id, "name": task.name})
+            return {"ok": True, "message": f"任务 '{task.name}' 已删除"}
+        raise HTTPException(status_code=500, detail="删除失败")
 
     # ── Graph Engine: DAG 图结构 / Checkpoint / 断点恢复 ──
 
@@ -964,6 +1023,40 @@ def create_station_router(controller) -> APIRouter:
         logger.info("PM %s 交付物已接收: %s", pm_id[:12], task_name)
         return {"ok": True, "task_id": task_id, "message": "交付物已接收, 等待 Boss 验收"}
 
+    @router.post("/api/tasks/{task_id}/accept")
+    async def accept_delivery(task_id: str):
+        """Boss 验收交付物。"""
+        _check_secretary()
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        if not task.output_data or "_delivery" not in task.output_data:
+            raise HTTPException(status_code=409, detail="该任务尚无交付物")
+        task.output_data["_delivery"]["accepted"] = True
+        task.status = "accepted"
+        db.save_task(task)
+        await _broadcast(state, "task_updated", {"task_id": task_id, "status": "accepted"})
+        logger.info("任务 %s 交付物已验收", task_id[:12])
+        return {"ok": True, "message": "已验收"}
+
+    @router.post("/api/tasks/{task_id}/reject")
+    async def reject_delivery(task_id: str, payload: dict = None):
+        """Boss 退回交付物。"""
+        _check_secretary()
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        if not task.output_data or "_delivery" not in task.output_data:
+            raise HTTPException(status_code=409, detail="该任务尚无交付物")
+        reason = (payload or {}).get("reason", "")
+        task.output_data["_delivery"]["accepted"] = False
+        task.output_data["_delivery"]["reject_reason"] = reason
+        task.status = "rejected"
+        db.save_task(task)
+        await _broadcast(state, "task_updated", {"task_id": task_id, "status": "rejected"})
+        logger.info("任务 %s 交付物被退回: %s", task_id[:12], reason[:100])
+        return {"ok": True, "message": "已退回"}
+
     # ── 优化14: 任务记忆 ──
 
     @router.post("/api/pm/{pm_id}/task-memory")
@@ -1070,12 +1163,34 @@ def create_station_router(controller) -> APIRouter:
             broadcast_data["clarification_question"] = clarification_question
             broadcast_data["clarification_options"] = payload.get("clarification_options", [])
 
+        # 方案C: awaiting_input 时双写 L1 通知 + L2 线程消息
+        if status == "awaiting_input" and clarification_question:
+            ch = getattr(controller, 'chat_handler', None)
+            if ch:
+                ch.notify_pm_clarification(
+                    pm_id, clarification_question,
+                    options=payload.get("clarification_options", []),
+                )
+        elif status != "awaiting_input":
+            # 非 awaiting 状态时同步更新线程状态
+            ch = getattr(controller, 'chat_handler', None)
+            if ch:
+                ch.update_pm_thread_status(pm_id, status)
+
         # 优化10: escalated 状态时附带升级详情
         escalation = payload.get("escalation")
         if escalation:
             broadcast_data["escalation"] = escalation
 
         await _broadcast(state, "pm_status_change", broadcast_data)
+
+        # 优化: awaiting_input 时 Bot 推送 (带 options 触发 Inline Keyboard)
+        if status == "awaiting_input" and clarification_question:
+            controller.bot_gateway.notify("pm_awaiting_input", {
+                "pm_id": pm_id,
+                "question": clarification_question,
+                "options": payload.get("clarification_options", []),
+            })
 
         # 优化10: escalated 时额外广播 + Bot 推送
         if status == "escalated" and escalation:
@@ -1281,7 +1396,10 @@ def create_station_router(controller) -> APIRouter:
 
     @router.post("/api/conversations/{conv_id}/messages")
     async def send_conversation_message(conv_id: str, payload: dict):
-        """在指定对话中发送消息。"""
+        """在指定对话中发送消息。
+
+        方案C: 若 payload 含 pm_thread_id, 则消息直接路由到 PM 线程 (L2)。
+        """
         _check_secretary()
         ch = getattr(controller, 'chat_handler', None)
         if not ch:
@@ -1289,7 +1407,8 @@ def create_station_router(controller) -> APIRouter:
         message = payload.get("message", "")
         if not message:
             raise HTTPException(status_code=400, detail="消息不能为空")
-        result = ch.chat(message, conv_id=conv_id)
+        pm_thread_id = payload.get("pm_thread_id", "")
+        result = ch.chat(message, conv_id=conv_id, pm_thread_id=pm_thread_id)
         await _broadcast(state, "chat_reply", result)
         return result
 
@@ -1315,6 +1434,80 @@ def create_station_router(controller) -> APIRouter:
             raise HTTPException(status_code=400, detail="标题不能为空")
         ok = ch.rename_conversation(conv_id, title)
         return {"ok": ok}
+
+    # ── 方案C: PM 线程 API (L2 层) ──
+
+    @router.get("/api/conversations/{conv_id}/pm-threads")
+    async def list_pm_threads(conv_id: str):
+        """获取对话关联的 PM 线程列表。"""
+        _check_secretary()
+        ch = getattr(controller, 'chat_handler', None)
+        if not ch:
+            return {"threads": []}
+        threads = ch.get_pm_threads(conv_id)
+        return {"threads": threads, "conv_id": conv_id}
+
+    @router.post("/api/conversations/{conv_id}/pm-threads")
+    async def attach_pm_thread(conv_id: str, payload: dict):
+        """将 PM Agent 绑定到对话线程。"""
+        _check_secretary()
+        ch = getattr(controller, 'chat_handler', None)
+        if not ch:
+            raise HTTPException(status_code=503, detail="聊天处理器未初始化")
+        pm_id = payload.get("pm_id", "")
+        if not pm_id:
+            raise HTTPException(status_code=400, detail="pm_id 不能为空")
+        result = ch.attach_pm_thread(
+            conv_id, pm_id,
+            task_name=payload.get("task_name", ""),
+            agent_name=payload.get("agent_name", ""),
+        )
+        if result.get("ok"):
+            await _broadcast(state, "pm_thread_attached", {"conv_id": conv_id, "pm_id": pm_id})
+        return result
+
+    @router.delete("/api/conversations/{conv_id}/pm-threads/{pm_id}")
+    async def detach_pm_thread(conv_id: str, pm_id: str):
+        """从对话中移除 PM 线程。"""
+        _check_secretary()
+        ch = getattr(controller, 'chat_handler', None)
+        if not ch:
+            return {"ok": False}
+        ok = ch.detach_pm_thread(conv_id, pm_id)
+        return {"ok": ok}
+
+    @router.get("/api/pm-threads/{pm_id}/messages")
+    async def get_pm_thread_messages(pm_id: str, limit: int = 100):
+        """获取 PM 线程的历史消息。"""
+        _check_secretary()
+        ch = getattr(controller, 'chat_handler', None)
+        if not ch:
+            return {"messages": []}
+        messages = ch.get_pm_thread_messages(pm_id, limit)
+        return {"messages": messages, "pm_id": pm_id}
+
+    @router.post("/api/pm-threads/{pm_id}/messages")
+    async def send_pm_thread_message(pm_id: str, payload: dict):
+        """L2 路由: 在 PM 线程内直接发送消息给 PM Agent。
+
+        跳过秘书 LLM, 直接注入 PM 的 receive_input。
+        """
+        _check_secretary()
+        ch = getattr(controller, 'chat_handler', None)
+        if not ch:
+            raise HTTPException(status_code=503, detail="聊天处理器未初始化")
+        message = payload.get("message", "")
+        if not message:
+            raise HTTPException(status_code=400, detail="消息不能为空")
+        conv_id = payload.get("conv_id", "") or ch.find_conv_by_pm(pm_id)
+        if not conv_id:
+            raise HTTPException(status_code=404, detail="PM 未绑定到任何对话")
+        result = ch.send_to_pm_thread(conv_id, pm_id, message)
+        await _broadcast(state, "pm_thread_message", {
+            "pm_id": pm_id, "conv_id": conv_id,
+            "reply": result.get("reply", ""),
+        })
+        return result
 
     # ── 优化15: Bot 统一消息入口 ──
 
@@ -1694,6 +1887,27 @@ def create_station_router(controller) -> APIRouter:
                 "status": info.get("status", "idle"),
             })
         return {"sub_agents": result, "total": len(result)}
+
+    @router.post("/tasks/execute")
+    async def local_execute_task(payload: dict):
+        """接收 PM Dispatcher 分发的子任务并在本机异步执行。
+
+        立即返回 {"status": "started"}，实际执行在后台线程完成，
+        执行完毕后通过 receive_subtask_result 回调 PM Monitor。
+        """
+        import threading as _threading
+
+        def _run():
+            try:
+                controller._local_execute_task(payload)
+            except Exception as e:
+                logger.error("本机子任务执行异常: %s", e)
+
+        _threading.Thread(
+            target=_run, daemon=True,
+            name=f"subtask-{payload.get('name', '')[:20]}",
+        ).start()
+        return {"status": "started", "name": payload.get("name", "")}
 
     @router.post("/api/p2p/send")
     async def p2p_send_message(payload: dict):

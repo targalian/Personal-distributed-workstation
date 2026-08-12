@@ -93,9 +93,21 @@ class CloudStorageConfig(BaseModel):
     sync_interval: int = 300           # 自动同步间隔 (秒), 0 = 仅启动时同步一次
 
 
+class QuietHoursConfig(BaseModel):
+    """免打扰时段配置。"""
+    enabled: bool = False
+    start: str = "23:00"              # 开始时间 (HH:MM)
+    end: str = "08:00"                # 结束时间 (HH:MM)
+    override_priority: str = "high"   # 此级别及以上可穿透免打扰
+
+
 class BotConfig(BaseModel):
     """Bot 通道总配置。"""
     channels: list = Field(default_factory=list)  # List[BotChannelConfig]
+    aggregate_window: int = 30        # 消息聚合窗口 (秒), 0=禁用聚合
+    quiet_hours: QuietHoursConfig = Field(default_factory=QuietHoursConfig)
+    max_retry: int = 3                # 发送失败最大重试次数
+    retry_backoff: float = 2.0        # 重试退避基数 (秒)
 
 
 class AppConfig(BaseModel):

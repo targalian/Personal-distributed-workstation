@@ -43,6 +43,7 @@ class PMMonitor:
         self._state = state
         self._agent = agent
         self._dispatcher = dispatcher
+        self._local_takeover_tasks = set()  # 防重入: PM本地接管中的子任务
 
     # ── 进度轮询 ──────────────────────────────────────────────────
 
@@ -98,14 +99,23 @@ class PMMonitor:
         status = report.get("status", "in_progress")
 
         with st.lock:
-            if reporter_id in st.subagents:
-                st.subagents[reporter_id]["progress"] = report.get("progress", 0.0)
-                st.subagents[reporter_id]["status"] = status
-                st.subagents[reporter_id]["current_task"] = task_name
+            # 支持 member_id 或 agent_id 查找 (Station 内嵌模式传 agent_id)
+            target = st.subagents.get(reporter_id)
+            if not target:
+                for m in st.subagents.values():
+                    if m.get("agent_id") == reporter_id:
+                        target = m
+                        break
+            if target:
+                target["progress"] = report.get("progress", 0.0)
+                target["status"] = status
+                target["current_task"] = task_name
 
         # 优化1: 任务完成时存储输出并尝试分发依赖链
         if status == "completed" and task_name:
             output = report.get("output", report.get("message", ""))
+            # 本地接管成功的任务, 移出集合, 防止同名子任务后续失败被误判为已接管
+            self._local_takeover_tasks.discard(task_name)
             with st.lock:
                 st.subtask_outputs[task_name] = output
 
@@ -137,11 +147,16 @@ class PMMonitor:
 
             self._dispatcher.try_dispatch_pending()
 
-        # 优化5: 任务失败时触发接管策略
+        # 优化5: 任务失败时触发接管策略 (跳过已在本地接管中的任务, 防止无限递归)
         if status == "failed" and task_name:
-            error_msg = report.get("message", "未知错误")
-            logger.error("[%s] 子任务 '%s' 失败: %s", self._pm_id[:8], task_name, error_msg[:200])
-            self.handle_subagent_failure(task_name, error_msg)
+            if task_name in self._local_takeover_tasks:
+                logger.error("[%s] 子任务 '%s' 本地接管后仍失败, 放弃重试",
+                            self._pm_id[:8], task_name)
+                self._local_takeover_tasks.discard(task_name)
+            else:
+                error_msg = report.get("message", "未知错误")
+                logger.error("[%s] 子任务 '%s' 失败: %s", self._pm_id[:8], task_name, error_msg[:200])
+                self.handle_subagent_failure(task_name, error_msg)
 
         # 同步子任务状态到 Secretary
         self._agent.sync_subtasks()
@@ -251,8 +266,9 @@ class PMMonitor:
                 self._dispatcher.dispatch_subtask(new_station, new_agent_info, st.task, sub, plan=st.plan)
             return
 
-        # 策略3: PM 本地接管
+        # 策略3: PM 本地接管 (最终回退, 失败后不再递归)
         logger.info("[%s] PM 本地接管子任务 '%s'", self._pm_id[:8], task_name)
+        self._local_takeover_tasks.add(task_name)
         self._dispatcher.execute_subtask_locally(st.task, sub)
         self._report_escalation(task_name, error_msg, sub)
 

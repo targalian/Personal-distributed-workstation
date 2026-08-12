@@ -14,6 +14,12 @@ Bot 网关 — 手机消息通道
                 ├── sendMessage (推)
                 └── getUpdates / webhook (收)
 
+优化清单:
+  - 消息聚合/防刷屏 (短时间窗口内事件合并为一条)
+  - Telegram Inline Keyboard (PM 决策一键操作)
+  - typing 状态指示 + 发送重试/离线队列
+  - 免打扰时段 (Quiet Hours)
+
 事件类型:
   - task_submitted / task_completed / task_failed
   - host_online / host_offline
@@ -24,7 +30,9 @@ Bot 网关 — 手机消息通道
 import json
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional, Callable
 
 import requests
@@ -77,6 +85,24 @@ EVENT_PRIORITY = {
     "periodic_report": "low",
 }
 
+# 事件图标 (聚合消息时使用)
+EVENT_ICONS = {
+    "task_submitted": "📋",
+    "task_completed": "✅",
+    "task_failed": "❌",
+    "task_cancelled": "🚫",
+    "task_paused": "⏸️",
+    "host_online": "🖥️",
+    "host_offline": "⚠️",
+    "secretary_activated": "🔑",
+    "secretary_deactivated": "🔴",
+    "budget_warning": "💰",
+    "pm_awaiting_input": "❓",
+    "task_delivered": "📦",
+    "task_escalated": "🚨",
+    "periodic_report": "📊",
+}
+
 
 @dataclass
 class BotChannel:
@@ -91,6 +117,158 @@ class BotChannel:
     webhook_url_base: str = ""   # 公网回调地址 (如 https://example.com)
 
 
+# ── 优化1: 消息聚合器 ──────────────────────────────────────────
+
+
+class MessageAggregator:
+    """消息聚合器 — 短时间窗口内的事件合并为一条摘要推送, 防止刷屏。
+
+    工作原理:
+    - 收到事件后放入缓冲区, 启动 window_secs 的定时器
+    - 定时器到期后, 将缓冲区内所有事件合并为一条消息发送
+    - 若窗口内只有 1 条事件, 直接原样发送 (不聚合)
+    - high 优先级事件立即发送, 不参与聚合
+    """
+
+    def __init__(self, window_secs: int = 30, flush_callback: Optional[Callable] = None):
+        self._window = window_secs
+        self._flush_callback = flush_callback  # fn(channel, message, event_type)
+        self._buffer: list[dict] = []
+        self._lock = threading.Lock()
+        self._timer: Optional[threading.Timer] = None
+
+    @property
+    def enabled(self) -> bool:
+        return self._window > 0
+
+    def push(self, channel: "BotChannel", message: str, event_type: str, priority: str):
+        """将事件推入聚合缓冲区。
+
+        high 优先级事件立即刷新, 不参与聚合。
+        注意: 直接发送路径必须在后台线程执行, notify() 由 async 端点调用,
+        同步网络请求+重试退避会阻塞 FastAPI 事件循环。
+        """
+        if not self.enabled or priority == "high":
+            # 聚合禁用或 high 优先级: 直接发送 (后台线程, 不阻塞调用方)
+            if self._flush_callback:
+                threading.Thread(
+                    target=self._flush_callback,
+                    args=(channel, message, event_type),
+                    daemon=True,
+                ).start()
+            return
+
+        with self._lock:
+            self._buffer.append({
+                "channel": channel,
+                "message": message,
+                "event_type": event_type,
+                "priority": priority,
+                "ts": time.time(),
+            })
+            # 首条消息时启动定时器
+            if self._timer is None:
+                self._timer = threading.Timer(self._window, self._flush)
+                self._timer.daemon = True
+                self._timer.start()
+
+    def _flush(self):
+        """定时器到期, 刷新缓冲区。"""
+        with self._lock:
+            pending = list(self._buffer)
+            self._buffer.clear()
+            self._timer = None
+
+        if not pending or not self._flush_callback:
+            return
+
+        # 按通道分组
+        by_channel: dict[str, list] = {}
+        for item in pending:
+            key = item["channel"].channel_type
+            by_channel.setdefault(key, []).append(item)
+
+        for _ch_type, items in by_channel.items():
+            channel = items[0]["channel"]
+            if len(items) == 1:
+                # 只有一条, 原样发送
+                self._flush_callback(channel, items[0]["message"], items[0]["event_type"])
+            else:
+                # 多条合并
+                combined = self._merge_messages(items)
+                self._flush_callback(channel, combined, "aggregated")
+
+    def _merge_messages(self, items: list[dict]) -> str:
+        """将多条事件合并为一条摘要消息。"""
+        lines = [f"📊 工作站通知 ({len(items)} 条)"]
+        lines.append("─" * 20)
+        for item in items:
+            icon = EVENT_ICONS.get(item["event_type"], "📢")
+            # 取消息第一行作为摘要
+            first_line = item["message"].split("\n")[0]
+            # 去掉原始 icon (避免重复)
+            for existing_icon in EVENT_ICONS.values():
+                if first_line.startswith(existing_icon):
+                    first_line = first_line[len(existing_icon):].strip()
+                    break
+            lines.append(f"{icon} {first_line}")
+        lines.append("─" * 20)
+        lines.append(f"⏰ {datetime.now().strftime('%H:%M:%S')}")
+        return "\n".join(lines)
+
+    def cancel(self):
+        """取消待刷新的定时器。"""
+        with self._lock:
+            if self._timer:
+                self._timer.cancel()
+                self._timer = None
+
+
+# ── 优化4: 免打扰时段检查 ──────────────────────────────────────
+
+
+class QuietHoursChecker:
+    """免打扰时段检查器。"""
+
+    def __init__(self, enabled: bool = False, start: str = "23:00",
+                 end: str = "08:00", override_priority: str = "high"):
+        self.enabled = enabled
+        self._start = self._parse_time(start)
+        self._end = self._parse_time(end)
+        self._override_priority = override_priority
+
+    @staticmethod
+    def _parse_time(t: str) -> tuple[int, int]:
+        try:
+            parts = t.split(":")
+            return int(parts[0]), int(parts[1])
+        except (ValueError, IndexError):
+            return 23, 0
+
+    def is_quiet(self) -> bool:
+        """当前是否处于免打扰时段。"""
+        if not self.enabled:
+            return False
+        now = datetime.now()
+        current = (now.hour, now.minute)
+        if self._start <= self._end:
+            # 同日区间 (如 08:00 ~ 12:00)
+            return self._start <= current < self._end
+        else:
+            # 跨午夜区间 (如 23:00 ~ 08:00)
+            return current >= self._start or current < self._end
+
+    def should_block(self, event_priority: str) -> bool:
+        """判断是否应阻止该优先级的消息。"""
+        if not self.is_quiet():
+            return False
+        # 高于 override_priority 的消息可穿透
+        return _PRIORITY_ORDER.get(event_priority, 1) < _PRIORITY_ORDER.get(self._override_priority, 2)
+
+
+# ── 主类 ──────────────────────────────────────────────────────
+
+
 class BotGateway:
     """Bot 网关 — 手机消息通道管理器。
 
@@ -98,13 +276,20 @@ class BotGateway:
     1. 企业微信群机器人 Webhook — 单向推送，最简单
     2. Telegram Bot API — 双向，支持推送 + 命令交互
 
+    优化:
+    - 消息聚合防刷屏 (aggregate_window)
+    - Inline Keyboard 交互按钮 (PM 决策一键操作)
+    - typing 状态 + 发送重试/离线队列
+    - 免打扰时段 (Quiet Hours)
+
     用法:
         gw = BotGateway()
         gw.add_channel(BotChannel(channel_type="wechat_webhook", webhook_url="...", enabled=True))
         gw.notify("task_completed", {"name": "xxx", "task_id": "abc"})
     """
 
-    def __init__(self):
+    def __init__(self, aggregate_window: int = 30, max_retry: int = 3,
+                 retry_backoff: float = 2.0, quiet_hours: dict = None):
         self._channels: list[BotChannel] = []
         self._lock = threading.Lock()
         self._command_handler: Optional[Callable] = None
@@ -113,6 +298,27 @@ class BotGateway:
         self._tg_polling = False
         # ── 优化15: 统一消息入口 ──
         self._chat_handler = None  # ChatHandler 实例, 用于统一处理自然语言消息
+
+        # ── 优化1: 消息聚合 ──
+        self._aggregator = MessageAggregator(
+            window_secs=aggregate_window,
+            flush_callback=self._do_send_to_channel,
+        )
+
+        # ── 优化3: 重试 + 离线队列 ──
+        self._max_retry = max_retry
+        self._retry_backoff = retry_backoff
+        self._pending_queue: deque = deque(maxlen=100)  # 发送失败的离线消息
+        self._send_pool_lock = threading.Lock()
+
+        # ── 优化4: 免打扰 ──
+        qh = quiet_hours or {}
+        self._quiet_checker = QuietHoursChecker(
+            enabled=qh.get("enabled", False),
+            start=qh.get("start", "23:00"),
+            end=qh.get("end", "08:00"),
+            override_priority=qh.get("override_priority", "high"),
+        )
 
     # ── 通道管理 ──
 
@@ -183,7 +389,6 @@ class BotGateway:
         data = data or {}
         template = EVENT_TEMPLATES.get(event_type)
         if not template:
-            # 未知事件类型，直接用 JSON
             message = f"📢 {event_type}\n{json.dumps(data, ensure_ascii=False, indent=2)}"
         else:
             try:
@@ -193,6 +398,11 @@ class BotGateway:
 
         priority = EVENT_PRIORITY.get(event_type, "normal")
 
+        # ── 优化4: 免打扰检查 ──
+        if self._quiet_checker.should_block(priority):
+            logger.debug("免打扰时段, 跳过 %s 推送 (priority=%s)", event_type, priority)
+            return
+
         with self._lock:
             channels = list(self._channels)
 
@@ -201,30 +411,67 @@ class BotGateway:
                 continue
             if not _should_send(priority, ch.min_priority):
                 continue
-            # 异步发送，避免阻塞调用方
-            threading.Thread(
-                target=self._send_to_channel,
-                args=(ch, message, event_type),
-                daemon=True,
-            ).start()
 
-    def _send_to_channel(self, channel: BotChannel, message: str, event_type: str):
-        """发送消息到单个通道。"""
-        try:
-            if channel.channel_type == "wechat_webhook":
-                self._send_wechat(channel, message)
-            elif channel.channel_type == "telegram":
-                self._send_telegram(channel, message)
-        except Exception as e:
-            logger.error("发送到 %s 失败: %s", channel.channel_type, e)
+            # ── 优化2: PM 决策请求附带 Inline Keyboard ──
+            if event_type == "pm_awaiting_input" and ch.channel_type == "telegram":
+                options = data.get("options", [])
+                pm_id = data.get("pm_id", "")
+                self._send_telegram_with_keyboard(ch, message, pm_id, options)
+                continue
+
+            # ── 优化1: 通过聚合器发送 ──
+            self._aggregator.push(ch, message, event_type, priority)
+
+    def _do_send_to_channel(self, channel: BotChannel, message: str, event_type: str):
+        """实际发送 (聚合器回调 + 直接发送共用)。含重试逻辑。"""
+        # ── 优化3: 重试 + 离线队列 ──
+        for attempt in range(self._max_retry):
+            try:
+                if channel.channel_type == "wechat_webhook":
+                    self._send_wechat(channel, message)
+                elif channel.channel_type == "telegram":
+                    self._send_telegram(channel, message)
+                return  # 成功
+            except Exception as e:
+                if attempt < self._max_retry - 1:
+                    wait = self._retry_backoff ** attempt
+                    logger.warning("发送到 %s 失败 (第%d次), %.1fs后重试: %s",
+                                   channel.channel_type, attempt + 1, wait, e)
+                    time.sleep(wait)
+                else:
+                    logger.error("发送到 %s 最终失败, 消息进入离线队列: %s", channel.channel_type, e)
+                    self._pending_queue.append({
+                        "channel_type": channel.channel_type,
+                        "message": message,
+                        "event_type": event_type,
+                        "failed_at": time.time(),
+                    })
+
+    def flush_pending_queue(self):
+        """手动触发离线队列补发 (可在通道恢复后调用)。"""
+        flushed = 0
+        while self._pending_queue:
+            item = self._pending_queue[0]
+            ch = self.get_channel(item["channel_type"])
+            if not ch or not ch.enabled:
+                break
+            try:
+                if ch.channel_type == "wechat_webhook":
+                    self._send_wechat(ch, item["message"])
+                elif ch.channel_type == "telegram":
+                    self._send_telegram(ch, item["message"])
+                self._pending_queue.popleft()
+                flushed += 1
+            except Exception:
+                break
+        if flushed:
+            logger.info("离线队列补发 %d 条消息", flushed)
+        return flushed
 
     # ── 企业微信群机器人 ──
 
     def _send_wechat(self, channel: BotChannel, message: str):
-        """企业微信群机器人 Webhook 推送。
-
-        文档: https://developer.work.weixin.qq.com/document/path/91770
-        """
+        """企业微信群机器人 Webhook 推送。"""
         if not channel.webhook_url:
             return
         payload = {
@@ -233,9 +480,10 @@ class BotGateway:
         }
         resp = requests.post(channel.webhook_url, json=payload, timeout=10)
         if resp.status_code != 200:
-            logger.warning("微信 webhook 返回 %d: %s", resp.status_code, resp.text)
-        elif resp.json().get("errcode", 0) != 0:
-            logger.warning("微信 webhook 错误: %s", resp.json())
+            raise RuntimeError(f"微信 webhook 返回 {resp.status_code}: {resp.text[:200]}")
+        result = resp.json()
+        if result.get("errcode", 0) != 0:
+            raise RuntimeError(f"微信 webhook 错误: {result}")
 
     # ── Telegram Bot ──
 
@@ -244,14 +492,63 @@ class BotGateway:
         if not channel.bot_token or not channel.chat_id:
             return
         url = f"https://api.telegram.org/bot{channel.bot_token}/sendMessage"
+        # 长消息分片 (Telegram 限制 4096 字符)
+        chunks = _split_message(message, max_len=4000)
+        for chunk in chunks:
+            payload = {
+                "chat_id": channel.chat_id,
+                "text": chunk,
+                "parse_mode": "HTML",
+            }
+            resp = requests.post(url, json=payload, timeout=10)
+            if resp.status_code != 200:
+                raise RuntimeError(f"Telegram 返回 {resp.status_code}: {resp.text[:200]}")
+
+    def _send_telegram_with_keyboard(self, channel: BotChannel, message: str,
+                                      pm_id: str, options: list):
+        """优化2: 发送带 Inline Keyboard 的 Telegram 消息 (PM 决策按钮)。"""
+        if not channel.bot_token or not channel.chat_id:
+            return
+        url = f"https://api.telegram.org/bot{channel.bot_token}/sendMessage"
+
+        # 构建 inline keyboard
+        keyboard_rows = []
+        if options:
+            for opt in options[:6]:  # 最多 6 个选项
+                keyboard_rows.append([{
+                    "text": opt,
+                    "callback_data": f"decide:{pm_id}:{opt}"
+                }])
+        # 添加通用操作行
+        keyboard_rows.append([
+            {"text": "✅ 同意继续", "callback_data": f"decide:{pm_id}:approve"},
+            {"text": "❌ 放弃任务", "callback_data": f"decide:{pm_id}:abort"},
+        ])
+
         payload = {
             "chat_id": channel.chat_id,
             "text": message,
             "parse_mode": "HTML",
+            "reply_markup": json.dumps({"inline_keyboard": keyboard_rows}),
         }
-        resp = requests.post(url, json=payload, timeout=10)
-        if resp.status_code != 200:
-            logger.warning("Telegram 返回 %d: %s", resp.status_code, resp.text)
+        try:
+            resp = requests.post(url, json=payload, timeout=10)
+            if resp.status_code != 200:
+                logger.warning("Telegram keyboard 消息发送失败: %d", resp.status_code)
+        except Exception as e:
+            logger.error("Telegram keyboard 发送异常: %s", e)
+
+    def _send_telegram_typing(self, channel: BotChannel, chat_id: str):
+        """优化3: 发送 typing 状态指示 (让用户知道 Bot 正在处理)。"""
+        if not channel.bot_token:
+            return
+        url = f"https://api.telegram.org/bot{channel.bot_token}/sendChatAction"
+        try:
+            requests.post(url, json={"chat_id": chat_id, "action": "typing"}, timeout=5)
+        except Exception:
+            pass  # typing 失败不影响主流程
+
+    # ── Telegram 轮询 ──
 
     def _start_telegram_polling(self, channel: BotChannel):
         """启动 Telegram Bot 长轮询（接收用户命令）。"""
@@ -288,7 +585,14 @@ class BotGateway:
 
                 for update in result.get("result", []):
                     self._tg_last_update_id = update.get("update_id", self._tg_last_update_id)
-                    message = update.get("message") or update.get("callback_query", {}).get("message")
+
+                    # ── 优化2: 处理 Inline Keyboard 回调 ──
+                    callback_query = update.get("callback_query")
+                    if callback_query:
+                        self._handle_callback_query(channel, callback_query)
+                        continue
+
+                    message = update.get("message")
                     if not message:
                         continue
                     text = message.get("text", "").strip()
@@ -301,6 +605,68 @@ class BotGateway:
             except Exception as e:
                 logger.error("Telegram 轮询异常: %s", e)
                 time.sleep(5)
+
+    def _handle_callback_query(self, channel: BotChannel, callback_query: dict):
+        """优化2: 处理 Inline Keyboard 按钮点击。
+
+        callback_data 格式: "decide:{pm_id}:{choice}"
+        """
+        data = callback_query.get("data", "")
+        chat_id = str(callback_query.get("message", {}).get("chat", {}).get("id", ""))
+        query_id = callback_query.get("id", "")
+
+        # 应答 callback (消除按钮 loading 状态)
+        self._answer_callback_query(channel, query_id)
+
+        if not data.startswith("decide:"):
+            return
+
+        parts = data.split(":", 2)
+        if len(parts) < 3:
+            return
+        _, pm_id, choice = parts
+
+        logger.info("收到 Inline 决策: PM=%s, choice=%s (from %s)", pm_id[:12], choice, chat_id)
+
+        # 将决策注入 PM Agent
+        if self._chat_handler and hasattr(self._chat_handler, 'controller'):
+            try:
+                controller = self._chat_handler.controller
+                result = controller.inject_input_to_pm(pm_id, {
+                    "response": choice,
+                    "choice": choice,
+                    "source": "telegram_inline",
+                })
+                if result.get("ok"):
+                    ack = f"✅ 已将决策「{choice}」发送给 PM Agent"
+                else:
+                    ack = f"❌ 发送失败: {result.get('message', '未知错误')}"
+            except Exception as e:
+                ack = f"⚠️ 处理异常: {e}"
+        elif self._command_handler:
+            try:
+                ack = self._command_handler("decide", f"{pm_id} {choice}", chat_id)
+            except Exception as e:
+                ack = f"⚠️ 命令执行出错: {e}"
+        else:
+            ack = "⚠️ 无法处理决策: 秘书未激活"
+
+        # 回复确认
+        try:
+            url = f"https://api.telegram.org/bot{channel.bot_token}/sendMessage"
+            requests.post(url, json={"chat_id": chat_id, "text": ack}, timeout=10)
+        except Exception as e:
+            logger.error("回复 Inline 决策确认失败: %s", e)
+
+    def _answer_callback_query(self, channel: BotChannel, callback_query_id: str):
+        """应答 Telegram callback_query (消除客户端 loading)。"""
+        if not callback_query_id or not channel.bot_token:
+            return
+        url = f"https://api.telegram.org/bot{channel.bot_token}/answerCallbackQuery"
+        try:
+            requests.post(url, json={"callback_query_id": callback_query_id}, timeout=5)
+        except Exception:
+            pass
 
     def _handle_telegram_command(self, channel: BotChannel, text: str, chat_id: str):
         """处理来自 Telegram 的命令 (优化15: 统一入口)。"""
@@ -334,16 +700,21 @@ class BotGateway:
                 reply = f"未知命令: {text}\n发送 /help 查看可用命令"
         else:
             # 优化15: 自然语言消息 → 统一转发给 ChatHandler
+            # ── 优化3: 先发送 typing 状态 ──
+            self._send_telegram_typing(channel, chat_id)
             reply = self._handle_natural_language(text, chat_id)
 
         # 发送回复
         url = f"https://api.telegram.org/bot{channel.bot_token}/sendMessage"
         try:
-            requests.post(url, json={
-                "chat_id": chat_id,
-                "text": reply,
-                "parse_mode": "HTML",
-            }, timeout=10)
+            # 长消息分片
+            chunks = _split_message(reply, max_len=4000)
+            for chunk in chunks:
+                requests.post(url, json={
+                    "chat_id": chat_id,
+                    "text": chunk,
+                    "parse_mode": "HTML",
+                }, timeout=10)
         except Exception as e:
             logger.error("回复 Telegram 失败: %s", e)
 
@@ -359,9 +730,6 @@ class BotGateway:
                 result = self._chat_handler.chat(text)
                 reply = result.get("reply", "")
                 if reply:
-                    # Telegram 消息长度限制 4096 字符
-                    if len(reply) > 4000:
-                        reply = reply[:4000] + "\n...(内容过长已截断)"
                     return reply
             except Exception as e:
                 logger.error("ChatHandler 处理异常: %s", e)
@@ -384,6 +752,7 @@ class BotGateway:
     def stop(self):
         """停止所有后台线程。"""
         self._tg_polling = False
+        self._aggregator.cancel()
 
     # ── 测试 ──
 
@@ -395,7 +764,7 @@ class BotGateway:
         if not ch.enabled:
             return {"ok": False, "error": f"通道 {channel_type} 未启用"}
         try:
-            self._send_to_channel(ch, EVENT_TEMPLATES["bot_test"], "bot_test")
+            self._do_send_to_channel(ch, EVENT_TEMPLATES["bot_test"], "bot_test")
             return {"ok": True, "message": "测试消息已发送，请检查手机端"}
         except Exception as e:
             return {"ok": False, "error": str(e)}
@@ -416,3 +785,25 @@ def _mask(s: str) -> str:
     if len(s) <= 12:
         return s[:3] + "***"
     return s[:6] + "..." + s[-4:]
+
+
+def _split_message(text: str, max_len: int = 4000) -> list[str]:
+    """将长消息按段落分片, 避免超过 Telegram 4096 字符限制。"""
+    if len(text) <= max_len:
+        return [text]
+
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_len:
+            chunks.append(remaining)
+            break
+        # 尝试在换行处切割
+        cut_pos = remaining.rfind("\n", 0, max_len)
+        if cut_pos < max_len // 2:
+            # 没有合适的换行, 硬切
+            cut_pos = max_len
+        chunk = remaining[:cut_pos]
+        remaining = remaining[cut_pos:].lstrip("\n")
+        chunks.append(chunk + ("\n…" if remaining else ""))
+    return chunks

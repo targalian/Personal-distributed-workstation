@@ -190,9 +190,15 @@ class PMPlanner:
             "fallback_models": [],
         }
         result = self._runtime.execute(subtask)
+        output = result.get("output", {})
+        code_content = output.get("code", output.get("summary", "完成"))
+        # 检测 LLM 返回的错误标记
+        status = result.get("status", "completed")
+        if isinstance(code_content, str) and code_content.startswith(("[未配置", "[LLM 调用失败", "[模型调用失败")):
+            status = "failed"
         return {
-            "summary": result.get("output", {}).get("code", result.get("output", {}).get("summary", "完成"))[:200],
-            "status": result.get("status", "completed"),
+            "summary": code_content if isinstance(code_content, str) else str(code_content),
+            "status": status,
         }
 
     # ── F2.3: 多轮任务细化 ─────────────────────────────────────
