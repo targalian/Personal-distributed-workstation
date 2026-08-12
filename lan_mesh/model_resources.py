@@ -22,11 +22,14 @@ import datetime
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 import yaml
 
 from .logger import get_logger
+
+if TYPE_CHECKING:
+    from .database import Database
 
 logger = get_logger("resources")
 
@@ -86,7 +89,7 @@ class ModelResourceManager:
     # ── 加载 ────────────────────────────────────────────────────
 
     def load(self, yaml_path: Union[str, Path], pool_entries: list = None,
-             db=None) -> bool:
+             db: Optional["Database"] = None) -> bool:
         """加载资源配置 + 价格目录。
 
         Args:
@@ -290,7 +293,8 @@ _mgr = ModelResourceManager()
 
 
 def init_resource_manager(yaml_path: Union[str, Path] = None,
-                          pool_entries: list = None, db=None) -> ModelResourceManager:
+                          pool_entries: list = None,
+                          db: Optional["Database"] = None) -> ModelResourceManager:
     """启动时调用一次, 加载资源配置。"""
     if yaml_path:
         _mgr.load(yaml_path, pool_entries, db)

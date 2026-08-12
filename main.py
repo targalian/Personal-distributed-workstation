@@ -118,12 +118,14 @@ def _run_resources_cli(cfg, args):
     if args.init:
         example = Path(__file__).parent / "lan_mesh" / "resources.example.yaml"
         if target.exists():
-            print(f"resources.yaml 已存在, 跳过生成: {target.resolve()}")
+            print("[resources] resources.yaml 已存在, 跳过生成: "
+                  f"{target.resolve()}")
         else:
             target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
-            print(f"已生成配置模板: {target.resolve()}")
-            print("请编辑填写资源池 (按量预算 / token 包 / 编程订阅) 后重新运行:")
-            print("  python main.py resources")
+            print(f"[resources] 已生成配置模板: {target.resolve()}")
+            print("[resources] 请编辑填写资源池 (按量预算 / token 包 / 编程订阅)"
+                  "后重新运行:")
+            print("[resources]   python main.py resources")
         return
 
     model_pool = load_model_pool()
@@ -131,17 +133,19 @@ def _run_resources_cli(cfg, args):
     mgr = ModelResourceManager()
     enabled = mgr.load(target, model_pool.models if model_pool.models else None, db)
     if not enabled:
-        print("模型资源管理未启用: 未找到 lan_mesh/resources.yaml")
-        print("提示: 运行 `python main.py resources --init` 生成配置模板")
+        print("[resources] 模型资源管理未启用: 未找到 lan_mesh/resources.yaml")
+        print("[resources] 提示: 运行 `python main.py resources --init` "
+              "生成配置模板")
         return
 
     summary = mgr.summarize()
-    print(f"模型资源管理已启用 (strict={summary.get('strict', False)})")
+    print(f"[resources] 模型资源管理已启用 (strict={summary.get('strict', False)})")
     for res in summary.get("resources", []):
         rate = round((res.get("rate") or 0) * 100)
-        print(f"  [{res.get('resource_id')}] {res.get('provider')} "
-              f"{res.get('plan_type')} | 已用 {res.get('used')} / {res.get('quota')} "
-              f"{res.get('unit')} ({rate}%) | 状态: {res.get('status')} "
+        print(f"[resources]   [{res.get('resource_id')}] {res.get('provider')} "
+              f"{res.get('plan_type')} | 已用 {res.get('used')} / "
+              f"{res.get('quota')} {res.get('unit')} ({rate}%) | "
+              f"状态: {res.get('status')} "
               f"{('- ' + res.get('note')) if res.get('note') else ''}")
 
 
