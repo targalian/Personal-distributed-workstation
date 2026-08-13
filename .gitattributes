@@ -1,0 +1,2 @@
+# Keep the English README when merging from the Chinese master branch
+README.md merge=ours

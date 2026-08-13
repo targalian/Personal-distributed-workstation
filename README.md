@@ -1,156 +1,158 @@
 # Work Station
 
-分布式个人 AI 工作站 — 将局域网内多台异构主机组成统一调度网格，由项目经理 Agent (PM Agent) 驱动任务自动拆解、团队组建、分布式执行与结果聚合，通过 Web 端与秘书对话管理全局。
+A distributed personal AI workstation — organizes multiple heterogeneous hosts on a LAN into a unified scheduling grid. A Project Manager Agent (PM Agent) drives automatic task decomposition, team formation, distributed execution, and result aggregation, all managed through a chat with the Secretary in the Web UI.
 
-## 项目结构
+> 中文文档请见 Gitee 仓库的 master 分支。
+
+## Project Structure
 
 ```
 work_station/
-├── lan_mesh/                  # Python/FastAPI 分布式 AI Agent 网格
-│   ├── web/                   # Web UI 仪表盘 (深色主题, 7 Tab 面板)
+├── lan_mesh/                  # Python/FastAPI distributed AI Agent mesh
+│   ├── web/                   # Web UI dashboard (dark theme, 7 tab panels)
 │   │   ├── templates/dashboard.html
 │   │   └── static/
-│   ├── station_controller.py  # Station Director 主控制器 (Secretary/Worker 统一入口)
-│   ├── station_api.py         # Secretary 侧 API (任务/PM/团队/聊天)
-│   ├── station_director.py    # 主机管理与评级
-│   ├── secretary.py           # Secretary 控制器 (向后兼容)
-│   ├── worker.py              # Worker 守护进程 (含 PM Agent 内嵌支持)
-│   ├── pm_agent.py            # 项目经理 Agent (任务分解/团队组建/进度管理/结果聚合)
-│   ├── chat_handler.py        # 秘书聊天处理器 (Web 对话 + 状态注入 + 意图检测)
-│   ├── agent_prompt.py        # 子 Agent 通用 Prompt 模板与定制构建器
-│   ├── agent_runtime.py       # Agent 运行时 (多 Provider LLM + 技能路由 + 定制 prompt)
-│   ├── agent_card.py          # Agent 能力声明卡
-│   ├── model_router.py        # 模型路由器 (L1-L4 难度分级 + 加权评分)
-│   ├── model_pool.yaml        # 模型池配置
-│   ├── project.py             # 项目管理与预算控制
-│   ├── mcp_gateway.py         # MCP 工具网关
-│   ├── mcp_client.py          # MCP 客户端
-│   ├── orchestrator.py        # (已废弃, 被 PM Agent 替代)
-│   ├── host_info.py           # 主机硬件信息采集
-│   ├── host_rating.py         # 主机评级 (S/A/B/C/D)
-│   ├── shared_folder.py       # 共享文件夹管理
-│   ├── discovery.py           # UDP 广播发现
-│   ├── database.py            # SQLite 持久化 (主机/任务/PM/团队/进度)
-│   ├── protocol.py            # 数据模型与协议定义
-│   ├── config.py              # Pydantic 配置加载
-│   ├── tool_registry.py       # 工具注册表
-│   ├── preflight.py           # 启动前自检
-│   └── api.py                 # FastAPI 路由层 (Worker API + Secretary API)
-├── quicklan-main/             # Tauri/React 局域网文件共享桌面应用
-├── scripts/                   # 跨平台一键启动脚本
-│   ├── start_workstation.bat  # Windows 双击启动
-│   ├── start_workstation.ps1  # PowerShell 启动 (支持参数)
-│   └── start_workstation.sh   # Linux/Mac 启动
-├── main.py                    # 统一启动入口
-├── config.yaml                # 运行配置
-└── requirements.txt           # Python 依赖
+│   ├── station_controller.py  # Station Director main controller (unified Secretary/Worker entry)
+│   ├── station_api.py         # Secretary-side API (tasks/PM/teams/chat)
+│   ├── station_director.py    # Host management and rating
+│   ├── secretary.py           # Secretary controller (backward compatible)
+│   ├── worker.py              # Worker daemon (with embedded PM Agent support)
+│   ├── pm_agent.py            # Project Manager Agent (task decomposition / team formation / progress management / result aggregation)
+│   ├── chat_handler.py        # Secretary chat handler (Web chat + state injection + intent detection)
+│   ├── agent_prompt.py        # Shared prompt templates and customized builders for sub-Agents
+│   ├── agent_runtime.py       # Agent runtime (multi-provider LLM + skill routing + custom prompts)
+│   ├── agent_card.py          # Agent capability declaration card
+│   ├── model_router.py        # Model router (L1-L4 difficulty grading + weighted scoring)
+│   ├── model_pool.yaml        # Model pool configuration
+│   ├── project.py             # Project management and budget control
+│   ├── mcp_gateway.py         # MCP tool gateway
+│   ├── mcp_client.py          # MCP client
+│   ├── orchestrator.py        # (deprecated, replaced by PM Agent)
+│   ├── host_info.py           # Host hardware info collection
+│   ├── host_rating.py         # Host rating (S/A/B/C/D)
+│   ├── shared_folder.py       # Shared folder management
+│   ├── discovery.py           # UDP broadcast discovery
+│   ├── database.py            # SQLite persistence (hosts/tasks/PMs/teams/progress)
+│   ├── protocol.py            # Data models and protocol definitions
+│   ├── config.py              # Pydantic configuration loading
+│   ├── tool_registry.py       # Tool registry
+│   ├── preflight.py           # Pre-launch self check
+│   └── api.py                 # FastAPI routing layer (Worker API + Secretary API)
+├── quicklan-main/             # Tauri/React LAN file sharing desktop app
+├── scripts/                   # Cross-platform one-click startup scripts
+│   ├── start_workstation.bat  # Windows double-click startup
+│   ├── start_workstation.ps1  # PowerShell startup (with parameters)
+│   └── start_workstation.sh   # Linux/Mac startup
+├── main.py                    # Unified entry point
+├── config.yaml                # Runtime configuration
+└── requirements.txt           # Python dependencies
 ```
 
-## 核心能力
+## Core Capabilities
 
-### PM Agent 驱动的任务编排
-- Boss 通过 Web 端提交任务 → Secretary 在合适 work_station 上注册 PM Agent
-- PM 使用 multi-agent-architect skill 分析任务复杂度，决策团队架构
-- 自主分解任务为子任务列表，梳理依赖关系（DAG 拓扑排序）
-- 在合适 work_station 上创建子 Agent 或团队，分配定制化 system prompt
-- 简单任务 PM 自行完成，复杂任务组建团队分发
+### PM Agent Driven Task Orchestration
+- Boss submits a task via the Web UI → Secretary registers a PM Agent on a suitable work_station
+- The PM uses the multi-agent-architect skill to analyze task complexity and decide the team architecture
+- Autonomously decomposes the task into a subtask list and organizes dependencies (DAG topological sort)
+- Creates sub-Agents or teams on suitable work_stations, each with a customized system prompt
+- The PM handles simple tasks itself; for complex tasks it forms a team and dispatches work
 
-### 子 Agent Prompt 定制体系
-- **通用模板**：所有子 Agent 共享基础准则（身份、工作规范、进度上报协议、自检要求）
-- **角色模板**：7 种技能类型各有角色名、职责、质量标准
-- **动态生成**：PM 按任务类型、团队结构、依赖关系为每个子 Agent 生成定制 prompt
-- **运行时更新**：PM 可在任务执行中途通过 `/pm/update-prompt` 动态调整子 Agent prompt
+### Sub-Agent Prompt Customization System
+- **Common template**: all sub-Agents share base guidelines (identity, working norms, progress reporting protocol, self-check requirements)
+- **Role templates**: 7 skill types, each with a role name, responsibilities, and quality standards
+- **Dynamic generation**: the PM generates a custom prompt for each sub-Agent based on task type, team structure, and dependencies
+- **Runtime updates**: the PM can adjust a sub-Agent's prompt mid-execution via `/pm/update-prompt`
 
-### 六项生产级优化
-1. **依赖感知拓扑分发** — 前序任务完成后自动注入结果到后续任务 input_data
-2. **PM 动态调整 Prompt** — Worker 新增端点，PM 可中途纠偏/补上下文/调策略
-3. **技能选择性注入** — AgentRuntime 按 required_skill 只加载匹配技能，减少 token 占用
-4. **PM 结果聚合** — 全部子任务完成后 LLM 按依赖顺序聚合为最终交付物
-5. **失败接管策略** — 子 Agent 失败后三级策略：同站重试 → 换站重试 → PM 本地接管
-6. **子 Agent 自检** — 完成时附带 self_check 字段，PM 验证后才确认
+### Six Production-Grade Optimizations
+1. **Dependency-aware topological dispatch** — when a predecessor task completes, its result is automatically injected into the successor's input_data
+2. **PM dynamic prompt adjustment** — new Worker endpoint lets the PM correct course / add context / adjust strategy mid-flight
+3. **Selective skill injection** — AgentRuntime loads only skills matching required_skill, reducing token usage
+4. **PM result aggregation** — after all subtasks finish, an LLM aggregates them into the final deliverable in dependency order
+5. **Failure takeover strategy** — three-tier strategy when a sub-Agent fails: retry on same station → retry on another station → PM local takeover
+6. **Sub-Agent self-check** — completion includes a self_check field, verified by the PM before confirmation
 
-### 秘书聊天接口
-- Web 端聊天窗口，Boss 直接与秘书对话
-- 秘书注入工作站状态上下文（在线主机数、活跃 PM、进行中任务）
-- 意图检测：提交任务、启动/停止秘书、查询状态/进度/主机/任务
+### Secretary Chat Interface
+- Chat window in the Web UI; the Boss talks directly to the Secretary
+- The Secretary injects workstation state context (online host count, active PMs, in-progress tasks)
+- Intent detection: task submission, start/stop Secretary, query status/progress/hosts/tasks
 
-### 分布式主机管理
-- Station Director 统一管理，UDP 广播自动发现，HTTP 心跳注册
-- 主机硬件评级系统（S/A/B/C/D），任务分发按评级排序选择最优节点
-- Worker 自动采集本机配置（CPU/内存/磁盘/OS/网络）
+### Distributed Host Management
+- Station Director unified management, UDP broadcast auto-discovery, HTTP heartbeat registration
+- Host hardware rating system (S/A/B/C/D); task dispatch picks the best node by rating
+- Workers automatically collect local specs (CPU/memory/disk/OS/network)
 
-### 模型路由器
-- **L1-L4 难度分级**：规则驱动，按文本长度、关键词、技能类型自动判定
-- **加权评分算法**：`Score = 能力覆盖率×0.4 + 成本反向×0.3 + 速度×0.2 - 负载×0.1`
-- **降级链容灾**：首选模型失败时自动沿 Fallback Chain 重试
-- **多 Provider 支持**：DeepSeek / OpenAI / Anthropic / Qwen / 阿里云 Token Plan
+### Model Router
+- **L1-L4 difficulty grading**: rule-driven, based on text length, keywords, and skill type
+- **Weighted scoring**: `Score = capability coverage × 0.4 + cost inverse × 0.3 + speed × 0.2 − load × 0.1`
+- **Fallback chain resilience**: if the preferred model fails, automatically retries along the fallback chain
+- **Multi-provider support**: DeepSeek / OpenAI / Anthropic / Qwen / Aliyun Token Plan
 
-### 项目隔离与预算管控
-- 每个项目独立工作空间、预算配额、模型白名单
-- Token 用量自动计量，成本实时追踪
-- 预算超支自动暂停或切换经济模型
+### Project Isolation and Budget Control
+- Each project has an isolated workspace, budget quota, and model whitelist
+- Automatic token metering with real-time cost tracking
+- Auto-pause or switch to economy models when the budget is exceeded
 
-### Web UI 仪表盘
-- 深色主题，7 个 Tab 面板：
-  - **Work Station 监控** — 主机列表、评级、资源使用率
-  - **任务管理** — 任务提交、状态追踪、PM Agent 分配信息
-  - **秘书对话** — 与秘书聊天窗口（状态感知 + 意图检测）
-  - **团队管理** — PM 及团队树形展示（所在 station、状态、进度报告）
-  - **Agent 状态** — Agent Card、技能、工具
-  - **MCP 工具** — 工具列表与配置
-  - **项目管理** — 项目隔离、预算、消费记录
-- WebSocket 实时推送（心跳、任务变更、PM 注册、进度报告、聊天回复）
+### Web UI Dashboard
+- Dark theme, 7 tab panels:
+  - **Work Station Monitor** — host list, ratings, resource usage
+  - **Task Management** — task submission, status tracking, PM Agent assignment info
+  - **Secretary Chat** — chat window with the Secretary (state-aware + intent detection)
+  - **Team Management** — tree view of PMs and teams (station, status, progress reports)
+  - **Agent Status** — Agent cards, skills, tools
+  - **MCP Tools** — tool list and configuration
+  - **Project Management** — project isolation, budgets, spending records
+- Real-time WebSocket push (heartbeats, task changes, PM registration, progress reports, chat replies)
 
-## 技术栈
+## Tech Stack
 
-| 组件 | 技术 |
-|------|------|
-| 后端框架 | FastAPI + Uvicorn |
-| 数据校验 | Pydantic v2 |
-| 配置管理 | PyYAML + Pydantic |
-| 持久化 | SQLite |
-| LLM 调用 | requests（OpenAI 兼容协议） |
-| 桌面应用 | Tauri + React + TypeScript |
-| 发现协议 | UDP 广播 |
-| 通信协议 | HTTP REST + WebSocket |
-| 多智能体决策 | multi-agent-architect skill (10 步决策框架) |
+| Component | Technology |
+|-----------|-----------|
+| Backend framework | FastAPI + Uvicorn |
+| Data validation | Pydantic v2 |
+| Configuration | PyYAML + Pydantic |
+| Persistence | SQLite |
+| LLM calls | requests (OpenAI-compatible protocol) |
+| Desktop app | Tauri + React + TypeScript |
+| Discovery protocol | UDP broadcast |
+| Communication | HTTP REST + WebSocket |
+| Multi-agent decisions | multi-agent-architect skill (10-step decision framework) |
 
-## 快速开始
+## Quick Start
 
-### 一键启动（推荐）
+### One-Click Startup (Recommended)
 
-**Windows 双击启动：**
+**Windows double-click:**
 
-双击 `scripts/start_workstation.bat` 即可。脚本自动完成：检查 Python → 创建虚拟环境 → 安装依赖 → 复制配置 → 启动 Station Director。
+Just double-click `scripts/start_workstation.bat`. The script automatically: checks Python → creates a virtual environment → installs dependencies → copies configuration → starts the Station Director.
 
-**PowerShell 启动（支持参数）：**
+**PowerShell startup (with parameters):**
 
 ```powershell
-# 基本启动
+# Basic startup
 .\scripts\start_workstation.ps1
 
-# 指定端口和名称
-.\scripts\start_workstation.ps1 -Port 8080 -Name "控制中心"
+# Specify port and name
+.\scripts\start_workstation.ps1 -Port 8080 -Name "Control Center"
 
-# 同时启动本地 Worker (后台)
+# Also start a local Worker (background)
 .\scripts\start_workstation.ps1 -WithWorker
 ```
 
-**Linux/Mac 启动：**
+**Linux/Mac startup:**
 
 ```bash
 bash scripts/start_workstation.sh
 
-# 指定端口和名称
+# Specify port and name
 bash scripts/start_workstation.sh --port 8080 --name "Control Center"
 
-# 同时启动本地 Worker
+# Also start a local Worker
 bash scripts/start_workstation.sh --with-worker
 ```
 
-启动后打开 `http://localhost:45470` 进入 Web UI，点击「设为主节点」激活 Secretary。
+After startup, open `http://localhost:45470` to enter the Web UI and click "Set as Master" to activate the Secretary.
 
-### 手动安装
+### Manual Installation
 
 ```powershell
 python -m venv .venv
@@ -158,125 +160,125 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 配置模型池
+### Configure the Model Pool
 
-复制模板并填入 API Key 环境变量名：
+Copy the template and fill in the API key environment variable names:
 
 ```powershell
 Copy-Item lan_mesh\model_pool.example.yaml lan_mesh\model_pool.yaml
 ```
 
-设置环境变量（按需）：
+Set environment variables as needed:
 
 ```powershell
 $env:DEEPSEEK_API_KEY = "sk-xxx"
 $env:OPENAI_API_KEY = "sk-xxx"
-$env:ALIYUN_TOKENPLAN_API_KEY = "你的TokenPlan专属Key"
+$env:ALIYUN_TOKENPLAN_API_KEY = "your-dedicated-TokenPlan-key"
 ```
 
-### 启动节点
+### Start a Node
 
 ```powershell
-# Station Director (主节点, 含 Web UI)
+# Station Director (master node, includes Web UI)
 python main.py station
 
-# Worker (工作节点)
+# Worker (worker node)
 python main.py worker
 
-# 向后兼容: 直接启动 Secretary
+# Backward compatible: start the Secretary directly
 python main.py secretary
 ```
 
-### 在其他主机上启动 Worker
+### Start Workers on Other Hosts
 
-在其他局域网主机上重复上述安装步骤，然后运行：
+Repeat the installation steps above on another LAN host, then run:
 
 ```powershell
-python main.py worker --name "计算节点-01"
+python main.py worker --name "Compute-Node-01"
 ```
 
-Worker 自动发现 Station Director 并注册。
+The Worker automatically discovers the Station Director and registers.
 
-## 端口说明
+## Ports
 
-| 端口 | 协议 | 用途 |
-|------|------|------|
-| 45454 | UDP | 设备发现广播 |
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 45454 | UDP | Device discovery broadcast |
 | 45460 | TCP | Worker HTTP API |
 | 45470 | TCP | Station Director HTTP API + Web UI |
 
-## API 概览
+## API Overview
 
-### 任务管理
-- `POST /api/tasks` — 提交任务（自动选择 work_station、注册 PM Agent）
-- `GET /api/tasks` — 任务列表
-- `GET /api/tasks/{id}` — 任务详情
+### Task Management
+- `POST /api/tasks` — submit a task (auto-selects a work_station and registers a PM Agent)
+- `GET /api/tasks` — task list
+- `GET /api/tasks/{id}` — task details
 
-### PM Agent 管理
-- `GET /api/pm` — 列出所有 PM Agent
-- `GET /api/pm/{pm_id}` — PM 详情（含团队结构 + 进度）
-- `GET /api/pm/{pm_id}/teams` — PM 下属团队
-- `GET /api/pm/{pm_id}/progress` — PM 进度报告
-- `POST /api/pm/{pm_id}/status` — PM 上报状态（Worker 调用）
-- `POST /api/pm/{pm_id}/progress` — PM 上报进度（Worker 调用）
+### PM Agent Management
+- `GET /api/pm` — list all PM Agents
+- `GET /api/pm/{pm_id}` — PM details (including team structure + progress)
+- `GET /api/pm/{pm_id}/teams` — teams under a PM
+- `GET /api/pm/{pm_id}/progress` — PM progress report
+- `POST /api/pm/{pm_id}/status` — PM status reporting (called by Workers)
+- `POST /api/pm/{pm_id}/progress` — PM progress reporting (called by Workers)
 
-### 团队管理
-- `GET /api/teams` — 所有团队
-- `GET /api/teams/{team_id}` — 团队详情
+### Team Management
+- `GET /api/teams` — all teams
+- `GET /api/teams/{team_id}` — team details
 
-### 秘书聊天
-- `POST /api/secretary/chat` — 发送消息（{message} → {reply, action_taken}）
-- `GET /api/secretary/chat/history` — 对话历史
-- `DELETE /api/secretary/chat/history` — 清空对话历史（内存 + DB）
+### Secretary Chat
+- `POST /api/secretary/chat` — send a message ({message} → {reply, action_taken})
+- `GET /api/secretary/chat/history` — chat history
+- `DELETE /api/secretary/chat/history` — clear chat history (memory + DB)
 
-### Worker PM 端点（PM Agent 调用）
-- `POST /role/start-pm` — 在 Worker 上启动 PM Agent
-- `POST /role/stop-pm` — 停止 PM Agent
-- `GET /role/pm-status` — PM Agent 运行状态
-- `POST /pm/create-subagent` — 创建子 Agent（含定制 system_prompt）
-- `POST /pm/update-prompt` — 动态更新子 Agent prompt
-- `POST /pm/progress-report` — 子 Agent 向 PM 上报进度
-- `GET /pm/subagents` — 子 Agent 列表
+### Worker PM Endpoints (called by the PM Agent)
+- `POST /role/start-pm` — start a PM Agent on a Worker
+- `POST /role/stop-pm` — stop a PM Agent
+- `GET /role/pm-status` — PM Agent runtime status
+- `POST /pm/create-subagent` — create a sub-Agent (with a custom system_prompt)
+- `POST /pm/update-prompt` — dynamically update a sub-Agent's prompt
+- `POST /pm/progress-report` — a sub-Agent reports progress to the PM
+- `GET /pm/subagents` — sub-Agent list
 
-### 项目管理
-- `POST /api/projects` — 创建项目（含预算、模型白名单、路由策略）
-- `GET /api/projects` — 列出所有项目
-- `GET /api/projects/{id}/usage` — 查看消费记录
+### Project Management
+- `POST /api/projects` — create a project (budget, model whitelist, routing policy)
+- `GET /api/projects` — list all projects
+- `GET /api/projects/{id}/usage` — view spending records
 
-### 模型路由
-- `POST /api/route/dry-run` — 路由决策预览
-- `GET /api/models` — 模型池列表
+### Model Routing
+- `POST /api/route/dry-run` — routing decision preview
+- `GET /api/models` — model pool list
 
-### 实时通信
-- `WS /ws` — WebSocket 推送（主机状态、任务变更、PM 注册、进度报告、聊天回复、团队更新）
+### Real-Time Communication
+- `WS /ws` — WebSocket push (host status, task changes, PM registration, progress reports, chat replies, team updates)
 
-## 运行流程
+## Execution Flow
 
 ```
-Boss 提交任务 (Web UI)
-  → Secretary 选择最优 work_station (按评级排序)
-  → POST /role/start-pm → Worker 创建 PM Agent
-  → PM 分析任务 (multi-agent-architect skill + LLM)
-  → PM 决策: 简单任务自执行 / 复杂任务组建团队
-  → PM 创建子 Agent (含定制 prompt) + 按依赖拓扑分发
-  → 子 Agent 执行 + 阶段进度上报
-  → PM 收集进度 + 依赖完成后自动分发后续任务
-  → 全部完成 → PM LLM 聚合结果 → 上报 Secretary
-  → Web UI 实时展示 PM/团队/进度
+Boss submits a task (Web UI)
+  → Secretary picks the best work_station (sorted by rating)
+  → POST /role/start-pm → Worker creates a PM Agent
+  → PM analyzes the task (multi-agent-architect skill + LLM)
+  → PM decides: execute simple tasks itself / form a team for complex tasks
+  → PM creates sub-Agents (with custom prompts) + dispatches by dependency topology
+  → Sub-Agents execute + report staged progress
+  → PM collects progress + auto-dispatches follow-up tasks when dependencies complete
+  → All done → PM aggregates results via LLM → reports to the Secretary
+  → Web UI shows PM/teams/progress in real time
 ```
 
-## 路线图
+## Roadmap
 
-| 阶段 | 状态 | 内容 |
-|------|------|------|
-| Phase 1 基建层 | ✅ | FastAPI Worker、UDP 发现、心跳注册 |
-| Phase 2 路由器 | ✅ | 难度分类器、加权评分路由、降级链 |
-| Phase 3 项目隔离 | ✅ | 项目目录隔离、预算计数器、消费追踪 |
-| Phase 4 工作流编排 | ✅ | 预设模板（代码/文档/系统任务） |
-| Phase 5 仪表盘 | ✅ | 7 Tab 多面板仪表盘、WebSocket 实时推送 |
-| Phase 6 PM Agent | ✅ | 项目经理 Agent、团队组建、子 Agent prompt 定制、聊天接口 |
-| Phase 7 生产级优化 | ✅ | 依赖感知分发、动态 prompt、选择性注入、结果聚合、失败接管、自检 |
-| Phase 8 增强 | 🔄 | 子 Agent 间直接通信、语义缓存、技能市场 |
+| Phase | Status | Content |
+|-------|--------|---------|
+| Phase 1 Infrastructure | ✅ | FastAPI Worker, UDP discovery, heartbeat registration |
+| Phase 2 Router | ✅ | Difficulty classifier, weighted scoring routing, fallback chain |
+| Phase 3 Project Isolation | ✅ | Project directory isolation, budget counters, spending tracking |
+| Phase 4 Workflow Orchestration | ✅ | Preset templates (code/document/system tasks) |
+| Phase 5 Dashboard | ✅ | 7-tab multi-panel dashboard, real-time WebSocket push |
+| Phase 6 PM Agent | ✅ | Project Manager Agent, team formation, sub-Agent prompt customization, chat interface |
+| Phase 7 Production Optimizations | ✅ | Dependency-aware dispatch, dynamic prompts, selective injection, result aggregation, failure takeover, self-check |
+| Phase 8 Enhancements | 🔄 | Direct sub-Agent communication, semantic cache, skill marketplace |
 
 ## License
 
