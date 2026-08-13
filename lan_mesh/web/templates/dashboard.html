@@ -567,13 +567,14 @@
 <div class="panel" id="panel-resources">
   <div class="toolbar">
     <button class="btn primary" onclick="withFeedback(this,refreshResources)">🔄 刷新</button>
+    <button class="btn" onclick="withFeedback(this,probeBalances)">🔍 探测余额</button>
     <span style="margin-left:auto;font-size:14px;color:var(--dim)">
       资源池 <b id="res-total" style="color:var(--accent)">0</b> · 状态 <b id="res-state" style="color:var(--dim)">未启用</b>
     </span>
   </div>
   <div class="table-wrap">
   <table class="fleet-table">
-    <thead><tr><th>资源池</th><th>服务商</th><th>计划类型</th><th>额度</th><th>已用</th><th>剩余</th><th>使用率</th><th>状态</th><th>备注</th></tr></thead>
+    <thead><tr><th>资源池</th><th>服务商</th><th>计划类型</th><th>额度</th><th>已用</th><th>剩余</th><th>使用率</th><th>余额</th><th>状态</th><th>备注</th></tr></thead>
     <tbody id="res-body"></tbody>
   </table>
   </div>
@@ -581,6 +582,7 @@
   <div style="color:var(--dim);font-size:13px;line-height:1.7;padding:0 4px">
     在 <code>lan_mesh/resources.yaml</code> 中配置资源池 (按量预算 / token 包 / 编程订阅) 后自动启用预算跟踪。
     每次 LLM 调用自动记账; 资源耗尽/过期/暂停后相关模型自动从路由候选中剔除。
+    “探测余额”自动调用服务商余额 API (SiliconFlow/DeepSeek/Moonshot/智谱), 未支持的服务商在控制台查看。
     运行 <code>python main.py resources --init</code> 可生成配置模板。
   </div>
 </div>
@@ -1113,12 +1115,16 @@ async function refreshResources(){
     stateEl.style.color=d.enabled?'var(--green)':'var(--dim)';
     const body=document.getElementById('res-body');
     if(!(d.resources||[]).length){
-      body.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--dim);padding:20px">未配置资源池 — 编辑 lan_mesh/resources.yaml 启用预算跟踪</td></tr>';
+      body.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--dim);padding:20px">未配置资源池 — 编辑 lan_mesh/resources.yaml 启用预算跟踪</td></tr>';
       return;
     }
     body.innerHTML=(d.resources||[]).map(res=>{
       const pct=Math.min(100,Math.round((res.rate||0)*100));
       const color=pct>=90?'var(--red)':pct>=70?'#e6a23c':'var(--green)';
+      const bal=res.balance||{};
+      let balTxt='<span style="color:var(--dim)">—</span>';
+      if(bal.supported)balTxt=`${fmtMoney(bal.balance)}<span style="color:var(--dim)"> ${esc(bal.currency||'')}</span>`;
+      else if(bal.error)balTxt=`<span style="color:#e6a23c" title="${esc(bal.hint||bal.error)}">未获取</span>`;
       return `<tr>
         <td><b>${esc(res.resource_id)}</b></td>
         <td>${esc(res.provider||'')}</td>
@@ -1127,11 +1133,25 @@ async function refreshResources(){
         <td>${fmtQuota(res.used,res.unit)}</td>
         <td>${fmtQuota(res.remaining,res.unit)}</td>
         <td style="color:${color}">${pct}%</td>
+        <td>${balTxt}</td>
         <td>${esc(res.status||'')}</td>
         <td style="color:var(--dim)">${esc(res.note||'')}</td>
       </tr>`;
     }).join('');
   }catch(e){console.error(e);}
+}
+async function probeBalances(){
+  try{
+    const r=await apiFetch('/api/resources/probe',{method:'POST'});const d=await r.json();
+    const ok=(d.supported||0), total=(d.probed||0);
+    alert(`余额探测完成: ${total} 个池, ${ok} 个成功`);
+    await refreshResources();
+  }catch(e){alert('余额探测失败: '+e.message||e);}
+}
+function fmtMoney(v){
+  if(v===null||v===undefined)return '';
+  const n=Number(v);
+  return n>=10000?(n/10000).toFixed(2)+'万':n.toFixed(2);
 }
 function fmtQuota(v,unit){
   if(unit==='token'){if(v>=1e8)return (v/1e8).toFixed(1)+'亿';if(v>=1e4)return (v/1e4).toFixed(1)+'万';return Number(v).toLocaleString();}

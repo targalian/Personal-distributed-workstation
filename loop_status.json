@@ -1,7 +1,7 @@
 {
   "version": 1,
   "last_run": "2026-08-13T00:35:00Z",
-  "current_phase": "R2-fixes",
+  "current_phase": "R2-balance-probe",
   "phase_status": "closed",
   "completed": [
     "F1.1",
@@ -22,20 +22,20 @@
     "P0-secretary",
     "P0-pm-memory",
     "R1-resources",
-    "R2-fixes"
+    "R2-fixes",
+    "R2-balance-probe"
   ],
   "failed": [],
   "blocked": [],
   "next_tasks": [
     "M5: Secretary 事件总线 (替换 HTTP 轮询上报)",
     "M6: 角色卡统一化 (Secretary/PM/Worker 单文件定义)",
-    "R2: 资源余额自动获取 (各家控制台/配额 API 探测, 减少手工填写)",
     "R3: Worker 跨主机用量上报聚合到 Secretary (POST /api/resources/usage 已预留)",
     "R4: 成本分摊到任务/项目维度 (usage log 增加 task_id 关联)",
     "R5: token 包到期/额度预警推送 Bot 通道"
   ],
-  "iteration_count": 13,
-  "total_files_modified": 48,
+  "iteration_count": 14,
+  "total_files_modified": 52,
   "last_error": "",
-  "notes": "2026-08-13 会话完成五项迭代: (1) P0-auth: mesh token 节点间认证接线; (2) P0-secretary: PM 线程消息裁剪 + 状态上下文增强 + delete_task 收尾清理; (3) P0-pm-memory: 任务记忆驱动规划 + 修复记忆记录缺陷; (4) R1-resources: 模型资源管理 (资源池抽象 payg/token_plan/coding_plan + 价格单一事实源 + 统一出口自动记账 + 路由可用性过滤 + 幂等告警 + 未配置 no-op + CLI/Web/API 多端 + 主流服务商参考价模板); (5) R2-fixes: 遗留缺陷批量修复 (M1 /tasks/execute 必填字段校验 (name/input_data/subtask_id 缺失→400, 不进入执行线程); M2 dev-reload 重启竞态 (保存 uvicorn Server 引用 → should_exit 优雅关闭 → _port_in_use 轮询等待端口释放 ≤8s → 再启新进程); M3 CLI Agent 检测统一 (preflight 复用 agent_runtime.detect_cli_agents, 消除 shutil.which 双实现); M4 Telegram 分片 HTML 安全 (切割点避开标签内部 + _balance_html_tags 未闭合补全/恢复, void/自闭合/注释标签不误补))。验证: 编译 OK + 专项 22/22 + 44 单测全过 + pre-push 0 Blocker。"
+  "notes": "2026-08-13 会话完成六项迭代: (1) P0-auth: mesh token 节点间认证接线; (2) P0-secretary: PM 线程消息裁剪 + 状态上下文增强 + delete_task 收尾清理; (3) P0-pm-memory: 任务记忆驱动规划 + 修复记忆记录缺陷; (4) R1-resources: 模型资源管理 (资源池抽象 + 统一出口记账 + 路由过滤 + 幂等告警 + 未配置 no-op); (5) R2-fixes: M1-M4 遗留缺陷批量修复 (端点校验/端口竞态/检测统一/HTML分片); (6) R2-balance-probe: 资源余额自动探测 (balance_probe.py 适配器框架: SiliconFlow/DeepSeek/Moonshot/智谱 4 家已查证 API + 别名归一化 + unsupported 引导提示 (OpenAI 需 admin key/火山阿里需 AK/SK); ModelResourceManager.probe_balances 集成 (余额 0 自动 exhausted 供路由剔除 + summarize 附余额); CLI --probe + POST /api/resources/probe + Web 探测余额按钮/余额列)。验证: 编译 OK + 专项 19/19 (mock 各家响应/降级路径/集成) + 44 单测全过 + CLI 冒烟。"
 }

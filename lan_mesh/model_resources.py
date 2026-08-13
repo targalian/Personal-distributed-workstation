@@ -81,6 +81,7 @@ class ModelResourceManager:
         self._enabled = False
         self._alerted: set[str] = set()                     # 已告警资源 (防刷屏)
         self._strict = False                                # strict: 无池模型禁用
+        self._balances: dict[str, dict] = {}                # resource_id → 探测结果 (R2)
 
     @property
     def enabled(self) -> bool:
@@ -273,6 +274,40 @@ class ModelResourceManager:
 
     # ── 报告 ────────────────────────────────────────────────────
 
+    def probe_balances(self, timeout: float = 10.0) -> dict:
+        """探测所有资源池的服务商余额 (R2, 自动获取)。
+
+        仅探测配置了 api_key_env 且环境变量有值的池; 结果缓存到
+        self._balances, 供 summarize/API 展示。
+
+        Returns:
+            {"probed": int, "supported": int, "results": {rid: result}}
+        """
+        from .balance_probe import probe_resource
+
+        results: dict[str, dict] = {}
+        probed = supported = 0
+        for rid, pool in self._resources.items():
+            env_name = (pool.api_key_env or "").strip()
+            if not env_name:
+                continue
+            probed += 1
+            res = probe_resource({
+                "id": rid, "provider": pool.provider,
+                "api_key_env": pool.api_key_env,
+            }, timeout=timeout)
+            results[rid] = res
+            if res.get("supported"):
+                supported += 1
+            # 探测成功且余额已耗尽 → 自动置为 exhausted (供路由剔除)
+            if res.get("supported") and res.get("balance") is not None \
+                    and float(res.get("balance")) <= 0:
+                if pool.status != "exhausted":
+                    logger.warning("资源池 %s 余额为 0, 自动标记 exhausted", rid)
+                    pool.status = "exhausted"
+        self._balances = results
+        return {"probed": probed, "supported": supported, "results": results}
+
     def summarize(self) -> dict:
         """全池汇总报告 (API / CLI / Web UI 使用)。"""
         return {
@@ -281,7 +316,8 @@ class ModelResourceManager:
             "resources": [
                 {**self.get_usage(rid), "provider": p.provider,
                  "models": p.models, "alert_threshold": p.alert_threshold,
-                 "note": p.note}
+                 "note": p.note,
+                 "balance": self._balances.get(rid, {})}
                 for rid, p in self._resources.items()
             ],
         }
@@ -323,3 +359,11 @@ def resource_summary() -> dict:
         return _mgr.summarize()
     except Exception:
         return {"enabled": False, "resources": []}
+
+
+def probe_balances_global(timeout: float = 10.0) -> dict:
+    """余额探测钩子 — API 端点用, 异常不影响主流程。"""
+    try:
+        return _mgr.probe_balances(timeout=timeout)
+    except Exception as e:
+        return {"probed": 0, "supported": 0, "results": {}, "error": str(e)}

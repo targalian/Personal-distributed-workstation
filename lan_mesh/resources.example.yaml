@@ -11,6 +11,16 @@
 #   - models 列表显式列出关联的模型 id (推荐, 精确控制)
 #   - models 留空 → 该 provider 下所有模型自动关联 (按 model_pool.yaml 的 provider 匹配)
 # 未关联任何资源池的模型: 默认放行 (宽松), 开启 strict: true 后禁用
+#
+# ── 余额自动探测 (R2, 可选) ──────────────────────────────────────
+# 配置 api_key_env 后, 运行 `python main.py resources --probe` 或
+# Web 仪表盘「探测余额」自动调用服务商余额 API:
+#   ✅ siliconflow  GET /v1/user/info        (CNY, 国际版 api.siliconflow.com)
+#   ✅ deepseek     GET /user/balance        (total_balance + currency)
+#   ✅ moonshot     GET /v1/users/me/balance (Kimi, 宽容解析)
+#   ⚠️ zhipu        GET /api/monitor/usage/quota/limit (实验性)
+#   ❌ openai / anthropic / ark / aliyun / google: 无普通 Key 余额接口, 控制台查看
+# 探测到余额为 0 的资源池自动标记 exhausted (模型从路由剔除)
 
 # strict: true   # 取消注释后, 未关联资源池的模型将从路由中剔除
 

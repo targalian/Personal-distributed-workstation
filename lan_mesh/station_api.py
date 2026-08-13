@@ -1169,6 +1169,17 @@ def create_station_router(controller) -> APIRouter:
             payload.get("output_tokens", 0),
         )
 
+    @router.post("/api/resources/probe")
+    async def probe_model_balances():
+        """触发资源池服务商余额自动探测 (R2)。
+
+        调用各家余额 API (SiliconFlow/DeepSeek/Moonshot/智谱), 结果
+        缓存并附到 /api/resources 汇总; 未支持的服务商返回引导提示。
+        """
+        _check_secretary()
+        from .model_resources import probe_balances_global
+        return probe_balances_global()
+
     # ── PM Agent 管理 ──
 
     @router.get("/api/pm")

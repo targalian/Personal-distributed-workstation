@@ -64,6 +64,8 @@ def main():
     parser.add_argument("--config", "-c", type=str, default=None, help="配置文件路径")
     parser.add_argument("--dev", action="store_true", help="开发模式: 文件变动自动重载")
     parser.add_argument("--init", action="store_true", help="resources: 生成配置模板")
+    parser.add_argument("--probe", action="store_true",
+                        help="resources: 触发服务商余额自动探测")
     parser.add_argument("--version", "-v", action="version", version=f"LAN Mesh v{__version__}")
 
     args = parser.parse_args()
@@ -138,14 +140,34 @@ def _run_resources_cli(cfg, args):
               "生成配置模板")
         return
 
+    if args.probe:
+        print("[resources] 触发服务商余额自动探测...")
+        probe = mgr.probe_balances()
+        print(f"[resources] 探测完成: {probe.get('probed', 0)} 个池, "
+              f"{probe.get('supported', 0)} 个探测成功")
+        for rid, res in (probe.get("results") or {}).items():
+            if res.get("supported"):
+                print(f"[resources]   [{rid}] {res.get('provider')} 余额: "
+                      f"{res.get('balance')} {res.get('currency')} "
+                      f"(来源 {res.get('source')})")
+            else:
+                print(f"[resources]   [{rid}] {res.get('provider')} "
+                      f"未获取: {res.get('error')} — {res.get('hint', '')}")
+
     summary = mgr.summarize()
     print(f"[resources] 模型资源管理已启用 (strict={summary.get('strict', False)})")
     for res in summary.get("resources", []):
         rate = round((res.get("rate") or 0) * 100)
+        bal = (res.get("balance") or {})
+        bal_txt = ""
+        if bal.get("supported"):
+            bal_txt = f" | 余额: {bal.get('balance')} {bal.get('currency')}"
+        elif bal.get("error"):
+            bal_txt = f" | 余额: 未获取 ({bal.get('error')[:40]})"
         print(f"[resources]   [{res.get('resource_id')}] {res.get('provider')} "
               f"{res.get('plan_type')} | 已用 {res.get('used')} / "
               f"{res.get('quota')} {res.get('unit')} ({rate}%) | "
-              f"状态: {res.get('status')} "
+              f"状态: {res.get('status')}{bal_txt} "
               f"{('- ' + res.get('note')) if res.get('note') else ''}")
 
 
