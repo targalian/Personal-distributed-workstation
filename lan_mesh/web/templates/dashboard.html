@@ -569,10 +569,12 @@
     <button class="btn primary" onclick="withFeedback(this,refreshResources)">🔄 刷新</button>
     <button class="btn" onclick="showResourceConfig()">⚙️ 配置资源</button>
     <button class="btn" onclick="withFeedback(this,probeBalances)">🔍 探测余额</button>
+    <button class="btn" onclick="withFeedback(this,checkResourceAlerts)">🔔 检查预警</button>
     <span style="margin-left:auto;font-size:14px;color:var(--dim)">
       资源池 <b id="res-total" style="color:var(--accent)">0</b> · 状态 <b id="res-state" style="color:var(--dim)">未启用</b>
     </span>
   </div>
+  <div id="res-alerts"></div>
   <div class="table-wrap">
   <table class="fleet-table">
     <thead><tr><th>资源池</th><th>服务商</th><th>计划类型</th><th>额度</th><th>已用</th><th>剩余</th><th>使用率</th><th>余额</th><th>状态</th><th>备注</th></tr></thead>
@@ -1117,6 +1119,7 @@ async function refreshTools(){
 async function refreshResources(){
   try{
     const r=await apiFetch('/api/resources');const d=await r.json();
+    renderResAlerts(d.alerts||[]);
     document.getElementById('res-total').textContent=(d.resources||[]).length;
     const stateEl=document.getElementById('res-state');
     stateEl.textContent=d.enabled?'已启用':'未启用';
@@ -1148,6 +1151,27 @@ async function refreshResources(){
     }).join('');
   }catch(e){console.error(e);}
   finally{refreshCostByTask();}  // 资源池为空的早退分支也必须刷新成本表
+}
+function renderResAlerts(alerts){
+  // R7: 到期/额度预警横幅 (level 3 红 / 2 橙 / 1 黄)
+  const box=document.getElementById('res-alerts');
+  if(!box)return;
+  if(!(alerts||[]).length){box.innerHTML='';return;}
+  const style={3:{bg:'rgba(239,68,68,.12)',bd:'var(--red)',icon:'🚨'},
+               2:{bg:'rgba(230,162,60,.12)',bd:'#e6a23c',icon:'⚠️'},
+               1:{bg:'rgba(234,179,8,.10)',bd:'#d4a017',icon:'🔔'}};
+  const sorted=[...alerts].sort((a,b)=>(b.level||0)-(a.level||0));
+  box.innerHTML=sorted.map(a=>{
+    const s=style[a.level]||style[1];
+    return `<div style="background:${s.bg};border:1px solid ${s.bd};border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:13px">${s.icon} <b>${esc(a.resource_id)}</b> · ${esc(a.message)}</div>`;
+  }).join('');
+}
+async function checkResourceAlerts(){
+  // R7: 手动触发一轮预警检查并刷新面板
+  try{
+    await apiFetch('/api/resources/alerts/check',{method:'POST'});
+  }catch(e){console.error(e);}
+  await refreshResources();
 }
 async function refreshCostByTask(){
   // R6: 成本分摊聚合 (按 task_id 分组)

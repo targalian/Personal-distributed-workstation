@@ -89,6 +89,12 @@ class ModelResourceManager:
         self._secretary_url = ""                            # 上报目标 (R3)
         self._report_interval = 60.0                        # 上报周期 (秒, R3)
         self._reporter = None                               # 上报线程 (R3)
+        # ── R7: 到期/额度预警 ──
+        self._bot_notify = None                             # Bot 推送回调 (可选注入)
+        self._alert_state: dict[tuple, int] = {}            # (rid,kind) → 已推档位 (仅升级重推)
+        self._active_alerts: list[dict] = []                # 最近一轮预警 (summarize/API 展示)
+        self._alert_checker = None                          # 预警检查线程
+        self._alert_interval = 300.0                        # 检查周期 (秒)
         self._stop_evt = threading.Event()
 
     @property
@@ -110,8 +116,9 @@ class ModelResourceManager:
             是否成功启用
         """
         self._db = db
-        # R4: 热重载安全 — 先停旧上报线程, 重置动态状态
+        # R4: 热重载安全 — 先停旧上报/检查线程, 重置动态状态
         self.stop_reporter()
+        self._stop_evt.set()  # 通知旧检查线程退出 (下方按需重启)
         self._alerted = set()
         self._balances = {}
         if pool_entries:
@@ -156,6 +163,9 @@ class ModelResourceManager:
             # R3: 配置了 Secretary 地址 → 启用用量上报 (Worker 主机)
             self.set_report_target(data.get("secretary_url", ""),
                                    float(data.get("report_interval", 60)))
+            # R7: 启动到期/额度预警后台检查 (alert_check: false 可禁用)
+            if data.get("alert_check", True) is not False:
+                self.start_alert_checker(float(data.get("alert_interval", 300)))
         return self._enabled
 
     # ── 台账 ────────────────────────────────────────────────────
@@ -440,7 +450,136 @@ class ModelResourceManager:
                  "balance": self._balances.get(rid, {})}
                 for rid, p in self._resources.items()
             ],
+            "alerts": list(self._active_alerts),  # R7: 最近一轮预警
         }
+
+    # ── R7: 到期/额度预警 ────────────────────────────────
+
+    _ALERT_EVENT = {1: "resource_alert_low", 2: "resource_alert",
+                    3: "resource_alert_high"}
+
+    def set_bot_notify(self, callback) -> None:
+        """注入 Bot 推送回调 fn(event_type, data); 未注入时仅日志+内存记录。"""
+        self._bot_notify = callback
+
+    def check_alerts(self, now: float = None) -> list:
+        """扫描全部资源池, 生成到期/额度/重置预警。
+
+        规则:
+        - 到期 (expire_at>0): 14 天内 low / 7 天内 normal / 3 天内或已过期 high
+        - 额度: 达阈值 normal / >=95% 或耗尽 high
+        - 重置 (billing_period=renew): 距窗口重置 <=3 天 low (每窗口一次)
+
+        去重: 同 (池,类别) 仅在档位升级时重新推送, 避免刷屏。
+
+        Returns:
+            本轮新推送的预警列表 (全量活跃预警存 _active_alerts)
+        """
+        now = now or time.time()
+        alerts: list[dict] = []
+        for rid, pool in self._resources.items():
+            if pool.status == "paused":
+                continue
+            # 1) 到期预警
+            if pool.expire_at > 0:
+                days = (pool.expire_at - now) / 86400
+                if days <= 0:
+                    lv, msg = 3, f"已过期 ({-days:.1f} 天前), 相关模型已从路由剔除"
+                elif days <= 3:
+                    lv, msg = 3, f"{days:.1f} 天后到期, 请尽快续费或调整关联模型"
+                elif days <= 7:
+                    lv, msg = 2, f"{days:.1f} 天后到期"
+                elif days <= 14:
+                    lv, msg = 1, f"{days:.1f} 天后到期"
+                else:
+                    lv, msg = 0, ""
+                if lv:
+                    alerts.append({"resource_id": rid, "kind": "expire",
+                                   "level": lv, "message": msg})
+            # 2) 额度预警
+            if pool.quota > 0:
+                usage = self.get_usage(rid)
+                rate = usage.get("rate", 0.0)
+                if rate >= 1.0:
+                    lv, msg = 3, (f"额度已耗尽 ({usage.get('used')}/"
+                                  f"{pool.quota}), 相关模型已从路由剔除")
+                elif rate >= max(pool.alert_threshold, 0.95):
+                    lv, msg = 3, (f"使用率 {rate*100:.0f}%, 剩余不足 "
+                                  f"{(1-rate)*pool.quota:.0f}")
+                elif rate >= pool.alert_threshold:
+                    lv, msg = 2, (f"使用率 {rate*100:.0f}% 已达告警阈值 "
+                                  f"{pool.alert_threshold*100:.0f}%")
+                else:
+                    lv, msg = 0, ""
+                if lv:
+                    alerts.append({"resource_id": rid, "kind": "quota",
+                                   "level": lv, "message": msg})
+            # 3) 周期重置提醒 (每窗口一次)
+            if pool.billing_period == "renew" and pool.renew_at > 0:
+                step = max(1, pool.period_days) * 86400
+                ws = pool.window_start(now)
+                days_left = (ws + step - now) / 86400
+                if 0 < days_left <= 3:
+                    alerts.append({"resource_id": rid, "kind": "renew",
+                                   "level": 1,
+                                   "message": f"额度窗口将于 {days_left:.1f} 天后重置",
+                                   "_window": ws})
+        # 去重后推送 (仅档位升级/新窗口触发)
+        pushed: list[dict] = []
+        for a in alerts:
+            key = (a["resource_id"], a["kind"])
+            if a["kind"] == "renew":
+                if self._alert_state.get(key) == a["_window"]:
+                    continue
+                self._alert_state[key] = a["_window"]
+            else:
+                if a["level"] <= self._alert_state.get(key, 0):
+                    continue
+                self._alert_state[key] = a["level"]
+            pushed.append(a)
+            logger.warning("[resources] 预警 %s/%s (Lv%d): %s",
+                           a["resource_id"], a["kind"], a["level"],
+                           a["message"])
+            if self._bot_notify:
+                try:
+                    self._bot_notify(self._ALERT_EVENT.get(a["level"],
+                                                           "resource_alert"),
+                                     {"resource_id": a["resource_id"],
+                                      "message": a["message"]})
+                except Exception as e:
+                    logger.warning("[resources] 预警推送失败: %s", e)
+        for a in alerts:
+            a.pop("_window", None)
+        self._active_alerts = alerts
+        return pushed
+
+    def start_alert_checker(self, interval: float = 300.0) -> bool:
+        """启动后台预警检查 (daemon 线程, 异常隔离); 启动时立即检查一轮。"""
+        if not self._enabled:
+            return False
+        self._alert_interval = max(30.0, float(interval or 300.0))
+        if self._alert_checker and self._alert_checker.is_alive():
+            return True
+        self._stop_evt.clear()
+        self._alert_checker = threading.Thread(
+            target=self._alert_loop, name="resource-alert-checker",
+            daemon=True)
+        self._alert_checker.start()
+        try:
+            self.check_alerts()
+        except Exception as e:
+            logger.warning("[resources] 首次预警检查异常: %s", e)
+        logger.info("[resources] 预警检查已启动 (周期 %.0fs)",
+                    self._alert_interval)
+        return True
+
+    def _alert_loop(self):
+        """预警检查线程主循环 — 与上报线程共用 _stop_evt。"""
+        while not self._stop_evt.wait(self._alert_interval):
+            try:
+                self.check_alerts()
+            except Exception as e:
+                logger.warning("[resources] 预警检查轮次异常: %s", e)
 
 
 # ── 全局单例 + 轻量钩子 (供 agent_runtime / model_router 无侵入调用) ──
@@ -601,6 +740,22 @@ def probe_balances_global(timeout: float = 10.0) -> dict:
         return _mgr.probe_balances(timeout=timeout)
     except Exception as e:
         return {"probed": 0, "supported": 0, "results": {}, "error": str(e)}
+
+
+def set_bot_notify_global(callback) -> None:
+    """R7: 注入预警 Bot 推送回调 (启动/热重载后调用)。"""
+    try:
+        _mgr.set_bot_notify(callback)
+    except Exception:
+        pass
+
+
+def check_alerts_global() -> list:
+    """R7: 手动触发一轮预警检查 (API 端点用)。"""
+    try:
+        return _mgr.check_alerts()
+    except Exception as e:
+        return [{"error": str(e)}]
 
 
 def report_usage_global() -> dict:
