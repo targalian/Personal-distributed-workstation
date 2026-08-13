@@ -886,6 +886,7 @@ function connectWS(){
     }
     if(msg.type==='task_updated'||msg.type==='task_deleted'){renderWsOverview();}
     if(msg.type==='p2p_chat'){onP2PChatMessage(msg.data);}
+    if(msg.type==='event'){onStationEvent(msg.data||{});}
   };
   ws.onclose=()=>{document.getElementById('ws-dot').classList.add('offline');document.getElementById('ws-label').textContent='重连中...';setTimeout(connectWS,3000);};
   ws.onerror=()=>{};
@@ -893,6 +894,18 @@ function connectWS(){
 function refreshAllState(){
   refreshHosts();refreshTasks();refreshAgents();refreshProjects();
   checkSecretaryState();refreshPMAgents();loadPMThreads();renderWsOverview();
+}
+function onStationEvent(evt){
+  // M5: 事件总线分发 — 资源面板实时刷新 (替代轮询/手动刷新)
+  const t=evt.type||'';
+  if(t==='usage_reported'||t==='resource_config'||t==='resource_alert'){
+    refreshResources();
+    if(t==='resource_alert'){
+      const lv=(evt.data&&evt.data.max_level)||0;
+      showToast(`🔔 收到 ${evt.data.count||0} 条资源预警`,lv>=3?'err':'info');
+    }
+    if(t==='resource_config'){showToast('⚙️ 资源配置已热重载','ok');}
+  }
 }
 
 // ── 主机面板 ──
