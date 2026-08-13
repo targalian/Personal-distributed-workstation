@@ -5,6 +5,9 @@
 1. TaskDAG — 拓扑排序、依赖解析、环检测、动态增删、条件边、序列化
 2. ModelRouter — 难度分类、评分路由、降级链
 3. _classify_task — 任务类型分类
+4. EventBus — 发布/订阅、环形历史、sink 投递、边界 (M5)
+5. role_cards — 角色卡结构、秘书 prompt 关键约束回归 (M6)
+6. balance_probe — 别名归一、各家解析、异常提示、key 优先级 (R2/R4)
 
 运行: pytest tests/ -v
 """
@@ -22,6 +25,13 @@ from lan_mesh.model_router import classify_difficulty, ModelRouter, STRATEGY_WEI
 from lan_mesh.config import ModelEntryConfig
 from lan_mesh.orchestrator import _classify_task
 from lan_mesh.protocol import Task
+from lan_mesh.event_bus import EventBus
+from lan_mesh.role_cards import (
+    ROLE_CARDS, SECRETARY_CARD, get_role_card, list_role_cards,
+    render_secretary_prompt,
+)
+from lan_mesh import balance_probe
+import requests
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -445,3 +455,240 @@ class TestConditionalEdge:
         edge = ConditionalEdge.from_dict(d)
         assert edge.source_id == "x"
         assert not hasattr(edge, "unknown_field")
+
+
+# ═══════════════════════════════════════════════════════════════
+# EventBus 单元测试 (M5)
+# ═══════════════════════════════════════════════════════════════
+
+class TestEventBus:
+    """事件总线: 发布/历史/sink 投递/边界。"""
+
+    def test_publish_and_recent(self):
+        bus = EventBus()
+        bus.publish("usage_reported", {"count": 3})
+        items = bus.recent()
+        assert len(items) == 1
+        assert items[0]["type"] == "usage_reported"
+        assert items[0]["data"] == {"count": 3}
+        assert isinstance(items[0]["ts"], float)
+
+    def test_recent_limit_and_order(self):
+        bus = EventBus()
+        for i in range(5):
+            bus.publish("evt", {"i": i})
+        items = bus.recent(3)
+        assert len(items) == 3
+        assert [e["data"]["i"] for e in items] == [2, 3, 4]  # 时间升序取最近 3
+
+    def test_recent_zero_returns_empty(self):
+        # 回归: 早期 recent(0) 曾返回全部历史, 修复后必须返回空
+        bus = EventBus()
+        bus.publish("evt", {})
+        assert bus.recent(0) == []
+
+    def test_recent_negative_returns_empty(self):
+        bus = EventBus()
+        bus.publish("evt", {})
+        assert bus.recent(-5) == []
+
+    def test_ring_history_caps_old_events(self):
+        bus = EventBus(history=3)
+        for i in range(5):
+            bus.publish("evt", {"i": i})
+        assert len(bus.recent(100)) == 3
+
+    def test_publish_without_sink_is_noop(self):
+        bus = EventBus()
+        assert not bus.has_sink
+        bus.publish("evt", {"x": 1})  # 无 sink 不抛异常
+
+    def test_attach_sink_direct_dispatch(self):
+        bus = EventBus()
+        got = []
+        bus.attach(loop=None, sink=got.append)  # loop=None → 直投
+        assert bus.has_sink
+        bus.publish("evt", {"v": 7})
+        assert len(got) == 1 and got[0]["data"]["v"] == 7
+
+    def test_sink_exception_swallowed(self):
+        bus = EventBus()
+
+        def bad_sink(evt):
+            raise RuntimeError("sink 故障")
+
+        bus.attach(loop=None, sink=bad_sink)
+        bus.publish("evt", {})  # sink 异常只告警, 不向发布方抛出
+
+    def test_detach_clears_sink(self):
+        bus = EventBus()
+        bus.attach(loop=None, sink=lambda e: None)
+        bus.detach()
+        assert not bus.has_sink
+
+    def test_publish_data_none_normalized(self):
+        bus = EventBus()
+        bus.publish("evt", None)
+        assert bus.recent()[0]["data"] == {}
+
+
+# ═══════════════════════════════════════════════════════════════
+# role_cards 单元测试 (M6)
+# ═══════════════════════════════════════════════════════════════
+
+class TestRoleCards:
+    """角色卡: 结构完整性 + 秘书 prompt 关键约束回归。"""
+
+    def test_three_roles_complete(self):
+        assert set(ROLE_CARDS) == {"secretary", "pm", "worker"}
+        for card in ROLE_CARDS.values():
+            for key in ("role", "display_name", "identity", "mission", "sections"):
+                assert card.get(key), f"角色卡缺字段: {card.get('role')} → {key}"
+
+    def test_get_role_card_unknown_empty(self):
+        assert get_role_card("ghost") == {}
+
+    def test_list_role_cards_summary(self):
+        cards = list_role_cards()
+        assert len(cards) == 3
+        for c in cards:
+            assert c["sections"] == sorted(c["sections"])
+
+    def test_render_secretary_prompt_structure(self):
+        prompt = render_secretary_prompt("在线主机: 2 台")
+        assert SECRETARY_CARD["identity"] in prompt
+        assert SECRETARY_CARD["mission"] in prompt
+        for title in SECRETARY_CARD["sections"]:
+            assert f"# {title}" in prompt
+        assert "# 当前工作站实时状态" in prompt
+        assert "在线主机: 2 台" in prompt
+
+    def test_secretary_key_constraints_kept(self):
+        # M6 行为等价重构回归: 反幻觉关键约束不得丢失
+        prompt = render_secretary_prompt()
+        assert "绝对禁止在回复中声称操作已执行" in prompt
+        assert "不要编造不存在的功能" in prompt
+
+
+# ═══════════════════════════════════════════════════════════════
+# balance_probe 单元测试 (R2/R4)
+# ═══════════════════════════════════════════════════════════════
+
+class _FakeResp:
+    """requests.Response 最小替身。"""
+
+    def __init__(self, payload=None, status_code=200):
+        self._payload = payload
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(response=self)
+
+    def json(self):
+        return self._payload
+
+
+class TestBalanceProbe:
+    """余额探测: 别名归一/不支持引导/各家解析/异常提示/key 优先级。"""
+
+    def test_provider_alias_normalize(self):
+        assert balance_probe._normalize_provider("SF") == "siliconflow"
+        assert balance_probe._normalize_provider("kimi") == "moonshot"
+        assert balance_probe._normalize_provider("glm") == "zhipu"
+        assert balance_probe._normalize_provider("unknown-x") == "unknown-x"
+
+    def test_supported_providers(self):
+        assert balance_probe.supported_providers() == [
+            "deepseek", "moonshot", "siliconflow", "zhipu"]
+
+    def test_no_api_key_hint(self):
+        r = balance_probe.probe_balance("deepseek", "")
+        assert not r["supported"] and r["balance"] is None
+        assert "未配置 API Key" in r["error"]
+
+    def test_unsupported_provider_hint(self):
+        r = balance_probe.probe_balance("openai", "sk-test")
+        assert not r["supported"]
+        assert r["hint"] == balance_probe.UNSUPPORTED_HINTS["openai"]
+
+    def test_siliconflow_success(self, monkeypatch):
+        monkeypatch.setattr(balance_probe.requests, "get",
+                            lambda url, **kw: _FakeResp({"data": {"balance": 12.5}}))
+        r = balance_probe.probe_balance("siliconflow", "sk-x")
+        assert r["supported"] and r["balance"] == 12.5 and r["currency"] == "CNY"
+
+    def test_siliconflow_missing_field(self, monkeypatch):
+        monkeypatch.setattr(balance_probe.requests, "get",
+                            lambda url, **kw: _FakeResp({"data": {}}))
+        r = balance_probe.probe_balance("sf", "sk-x")
+        assert not r["supported"] and "缺少 balance" in r["error"]
+
+    def test_deepseek_success(self, monkeypatch):
+        payload = {"balance_infos": [{"total_balance": "88.00", "currency": "CNY"}]}
+        monkeypatch.setattr(balance_probe.requests, "get",
+                            lambda url, **kw: _FakeResp(payload))
+        r = balance_probe.probe_balance("deepseek", "sk-x")
+        assert r["balance"] == 88.0 and r["currency"] == "CNY"
+
+    def test_moonshot_lenient_fields(self, monkeypatch):
+        # 宽容解析: 仅 balance 字段 (无 available_balance) 也应解析成功
+        monkeypatch.setattr(balance_probe.requests, "get",
+                            lambda url, **kw: _FakeResp({"data": {"balance": 3.2}}))
+        r = balance_probe.probe_balance("moonshot", "sk-x")
+        assert r["balance"] == 3.2
+
+    def test_zhipu_quota_parse(self, monkeypatch):
+        monkeypatch.setattr(balance_probe.requests, "get",
+                            lambda url, **kw: _FakeResp({"quota": 1000000}))
+        r = balance_probe.probe_balance("zhipu", "sk-x")
+        assert r["balance"] == 1000000.0 and r["currency"] == "token"
+
+    def test_http_401_invalid_key_hint(self, monkeypatch):
+        def fake_get(url, **kw):
+            raise requests.HTTPError(response=_FakeResp(status_code=401))
+        monkeypatch.setattr(balance_probe.requests, "get", fake_get)
+        r = balance_probe.probe_balance("deepseek", "sk-x")
+        assert "HTTP 401" in r["error"] and "无效" in r["hint"]
+
+    def test_network_error(self, monkeypatch):
+        def fake_get(url, **kw):
+            raise requests.ConnectionError("连不上")
+        monkeypatch.setattr(balance_probe.requests, "get", fake_get)
+        r = balance_probe.probe_balance("deepseek", "sk-x")
+        assert "网络错误" in r["error"]
+
+    def test_probe_resource_direct_key_priority(self, monkeypatch):
+        # R4: api_key 直填值优先于环境变量
+        captured = {}
+
+        def fake_get(url, headers=None, **kw):
+            captured.update(headers or {})
+            return _FakeResp({"balance_infos": [{"total_balance": 1, "currency": "CNY"}]})
+
+        monkeypatch.setattr(balance_probe.requests, "get", fake_get)
+        monkeypatch.setenv("FAKE_ENV_KEY_X", "from-env")
+        pool = {"id": "p1", "provider": "deepseek",
+                "api_key": "direct-key", "api_key_env": "FAKE_ENV_KEY_X"}
+        r = balance_probe.probe_resource(pool)
+        assert r["resource_id"] == "p1"
+        assert captured["Authorization"] == "Bearer direct-key"
+
+    def test_probe_resource_env_fallback(self, monkeypatch):
+        captured = {}
+
+        def fake_get(url, headers=None, **kw):
+            captured.update(headers or {})
+            return _FakeResp({"balance_infos": [{"total_balance": 1, "currency": "CNY"}]})
+
+        monkeypatch.setattr(balance_probe.requests, "get", fake_get)
+        monkeypatch.setenv("FAKE_ENV_KEY_Y", "from-env")
+        pool = {"id": "p2", "provider": "deepseek", "api_key_env": "FAKE_ENV_KEY_Y"}
+        balance_probe.probe_resource(pool)
+        assert captured["Authorization"] == "Bearer from-env"
+
+    def test_probe_resource_no_key_configured(self, monkeypatch):
+        monkeypatch.delenv("MISSING_KEY_XYZ", raising=False)
+        pool = {"id": "p3", "provider": "deepseek", "api_key_env": "MISSING_KEY_XYZ"}
+        r = balance_probe.probe_resource(pool)
+        assert "未配置 API Key" in r["error"]
