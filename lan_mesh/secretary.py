@@ -276,7 +276,10 @@ class SecretaryController:
         async def dashboard():
             html_path = TEMPLATES_DIR / "dashboard.html"
             if html_path.is_file():
-                return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+                # 禁缓存: 避免 UI 更新后浏览器用旧页面导致按钮无响应
+                return HTMLResponse(
+                    content=html_path.read_text(encoding="utf-8"),
+                    headers={"Cache-Control": "no-cache, must-revalidate"})
             return HTMLResponse(content="<h1>LAN Mesh Secretary</h1><p>dashboard.html 未找到</p>")
 
         return app
