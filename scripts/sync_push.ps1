@@ -1,12 +1,12 @@
 ﻿<#
 .SYNOPSIS
-    双仓库同步推送：master -> Gitee（中文版），en -> GitHub main（英文版）
+    双仓库同步推送：master -> Gitee（中文版），master/en -> GitHub CN/EN 分支
 
 .DESCRIPTION
     1. 要求工作区干净且当前在 master 分支
     2. 将 master 的代码变更合并进 en 分支（en 分支 .gitattributes 中
        README.md 配置了 merge=ours，合并时自动保留英文 README）
-    3. 推送 master 到 gitee 远程，推送 en 到 origin(GitHub) 的 main
+    3. 推送 master 到 gitee 远程，推送 master/en 到 origin(GitHub) 的 CN/EN 分支
 
 .PARAMETER SkipMerge
     跳过 master -> en 的同步合并，仅执行推送
@@ -55,7 +55,7 @@ if (-not $SkipMerge) {
 Write-Host "==> 推送 master -> Gitee（中文版）"
 Invoke-Git push gitee master
 
-Write-Host "==> 推送 en -> GitHub main（英文版）"
-Invoke-Git push origin en:main
+Write-Host "==> 推送 master/en -> GitHub CN/EN 分支"
+Invoke-Git push origin master:CN en:EN
 
-Write-Host "完成：Gitee(master 中文) 与 GitHub(main 英文) 已同步更新" -ForegroundColor Green
+Write-Host "完成：Gitee(master 中文) 与 GitHub(CN 中文 / EN 英文) 已同步更新" -ForegroundColor Green
