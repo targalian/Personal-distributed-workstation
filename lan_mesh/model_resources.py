@@ -19,7 +19,9 @@
 用户可在 resources.yaml 的 pricing 段为未收录模型补充覆盖。
 """
 import datetime
+import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
@@ -82,6 +84,10 @@ class ModelResourceManager:
         self._alerted: set[str] = set()                     # 已告警资源 (防刷屏)
         self._strict = False                                # strict: 无池模型禁用
         self._balances: dict[str, dict] = {}                # resource_id → 探测结果 (R2)
+        self._secretary_url = ""                            # 上报目标 (R3)
+        self._report_interval = 60.0                        # 上报周期 (秒, R3)
+        self._reporter = None                               # 上报线程 (R3)
+        self._stop_evt = threading.Event()
 
     @property
     def enabled(self) -> bool:
@@ -141,6 +147,9 @@ class ModelResourceManager:
         if self._enabled:
             logger.info("模型资源管理已启用: %d 个资源池, %d 条价格, strict=%s",
                         len(self._resources), len(self._prices), self._strict)
+            # R3: 配置了 Secretary 地址 → 启用用量上报 (Worker 主机)
+            self.set_report_target(data.get("secretary_url", ""),
+                                   float(data.get("report_interval", 60)))
         return self._enabled
 
     # ── 台账 ────────────────────────────────────────────────────
@@ -174,15 +183,18 @@ class ModelResourceManager:
     # ── 记账 ────────────────────────────────────────────────────
 
     def record_usage(self, model_id: str, input_tokens: int,
-                     output_tokens: int) -> dict:
+                     output_tokens: int, usage_id: str = "") -> dict:
         """记录一次 LLM 调用消耗。
 
         payg 池按价格目录折算金额, token/coding 池直接计 token 数。
         无资源匹配或未启用 → 不追踪 (返回 tracked=False)。
 
+        Args:
+            usage_id: 幂等键 (R3 跨主机上报去重); 留空自动生成。
+
         Returns:
             {"tracked", "resource_id", "plan_type", "consumed", "unit",
-             "rate", "alert"?}
+             "rate", "alert"?, "duplicate"?}
         """
         if not self._enabled or self._db is None:
             return {"tracked": False}
@@ -201,18 +213,23 @@ class ModelResourceManager:
             consumed = in_tok + out_tok
             unit = "token"
 
+        uid = usage_id or uuid.uuid4().hex
         try:
-            self._db.insert_resource_usage(
-                pool.id, model_id, pool.plan_type, in_tok, out_tok, consumed)
+            inserted = self._db.insert_resource_usage(
+                pool.id, model_id, pool.plan_type, in_tok, out_tok,
+                consumed, usage_id=uid)
         except Exception as e:
             logger.warning("用量写入失败: %s", e)
             return {"tracked": False}
+        if not inserted:
+            logger.debug("用量记录 %s 重复上报, 已忽略 (幂等)", uid)
+            return {"tracked": True, "duplicate": True, "usage_id": uid}
 
         usage = self.get_usage(pool.id)
         result = {
             "tracked": True, "resource_id": pool.id,
             "plan_type": pool.plan_type, "consumed": consumed, "unit": unit,
-            "rate": usage.get("rate", 0.0),
+            "rate": usage.get("rate", 0.0), "usage_id": uid,
         }
         rate = usage.get("rate", 0.0)
         if rate >= pool.alert_threshold and pool.id not in self._alerted:
@@ -308,6 +325,88 @@ class ModelResourceManager:
         self._balances = results
         return {"probed": probed, "supported": supported, "results": results}
 
+    # ── R3: 跨主机用量上报 (Worker → Secretary) ──────────────────
+
+    def set_report_target(self, url: str, interval: float = 60.0) -> bool:
+        """设置/启动用量上报目标 (Worker 主机配置或运行时注入)。
+
+        Args:
+            url: Secretary 站点地址 (空 → 不启用上报)
+            interval: 上报周期 (秒)
+
+        Returns:
+            是否已启用上报线程
+        """
+        target = (url or "").strip().rstrip("/")
+        self._secretary_url = target
+        self._report_interval = max(5.0, float(interval or 60.0))
+        if not target or not self._enabled or self._db is None:
+            return False
+        if self._reporter and self._reporter.is_alive():
+            return True  # 线程已在运行 (仅更新目标地址)
+        self._stop_evt.clear()
+        self._reporter = threading.Thread(
+            target=self._report_loop, name="resource-usage-reporter",
+            daemon=True)
+        self._reporter.start()
+        logger.info("[resources] 用量上报已启用 → %s (周期 %.0fs)",
+                    target, self._report_interval)
+        return True
+
+    def stop_reporter(self):
+        """停止上报线程 (进程退出前调用)。"""
+        self._stop_evt.set()
+
+    def report_once(self, batch: int = 200) -> dict:
+        """执行一轮上报 (同步, 供测试/手动触发)。
+
+        未上报记录 → POST 到 Secretary /api/resources/usage (批量),
+        成功后标记 reported; 失败不推进游标, 下轮重试 (离线容错)。
+
+        Returns:
+            {"reported": 条数, "duplicate": 重复条数, "error"?}
+        """
+        if not self._secretary_url or self._db is None:
+            return {"reported": 0, "error": "no_report_target"}
+        try:
+            rows = self._db.query_unreported_usage(batch)
+        except Exception as e:
+            return {"reported": 0, "error": f"query_failed: {e}"}
+        if not rows:
+            return {"reported": 0}
+        payload = {
+            "records": [
+                {"usage_id": r["usage_id"], "model": r["model_id"],
+                 "input_tokens": r["input_tokens"],
+                 "output_tokens": r["output_tokens"]}
+                for r in rows
+            ]
+        }
+        try:
+            import requests
+            resp = requests.post(
+                f"{self._secretary_url}/api/resources/usage",
+                json=payload, timeout=10)
+            resp.raise_for_status()
+            body = resp.json() if resp.text else {}
+        except Exception as e:
+            logger.warning("[resources] 用量上报失败 (%d 条, 下轮重试): %s",
+                           len(rows), e)
+            return {"reported": 0, "pending": len(rows), "error": str(e)}
+        self._db.mark_usage_reported([r["id"] for r in rows])
+        dup = int(body.get("duplicate", 0))
+        logger.info("[resources] 用量已上报 Secretary: %d 条 (重复 %d)",
+                    len(rows), dup)
+        return {"reported": len(rows), "duplicate": dup}
+
+    def _report_loop(self):
+        """上报线程主循环 — 异常隔离, 永不退出 (直到 stop)。"""
+        while not self._stop_evt.wait(self._report_interval):
+            try:
+                self.report_once()
+            except Exception as e:  # 双保险 (report_once 内部已兜底)
+                logger.warning("[resources] 上报轮次异常: %s", e)
+
     def summarize(self) -> dict:
         """全池汇总报告 (API / CLI / Web UI 使用)。"""
         return {
@@ -337,12 +436,22 @@ def init_resource_manager(yaml_path: Union[str, Path] = None,
     return _mgr
 
 
-def record_usage_global(model_id: str, input_tokens: int, output_tokens: int) -> dict:
+def record_usage_global(model_id: str, input_tokens: int, output_tokens: int,
+                        usage_id: str = "") -> dict:
     """记账钩子 — 每次真实 LLM 调用成功后调用, 异常不影响主流程。"""
     try:
-        return _mgr.record_usage(model_id, input_tokens, output_tokens)
+        return _mgr.record_usage(model_id, input_tokens, output_tokens,
+                                 usage_id=usage_id)
     except Exception:
         return {"tracked": False}
+
+
+def set_report_target_global(url: str, interval: float = 60.0) -> bool:
+    """上报目标注入钩子 (R3) — Worker 收到任务后注入 Secretary 地址。"""
+    try:
+        return _mgr.set_report_target(url, interval)
+    except Exception:
+        return False
 
 
 def resource_available(model_id: str) -> bool:
@@ -367,3 +476,11 @@ def probe_balances_global(timeout: float = 10.0) -> dict:
         return _mgr.probe_balances(timeout=timeout)
     except Exception as e:
         return {"probed": 0, "supported": 0, "results": {}, "error": str(e)}
+
+
+def report_usage_global() -> dict:
+    """手动上报钩子 (R3) — API 端点用, 立即执行一轮上报。"""
+    try:
+        return _mgr.report_once()
+    except Exception as e:
+        return {"reported": 0, "error": str(e)}

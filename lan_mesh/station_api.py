@@ -1157,16 +1157,37 @@ def create_station_router(controller) -> APIRouter:
 
     @router.post("/api/resources/usage")
     async def record_model_usage(payload: dict):
-        """记录一次 LLM 调用消耗 (模型 → 资源池自动匹配)。
+        """记录 LLM 调用消耗 (模型 → 资源池自动匹配)。
 
-        供 Worker 侧上报用量 (跨主机场景), 或补记历史消耗。
+        单条: {model, input_tokens, output_tokens, usage_id?}
+        批量 (R3 Worker 上报): {records: [{usage_id, model,
+            input_tokens, output_tokens}, ...]} — usage_id 幂等去重。
         """
         _check_secretary()
         from .model_resources import record_usage_global
+        records = payload.get("records")
+        if isinstance(records, list) and records:
+            recorded = duplicate = 0
+            for rec in records:
+                if not isinstance(rec, dict):
+                    continue
+                res = record_usage_global(
+                    rec.get("model", ""),
+                    rec.get("input_tokens", 0),
+                    rec.get("output_tokens", 0),
+                    usage_id=str(rec.get("usage_id", "")),
+                )
+                if res.get("duplicate"):
+                    duplicate += 1
+                elif res.get("tracked"):
+                    recorded += 1
+            return {"batch": True, "total": len(records),
+                    "recorded": recorded, "duplicate": duplicate}
         return record_usage_global(
             payload.get("model", ""),
             payload.get("input_tokens", 0),
             payload.get("output_tokens", 0),
+            usage_id=str(payload.get("usage_id", "")),
         )
 
     @router.post("/api/resources/probe")
@@ -1916,6 +1937,9 @@ def create_station_router(controller) -> APIRouter:
         task_data = payload.get("task_data")
         if not task_id or not secretary_url:
             raise HTTPException(status_code=400, detail="缺少 task_id 或 secretary_url")
+        # R3: 注入用量上报目标 (本机作为 Worker, 记账汇总到 Secretary)
+        from .model_resources import set_report_target_global
+        set_report_target_global(secretary_url)
         result = controller._local_start_pm(task_id, secretary_url, task_data)
         if not result.get("ok"):
             raise HTTPException(status_code=409, detail=result.get("message", "启动失败"))

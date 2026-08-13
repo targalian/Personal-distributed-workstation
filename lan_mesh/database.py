@@ -19,7 +19,7 @@ logger = get_logger("database")
 # 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
 # 迁移函数签名: (conn: sqlite3.Connection) -> None
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -49,9 +49,30 @@ def _migration_v1(conn: sqlite3.Connection):
         pass
 
 
+def _migration_v2(conn: sqlite3.Connection):
+    """迁移 v2: resource_usage_log 增加 usage_id (幂等键) 与 reported 游标。"""
+    for col, dtype, default in [
+        ("usage_id", "TEXT", "''"),
+        ("reported", "INTEGER", "0"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE resource_usage_log "
+                         f"ADD COLUMN {col} {dtype} NOT NULL DEFAULT {default}")
+        except sqlite3.OperationalError:
+            pass
+    try:
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_usage_uid
+                ON resource_usage_log(usage_id) WHERE usage_id != ''
+        """)
+    except sqlite3.OperationalError:
+        pass
+
+
 # 迁移注册表: version → 迁移函数
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
+    2: _migration_v2,
 }
 
 
@@ -307,6 +328,7 @@ class Database:
                 ON task_memory(created_at);
 
             -- R1: 模型资源用量日志 (每次 LLM 调用一行, 可审计可聚合)
+            -- R3: usage_id 幂等键 (跨主机上报去重), reported 上报游标
             CREATE TABLE IF NOT EXISTS resource_usage_log (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 resource_id     TEXT NOT NULL DEFAULT '',
@@ -315,7 +337,9 @@ class Database:
                 input_tokens    INTEGER NOT NULL DEFAULT 0,
                 output_tokens   INTEGER NOT NULL DEFAULT 0,
                 cost            REAL NOT NULL DEFAULT 0,
-                created_at      REAL NOT NULL DEFAULT 0
+                created_at      REAL NOT NULL DEFAULT 0,
+                usage_id        TEXT NOT NULL DEFAULT '',
+                reported        INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS idx_resource_usage_rid_ts
@@ -1401,15 +1425,54 @@ class Database:
 
     def insert_resource_usage(self, resource_id: str, model_id: str,
                               plan_type: str, input_tokens: int,
-                              output_tokens: int, cost: float):
-        """写入一条 LLM 调用用量记录。"""
+                              output_tokens: int, cost: float,
+                              usage_id: str = "") -> bool:
+        """写入一条 LLM 调用用量记录。
+
+        Args:
+            usage_id: 幂等键 (R3 跨主机上报去重); 非空且已存在 → 跳过。
+
+        Returns:
+            是否实际写入 (重复上报返回 False)
+        """
         conn = self._get_conn()
+        if usage_id:
+            dup = conn.execute(
+                "SELECT 1 FROM resource_usage_log WHERE usage_id = ? LIMIT 1",
+                (usage_id,)).fetchone()
+            if dup:
+                return False
         conn.execute("""
             INSERT INTO resource_usage_log
-                (resource_id, model_id, plan_type, input_tokens, output_tokens, cost, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (resource_id, model_id, plan_type, input_tokens, output_tokens,
+                 cost, created_at, usage_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (resource_id, model_id, plan_type, int(input_tokens),
-              int(output_tokens), cost, time.time()))
+              int(output_tokens), cost, time.time(), usage_id))
+        conn.commit()
+        return True
+
+    def query_unreported_usage(self, limit: int = 200) -> list:
+        """查询未上报 Secretary 的用量记录 (R3 跨主机上报)。"""
+        conn = self._get_conn()
+        rows = conn.execute("""
+            SELECT id, usage_id, model_id, input_tokens, output_tokens
+            FROM resource_usage_log
+            WHERE reported = 0
+            ORDER BY id ASC LIMIT ?
+        """, (int(limit),)).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_usage_reported(self, ids: list):
+        """标记用量记录已上报 (R3)。"""
+        if not ids:
+            return
+        conn = self._get_conn()
+        placeholders = ",".join("?" for _ in ids)
+        conn.execute(f"""
+            UPDATE resource_usage_log SET reported = 1
+            WHERE id IN ({placeholders})
+        """, [int(i) for i in ids])
         conn.commit()
 
     def sum_resource_usage(self, resource_id: str, since_ts: float) -> dict:

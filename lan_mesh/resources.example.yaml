@@ -21,6 +21,15 @@
 #   ⚠️ zhipu        GET /api/monitor/usage/quota/limit (实验性)
 #   ❌ openai / anthropic / ark / aliyun / google: 无普通 Key 余额接口, 控制台查看
 # 探测到余额为 0 的资源池自动标记 exhausted (模型从路由剔除)
+#
+# ── 跨主机用量上报 (R3, 多主机场景) ─────────────────────────────
+# Worker 主机的 LLM 用量自动汇总到 Secretary 统一计量:
+#   - 独立 Worker 进程 (python main.py worker): 自动发现 Secretary, 免配置
+#   - 内嵌 PM / Station 充当 Worker: 收到任务时自动注入上报目标, 免配置
+#   - 静态配置 (可选): 填写 secretary_url, 后台线程按 report_interval
+#     周期性批量上报; 上报失败自动重试 (离线容错), usage_id 幂等去重
+# secretary_url: http://192.168.1.10:18080   # Secretary 站点地址 (Worker 主机填)
+# report_interval: 60                         # 上报周期秒数 (默认 60)
 
 # strict: true   # 取消注释后, 未关联资源池的模型将从路由中剔除
 

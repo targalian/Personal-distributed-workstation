@@ -66,6 +66,8 @@ def main():
     parser.add_argument("--init", action="store_true", help="resources: 生成配置模板")
     parser.add_argument("--probe", action="store_true",
                         help="resources: 触发服务商余额自动探测")
+    parser.add_argument("--report", action="store_true",
+                        help="resources: 立即向 Secretary 上报一轮用量 (需配置 secretary_url)")
     parser.add_argument("--version", "-v", action="version", version=f"LAN Mesh v{__version__}")
 
     args = parser.parse_args()
@@ -153,6 +155,18 @@ def _run_resources_cli(cfg, args):
             else:
                 print(f"[resources]   [{rid}] {res.get('provider')} "
                       f"未获取: {res.get('error')} — {res.get('hint', '')}")
+
+    if args.report:
+        rep = mgr.report_once()
+        if rep.get("error") == "no_report_target":
+            print("[resources] 未配置上报目标: 请在 resources.yaml 中"
+                  "填写 secretary_url (Worker 主机自动发现时免配置)")
+        elif rep.get("error"):
+            print(f"[resources] 上报失败: {rep.get('error')} "
+                  f"(待上报 {rep.get('pending', '?')} 条, 下轮自动重试)")
+        else:
+            print(f"[resources] 上报完成: {rep.get('reported', 0)} 条 "
+                  f"(Secretary 重复忽略 {rep.get('duplicate', 0)} 条)")
 
     summary = mgr.summarize()
     print(f"[resources] 模型资源管理已启用 (strict={summary.get('strict', False)})")

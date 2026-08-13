@@ -166,6 +166,10 @@ class WorkerAgent:
                 self._register_agent_card()
                 # 3. 拉取已授权技能到本地缓存
                 self._pull_skills()
+                # 4. R3: 注入资源用量上报目标 (记账汇总到 Secretary)
+                from .model_resources import set_report_target_global
+                set_report_target_global(
+                    f"http://{self.state.secretary_ip}:{self.state.secretary_port}")
                 return True
         except requests.RequestException as e:
             logger.error("注册失败: %s", e)
