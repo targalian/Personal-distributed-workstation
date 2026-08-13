@@ -588,6 +588,13 @@
     每次 LLM 调用自动记账; 资源耗尽/过期/暂停后相关模型自动从路由候选中剔除。
     “探测余额”自动调用服务商余额 API (SiliconFlow/DeepSeek/Moonshot/智谱), 未支持的服务商在控制台查看。
   </div>
+  <div class="stitle">🔀 轮换调度 (R5: 同模型多池时自动择优消耗)</div>
+  <div class="table-wrap">
+  <table class="fleet-table">
+    <thead><tr><th>模型</th><th>消耗池</th><th>候选池优先级 (高→低)</th></tr></thead>
+    <tbody id="rotation-body"><tr><td colspan="3" style="text-align:center;color:var(--dim);padding:14px">点击刷新加载</td></tr></tbody>
+  </table>
+  </div>
   <div class="stitle">💰 成本分摊 (按任务)</div>
   <div class="table-wrap">
   <table class="fleet-table">
@@ -1150,7 +1157,33 @@ async function refreshResources(){
       </tr>`;
     }).join('');
   }catch(e){console.error(e);}
-  finally{refreshCostByTask();}  // 资源池为空的早退分支也必须刷新成本表
+  finally{refreshRotationPlan();refreshCostByTask();}  // 早退分支也必须刷新轮换表与成本表
+}
+async function refreshRotationPlan(){
+  // R5: 多池轮换调度方案 (逐模型候选池优先级)
+  const body=document.getElementById('rotation-body');
+  if(!body)return;
+  try{
+    const r=await apiFetch('/api/resources/rotation');
+    const d=await r.json();
+    renderRotationPlan(body,d.plan||[]);
+  }catch(e){renderRotationPlan(body,[]);}
+}
+function renderRotationPlan(body,plan){
+  if(!(plan||[]).length){
+    body.innerHTML='<tr><td colspan="3" style="text-align:center;color:var(--dim);padding:14px">暂无关联模型的资源池 — 配置向导中为资源池关联模型后生效</td></tr>';
+    return;
+  }
+  body.innerHTML=plan.map(r=>{
+    const pools=(r.pools||[]).map(p=>p.id===r.chosen
+      ?`<b style="color:#4ade80">${esc(p.id)}⭐ ${p.priority}</b>`
+      :`<span style="color:var(--dim)">${esc(p.id)} ${p.priority}</span>`).join(' · ');
+    return `<tr>
+      <td><b>${esc(r.model)}</b></td>
+      <td style="color:var(--accent)">${esc(r.chosen||'-')}</td>
+      <td>${pools}</td>
+    </tr>`;
+  }).join('');
 }
 function renderResAlerts(alerts){
   // R7: 到期/额度预警横幅 (level 3 红 / 2 橙 / 1 黄)

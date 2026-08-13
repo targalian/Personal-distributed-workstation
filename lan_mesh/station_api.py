@@ -1330,6 +1330,13 @@ def create_station_router(controller) -> APIRouter:
         return {"pushed": pushed,
                 "active": resource_summary().get("alerts", [])}
 
+    @router.get("/api/resources/rotation")
+    async def get_rotation_plan():
+        """R5: 多池轮换调度方案 — 逐模型候选池优先级与选中池。"""
+        _check_secretary()
+        from .model_resources import rotation_plan_global
+        return {"plan": rotation_plan_global()}
+
     # ── PM Agent 管理 ──
 
     @router.get("/api/pm")
