@@ -27,6 +27,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse
 
 from .protocol import HostInfo, HostRecord, AgentCard, Task
+from .event_bus import publish_event, recent_events
 from .host_rating import rate_host
 from .http_retry import auth_headers
 from .logger import get_logger
@@ -1185,6 +1186,9 @@ def create_station_router(controller) -> APIRouter:
                     duplicate += 1
                 elif res.get("tracked"):
                     recorded += 1
+            publish_event("usage_reported",
+                          {"total": len(records), "recorded": recorded,
+                           "duplicate": duplicate})
             return {"batch": True, "total": len(records),
                     "recorded": recorded, "duplicate": duplicate}
         return record_usage_global(
@@ -1309,6 +1313,8 @@ def create_station_router(controller) -> APIRouter:
         # R7: 热重载后重新注入预警推送回调 (load 会重置管理器状态)
         from .model_resources import set_bot_notify_global
         set_bot_notify_global(controller.bot_gateway.notify)
+        publish_event("resource_config",
+                      {"ok": True, "pools": len(mgr.list_resources())})
         return {"ok": True, "enabled": mgr.enabled,
                 "pools": len(mgr.list_resources()),
                 "backup": saved.get("backup", "")}
@@ -1336,6 +1342,12 @@ def create_station_router(controller) -> APIRouter:
         _check_secretary()
         from .model_resources import rotation_plan_global
         return {"plan": rotation_plan_global()}
+
+    @router.get("/api/events/recent")
+    async def get_recent_events(n: int = 20):
+        """M5: 最近事件查询 (事件总线历史, 供 UI 补拉)。"""
+        _check_secretary()
+        return {"events": recent_events(max(1, min(int(n or 20), 100)))}
 
     # ── PM Agent 管理 ──
 
@@ -2386,9 +2398,16 @@ def create_station_router(controller) -> APIRouter:
 
     @router.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
-        """WebSocket 实时推送主机状态变更。"""
+        """WebSocket 实时推送主机状态变更 + M5 事件总线事件。"""
         await websocket.accept()
         state.ws_clients.add(websocket)
+        # M5: 懒装配事件总线 sink (幂等) — 事件经本通道广播
+        from .event_bus import get_event_bus
+        bus = get_event_bus()
+        if not bus.has_sink:
+            def _event_sink(evt: dict):
+                asyncio.ensure_future(_broadcast(state, "event", evt))
+            bus.attach(asyncio.get_running_loop(), _event_sink)
         try:
             hosts = db.list_hosts()
             await websocket.send_json({

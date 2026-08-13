@@ -617,6 +617,15 @@ class ModelResourceManager:
         for a in alerts:
             a.pop("_window", None)
         self._active_alerts = alerts
+        # M5: 预警到达发事件总线 (UI 实时刷新, 后台线程触发亦生效)
+        if pushed:
+            try:
+                from .event_bus import publish_event
+                publish_event("resource_alert",
+                              {"count": len(pushed),
+                               "max_level": max(x["level"] for x in pushed)})
+            except Exception:
+                pass
         return pushed
 
     def start_alert_checker(self, interval: float = 300.0) -> bool:
