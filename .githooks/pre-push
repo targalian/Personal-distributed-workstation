@@ -16,8 +16,21 @@ echo "======================================"
 echo " LAN Mesh Pre-Push 代码审核"
 echo "======================================"
 
+# ── 解析审核基线（双仓库: master→gitee/master, en→origin/main）──
+UPSTREAM=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null || true)
+if [ -z "$UPSTREAM" ] || ! git rev-parse --verify --quiet "$UPSTREAM" >/dev/null; then
+    UPSTREAM="gitee/master"
+fi
+if git rev-parse --verify --quiet "$UPSTREAM" >/dev/null; then
+    BASE="$UPSTREAM"
+else
+    BASE="HEAD~1"
+fi
+echo -e "审核基线: ${GREEN}${BASE}${NC}"
+echo ""
+
 # ── 收集待审核的 Python 文件 ──────────────────────────
-CHANGED_PY=$(git diff --name-only --diff-filter=ACM origin/master -- '*.py' 2>/dev/null || git diff --name-only --diff-filter=ACM HEAD~1 -- '*.py' 2>/dev/null || true)
+CHANGED_PY=$(git diff --name-only --diff-filter=ACM "$BASE" -- '*.py' 2>/dev/null || git diff --name-only --diff-filter=ACM HEAD~1 -- '*.py' 2>/dev/null || true)
 
 if [ -z "$CHANGED_PY" ]; then
     echo -e "${GREEN}[PASS] 无 Python 文件变更，跳过代码审核${NC}"
@@ -158,7 +171,7 @@ echo ""
 
 # ── 7. Commit Message 格式检查 ───────────────────────
 echo "── 7. Commit Message 格式检查 ──"
-COMMITS=$(git log --format="%s" origin/master..HEAD 2>/dev/null || git log --format="%s" HEAD~5..HEAD 2>/dev/null || true)
+COMMITS=$(git log --format="%s" "$BASE"..HEAD 2>/dev/null || git log --format="%s" HEAD~5..HEAD 2>/dev/null || true)
 if [ -n "$COMMITS" ]; then
     VALID_TYPES='feat|fix|refactor|docs|chore|perf|test|ci|style'
     VALID_SCOPES='pm|runtime|router|api|ws|ui|config|discovery|db|auth|skill|station|deploy|scripts'
