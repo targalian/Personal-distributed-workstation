@@ -1463,7 +1463,7 @@ class Database:
         """, (int(limit),)).fetchall()
         return [dict(r) for r in rows]
 
-    def mark_usage_reported(self, ids: list):
+    def mark_usage_reported(self, ids: list) -> None:
         """标记用量记录已上报 (R3)。"""
         if not ids:
             return
