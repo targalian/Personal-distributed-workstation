@@ -15,6 +15,7 @@ Loop Engineering — 每日验证循环编排器
   python test_bug/run_loop.py --full           # 全量扫描
   python test_bug/run_loop.py --retest BUG-001 # 复测指定条目
   python test_bug/run_loop.py --report-only    # 只生成报告不跑测试
+  python test_bug/run_loop.py --ui-pending     # 只列出未检测的 UI 改动项
 """
 import argparse
 import csv
@@ -54,6 +55,9 @@ STATUS_MAP = {
     "复测通过": "复测通过",
     "复测失败": "复测失败",  # 回归!
     "关闭": "关闭",
+    "未检测": "未检测",      # UI 改动待行为检测
+    "检测通过": "检测通过",
+    "检测失败": "检测失败",  # UI 改动检测发现回归
 }
 
 
@@ -142,16 +146,18 @@ def generate_report(results: list[TestResult], csv_rows: list[dict],
 
     # 统计
     total_bugs = len(csv_rows)
-    fixed = sum(1 for r in csv_rows if r.get("状态") in ("已修复", "复测通过"))
-    open_bugs = sum(1 for r in csv_rows if r.get("状态") in ("未修复", "复测失败"))
+    fixed = sum(1 for r in csv_rows if r.get("状态") in ("已修复", "复测通过", "检测通过"))
+    open_bugs = sum(1 for r in csv_rows if r.get("状态") in ("未修复", "复测失败", "检测失败"))
+    ui_pending = [r for r in csv_rows if r.get("状态") == "未检测"]
     test_passed = sum(1 for r in results if r.passed)
     test_failed = sum(1 for r in results if not r.passed)
     test_skipped = sum(1 for r in results if "SKIP" in r.message)
 
-    # 健康分数 (加权)
-    max_score = sum(weights.get(r.get("严重级别", "P3"), 5) for r in csv_rows)
+    # 健康分数 (加权; 未检测项不计入扣分但单独提示)
+    max_score = sum(weights.get(r.get("严重级别", "P3"), 5) for r in csv_rows
+                    if r.get("状态") != "未检测")
     penalty = sum(weights.get(r.get("严重级别", "P3"), 5) for r in csv_rows
-                  if r.get("状态") in ("未修复", "复测失败"))
+                  if r.get("状态") in ("未修复", "复测失败", "检测失败"))
     health_score = round((1 - penalty / max(max_score, 1)) * 100, 1)
 
     lines = [
@@ -172,8 +178,19 @@ def generate_report(results: list[TestResult], csv_rows: list[dict],
         f"| 跳过 (前置不满足) | {test_skipped} |",
         f"| 复测确认修复 | {len(update_info.get('confirmed', []))} |",
         f"| 回归 (复测失败) | {len(update_info.get('regressions', []))} |",
+        f"| UI 改动待检测 | {len(ui_pending)} |",
         f"",
     ]
+
+    # UI 改动待检清单
+    if ui_pending:
+        lines.append("## 📋 UI 改动待检测")
+        lines.append("")
+        lines.append("以下 UI 改动尚未做行为检测, 需在浏览器中验证后标记 (ui_change_log.py check):")
+        lines.append("")
+        for r in ui_pending:
+            lines.append(f"- **{r['编号']}** [{r.get('严重级别', '?')}] {r.get('功能点', '')} — {r.get('预期行为', '')}")
+        lines.append("")
 
     # 回归告警
     if update_info.get("regressions"):
@@ -195,8 +212,8 @@ def generate_report(results: list[TestResult], csv_rows: list[dict],
         lines.append(f"| {r.bug_id} | {r.name} | {icon}{skip} | {r.duration_ms:.0f}ms | {r.message[:60]} |")
     lines.append("")
 
-    # 未修复清单
-    open_rows = [r for r in csv_rows if r.get("状态") in ("未修复", "复测失败")]
+    # 未修复清单 (含 UI 检测失败回归项)
+    open_rows = [r for r in csv_rows if r.get("状态") in ("未修复", "复测失败", "检测失败")]
     if open_rows:
         lines.append("## 待修复清单 (按严重级别)")
         lines.append("")
@@ -213,7 +230,8 @@ def generate_report(results: list[TestResult], csv_rows: list[dict],
 
 # ── 主流程 ────────────────────────────────────────────────────
 
-def run_loop(full: bool = False, retest_ids: list[str] = None, report_only: bool = False):
+def run_loop(full: bool = False, retest_ids: list[str] = None, report_only: bool = False,
+             ui_pending_only: bool = False):
     """执行一次 Loop Engineering 循环。"""
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
@@ -238,6 +256,18 @@ def run_loop(full: bool = False, retest_ids: list[str] = None, report_only: bool
     mode_str = 'FULL SCAN' if full else 'RETEST FIXED' if not retest_ids else 'TARGETED RETEST'
     print(f"  Mode: {mode_str}")
     print(f"{'=' * 60}\n")
+
+    if ui_pending_only:
+        # 只列出未检测的 UI 改动项
+        from test_bug.ui_change_log import list_pending
+        pending = list_pending(load_csv(csv_path) or [])
+        if not pending:
+            print("[i] 无未检测的 UI 改动项")
+            return True
+        print(f"未检测 UI 改动 ({len(pending)} 项):")
+        for r in pending:
+            print(f"  [{r['编号']}] [{r.get('严重级别', '?')}] {r.get('功能点', '')} — {r.get('预期行为', '')}")
+        return len(pending) == 0
 
     if report_only:
         # 只从 CSV 生成报告
@@ -307,9 +337,11 @@ def main():
     parser.add_argument("--full", action="store_true", help="全量扫描 (默认只复测已修复)")
     parser.add_argument("--retest", nargs="*", metavar="BUG_ID", help="复测指定 BUG 编号")
     parser.add_argument("--report-only", action="store_true", help="只生成报告,不运行测试")
+    parser.add_argument("--ui-pending", action="store_true", help="只列出未检测的 UI 改动项")
     args = parser.parse_args()
 
-    success = run_loop(full=args.full, retest_ids=args.retest, report_only=args.report_only)
+    success = run_loop(full=args.full, retest_ids=args.retest, report_only=args.report_only,
+                       ui_pending_only=args.ui_pending)
     sys.exit(0 if success else 1)
 
 

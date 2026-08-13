@@ -200,6 +200,17 @@ def main():
 
     passed = sum(1 for r in results if r["passed"])
     print(f"\n  Total: {len(results)} | PASS: {passed} | FAIL: {len(results) - passed}")
+
+    # UI 改动待检提醒 (静态分析无法覆盖行为回归, 需人工/浏览器验证)
+    try:
+        from test_bug.ui_change_log import list_pending
+        pending = list_pending()
+        if pending:
+            print(f"\n  📋 未检测 UI 改动 ({len(pending)} 项, 需在浏览器中验证后标记):")
+            for p in pending:
+                print(f"     [{p['编号']}] {p.get('功能点', '')} — {p.get('预期行为', '')}")
+    except Exception:
+        pass
     print()
 
     sys.exit(0 if all(r["passed"] for r in results) else 1)
