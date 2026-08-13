@@ -24,7 +24,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Callable, Optional, Union
 
 import yaml
 
@@ -458,7 +458,7 @@ class ModelResourceManager:
     _ALERT_EVENT = {1: "resource_alert_low", 2: "resource_alert",
                     3: "resource_alert_high"}
 
-    def set_bot_notify(self, callback) -> None:
+    def set_bot_notify(self, callback: Optional[Callable]) -> None:
         """注入 Bot 推送回调 fn(event_type, data); 未注入时仅日志+内存记录。"""
         self._bot_notify = callback
 
@@ -742,7 +742,7 @@ def probe_balances_global(timeout: float = 10.0) -> dict:
         return {"probed": 0, "supported": 0, "results": {}, "error": str(e)}
 
 
-def set_bot_notify_global(callback) -> None:
+def set_bot_notify_global(callback: Optional[Callable]) -> None:
     """R7: 注入预警 Bot 推送回调 (启动/热重载后调用)。"""
     try:
         _mgr.set_bot_notify(callback)
