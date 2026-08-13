@@ -13,8 +13,12 @@
 # 未关联任何资源池的模型: 默认放行 (宽松), 开启 strict: true 后禁用
 #
 # ── 余额自动探测 (R2, 可选) ──────────────────────────────────────
-# 配置 api_key_env 后, 运行 `python main.py resources --probe` 或
-# Web 仪表盘「探测余额」自动调用服务商余额 API:
+# 提供 API Key 两种方式 (二选一, 直填优先):
+#   - 资源池内填 api_key: sk-xxx (仅存本机, 文件已 gitignore) — 推荐,
+#     或在 Web 仪表盘「⚙️ 配置资源」向导中填写并一键测试
+#   - 填 api_key_env: DEEPSEEK_API_KEY 并设置同名环境变量
+# 然后运行 `python main.py resources --probe` 或 Web 仪表盘「探测余额」
+# 自动调用服务商余额 API:
 #   ✅ siliconflow  GET /v1/user/info        (CNY, 国际版 api.siliconflow.com)
 #   ✅ deepseek     GET /user/balance        (total_balance + currency)
 #   ✅ moonshot     GET /v1/users/me/balance (Kimi, 宽容解析)
@@ -68,6 +72,7 @@ resources:
   #   quota: 100000000                 # 1 亿 token
   #   billing_period: one_time
   #   expire_at: 1815868800            # unix 时间戳 (2027-07-01), 0 = 不过期
+  #   api_key: sk-xxx                  # 直填 (推荐, 支持一键测余额) 或用下面的 env 方式
   #   api_key_env: DEEPSEEK_API_KEY
   #   models: [deepseek-chat, deepseek-coder, deepseek-reasoner]
 
