@@ -317,6 +317,14 @@ class AgentRuntime:
         # 优化3: 记录当前技能类型, 供 _build_system_prompt 选择性加载 (线程局部, 防并行覆盖)
         self._local.current_skill = skill
 
+        # R6: 注入成本归因上下文 — 本线程内后续 LLM 记账自动带上 task_id
+        try:
+            from .model_resources import set_usage_context
+            set_usage_context(task_id=subtask.get("parent_task_id", ""),
+                              project_id=subtask.get("project_id", ""))
+        except Exception:
+            pass
+
         # 提取路由器注入的模型偏好 (由 orchestrator 写入 payload)
         input_data = dict(subtask.get("input_data", {}))
         input_data["_model_preference"] = subtask.get("model_preference", "")

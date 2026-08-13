@@ -189,7 +189,8 @@ class ModelResourceManager:
     # ── 记账 ────────────────────────────────────────────────────
 
     def record_usage(self, model_id: str, input_tokens: int,
-                     output_tokens: int, usage_id: str = "") -> dict:
+                     output_tokens: int, usage_id: str = "",
+                     task_id: str = "", project_id: str = "") -> dict:
         """记录一次 LLM 调用消耗。
 
         payg 池按价格目录折算金额, token/coding 池直接计 token 数。
@@ -197,6 +198,8 @@ class ModelResourceManager:
 
         Args:
             usage_id: 幂等键 (R3 跨主机上报去重); 留空自动生成。
+            task_id/project_id: 成本归因 (R6); 留空时自动取线程级
+                归因上下文 (set_usage_context 注入)。
 
         Returns:
             {"tracked", "resource_id", "plan_type", "consumed", "unit",
@@ -208,6 +211,12 @@ class ModelResourceManager:
         if not pool:
             logger.debug("模型 %s 无关联资源池, 用量未追踪", model_id)
             return {"tracked": False}
+
+        # R6: 显式参数优先, 否则回退线程级归因上下文
+        if not task_id or not project_id:
+            ctx_task, ctx_proj = _get_usage_context()
+            task_id = task_id or ctx_task
+            project_id = project_id or ctx_proj
 
         in_tok = max(0, int(input_tokens or 0))
         out_tok = max(0, int(output_tokens or 0))
@@ -223,7 +232,8 @@ class ModelResourceManager:
         try:
             inserted = self._db.insert_resource_usage(
                 pool.id, model_id, pool.plan_type, in_tok, out_tok,
-                consumed, usage_id=uid)
+                consumed, usage_id=uid, task_id=task_id,
+                project_id=project_id)
         except Exception as e:
             logger.warning("用量写入失败: %s", e)
             return {"tracked": False}
@@ -387,7 +397,9 @@ class ModelResourceManager:
             "records": [
                 {"usage_id": r["usage_id"], "model": r["model_id"],
                  "input_tokens": r["input_tokens"],
-                 "output_tokens": r["output_tokens"]}
+                 "output_tokens": r["output_tokens"],
+                 "task_id": r.get("task_id", ""),
+                 "project_id": r.get("project_id", "")}
                 for r in rows
             ]
         }
@@ -434,6 +446,25 @@ class ModelResourceManager:
 # ── 全局单例 + 轻量钩子 (供 agent_runtime / model_router 无侵入调用) ──
 
 _mgr = ModelResourceManager()
+
+# ── R6: 线程级成本归因上下文 ─────────────────────────────
+
+_ctx = threading.local()
+
+
+def set_usage_context(task_id: str = "", project_id: str = "") -> None:
+    """设置当前线程的用量归因上下文 (R6)。
+
+    任务执行入口 (agent_runtime.execute) 注入; 之后该线程内
+    的所有记账自动带上 task_id/project_id, 无需修改底层 LLM 调用签名。
+    """
+    _ctx.task_id = str(task_id or "")
+    _ctx.project_id = str(project_id or "")
+
+
+def _get_usage_context() -> tuple:
+    """读取当前线程归因上下文; 未设置返回 ("", "")。"""
+    return getattr(_ctx, "task_id", ""), getattr(_ctx, "project_id", "")
 
 
 def init_resource_manager(yaml_path: Union[str, Path] = None,
@@ -529,11 +560,13 @@ def save_config(yaml_path: Union[str, Path], data: dict) -> dict:
 
 
 def record_usage_global(model_id: str, input_tokens: int, output_tokens: int,
-                        usage_id: str = "") -> dict:
+                        usage_id: str = "", task_id: str = "",
+                        project_id: str = "") -> dict:
     """记账钩子 — 每次真实 LLM 调用成功后调用, 异常不影响主流程。"""
     try:
         return _mgr.record_usage(model_id, input_tokens, output_tokens,
-                                 usage_id=usage_id)
+                                 usage_id=usage_id, task_id=task_id,
+                                 project_id=project_id)
     except Exception:
         return {"tracked": False}
 

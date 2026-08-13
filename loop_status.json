@@ -1,7 +1,7 @@
 {
   "version": 1,
   "last_run": "2026-08-13T16:00:00Z",
-  "current_phase": "T1-ui-change-checklist",
+  "current_phase": "R6-cost-attribution",
   "phase_status": "closed",
   "completed": [
     "F1.1",
@@ -26,7 +26,8 @@
     "R2-balance-probe",
     "R3-cross-host-report",
     "R4-config-ui",
-    "T1-ui-change-checklist"
+    "T1-ui-change-checklist",
+    "R6-cost-attribution"
   ],
   "failed": [],
   "blocked": [],
@@ -34,12 +35,11 @@
     "M5: Secretary 事件总线 (替换 HTTP 轮询上报)",
     "M6: 角色卡统一化 (Secretary/PM/Worker 单文件定义)",
     "R5: 多 key 轮换调度策略 (基于 plan 可用模型稀有度/价值裁定, 规则 vs 量化公式待定; 矩阵: 千问token plan→qwen3.8-max/GLM5.2, 火山coding→kimi2.7/GLM5.2, DeepSeek按量)",
-    "R6: 成本分摊到任务/项目维度 (usage log 增加 task_id 关联)",
     "R7: token 包到期/额度预警推送 Bot 通道",
     "③: 多主机端到端验证 (待用户完成 UI 配置 + key 测试后执行)"
   ],
-  "iteration_count": 17,
-  "total_files_modified": 68,
+  "iteration_count": 18,
+  "total_files_modified": 75,
   "last_error": "",
-  "notes": "2026-08-13 会话完成九项迭代: (1) P0-auth: mesh token 节点间认证接线; (2) P0-secretary: PM 线程消息裁剪 + 状态上下文增强 + delete_task 收尾清理; (3) P0-pm-memory: 任务记忆驱动规划 + 修复记忆记录缺陷; (4) R1-resources: 模型资源管理 (资源池抽象 + 统一出口记账 + 路由过滤 + 幂等告警 + 未配置 no-op); (5) R2-fixes: M1-M4 遗留缺陷批量修复 (端点校验/端口竞态/检测统一/HTML分片); (6) R2-balance-probe: 资源余额自动探测 (balance_probe.py 适配器框架: SiliconFlow/DeepSeek/Moonshot/智谱 4 家已查证 API + 别名归一化 + unsupported 引导提示 (OpenAI 需 admin key/火山阿里需 AK/SK); ModelResourceManager.probe_balances 集成 (余额 0 自动 exhausted 供路由剔除 + summarize 附余额); CLI --probe + POST /api/resources/probe + Web 探测余额按钮/余额列)。验证: 编译 OK + 专项 19/19 (mock 各家响应/降级路径/集成) + 44 单测全过 + CLI 冒烟。(7) R3-cross-host-report: Worker 跨主机用量上报聚合到 Secretary (DB 迁移 v2 加 usage_id 幂等键/reported 游标 + insert 幂等写入; ModelResourceManager 后台上报线程 (批量 POST + 失败不推游标离线重试 + secretary_url 配置/运行时注入双通道); /api/resources/usage 扩展批量 records + usage_id 去重; worker.py 注册成功自动注入 + start-pm 注入; CLI --report 手动触发)。验证: 专项 20/20 (含旧库迁移 v2/幂等/离线重试/端点批量) + 44 单测 + CLI 冒烟; 修复 1 个验证中发现的真实缺陷 (部分唯一索引在迁移前执行导致旧库建索引失败)。(8) R4-config-ui: 资源配置 UI 化 (用户诉求①②: 免手工编辑 yaml + 一键测 key): ModelResource 增 api_key 直填字段 (文件已 gitignore) + probe_resource 直填优先于 env; load() 热重载安全 (停旧上报线程/重置动态状态); 模块级 read_config_data/validate_config/save_config (备份 .bak); API 三端点 GET/POST /api/resources/config (UI 字符串规范化 + 校验 400 + 保存后热重载) + POST /api/resources/test-key; Web 配置向导 (资源池卡片编辑/模型候选点选/一键测 key/保存生效)。验证: 专项 20/20 + 44 单测; 修复 1 个真实缺陷 (probe_balances 过滤条件只看 api_key_env, 直填 key 的池被跳过)。用户④ (多 key 轮换策略 + plan 可用模型矩阵) 已沉淀记忆并列入 R5 渐进开发。(9) T1-ui-change-checklist: UI 改动待检机制 (用户反馈①配置按钮无响应排查: Browser 实测功能正常, 根因为浏览器缓存旧页面 → dashboard 响应加 Cache-Control no-cache 根治; test_bug 优化: 新增 ui_change_log.py 登记工具 (add/list/check 三命令, UI-xxx 自动递增, 未检测→检测通过/失败状态流) + run_loop 接入 (STATUS_MAP 三新状态/报告待检区块/--ui-pending/检测失败计入健康分) + ui_tests 尾部待检提醒; 创建 .qoder/skills/ui-change-checklist 技能: UI 改动后必须登记未检测项并浏览器实测后标记。验证: ui_tests 9/9 + 全流程冒烟 + 报告新统计行; R4 向导补登 UI-022 并标记检测通过。"
+  "notes": "2026-08-13~14 会话完成十项迭代: (1) P0-auth: mesh token 节点间认证接线; (2) P0-secretary: PM 线程消息裁剪 + 状态上下文增强 + delete_task 收尾清理; (3) P0-pm-memory: 任务记忆驱动规划 + 修复记忆记录缺陷; (4) R1-resources: 模型资源管理 (资源池抽象 + 统一出口记账 + 路由过滤 + 幂等告警 + 未配置 no-op); (5) R2-fixes: M1-M4 遗留缺陷批量修复 (端点校验/端口竞态/检测统一/HTML分片); (6) R2-balance-probe: 资源余额自动探测 (balance_probe.py 适配器框架: SiliconFlow/DeepSeek/Moonshot/智谱 4 家已查证 API + 别名归一化 + unsupported 引导提示 (OpenAI 需 admin key/火山阿里需 AK/SK); ModelResourceManager.probe_balances 集成 (余额 0 自动 exhausted 供路由剔除 + summarize 附余额); CLI --probe + POST /api/resources/probe + Web 探测余额按钮/余额列)。验证: 编译 OK + 专项 19/19 (mock 各家响应/降级路径/集成) + 44 单测全过 + CLI 冒烟。(7) R3-cross-host-report: Worker 跨主机用量上报聚合到 Secretary (DB 迁移 v2 加 usage_id 幂等键/reported 游标 + insert 幂等写入; ModelResourceManager 后台上报线程 (批量 POST + 失败不推游标离线重试 + secretary_url 配置/运行时注入双通道); /api/resources/usage 扩展批量 records + usage_id 去重; worker.py 注册成功自动注入 + start-pm 注入; CLI --report 手动触发)。验证: 专项 20/20 (含旧库迁移 v2/幂等/离线重试/端点批量) + 44 单测 + CLI 冒烟; 修复 1 个验证中发现的真实缺陷 (部分唯一索引在迁移前执行导致旧库建索引失败)。(8) R4-config-ui: 资源配置 UI 化 (用户诉求①②: 免手工编辑 yaml + 一键测 key): ModelResource 增 api_key 直填字段 (文件已 gitignore) + probe_resource 直填优先于 env; load() 热重载安全 (停旧上报线程/重置动态状态); 模块级 read_config_data/validate_config/save_config (备份 .bak); API 三端点 GET/POST /api/resources/config (UI 字符串规范化 + 校验 400 + 保存后热重载) + POST /api/resources/test-key; Web 配置向导 (资源池卡片编辑/模型候选点选/一键测 key/保存生效)。验证: 专项 20/20 + 44 单测; 修复 1 个真实缺陷 (probe_balances 过滤条件只看 api_key_env, 直填 key 的池被跳过)。用户④ (多 key 轮换策略 + plan 可用模型矩阵) 已沉淀记忆并列入 R5 渐进开发。(9) T1-ui-change-checklist: UI 改动待检机制 (用户反馈①配置按钮无响应排查: Browser 实测功能正常, 根因为浏览器缓存旧页面 → dashboard 响应加 Cache-Control no-cache 根治; test_bug 优化: 新增 ui_change_log.py 登记工具 (add/list/check 三命令, UI-xxx 自动递增, 未检测→检测通过/失败状态流) + run_loop 接入 (STATUS_MAP 三新状态/报告待检区块/--ui-pending/检测失败计入健康分) + ui_tests 尾部待检提醒; 创建 .qoder/skills/ui-change-checklist 技能: UI 改动后必须登记未检测项并浏览器实测后标记。验证: ui_tests 9/9 + 全流程冒烟 + 报告新统计行; R4 向导补登 UI-022 并标记检测通过。(10) R6-cost-attribution: 成本分摊到任务维度: DB 迁移 v3 (resource_usage_log 加 task_id/project_id + 部分索引; 索引只放迁移内避免旧库炸 — 首次实施误放 executescript 致用户真实启动崩溃, 已修复); 线程级归因上下文 set_usage_context (agent_runtime.execute 入口从 parent_task_id 注入, 底层 LLM 记账签名零侵入); 上报链路 records 透传归因 + /api/resources/usage 接收透传; GET /api/resources/cost 聚合端点 (query_cost_by_task GROUP BY task_id); Web 资源面板新增成本分摊表。验证: 专项 22/22 (v2旧库迁移/幂等/上下文注入与线程隔离/上报payload/端点) + 44 单测 + Browser 实测 UI-023 (发现并修复真实缺陷: 资源池空早退 return 跳过成本表渲染 → finally)。"
 }

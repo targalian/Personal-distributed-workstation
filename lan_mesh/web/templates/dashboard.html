@@ -586,6 +586,13 @@
     每次 LLM 调用自动记账; 资源耗尽/过期/暂停后相关模型自动从路由候选中剔除。
     “探测余额”自动调用服务商余额 API (SiliconFlow/DeepSeek/Moonshot/智谱), 未支持的服务商在控制台查看。
   </div>
+  <div class="stitle">💰 成本分摊 (按任务)</div>
+  <div class="table-wrap">
+  <table class="fleet-table">
+    <thead><tr><th>任务</th><th>项目</th><th>调用次数</th><th>Tokens</th><th>成本</th><th>最近记账</th></tr></thead>
+    <tbody id="cost-body"></tbody>
+  </table>
+  </div>
 </div>
 
 <!-- 面板: Station Director (默认显示) -->
@@ -1137,6 +1144,33 @@ async function refreshResources(){
         <td>${balTxt}</td>
         <td>${esc(res.status||'')}</td>
         <td style="color:var(--dim)">${esc(res.note||'')}</td>
+      </tr>`;
+    }).join('');
+  }catch(e){console.error(e);}
+  finally{refreshCostByTask();}  // 资源池为空的早退分支也必须刷新成本表
+}
+async function refreshCostByTask(){
+  // R6: 成本分摊聚合 (按 task_id 分组)
+  const body=document.getElementById('cost-body');
+  if(!body)return;
+  try{
+    const r=await apiFetch('/api/resources/cost');const d=await r.json();
+    const items=d.items||[];
+    if(!items.length){
+      body.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--dim);padding:16px">暂无记账记录</td></tr>';
+      return;
+    }
+    body.innerHTML=items.map(it=>{
+      const tid=it.task_id?esc(it.task_id):'<span style="color:var(--dim)">未归因 (聊天/系统调用)</span>';
+      const cost=parseFloat(it.cost||0);
+      const costTxt=cost>0?fmtMoney(cost):'<span style="color:var(--dim)">'+Number(it.tokens||0).toLocaleString()+' tok</span>';
+      return `<tr>
+        <td><b>${tid}</b></td>
+        <td style="color:var(--dim)">${esc(it.project_id||'-')}</td>
+        <td>${it.calls||0}</td>
+        <td>${Number(it.tokens||0).toLocaleString()}</td>
+        <td>${costTxt}</td>
+        <td style="color:var(--dim)">${fmtTime(it.last_at)}</td>
       </tr>`;
     }).join('');
   }catch(e){console.error(e);}

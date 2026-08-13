@@ -19,7 +19,7 @@ logger = get_logger("database")
 # 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
 # 迁移函数签名: (conn: sqlite3.Connection) -> None
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -69,10 +69,28 @@ def _migration_v2(conn: sqlite3.Connection):
         pass
 
 
+def _migration_v3(conn: sqlite3.Connection):
+    """迁移 v3: resource_usage_log 增加 task_id/project_id 成本归因列 (R6)。"""
+    for col in ("task_id", "project_id"):
+        try:
+            conn.execute(f"ALTER TABLE resource_usage_log "
+                         f"ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+    try:
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_resource_usage_task
+                ON resource_usage_log(task_id) WHERE task_id != ''
+        """)
+    except sqlite3.OperationalError:
+        pass
+
+
 # 迁移注册表: version → 迁移函数
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
     2: _migration_v2,
+    3: _migration_v3,
 }
 
 
@@ -329,6 +347,7 @@ class Database:
 
             -- R1: 模型资源用量日志 (每次 LLM 调用一行, 可审计可聚合)
             -- R3: usage_id 幂等键 (跨主机上报去重), reported 上报游标
+            -- R6: task_id/project_id 成本归因
             CREATE TABLE IF NOT EXISTS resource_usage_log (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 resource_id     TEXT NOT NULL DEFAULT '',
@@ -339,11 +358,15 @@ class Database:
                 cost            REAL NOT NULL DEFAULT 0,
                 created_at      REAL NOT NULL DEFAULT 0,
                 usage_id        TEXT NOT NULL DEFAULT '',
-                reported        INTEGER NOT NULL DEFAULT 0
+                reported        INTEGER NOT NULL DEFAULT 0,
+                task_id         TEXT NOT NULL DEFAULT '',
+                project_id      TEXT NOT NULL DEFAULT ''
             );
 
             CREATE INDEX IF NOT EXISTS idx_resource_usage_rid_ts
                 ON resource_usage_log(resource_id, created_at);
+            -- 注意: task_id 部分索引只能建在 _migration_v3 中
+            -- (executescript 先于迁移执行, 旧库无 task_id 列会炸)
 
             -- Graph Engine: 图执行检查点表
             CREATE TABLE IF NOT EXISTS graph_checkpoints (
@@ -1426,11 +1449,13 @@ class Database:
     def insert_resource_usage(self, resource_id: str, model_id: str,
                               plan_type: str, input_tokens: int,
                               output_tokens: int, cost: float,
-                              usage_id: str = "") -> bool:
+                              usage_id: str = "", task_id: str = "",
+                              project_id: str = "") -> bool:
         """写入一条 LLM 调用用量记录。
 
         Args:
             usage_id: 幂等键 (R3 跨主机上报去重); 非空且已存在 → 跳过。
+            task_id/project_id: 成本归因 (R6); 留空表示无归因上下文。
 
         Returns:
             是否实际写入 (重复上报返回 False)
@@ -1445,10 +1470,11 @@ class Database:
         conn.execute("""
             INSERT INTO resource_usage_log
                 (resource_id, model_id, plan_type, input_tokens, output_tokens,
-                 cost, created_at, usage_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 cost, created_at, usage_id, task_id, project_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (resource_id, model_id, plan_type, int(input_tokens),
-              int(output_tokens), cost, time.time(), usage_id))
+              int(output_tokens), cost, time.time(), usage_id,
+              task_id, project_id))
         conn.commit()
         return True
 
@@ -1456,7 +1482,8 @@ class Database:
         """查询未上报 Secretary 的用量记录 (R3 跨主机上报)。"""
         conn = self._get_conn()
         rows = conn.execute("""
-            SELECT id, usage_id, model_id, input_tokens, output_tokens
+            SELECT id, usage_id, model_id, input_tokens, output_tokens,
+                   task_id, project_id
             FROM resource_usage_log
             WHERE reported = 0
             ORDER BY id ASC LIMIT ?
@@ -1489,6 +1516,28 @@ class Database:
             WHERE resource_id = ? AND created_at >= ?
         """, (resource_id, since_ts)).fetchone()
         return {"tokens": row["tokens"], "cost": row["cost"]}
+
+    def query_cost_by_task(self, limit: int = 100) -> list:
+        """R6: 按 task_id 聚合成本分摊 (含未归因汇总行)。
+
+        Returns:
+            [{"task_id", "project_id", "calls", "tokens", "cost",
+              "last_at"}] 按 cost 降序; 无归因记录 task_id 为空串。
+        """
+        conn = self._get_conn()
+        rows = conn.execute("""
+            SELECT task_id,
+                   MAX(project_id) AS project_id,
+                   COUNT(*) AS calls,
+                   COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens,
+                   COALESCE(SUM(cost), 0) AS cost,
+                   MAX(created_at) AS last_at
+            FROM resource_usage_log
+            GROUP BY task_id
+            ORDER BY cost DESC, tokens DESC
+            LIMIT ?
+        """, (int(limit),)).fetchall()
+        return [dict(r) for r in rows]
 
     # ── Graph Checkpoint CRUD ───────────────────────────────────
 

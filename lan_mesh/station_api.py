@@ -1159,9 +1159,11 @@ def create_station_router(controller) -> APIRouter:
     async def record_model_usage(payload: dict):
         """记录 LLM 调用消耗 (模型 → 资源池自动匹配)。
 
-        单条: {model, input_tokens, output_tokens, usage_id?}
+        单条: {model, input_tokens, output_tokens, usage_id?,
+            task_id?, project_id?}
         批量 (R3 Worker 上报): {records: [{usage_id, model,
-            input_tokens, output_tokens}, ...]} — usage_id 幂等去重。
+            input_tokens, output_tokens, task_id?, project_id?}, ...]}
+            — usage_id 幂等去重。
         """
         _check_secretary()
         from .model_resources import record_usage_global
@@ -1176,6 +1178,8 @@ def create_station_router(controller) -> APIRouter:
                     rec.get("input_tokens", 0),
                     rec.get("output_tokens", 0),
                     usage_id=str(rec.get("usage_id", "")),
+                    task_id=str(rec.get("task_id", "")),
+                    project_id=str(rec.get("project_id", "")),
                 )
                 if res.get("duplicate"):
                     duplicate += 1
@@ -1188,7 +1192,25 @@ def create_station_router(controller) -> APIRouter:
             payload.get("input_tokens", 0),
             payload.get("output_tokens", 0),
             usage_id=str(payload.get("usage_id", "")),
+            task_id=str(payload.get("task_id", "")),
+            project_id=str(payload.get("project_id", "")),
         )
+
+    @router.get("/api/resources/cost")
+    async def get_cost_by_task(limit: int = 100):
+        """R6: 成本分摊聚合 — 按 task_id 分组统计调用次数/token/金额。
+
+        无归因记录 task_id 为空串 (前端展示为「未归因」)。
+        """
+        _check_secretary()
+        if not controller.db:
+            return {"enabled": False, "items": []}
+        try:
+            items = controller.db.query_cost_by_task(
+                limit=max(1, min(int(limit or 100), 500)))
+        except Exception:
+            items = []  # 旧库未迁移等异常 → 降级空列表
+        return {"enabled": True, "items": items}
 
     @router.post("/api/resources/probe")
     async def probe_model_balances():
