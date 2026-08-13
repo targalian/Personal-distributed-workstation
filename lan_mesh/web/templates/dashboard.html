@@ -1198,7 +1198,9 @@ async function showResourceConfig(){
     <datalist id="res-providers">${providers.map(p=>`<option value="${esc(p)}">`).join('')}</datalist>
     <div class="modal-sec"><h3>全局选项</h3>
       <div class="form-row"><label>严格模式</label><input type="checkbox" id="rc-strict" ${data.strict?'checked':''}> <span style="color:var(--dim);font-size:12px">开启后未关联资源池的模型将被禁用</span></div>
-      <div class="form-row"><label>Secretary 地址</label><input id="rc-secretary" value="${esc(data.secretary_url||'')}" placeholder="留空: 自动发现 (仅 Worker 主机需填)"></div>
+      <div class="form-row"><label>Secretary 地址</label><input id="rc-secretary" value="${esc(data.secretary_url||'')}" placeholder="留空: 自动发现注入 (多数情况无需填写)">
+        <div style="color:var(--dim);font-size:12px;line-height:1.6;margin-top:4px">仅多主机场景下、自动发现不可用时才需填写 (形如 http://192.168.x.x:45470): 本机用量将周期性上报到该 Secretary 汇总。<br>单机/Secretary 本机运行 → 留空即可, 记账已直接发生在本机。</div>
+      </div>
     </div>
     <div class="modal-sec"><h3>资源池 (<span id="rc-count">0</span>)</h3>
       <div id="rc-pools"></div>
@@ -1223,7 +1225,7 @@ function resPoolRow(p,i){
       <span class="badge archived" style="cursor:pointer" onclick="removeResPool(${i})">🗑️ 删除</span>
     </div>
     <div class="form-row"><label>ID</label><input id="rp-id-${i}" value="${esc(p.id||'')}" placeholder="如 deepseek-token-pack"></div>
-    <div class="form-row"><label>服务商</label><input id="rp-provider-${i}" list="res-providers" value="${esc(p.provider||'')}" placeholder="deepseek / siliconflow ..." onchange="renderResPools()"></div>
+    <div class="form-row"><label>服务商</label><input id="rp-provider-${i}" list="res-providers" value="${esc(p.provider||'')}" placeholder="deepseek / siliconflow ..." onchange="collectAndRender()"></div>
     <div class="form-row"><label>计划类型</label><select id="rp-plan-${i}">
       <option value="payg" ${p.plan_type==='payg'?'selected':''}>按量付费 (预算金额)</option>
       <option value="token_plan" ${p.plan_type==='token_plan'?'selected':''}>token 包 (一次性额度)</option>
@@ -1241,13 +1243,13 @@ function resPoolRow(p,i){
   </div>`;
 }
 function renderResPools(){
-  // 收集当前表单值后重渲染 (provider 变更时刷新模型候选)
-  resPools=collectResPools();
+  // 纯渲染 (不重新收集表单, 避免新加空行被过滤)
   document.getElementById('rc-pools').innerHTML=resPools.length?resPools.map((p,i)=>resPoolRow(p,i)).join(''):'<p style="color:var(--dim);font-size:13px">尚未添加资源池</p>';
   document.getElementById('rc-count').textContent=resPools.length;
 }
-function collectResPools(){
-  return resPools.map((p,i)=>{
+function collectResPools(keepEmpty){
+  // keepEmpty=true 时保留空行 (编辑中); 保存时才过滤全空行
+  const rows=resPools.map((p,i)=>{
     const g=id=>{const el=document.getElementById(id);return el?el.value:(p[ id.replace(/^rp-(\w+)-\d+$/,'$1') ]??'');};
     const el=id=>document.getElementById(id);
     if(!el('rp-id-'+i))return p;  // 行未渲染 (首次)
@@ -1256,10 +1258,12 @@ function collectResPools(){
       models:g(`rp-models-${i}`),api_key:g(`rp-key-${i}`),api_key_env:g(`rp-keyenv-${i}`),
       note:g(`rp-note-${i}`),status:p.status||'active',alert_threshold:p.alert_threshold??0.8,
       billing_period:p.billing_period,expire_at:p.expire_at,renew_at:p.renew_at,period_days:p.period_days};
-  }).filter(p=>p.id||p.provider||p.quota);
+  });
+  return keepEmpty?rows:rows.filter(p=>p.id||p.provider||p.quota);
 }
-function addResPool(){resPools=collectResPools();resPools.push({});renderResPools();}
-function removeResPool(i){resPools=collectResPools();resPools.splice(i,1);renderResPools();}
+function collectAndRender(){resPools=collectResPools(true);renderResPools();}
+function addResPool(){resPools=collectResPools(true);resPools.push({plan_type:'payg',unit:'cny',status:'active',alert_threshold:0.8});renderResPools();}
+function removeResPool(i){resPools=collectResPools(true);resPools.splice(i,1);renderResPools();}
 function appendResModel(i,m){const el=document.getElementById('rp-models-'+i);if(!el)return;const cur=el.value.trim();el.value=cur?(cur.replace(/,?\s*$/,', ')+m):m;}
 async function testResKey(i){
   const provider=(document.getElementById('rp-provider-'+i).value||'').trim();
