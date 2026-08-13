@@ -1349,6 +1349,13 @@ def create_station_router(controller) -> APIRouter:
         _check_secretary()
         return {"events": recent_events(max(1, min(int(n or 20), 100)))}
 
+    @router.get("/api/roles")
+    async def get_role_cards():
+        """M6: 角色卡摘要 (Secretary/PM/Worker 人格单一事实源, 供 UI/quest 页面展示)。"""
+        _check_secretary()
+        from .role_cards import list_role_cards
+        return {"roles": list_role_cards()}
+
     # ── PM Agent 管理 ──
 
     @router.get("/api/pm")

@@ -14,6 +14,8 @@ Worker 将其注入 AgentRuntime.custom_system_prompt, 覆盖默认技能缓存�
 import json
 from typing import Optional
 
+from .role_cards import PM_CARD
+
 
 # ── 通用基础 Prompt (所有子 Agent 共享) ──────────────────────────
 
@@ -440,7 +442,7 @@ def build_aggregation_prompt(
         else:
             dep_lines.append(f"  - {d.get('name')} (无前序依赖)")
 
-    return f"""你是项目经理 Agent。所有子任务已完成, 请按依赖顺序聚合结果。
+    return f"""{PM_CARD['identity']}所有子任务已完成, 请按依赖顺序聚合结果。
 
 # 原始任务
 - 名称: {task_name}

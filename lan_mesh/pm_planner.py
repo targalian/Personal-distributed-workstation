@@ -15,6 +15,7 @@ from typing import Optional
 
 from .logger import get_logger
 from .pm_state import PMState
+from .role_cards import PM_CARD
 
 logger = get_logger("pm.planner")
 
@@ -113,7 +114,7 @@ class PMPlanner:
             f"\n## 历史任务经验 (同类任务, 来自 task_memory 表)\n{memory_hint}\n"
             if memory_hint else ""
         )
-        prompt = f"""你是项目经理 Agent。请分析以下任务并给出架构决策。
+        prompt = f"""{PM_CARD['identity']}请分析以下任务并给出架构决策。
 
 ## 任务信息
 - 名称: {task.get('name', '')}
