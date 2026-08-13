@@ -16,7 +16,7 @@ echo "======================================"
 echo " LAN Mesh Pre-Push 代码审核"
 echo "======================================"
 
-# ── 解析审核基线（双仓库: master→gitee/master, en→origin/main）──
+# ── 解析审核基线（双仓库: master→gitee/master + origin/CN, en→origin/EN）──
 UPSTREAM=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null || true)
 if [ -z "$UPSTREAM" ] || ! git rev-parse --verify --quiet "$UPSTREAM" >/dev/null; then
     UPSTREAM="gitee/master"

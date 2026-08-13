@@ -191,7 +191,8 @@ scope: `pm`, `runtime`, `router`, `api`, `ws`, `ui`, `config`, `discovery`, `db`
 | 远程 | 分支映射 | 内容版本 |
 |------|----------|----------|
 | `gitee` | `master` → `master` | 中文 README |
-| `origin` (GitHub) | `en` → `main` | 英文 README（`.gitattributes` merge=ours 保护） |
+| `origin` (GitHub) | `master` → `CN` | 中文 README |
+| `origin` (GitHub) | `en` → `EN` | 英文 README（`.gitattributes` merge=ours 保护） |
 
 在 `master` 提交后，运行同步脚本一键合并到 `en` 并双端推送：
 
@@ -208,7 +209,7 @@ scope: `pm`, `runtime`, `router`, `api`, `ws`, `ui`, `config`, `discovery`, `db`
 
 - **commit-msg**: 校验 `<type>(<scope>): <subject>` 格式，不合规则拒绝提交
 - **pre-push**: 7 项自动检查（语法、硬编码密钥、函数长度、docstring、类型标注、日志格式、commit 格式）
-  - 审核基线按当前分支上游自动解析（master→`gitee/master`，en→`origin/main`）
+  - 审核基线按当前分支上游自动解析（master→`gitee/master`，en→`origin/EN`）
   - Blocker（语法/密钥）→ 阻止 push
   - Warning（其余）→ 仅提示
 
