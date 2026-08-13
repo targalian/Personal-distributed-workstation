@@ -231,12 +231,15 @@ def probe_balance(provider: str, api_key: str,
 
 
 def probe_resource(pool: dict, timeout: float = DEFAULT_TIMEOUT) -> dict:
-    """按资源池定义探测余额 (池字段: provider / api_key_env)。
+    """按资源池定义探测余额。
 
-    api_key_env 为空或未设置环境变量 → 返回未配置提示。
+    Key 来源优先级: api_key 直填值 (R4, 文件已 gitignore) >
+    api_key_env 环境变量。两者均空 → 返回未配置提示。
     """
-    env_name = (pool.get("api_key_env") or "").strip()
-    api_key = os.environ.get(env_name, "") if env_name else ""
+    api_key = (pool.get("api_key") or "").strip()
+    if not api_key:
+        env_name = (pool.get("api_key_env") or "").strip()
+        api_key = os.environ.get(env_name, "") if env_name else ""
     result = probe_balance(pool.get("provider", ""), api_key, timeout)
     result["resource_id"] = pool.get("id", "")
     return result

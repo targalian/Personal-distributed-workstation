@@ -1201,6 +1201,101 @@ def create_station_router(controller) -> APIRouter:
         from .model_resources import probe_balances_global
         return probe_balances_global()
 
+    # ── R4: 资源配置向导 (UI 化, 免手工编辑 yaml) ──────────────
+
+    @router.get("/api/resources/config")
+    async def get_resources_config():
+        """读取资源配置 (UI 配置向导): 当前配置 + 模型目录 + 探测能力。"""
+        _check_secretary()
+        from pathlib import Path
+        from .balance_probe import UNSUPPORTED_HINTS, supported_providers
+        from .config import load_model_pool
+        from .model_resources import read_config_data
+        target = Path(__file__).parent / "resources.yaml"
+        cfg = read_config_data(target)
+        catalog: dict = {}
+        try:
+            pool = load_model_pool()
+            for e in (pool.models or []):
+                catalog.setdefault(e.provider, []).append(e.id)
+        except Exception:
+            pass
+        return {
+            "exists": cfg["exists"], "data": cfg["data"],
+            "parse_error": cfg["error"],
+            "catalog": [{"provider": p, "models": m}
+                        for p, m in sorted(catalog.items())],
+            "probe_supported": supported_providers(),
+            "probe_hints": UNSUPPORTED_HINTS,
+        }
+
+    @router.post("/api/resources/config")
+    async def save_resources_config(payload: dict):
+        """保存资源配置并热重载 (UI 配置向导)。
+
+        校验不通过 → 400 携带具体错误; 保存前自动备份 .bak。
+        """
+        _check_secretary()
+        from pathlib import Path
+        from .config import load_model_pool
+        from .model_resources import (init_resource_manager, save_config,
+                                      validate_config)
+        data = payload.get("config")
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=400, detail="缺少 config 字段")
+        # 全局数值字段规范化
+        if data.get("report_interval") not in (None, ""):
+            try:
+                data["report_interval"] = float(data["report_interval"])
+            except (TypeError, ValueError):
+                data.pop("report_interval", None)
+        if not (data.get("secretary_url") or "").strip():
+            data.pop("secretary_url", None)
+        # 规范化: models 逗号分隔字符串 → 列表; 数值字段强转 (UI 输入兼容)
+        for item in data.get("resources") or []:
+            if not isinstance(item, dict):
+                continue
+            if isinstance(item.get("models"), str):
+                item["models"] = [m.strip()
+                                  for m in item["models"].split(",")
+                                  if m.strip()]
+            for num_key in ("quota", "alert_threshold", "expire_at",
+                            "renew_at", "period_days"):
+                if item.get(num_key) in (None, ""):
+                    item.pop(num_key, None)
+                    continue
+                try:
+                    item[num_key] = float(item[num_key]) \
+                        if num_key in ("quota", "alert_threshold",
+                                       "expire_at", "renew_at") \
+                        else int(float(item[num_key]))
+                except (TypeError, ValueError):
+                    pass  # 留给 validate_config 报错
+            if not (item.get("api_key") or "").strip():
+                item.pop("api_key", None)  # 空 key 不落盘
+        errors = validate_config(data)
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors))
+        target = Path(__file__).parent / "resources.yaml"
+        saved = save_config(target, data)
+        if not saved.get("ok"):
+            raise HTTPException(status_code=500,
+                                detail=f"保存失败: {saved.get('error')}")
+        pool = load_model_pool()
+        mgr = init_resource_manager(
+            target, pool.models if pool.models else None, controller.db)
+        return {"ok": True, "enabled": mgr.enabled,
+                "pools": len(mgr.list_resources()),
+                "backup": saved.get("backup", "")}
+
+    @router.post("/api/resources/test-key")
+    async def test_resource_key(payload: dict):
+        """单个 API Key 有效性测试 + 余额查询 (UI 一键测试)。"""
+        _check_secretary()
+        from .balance_probe import probe_balance
+        return probe_balance(payload.get("provider", ""),
+                             payload.get("api_key", ""))
+
     # ── PM Agent 管理 ──
 
     @router.get("/api/pm")

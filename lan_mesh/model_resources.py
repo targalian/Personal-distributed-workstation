@@ -51,6 +51,8 @@ class ModelResource:
     renew_at: float = 0.0                     # coding_plan 续费锚点 (unix ts)
     period_days: int = 30                     # renew 周期窗口天数
     api_key_env: str = ""                     # 关联 API Key 环境变量名 (文档用途)
+    api_key: str = ""                         # API Key 直填值 (R4, 仅余额探测用;
+                                              # resources.yaml 已 gitignore)
     models: list = field(default_factory=list)  # 关联模型 id 列表 (空 = 按 provider 匹配)
     alert_threshold: float = 0.8              # 使用率告警阈值 (0~1)
     status: str = "active"                    # active | paused | exhausted
@@ -108,6 +110,10 @@ class ModelResourceManager:
             是否成功启用
         """
         self._db = db
+        # R4: 热重载安全 — 先停旧上报线程, 重置动态状态
+        self.stop_reporter()
+        self._alerted = set()
+        self._balances = {}
         if pool_entries:
             for e in pool_entries:
                 self._prices[e.id] = (e.cost_input_per_1k, e.cost_output_per_1k)
@@ -294,8 +300,8 @@ class ModelResourceManager:
     def probe_balances(self, timeout: float = 10.0) -> dict:
         """探测所有资源池的服务商余额 (R2, 自动获取)。
 
-        仅探测配置了 api_key_env 且环境变量有值的池; 结果缓存到
-        self._balances, 供 summarize/API 展示。
+        仅探测配置了 api_key (直填) 或 api_key_env (环境变量) 的池;
+        结果缓存到 self._balances, 供 summarize/API 展示。
 
         Returns:
             {"probed": int, "supported": int, "results": {rid: result}}
@@ -305,13 +311,16 @@ class ModelResourceManager:
         results: dict[str, dict] = {}
         probed = supported = 0
         for rid, pool in self._resources.items():
-            env_name = (pool.api_key_env or "").strip()
-            if not env_name:
+            # R4: api_key 直填 或 api_key_env 任一有值即可探测
+            has_key = ((pool.api_key or "").strip()
+                       or (pool.api_key_env or "").strip())
+            if not has_key:
                 continue
             probed += 1
             res = probe_resource({
                 "id": rid, "provider": pool.provider,
                 "api_key_env": pool.api_key_env,
+                "api_key": pool.api_key,
             }, timeout=timeout)
             results[rid] = res
             if res.get("supported"):
@@ -434,6 +443,89 @@ def init_resource_manager(yaml_path: Union[str, Path] = None,
     if yaml_path:
         _mgr.load(yaml_path, pool_entries, db)
     return _mgr
+
+
+# ── R4: 配置读写 (UI 配置向导用) ───────────────────────────────
+
+def read_config_data(yaml_path: Union[str, Path]) -> dict:
+    """读取 resources.yaml 原始配置 (供 UI 配置向导回显)。
+
+    Returns:
+        {"exists": bool, "data": dict, "error": str}
+    """
+    path = Path(yaml_path)
+    if not path.is_file():
+        return {"exists": False, "data": {}, "error": ""}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return {"exists": True, "data": data, "error": ""}
+    except Exception as e:
+        return {"exists": True, "data": {}, "error": str(e)}
+
+
+def validate_config(data: dict) -> list:
+    """保存前校验资源配置, 返回错误列表 (空 = 合法)。"""
+    errors = []
+    if not isinstance(data, dict):
+        return ["配置必须是键值结构"]
+    resources = data.get("resources") or []
+    if not isinstance(resources, list):
+        return ["resources 必须是列表"]
+    seen = set()
+    for i, item in enumerate(resources):
+        tag = f"第 {i + 1} 个资源池"
+        if not isinstance(item, dict):
+            errors.append(f"{tag}: 格式非法")
+            continue
+        rid = str(item.get("id", "")).strip()
+        if not rid:
+            errors.append(f"{tag}: 缺少 id")
+        elif rid in seen:
+            errors.append(f"{tag}: id '{rid}' 重复")
+        seen.add(rid)
+        if item.get("plan_type") not in VALID_PLAN_TYPES:
+            errors.append(f"{tag}: plan_type 必须是 "
+                          f"{'/'.join(VALID_PLAN_TYPES)}")
+        try:
+            if float(item.get("quota", 0)) < 0:
+                errors.append(f"{tag}: quota 不能为负数")
+        except (TypeError, ValueError):
+            errors.append(f"{tag}: quota 必须是数字")
+        thr = item.get("alert_threshold", 0.8)
+        try:
+            if not 0.0 <= float(thr) <= 1.0:
+                errors.append(f"{tag}: alert_threshold 必须在 0~1")
+        except (TypeError, ValueError):
+            errors.append(f"{tag}: alert_threshold 必须是数字")
+        if item.get("status", "active") not in ("active", "paused",
+                                                 "exhausted"):
+            errors.append(f"{tag}: status 必须是 active/paused/exhausted")
+    return errors
+
+
+def save_config(yaml_path: Union[str, Path], data: dict) -> dict:
+    """保存配置到 resources.yaml (先备份 .bak)。
+
+    Returns:
+        {"ok": bool, "error": str, "backup": str}
+    """
+    path = Path(yaml_path)
+    backup = ""
+    try:
+        if path.is_file():
+            backup = str(path) + ".bak"
+            path.replace(backup)
+        header = ("# 模型资源管理配置 (由 Web 配置向导生成, 可手工编辑)\n"
+                  "# 本文件已在 .gitignore 中排除, 不会提交到版本库\n")
+        path.write_text(
+            header + yaml.safe_dump(data, allow_unicode=True,
+                                    sort_keys=False),
+            encoding="utf-8")
+        logger.info("[resources] 配置已保存: %s", path.name)
+        return {"ok": True, "error": "", "backup": backup}
+    except Exception as e:
+        logger.error("[resources] 配置保存失败: %s", e)
+        return {"ok": False, "error": str(e), "backup": backup}
 
 
 def record_usage_global(model_id: str, input_tokens: int, output_tokens: int,
