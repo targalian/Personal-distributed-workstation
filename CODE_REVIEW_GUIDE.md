@@ -435,6 +435,8 @@ feat(pm): 实现子任务依赖感知拓扑分发
 
 **Blocker 项阻止 push，Warning 项仅提示不阻止。**
 
+**审核基线：** 按当前分支上游自动解析（`master` → `gitee/master`，`en` → `origin/main`），无上游时回退 `gitee/master` 或 `HEAD~1`。
+
 ### 12.3 启用方式
 
 **自动启用：** 运行启动脚本时自动配置：
@@ -462,3 +464,22 @@ Git Hooks 执行的是规则化静态检查。对于语义级深度审核，在 
 ```
 
 AI 审核覆盖 PM Agent 六项生产级要求、架构分层合规性等 Hooks 无法自动检查的内容。
+
+### 12.5 双仓库上库（Gitee 中文 + GitHub 英文）
+
+项目同时维护两个远程仓库，上库必须双端推送：
+
+| 远程 | 分支映射 | 内容版本 |
+|------|----------|----------|
+| `gitee` | `master` → `master` | 中文 README |
+| `origin` (GitHub) | `en` → `main` | 英文 README |
+
+**上库流程：** 在 `master` 提交后运行：
+
+```powershell
+.\scripts\sync_push.ps1
+```
+
+脚本自动：检查工作区干净 → 合并 `master` 到 `en`（英文 README 由 `en` 分支 `.gitattributes` 的 `merge=ours` 属性保护，不会被中文覆盖）→ 推送 `gitee master` → 推送 `origin en:main`。
+
+**注意：** 两次推送都会触发 pre-push 钩子，任一端 Blocker 不通过即中止，需修复后重跑脚本。

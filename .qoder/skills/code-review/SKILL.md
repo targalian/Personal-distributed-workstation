@@ -184,12 +184,31 @@ print(f"使用 Key: {api_key[:8]}...")
 
 scope: `pm`, `runtime`, `router`, `api`, `ws`, `ui`, `config`, `discovery`, `db`
 
+## 双仓库上库流程
+
+项目采用双仓库结构，上库必须同时推送两端：
+
+| 远程 | 分支映射 | 内容版本 |
+|------|----------|----------|
+| `gitee` | `master` → `master` | 中文 README |
+| `origin` (GitHub) | `en` → `main` | 英文 README（`.gitattributes` merge=ours 保护） |
+
+在 `master` 提交后，运行同步脚本一键合并到 `en` 并双端推送：
+
+```powershell
+.\scripts\sync_push.ps1            # 同步合并 + 双端推送
+.\scripts\sync_push.ps1 -SkipMerge # 仅推送，跳过 master -> en 合并
+```
+
+脚本要求工作区干净且在 master 分支。禁止单独 `git push` 到某一端导致双库失联。
+
 ## 自动化 Git Hooks
 
 项目 `.githooks/` 包含两个钩子，运行启动脚本时自动启用：
 
 - **commit-msg**: 校验 `<type>(<scope>): <subject>` 格式，不合规则拒绝提交
 - **pre-push**: 7 项自动检查（语法、硬编码密钥、函数长度、docstring、类型标注、日志格式、commit 格式）
+  - 审核基线按当前分支上游自动解析（master→`gitee/master`，en→`origin/main`）
   - Blocker（语法/密钥）→ 阻止 push
   - Warning（其余）→ 仅提示
 

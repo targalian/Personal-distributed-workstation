@@ -1306,6 +1306,9 @@ def create_station_router(controller) -> APIRouter:
         pool = load_model_pool()
         mgr = init_resource_manager(
             target, pool.models if pool.models else None, controller.db)
+        # R7: 热重载后重新注入预警推送回调 (load 会重置管理器状态)
+        from .model_resources import set_bot_notify_global
+        set_bot_notify_global(controller.bot_gateway.notify)
         return {"ok": True, "enabled": mgr.enabled,
                 "pools": len(mgr.list_resources()),
                 "backup": saved.get("backup", "")}
@@ -1317,6 +1320,15 @@ def create_station_router(controller) -> APIRouter:
         from .balance_probe import probe_balance
         return probe_balance(payload.get("provider", ""),
                              payload.get("api_key", ""))
+
+    @router.post("/api/resources/alerts/check")
+    async def check_resource_alerts():
+        """R7: 手动触发一轮到期/额度预警检查 (返回新推送的预警)。"""
+        _check_secretary()
+        from .model_resources import check_alerts_global, resource_summary
+        pushed = check_alerts_global()
+        return {"pushed": pushed,
+                "active": resource_summary().get("alerts", [])}
 
     # ── PM Agent 管理 ──
 

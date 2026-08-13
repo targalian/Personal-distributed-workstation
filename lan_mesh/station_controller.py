@@ -250,7 +250,8 @@ class StationController:
 
         # R1: 模型资源管理 (resources.yaml 不存在时 no-op, 不影响功能)
         try:
-            from .model_resources import init_resource_manager
+            from .model_resources import (init_resource_manager,
+                                          set_bot_notify_global)
             resources_path = self._find_resources_path()
             if resources_path:
                 init_resource_manager(
@@ -258,6 +259,8 @@ class StationController:
                     model_pool.models if model_pool.models else None,
                     self.db,
                 )
+                # R7: 到期/额度预警推送到 Bot 通道
+                set_bot_notify_global(self.bot_gateway.notify)
         except Exception as e:
             logger.warning("模型资源管理初始化失败 (no-op): %s", e)
 

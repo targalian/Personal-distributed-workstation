@@ -63,6 +63,10 @@ EVENT_TEMPLATES = {
     "task_delivered": "📦 任务交付: {name}\n🆔 {task_id}\n请验收或退回",
     "task_escalated": "🚨 任务升级: {task_name}\n子任务 {failed_subtask} 失败\n错误: {error}\n需要您的决策!",
     "periodic_report": "{summary}",
+    # R7: 资源预警 (三档优先级, 供通道 min_priority 过滤/免打扰)
+    "resource_alert_low": "🔔 资源提醒 [{resource_id}] {message}",
+    "resource_alert": "⚠️ 资源预警 [{resource_id}] {message}",
+    "resource_alert_high": "🚨 资源紧急 [{resource_id}] {message}",
 }
 
 # 事件严重级别 → 决定是否推送（避免低优先级事件打扰）
@@ -84,6 +88,9 @@ EVENT_PRIORITY = {
     "task_delivered": "high",
     "task_escalated": "high",
     "periodic_report": "low",
+    "resource_alert_low": "low",
+    "resource_alert": "normal",
+    "resource_alert_high": "high",
 }
 
 # 事件图标 (聚合消息时使用)
