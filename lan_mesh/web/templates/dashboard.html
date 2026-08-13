@@ -1185,6 +1185,13 @@ async function probeBalances(){
 }
 // ── 资源配置向导 (R4) ──
 let resCatalog=[];let resProbeSupported=[];let resProbeHints={};let resPools=[];
+// 全球模型精选 Top50 (参考榜单, 点击可加入关联模型)
+const RES_TOP_MODELS=['gpt-5.2','gpt-5.2-pro','gpt-5.1','gpt-5.1-codex','o4-pro','claude-opus-4.6','claude-sonnet-4.6','claude-haiku-4.5','claude-opus-4.5','claude-sonnet-4.5','gemini-3-pro','gemini-3-flash','gemini-2.5-pro','gemini-2.5-flash','deepseek-chat','deepseek-reasoner','deepseek-coder','qwen3.8-max','qwen3.5-plus','qwen3-coder','GLM5.2','GLM-5','glm-4.7','kimi2.7','kimi-k2.5','kimi-k2','grok-4.1','grok-4','grok-code-fast','mistral-large-3','mixtral-next','llama-4-maverick','llama-4-scout','command-r-plus','jamba-2-pro','yi-lightning','step-3','minimax-m2','abab-7','hunyuan-turbo','ernie-5.0','spark-5','baichuan-4','doubao-2.0','seed-2.0-pro','internlm-3.5','phi-5','olmo-3','nova-pro','reka-core'];
+function isTokenPlan(t){return t==='token_plan'||t==='coding_plan';}
+// 模型选择弹窗徽章样式 (选中=绿色实框, 未选=淡色虚框)
+const RES_PICK_ON='color:#4ade80;border:1px solid #4ade80;opacity:1';
+const RES_PICK_OFF='opacity:.65;border:1px dashed var(--border)';
+let resWizardHtml='';let resWizardGlobals=null;
 async function showResourceConfig(){
   try{
     const r=await apiFetch('/api/resources/config');const d=await r.json();
@@ -1226,13 +1233,17 @@ function resPoolRow(p,i){
     </div>
     <div class="form-row"><label>ID</label><input id="rp-id-${i}" value="${esc(p.id||'')}" placeholder="如 deepseek-token-pack"></div>
     <div class="form-row"><label>服务商</label><input id="rp-provider-${i}" list="res-providers" value="${esc(p.provider||'')}" placeholder="deepseek / siliconflow ..." onchange="collectAndRender()"></div>
-    <div class="form-row"><label>计划类型</label><select id="rp-plan-${i}">
+    <div class="form-row"><label>计划类型</label><select id="rp-plan-${i}" onchange="collectAndRender()">
       <option value="payg" ${p.plan_type==='payg'?'selected':''}>按量付费 (预算金额)</option>
       <option value="token_plan" ${p.plan_type==='token_plan'?'selected':''}>token 包 (一次性额度)</option>
       <option value="coding_plan" ${p.plan_type==='coding_plan'?'selected':''}>编程订阅 (周期重置)</option></select></div>
-    <div class="form-row"><label>额度</label><input id="rp-quota-${i}" type="number" value="${p.quota??''}" placeholder="按量: 预算金额; token: 额度数">
-      <select id="rp-unit-${i}" style="width:90px"><option value="usd" ${p.unit==='usd'?'selected':''}>USD</option><option value="cny" ${p.unit==='cny'?'selected':''}>CNY</option></select></div>
-    <div class="form-row"><label>关联模型</label><input id="rp-models-${i}" value="${esc((p.models||[]).join(', '))}" placeholder="逗号分隔; 留空=该服务商全部模型"></div>
+    ${isTokenPlan(p.plan_type)?`
+    <div class="form-row"><label>额度</label><input id="rp-quota-${i}" type="number" step="any" value="${p.quota?(Number(p.quota)/1e7):''}" placeholder="单位: 千万 tokens (如 50 = 5亿)">
+      <span style="color:var(--dim);font-size:12px;white-space:nowrap">千万 tokens</span></div>`:`
+    <div class="form-row"><label>额度</label><input id="rp-quota-${i}" type="number" step="any" value="${p.quota??''}" placeholder="预算金额">
+      <select id="rp-unit-${i}" style="width:90px"><option value="usd" ${p.unit==='usd'?'selected':''}>USD</option><option value="cny" ${p.unit==='cny'?'selected':''}>CNY</option></select></div>`}
+    <div class="form-row"><label>关联模型</label><input id="rp-models-${i}" value="${esc((Array.isArray(p.models)?p.models:String(p.models||'').split(',').map(s=>s.trim()).filter(Boolean)).join(', '))}" placeholder="点击 📋 选择按钮挑选模型">
+      <button class="btn" onclick="openModelPicker(${i})">📋 选择</button></div>
     ${modelBadges?`<div style="display:flex;flex-wrap:wrap;gap:4px;margin:-4px 0 6px 0">${modelBadges}</div>`:''}
     <div class="form-row"><label>API Key</label><input id="rp-key-${i}" type="password" value="${esc(p.api_key||'')}" placeholder="填入可一键测试余额 (仅存本机)">
       <button class="btn" onclick="testResKey(${i})">🔍 测试</button></div>
@@ -1253,8 +1264,12 @@ function collectResPools(keepEmpty){
     const g=id=>{const el=document.getElementById(id);return el?el.value:(p[ id.replace(/^rp-(\w+)-\d+$/,'$1') ]??'');};
     const el=id=>document.getElementById(id);
     if(!el('rp-id-'+i))return p;  // 行未渲染 (首次)
-    return {id:g(`rp-id-${i}`),provider:g(`rp-provider-${i}`),plan_type:el(`rp-plan-${i}`).value,
-      quota:g(`rp-quota-${i}`),unit:el(`rp-unit-${i}`).value,
+    const plan=el(`rp-plan-${i}`).value;
+    const tok=isTokenPlan(plan);  // token 类计划: UI 按千万输入, 存储为原始 token 数
+    const qRaw=g(`rp-quota-${i}`);
+    const unitEl=el(`rp-unit-${i}`);
+    return {id:g(`rp-id-${i}`),provider:g(`rp-provider-${i}`),plan_type:plan,
+      quota:tok&&qRaw!==''?Number(qRaw)*1e7:qRaw,unit:tok?'token':(unitEl?unitEl.value:'cny'),
       models:g(`rp-models-${i}`),api_key:g(`rp-key-${i}`),api_key_env:g(`rp-keyenv-${i}`),
       note:g(`rp-note-${i}`),status:p.status||'active',alert_threshold:p.alert_threshold??0.8,
       billing_period:p.billing_period,expire_at:p.expire_at,renew_at:p.renew_at,period_days:p.period_days};
@@ -1265,6 +1280,62 @@ function collectAndRender(){resPools=collectResPools(true);renderResPools();}
 function addResPool(){resPools=collectResPools(true);resPools.push({plan_type:'payg',unit:'cny',status:'active',alert_threshold:0.8});renderResPools();}
 function removeResPool(i){resPools=collectResPools(true);resPools.splice(i,1);renderResPools();}
 function appendResModel(i,m){const el=document.getElementById('rp-models-'+i);if(!el)return;const cur=el.value.trim();el.value=cur?(cur.replace(/,?\s*$/,', ')+m):m;}
+function resPoolSelected(i){
+  const el=document.getElementById('rp-models-'+i);
+  return el?el.value.split(',').map(s=>s.trim()).filter(Boolean):[];
+}
+function openModelPicker(i){
+  resPools=collectResPools(true);
+  const p=resPools[i]||{};
+  const cat=resCatalog.find(c=>c.provider===p.provider);
+  const catModels=cat?(cat.models||[]):[];
+  const selected=resPoolSelected(i);
+  // 保存向导 DOM 与全局选项 (picker 会替换 #modal 内容, 关闭时恢复)
+  resWizardHtml=document.getElementById('modal').innerHTML;
+  resWizardGlobals={strict:document.getElementById('rc-strict')?.checked??false,
+    secretary_url:document.getElementById('rc-secretary')?.value??''};
+  const topModels=RES_TOP_MODELS.filter(m=>!catModels.includes(m));
+  const selSet=new Set(selected);
+  const badge=(m)=>`<span class="badge${selSet.has(m)?' mp-picked':''}" style="cursor:pointer;margin:3px;${selSet.has(m)?RES_PICK_ON:RES_PICK_OFF}" data-model="${esc(m)}" onclick="togglePickModel(this)">${esc(m)}</span>`;
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeModelPicker(${i})">&times;</span>
+  <h2>📋 选择关联模型 — 资源池 #${i+1}</h2>
+  <p style="color:var(--dim);font-size:12px;margin-bottom:8px">点击徽章选中/取消 (已选高亮为绿色), 确认后回填到关联模型输入框</p>
+  <div class="form-row"><input id="mp-filter" placeholder="🔍 过滤模型名..." oninput="filterPickBadges()"></div>
+  <div class="modal-sec"><h3>该服务商目录 (${catModels.length}${cat?'':' — 未识别服务商'})</h3>
+    <div style="display:flex;flex-wrap:wrap">${catModels.map(badge).join('')||'<span style="color:var(--dim);font-size:12px">无目录模型</span>'}</div></div>
+  <div class="modal-sec"><h3>🌐 全球精选 Top${topModels.length} (参考榜单)</h3>
+    <div style="display:flex;flex-wrap:wrap">${topModels.map(badge).join('')}</div></div>
+  <div class="modal-sec" style="display:flex;gap:8px">
+    <button class="btn primary" onclick="confirmPickModels(${i})">✅ 确认选择</button>
+    <button class="btn" onclick="closeModelPicker(${i})">取消</button>
+    <span style="align-self:center;font-size:12px;color:var(--dim)">已选 <b id="mp-count">${selected.length}</b> 个</span>
+  </div>`;
+  document.getElementById('overlay').classList.add('show');
+}
+function togglePickModel(el){
+  const on=el.classList.toggle('mp-picked');
+  el.style.cssText='cursor:pointer;margin:3px;'+(on?RES_PICK_ON:RES_PICK_OFF);
+  const c=document.getElementById('mp-count');if(c)c.textContent=document.querySelectorAll('#modal .badge.mp-picked').length;
+}
+function filterPickBadges(){
+  const q=(document.getElementById('mp-filter').value||'').toLowerCase();
+  document.querySelectorAll('#modal .badge').forEach(b=>{b.style.display=(b.textContent||'').toLowerCase().includes(q)?'':'none';});
+}
+function confirmPickModels(i){
+  const picked=[...document.querySelectorAll('#modal .badge.mp-picked')].map(b=>b.dataset.model);
+  if(resPools[i])resPools[i].models=picked;  // 直接更新内存态, 重渲染后回填输入框
+  closeModelPicker(i);
+}
+function closeModelPicker(i){
+  // 恢复向导 DOM (picker 已替换 #modal) + 全局选项 + 重渲染资源池卡片
+  if(resWizardHtml){document.getElementById('modal').innerHTML=resWizardHtml;}
+  if(resWizardGlobals){
+    const s=document.getElementById('rc-strict');if(s)s.checked=resWizardGlobals.strict;
+    const u=document.getElementById('rc-secretary');if(u)u.value=resWizardGlobals.secretary_url;
+  }
+  renderResPools();
+  document.getElementById('overlay').classList.add('show');
+}
 async function testResKey(i){
   const provider=(document.getElementById('rp-provider-'+i).value||'').trim();
   const key=(document.getElementById('rp-key-'+i).value||'').trim();
