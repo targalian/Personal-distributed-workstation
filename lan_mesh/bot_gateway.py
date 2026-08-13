@@ -28,6 +28,7 @@ Bot 网关 — 手机消息通道
   - budget_warning
 """
 import json
+import re
 import threading
 import time
 from collections import deque
@@ -787,8 +788,17 @@ def _mask(s: str) -> str:
     return s[:6] + "..." + s[-4:]
 
 
+# HTML 标签正则 + Telegram 支持的 void 标签 (M4: 分片标签安全)
+_HTML_TAG_RE = re.compile(r"</?([a-zA-Z][a-zA-Z0-9]*)(\s[^>]*)?>|<!--.*?-->")
+_VOID_TAGS = {"br", "img", "hr", "meta", "link", "input"}
+
+
 def _split_message(text: str, max_len: int = 4000) -> list[str]:
-    """将长消息按段落分片, 避免超过 Telegram 4096 字符限制。"""
+    """将长消息按段落分片, 避免超过 Telegram 4096 字符限制。
+
+    HTML 感知 (M4): 分片点不落在标签内部; 片段末尾未闭合的标签自动补闭合,
+    并在下一片段开头恢复, 保证每段都是合法 HTML (parse_mode=HTML 不报错)。
+    """
     if len(text) <= max_len:
         return [text]
 
@@ -798,12 +808,44 @@ def _split_message(text: str, max_len: int = 4000) -> list[str]:
         if len(remaining) <= max_len:
             chunks.append(remaining)
             break
-        # 尝试在换行处切割
+        # 候选切割点: 优先换行
         cut_pos = remaining.rfind("\n", 0, max_len)
         if cut_pos < max_len // 2:
-            # 没有合适的换行, 硬切
             cut_pos = max_len
+        # 若切割点落在标签内部 (< 后紧跟字母或 / 且无闭合 >), 回退到标签前
+        lt = remaining.rfind("<", 0, cut_pos)
+        gt = remaining.rfind(">", 0, cut_pos)
+        if lt > gt and lt < cut_pos:
+            after = remaining[lt + 1] if lt + 1 < len(remaining) else ""
+            if after.isalpha() or after == "/":
+                prev_nl = remaining.rfind("\n", 0, lt)
+                cut_pos = prev_nl if prev_nl > 0 else lt
         chunk = remaining[:cut_pos]
         remaining = remaining[cut_pos:].lstrip("\n")
+        # 平衡未闭合标签
+        chunk, remaining = _balance_html_tags(chunk, remaining)
         chunks.append(chunk + ("\n…" if remaining else ""))
     return chunks
+
+
+def _balance_html_tags(chunk: str, rest: str) -> tuple[str, str]:
+    """chunk 末尾未闭合标签 → 补闭合标签; rest 开头恢复对应开标签。
+
+    Returns:
+        (补全后的 chunk, 恢复后的 rest)
+    """
+    stack: list[str] = []
+    for m in _HTML_TAG_RE.finditer(chunk):
+        raw = m.group(0)
+        if raw.startswith("<!--") or m.group(1) is None:
+            continue  # 注释或非标签
+        if raw.startswith("</"):
+            if stack and stack[-1] == m.group(1):
+                stack.pop()
+        elif not raw.endswith("/>") and m.group(1) not in _VOID_TAGS:
+            stack.append(m.group(1))
+    if not stack:
+        return chunk, rest
+    closers = "".join(f"</{t}>" for t in reversed(stack))
+    openers = "".join(f"<{t}>" for t in stack)
+    return chunk + closers, openers + rest

@@ -175,6 +175,7 @@ class StationController:
         # ── 优化12: 定期汇报 ──
         self._report_interval: float = 300.0  # 汇报间隔 (默认5分钟)
         self._last_report_time: float = 0.0
+        self._server = None  # uvicorn Server 引用 (dev-reload 优雅重启用)
 
         # ── F3.1: 自动扩缩容 ──
         self._autoscale_up_threshold: int = 2    # 队列积压 >= 2 时扩容
@@ -1458,6 +1459,7 @@ class StationController:
             log_level="warning",
         )
         server = uvicorn.Server(config)
+        self._server = server
 
         # 开发模式: 启动文件监控线程, 变动时自动重启进程
         if dev_reload:
@@ -1519,12 +1521,38 @@ class StationController:
             if changed:
                 logger.info("🔁 [dev-reload] 检测到变动: %s → 重启中...", ", ".join(changed[:5]))
                 time.sleep(0.5)  # 等待文件写入完成
-                # Windows 兼容: os.execv 在 Windows 上不会替换进程,
-                # 且 uvicorn 占用端口会导致新进程绑定失败。
-                # 改用 subprocess 启动新进程 + os._exit 终止当前进程。
-                self._running = False  # 通知主循环停止
-                import subprocess as _sp
-                _sp.Popen([sys.executable] + sys.argv)
-                logger.info("🔁 [dev-reload] 新进程已启动, 当前进程退出")
-                time.sleep(0.3)  # 等待日志刷新
-                os._exit(0)
+                self._dev_restart()
+
+    def _dev_restart(self):
+        """重启进程: 优雅关闭 uvicorn 释放端口 → 等待端口释放 → 启动新进程 → 退出。
+
+        M2 修复: 原实现直接 os._exit(0), 旧进程监听端口未释放时
+        新进程 bind 失败 (Windows 上 uvicorn 端口占用报错)。
+        """
+        self._running = False  # 通知主循环停止
+        # 请求 uvicorn 优雅退出 (释放监听 socket)
+        if self._server:
+            self._server.should_exit = True
+        # 轮询等待端口释放 (最多 8s), 消除新进程绑定竞态
+        deadline = time.time() + 8.0
+        while time.time() < deadline:
+            if not self._port_in_use(self.state.api_port):
+                break
+            time.sleep(0.2)
+        import subprocess as _sp
+        _sp.Popen([sys.executable] + sys.argv)
+        logger.info("🔁 [dev-reload] 新进程已启动, 当前进程退出")
+        time.sleep(0.3)  # 等待日志刷新
+        os._exit(0)
+
+    @staticmethod
+    def _port_in_use(port: int) -> bool:
+        """探测端口是否仍有进程监听 (重启前等待释放用)。"""
+        import socket as _socket
+        try:
+            with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+                s.settimeout(0.3)
+                s.connect(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False

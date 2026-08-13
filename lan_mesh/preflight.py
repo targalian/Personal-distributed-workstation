@@ -20,7 +20,6 @@
 import importlib
 import os
 import platform
-import shutil
 import socket
 import sys
 import time
@@ -240,18 +239,19 @@ def _check_web_template() -> Optional[CheckResult]:
 def _check_cli_agents() -> CheckResult:
     """检查 CLI Agent 后端是否可用 (claude / aider / codex)。
 
+    检测逻辑与 agent_runtime.detect_cli_agents 统一 (含 PATH + npm 常见目录
+    回退), 避免 preflight 与运行时检测结果不一致 (M3)。
+
     非致命项: 缺失时 PM Agent 仍可通过 LLM API 执行任务,
     但无法使用 CLI Agent 自主编码能力 (多文件探索/编辑/测试/修复)。
     """
-    backends = {
-        "claude": {"detect": "claude", "install": "npm install -g @anthropic-ai/claude-code"},
-        "aider": {"detect": "aider", "install": "pip install aider-chat"},
-        "codex": {"detect": "codex", "install": "npm install -g @openai/codex"},
+    from .agent_runtime import CLI_AGENT_BACKENDS, detect_cli_agents
+    install_hints = {
+        "claude": "npm install -g @anthropic-ai/claude-code",
+        "aider": "pip install aider-chat",
+        "codex": "npm install -g @openai/codex",
     }
-    available = []
-    for name, cfg in backends.items():
-        if shutil.which(cfg["detect"]):
-            available.append(name)
+    available = detect_cli_agents()
 
     if available:
         return CheckResult(
@@ -261,7 +261,8 @@ def _check_cli_agents() -> CheckResult:
         )
 
     # 未检测到任何 CLI Agent
-    hints = " | ".join(f"{n}: {c['install']}" for n, c in backends.items())
+    hints = " | ".join(
+        f"{n}: {install_hints.get(n, '')}" for n in CLI_AGENT_BACKENDS)
     return CheckResult(
         "CLI Agent", False,
         f"未检测到 CLI Agent (子 Agent 将使用 LLM API 单轮模式)\n"

@@ -1972,7 +1972,18 @@ def create_station_router(controller) -> APIRouter:
 
         立即返回 {"status": "started"}，实际执行在后台线程完成，
         执行完毕后通过 receive_subtask_result 回调 PM Monitor。
+
+        调用方校验 (M1): 必填字段缺失直接 400, 不进入执行线程。
         """
+        name = str(payload.get("name", "")).strip()
+        input_data = payload.get("input_data")
+        if not name:
+            raise HTTPException(status_code=400, detail="缺少必填字段: name")
+        if input_data is None or not isinstance(input_data, dict):
+            raise HTTPException(status_code=400, detail="缺少必填字段: input_data")
+        if not payload.get("subtask_id"):
+            raise HTTPException(status_code=400, detail="缺少必填字段: subtask_id")
+
         import threading as _threading
 
         def _run():

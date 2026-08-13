@@ -1,7 +1,7 @@
 {
   "version": 1,
   "last_run": "2026-08-13T00:35:00Z",
-  "current_phase": "R1-resources",
+  "current_phase": "R2-fixes",
   "phase_status": "closed",
   "completed": [
     "F1.1",
@@ -21,15 +21,12 @@
     "P0-auth",
     "P0-secretary",
     "P0-pm-memory",
-    "R1-resources"
+    "R1-resources",
+    "R2-fixes"
   ],
   "failed": [],
   "blocked": [],
   "next_tasks": [
-    "M1: station /tasks/execute 调用方校验",
-    "M2: _dev_file_watcher 端口竞态",
-    "M3: CLI Agent 检测函数不一致",
-    "M4: Telegram 分片切断 HTML 标签",
     "M5: Secretary 事件总线 (替换 HTTP 轮询上报)",
     "M6: 角色卡统一化 (Secretary/PM/Worker 单文件定义)",
     "R2: 资源余额自动获取 (各家控制台/配额 API 探测, 减少手工填写)",
@@ -37,8 +34,8 @@
     "R4: 成本分摊到任务/项目维度 (usage log 增加 task_id 关联)",
     "R5: token 包到期/额度预警推送 Bot 通道"
   ],
-  "iteration_count": 12,
-  "total_files_modified": 44,
+  "iteration_count": 13,
+  "total_files_modified": 48,
   "last_error": "",
-  "notes": "2026-08-13 会话完成四项迭代: (1) P0-auth: mesh token 节点间认证接线; (2) P0-secretary: PM 线程消息裁剪 + 状态上下文增强 + delete_task 收尾清理; (3) P0-pm-memory: 任务记忆驱动规划 + 修复记忆记录缺陷; (4) R1-resources: 模型资源管理 (model_resources.py 资源池抽象: payg/token_plan/coding_plan 三种计费形态统一; 价格单一事实源=model_pool.yaml cost_* + resources.yaml pricing 覆盖; agent_runtime 两个统一出口自动记账 + SQLite resource_usage_log 审计; model_router 可用性过滤 (耗尽/过期/暂停/strict); 幂等告警; 未配置 no-op 向后兼容; CLI python main.py resources --init 引导 + Web 资源 Tab + POST /api/resources/usage 跨主机上报预留; 模板含主流服务商 2026 参考价)。验证: 编译 OK + CLI 冒烟 + 专项 20/20 + 集成 7/7 + 44 单测全过。"
+  "notes": "2026-08-13 会话完成五项迭代: (1) P0-auth: mesh token 节点间认证接线; (2) P0-secretary: PM 线程消息裁剪 + 状态上下文增强 + delete_task 收尾清理; (3) P0-pm-memory: 任务记忆驱动规划 + 修复记忆记录缺陷; (4) R1-resources: 模型资源管理 (资源池抽象 payg/token_plan/coding_plan + 价格单一事实源 + 统一出口自动记账 + 路由可用性过滤 + 幂等告警 + 未配置 no-op + CLI/Web/API 多端 + 主流服务商参考价模板); (5) R2-fixes: 遗留缺陷批量修复 (M1 /tasks/execute 必填字段校验 (name/input_data/subtask_id 缺失→400, 不进入执行线程); M2 dev-reload 重启竞态 (保存 uvicorn Server 引用 → should_exit 优雅关闭 → _port_in_use 轮询等待端口释放 ≤8s → 再启新进程); M3 CLI Agent 检测统一 (preflight 复用 agent_runtime.detect_cli_agents, 消除 shutil.which 双实现); M4 Telegram 分片 HTML 安全 (切割点避开标签内部 + _balance_html_tags 未闭合补全/恢复, void/自闭合/注释标签不误补))。验证: 编译 OK + 专项 22/22 + 44 单测全过 + pre-push 0 Blocker。"
 }
