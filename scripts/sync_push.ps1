@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     双仓库同步推送：master -> Gitee（中文版），en -> GitHub main（英文版）
 

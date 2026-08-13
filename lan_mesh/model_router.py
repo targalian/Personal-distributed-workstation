@@ -277,15 +277,27 @@ class ModelRouter:
         # 当前负载率 (未来可接入实时监控, 默认 0)
         load = 0.0
 
+        # R5: 资源轮换调度偏置 (预付费/临期额度优先消耗, 0~0.1)
+        rot_bias = self._rotation_bias(entry.id)
+
         # 加权求和
         score = (
             cap_match * weights["cap"]
             + cost_index * weights["cost"]
             + speed * weights["speed"]
             - load * weights["load"]
+            + rot_bias
         )
 
         return score
+
+    def _rotation_bias(self, model_id: str) -> float:
+        """R5: 轮换调度加分 — 委托资源管理器, 未启用时为 0。"""
+        try:
+            from .model_resources import rotation_bias_global
+            return rotation_bias_global(model_id)
+        except Exception:
+            return 0.0
 
     # ── 候选过滤 ───────────────────────────────────────────────────
 
@@ -334,4 +346,6 @@ class ModelRouter:
                 continue
             chain.append(fb_entry.id)
 
+        # R5: 降级链内按轮换调度优先级重排 (相同优先级保持配置顺序)
+        chain.sort(key=lambda mid: self._rotation_bias(mid), reverse=True)
         return chain

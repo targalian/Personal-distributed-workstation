@@ -185,16 +185,82 @@ class ModelResourceManager:
         ]
 
     def _find_pool(self, model_id: str) -> Optional[ModelResource]:
-        """为模型匹配资源池: 显式 models 列表优先, 其次按 provider 兜底。"""
-        for pool in self._resources.values():
-            if model_id in pool.models:
-                return pool
-        provider = self._model_provider.get(model_id, "")
-        if provider:
-            for pool in self._resources.values():
-                if not pool.models and pool.provider == provider:
-                    return pool
-        return None
+        """为模型匹配资源池 (R5 轮换调度)。
+    
+        候选收集: 显式 models 列表匹配优先, 其次按 provider 兜底。
+        多池候选时按调度优先级动态选择 (预付费先耗/临期先耗/
+        高水位先耗), 而非静态首匹配; 无候选返回 None。
+        """
+        cands = [p for p in self._resources.values()
+                 if model_id in p.models]
+        if not cands:
+            provider = self._model_provider.get(model_id, "")
+            if provider:
+                cands = [p for p in self._resources.values()
+                         if not p.models and p.provider == provider]
+        if not cands:
+            return None
+        if len(cands) == 1:
+            return cands[0]
+        # R5: 优先在 active 且未过期的池中轮换
+        now = time.time()
+        active = [p for p in cands if p.status == "active"
+                  and (not p.expire_at or now <= p.expire_at)]
+        return max(active or cands, key=self._pool_priority)
+    
+    def _pool_priority(self, pool: ModelResource) -> float:
+        """R5: 资源池轮换调度优先级 (越大越优先消耗其额度)。
+    
+        规则 (首版纯规则, 量化公式待后续裁定):
+        - 预付费计划 (token/coding) 优先于按量消耗 — 不用即沉没成本
+        - 临期加压: expire_at 14 天内越近越优先; renew 窗口剩余
+          <=3 天加压 (到期前用完)
+        - 高水位先耗: 使用率越接近阈值越优先收尾
+        """
+        score = 5.0 if pool.is_payg else 10.0
+        now = time.time()
+        if pool.expire_at > 0:
+            days = (pool.expire_at - now) / 86400
+            if days <= 14:
+                score += max(0.0, 14.0 - days)
+        if pool.billing_period == "renew" and pool.renew_at > 0:
+            step = max(1, pool.period_days) * 86400
+            days_left = (pool.window_start(now) + step - now) / 86400
+            if 0 < days_left <= 3:
+                score += 3.0
+        if pool.quota > 0:
+            try:
+                score += self.get_usage(pool.id).get("rate", 0.0) * 3.0
+            except Exception:
+                pass
+        return score
+    
+    def rotation_plan(self) -> list:
+        """R5: 模型轮换调度方案 (供 API/Web 展示)。
+    
+        逐模型列出候选池优先级排序与实际选中的池。
+        """
+        models: set = set()
+        for p in self._resources.values():
+            models.update(p.models)
+        plan = []
+        for m in sorted(models):
+            cands = [p for p in self._resources.values() if m in p.models]
+            if not cands:
+                continue
+            ranked = sorted(cands, key=self._pool_priority, reverse=True)
+            chosen = self._find_pool(m)
+            plan.append({
+                "model": m,
+                "chosen": chosen.id if chosen else "",
+                "pools": [
+                    {"id": p.id, "plan_type": p.plan_type,
+                     "priority": round(self._pool_priority(p), 1),
+                     "status": p.status}
+                    for p in ranked
+                ],
+            })
+        return plan
 
     # ── 记账 ────────────────────────────────────────────────────
 
@@ -756,6 +822,33 @@ def check_alerts_global() -> list:
         return _mgr.check_alerts()
     except Exception as e:
         return [{"error": str(e)}]
+
+
+def rotation_plan_global() -> list:
+    """R5: 轮换调度方案钩子 — API 端点用, 未启用时返回空。"""
+    try:
+        return _mgr.rotation_plan() if _mgr.enabled else []
+    except Exception:
+        return []
+
+
+def rotation_bias_global(model_id: str) -> float:
+    """R5: 模型轮换调度路由加分 (0~0.1)。
+
+    模型对应池的调度优先级越高加分越大 — 能力相近时优先
+    消耗预付费/临期额度; 未启用或未匹配池时返回 0。
+    """
+    try:
+        if not _mgr.enabled:
+            return 0.0
+        pool = _mgr._find_pool(model_id)
+        if pool is None:
+            return 0.0
+        # 优先级基线 5~10, 加分项上限 ~17; 映射到 0~0.1 封顶,
+        # 确保不会反超能力匹配主导的评分
+        return min(0.1, max(0.0, _mgr._pool_priority(pool) * 0.005))
+    except Exception:
+        return 0.0
 
 
 def report_usage_global() -> dict:
