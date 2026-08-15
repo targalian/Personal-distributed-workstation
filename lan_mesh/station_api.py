@@ -93,6 +93,21 @@ def mesh_auth_enabled() -> bool:
     return _mesh_auth_enabled
 
 
+def _heal_mesh_token_from(controller, ip: str, port: int) -> str:
+    """S1 自愈: 从推送方 (Secretary) 收敛加密信任根并同步内存态。
+
+    mesh_token 分歧 (历史双 Secretary 脑裂 / token 文件重建) 会导致
+    密钥互推解密失败; 接收方据此从推送方拉取 bootstrap-token 收敛,
+    复用 controller 既有收敛逻辑 (拉取 + 持久化 + 更新内存态)。
+    """
+    global _mesh_auth_token
+    controller._converge_mesh_token(target_ip=ip, target_port=port)
+    from .auth import get_mesh_token
+    healed = get_mesh_token()
+    _mesh_auth_token = healed
+    return healed
+
+
 async def api_guard_middleware(request: Request, call_next):
     """F1.5: 全局限流 + API Key 认证 + Phase 0 mesh token 节点认证中间件。"""
     path = request.url.path
@@ -1419,7 +1434,7 @@ def create_station_router(controller) -> APIRouter:
         return payload
 
     @router.post("/api/secrets/receive")
-    async def receive_secrets(payload: dict):
+    async def receive_secrets(payload: dict, request: Request):
         """S1: 接收 Secretary 加密推送的资源配置 (含 API Key 直填)。
 
         解密用本机 mesh_token (与推送方同信任根, 与认证开关解耦);
@@ -1437,7 +1452,26 @@ def create_station_router(controller) -> APIRouter:
         try:
             data = decrypt_config(payload, local_token)
         except (ValueError, RuntimeError) as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            # S1 自愈: 加密信任根分歧时从推送方 (Secretary) 收敛
+            # mesh_token 后重试一次 (推送方即本轮信任源)
+            healed = ""
+            if "mesh_token 不匹配" in str(e):
+                src_ip = request.client.host if request.client else ""
+                try:
+                    src_port = int(payload.get("src_port") or 0)
+                except (TypeError, ValueError):
+                    src_port = 0
+                if src_ip and src_port:
+                    try:
+                        healed = _heal_mesh_token_from(controller, src_ip, src_port)
+                    except Exception as heal_err:
+                        logger.warning("[S1] 密钥接收自愈收敛失败: %s", heal_err)
+            if not healed or healed == local_token:
+                raise HTTPException(status_code=400, detail=str(e))
+            try:
+                data = decrypt_config(payload, healed)
+            except (ValueError, RuntimeError) as retry_err:
+                raise HTTPException(status_code=400, detail=str(retry_err))
         expected = (payload.get("config_hash") or "").strip()
         if expected and config_hash(data) != expected:
             raise HTTPException(status_code=400, detail="配置指纹不匹配, 拒绝落盘")

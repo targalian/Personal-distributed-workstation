@@ -143,6 +143,11 @@ class StationDirector:
             if metrics.get("version_ts"):
                 record.version_ts = metrics["version_ts"]
 
+            # E4: 心跳携带角色时同步落库 (选举避让/收敛依赖 DB role,
+            # 陈旧 role 会导致双 Secretary 脑裂)
+            if metrics.get("role"):
+                record.role = metrics["role"]
+
             # 更新 IP: 优先 UDP 发现, 其次 metrics 传入的 ip
             if self.discovery:
                 dev = self.discovery.find_device(device_id)

@@ -10,6 +10,7 @@
 6. balance_probe — 别名归一、各家解析、异常提示、key 优先级 (R2/R4)
 7. version_sync — 版本比对、领先检测、通知去重 (S2)
 8. startup-sync — hosts 版本列、心跳版本落库、启动密钥推/拉路由、拉取幂等 (S3)
+9. secretary-conflict — 广播真实角色、双 Secretary 仲裁让位方向与幂等 (E4)
 
 运行: pytest tests/ -v
 """
@@ -941,6 +942,21 @@ class TestStartupSync:
         assert got.code_version == "bbb2222"
         assert got.version_ts == 1755300200.0
 
+    def test_heartbeat_updates_role(self, tmp_path):
+        """E4: 心跳携带 role 时同步落库 (陈旧 role 致选举误判的回归)。"""
+        from lan_mesh.database import Database
+        from lan_mesh.station_director import StationDirector
+        from lan_mesh.protocol import HostInfo
+        db = Database(str(tmp_path / "m.db"))
+        director = StationDirector(db=db, discovery=None)
+        info = HostInfo(device_id="dev-c", role="station")
+        director.on_host_registered(info)
+        director.on_heartbeat("dev-c", {"role": "secretary"})
+        assert db.get_host("dev-c").role == "secretary"
+        # 未携带 role 的心跳不改写角色
+        director.on_heartbeat("dev-c", {"cpu_percent": 12.0})
+        assert db.get_host("dev-c").role == "secretary"
+
     def test_startup_key_sync_routing(self):
         from lan_mesh.station_controller import StationController
         calls = {"push": [], "pull": []}
@@ -995,3 +1011,158 @@ class TestStartupSync:
         result = StationController.pull_resource_secrets(
             fake_self, "10.0.0.2", 80)
         assert result["ok"] is True and result["applied"] is False
+
+    def test_pull_heal_on_token_mismatch(self, monkeypatch):
+        """S1 自愈: 解密失败 (mesh_token 不匹配) → 收敛 → 重试成功。"""
+        from lan_mesh.station_controller import StationController
+        from lan_mesh.secret_sync import encrypt_config
+        import types
+        import lan_mesh.http_retry as hr
+        import lan_mesh.auth as auth_mod
+        token_a, token_b = "a" * 64, "b" * 64
+        payload = encrypt_config({"resources": []}, token_b)
+        payload["config_hash"] = "deadbeef"  # 故意错指纹, 阻断后续落盘
+
+        class FakeResp:
+            def json(self):
+                return payload
+
+        states = {"v": token_a}
+        converged = {}
+
+        def fake_get_token(*a, **k):
+            return states["v"]
+
+        def converge_and_swap(target_ip="", target_port=0):
+            converged["args"] = (target_ip, target_port)
+            states["v"] = token_b
+
+        fake_self = types.SimpleNamespace(
+            _mesh_auth_token="", _converge_mesh_token=converge_and_swap)
+        monkeypatch.setattr(hr, "http_get", lambda url, **kw: FakeResp())
+        monkeypatch.setattr(auth_mod, "get_mesh_token", fake_get_token)
+        result = StationController.pull_resource_secrets(
+            fake_self, "10.0.0.2", 80)
+        # 解密重试成功 → 走到指纹校验 (而非解密失败)
+        assert result["detail"] == "配置指纹不匹配", result
+        assert converged.get("args") == ("10.0.0.2", 80), converged
+
+    def test_pull_no_heal_on_other_error(self, monkeypatch):
+        """S1 自愈边界: 非 token 分歧类错误不做收敛。"""
+        from lan_mesh.station_controller import StationController
+        from lan_mesh.secret_sync import encrypt_config
+        import types
+        import lan_mesh.http_retry as hr
+        import lan_mesh.auth as auth_mod
+        payload = encrypt_config({"resources": []}, "a" * 64)
+        payload["blob"] = "!!!not-base64!!!"  # 报文残缺, 非 token 分歧
+
+        class FakeResp:
+            def json(self):
+                return payload
+
+        converged = {}
+
+        def converge_and_swap(target_ip="", target_port=0):
+            converged["called"] = True
+
+        fake_self = types.SimpleNamespace(
+            _mesh_auth_token="", _converge_mesh_token=converge_and_swap)
+        monkeypatch.setattr(hr, "http_get", lambda url, **kw: FakeResp())
+        monkeypatch.setattr(auth_mod, "get_mesh_token", lambda *a, **k: "a" * 64)
+        result = StationController.pull_resource_secrets(
+            fake_self, "10.0.0.2", 80)
+        assert not result["ok"] and "解密失败" in result["detail"]
+        assert not converged, "非 token 分歧错误不应触发收敛"
+
+
+class TestSecretaryConflict:
+    """E4 Secretary 冲突仲裁 — 广播真实角色、让位方向、让位幂等。"""
+
+    def _fake_packet(self, device_id, role, name="peer"):
+        from lan_mesh.protocol import DiscoveryPacket
+        return DiscoveryPacket(device_id=device_id, device_name=name,
+                               role=role, api_port=45470)
+
+    def test_make_packet_broadcasts_real_role(self):
+        from lan_mesh.station_controller import StationController
+        from lan_mesh.protocol import HostInfo
+
+        class Fake:
+            secretary_active = True
+
+            def _collect_info(self):
+                return HostInfo(device_id="self-1", device_name="本机",
+                                role="ignored", api_port=45470)
+
+        f = Fake()
+        pkt = StationController._make_packet(f)
+        assert pkt.role == "secretary"
+        f.secretary_active = False
+        assert StationController._make_packet(f).role == "station"
+
+    def test_on_device_seen_yields_when_peer_id_smaller(self):
+        from lan_mesh.station_controller import StationController
+
+        class FakeDirector:
+            def on_heartbeat(self, *a, **k):
+                pass
+
+        class Fake:
+            secretary_active = True
+            state = type("S", (), {"device_id": "zzz-self"})()
+            station_director = FakeDirector()
+            db = type("D", (), {"get_host": lambda self, i: None})()
+            _yield_secretary_to = StationController._yield_secretary_to
+
+        f = Fake()
+        # 对端 id 更小 (字典序) → 本站让位
+        StationController._on_device_seen(
+            f, self._fake_packet("aaa-peer", "secretary"), "10.0.0.2")
+        assert getattr(f, "_secretary_yielded", False) is True
+
+    def test_on_device_seen_keeps_when_peer_id_larger(self):
+        from lan_mesh.station_controller import StationController
+
+        class FakeDirector:
+            def on_heartbeat(self, *a, **k):
+                pass
+
+        class Fake:
+            secretary_active = True
+            state = type("S", (), {"device_id": "mmm-self"})()
+            station_director = FakeDirector()
+            db = type("D", (), {"get_host": lambda self, i: None})()
+
+        f = Fake()
+        # 对端 id 更大 → 本站保留, 不让位
+        StationController._on_device_seen(
+            f, self._fake_packet("zzz-peer", "secretary"), "10.0.0.3")
+        assert not getattr(f, "_secretary_yielded", False)
+
+    def test_yield_deactivates_once_and_converges(self, monkeypatch):
+        from lan_mesh.station_controller import StationController
+        calls = {"deactivate": 0, "converge": [], "pull": []}
+
+        monkeypatch.setattr(
+            StationController, "_converge_mesh_token",
+            lambda self, **kw: calls["converge"].append(kw))
+        monkeypatch.setattr(
+            StationController, "pull_resource_secrets",
+            lambda self, ip, port: calls["pull"].append((ip, port)))
+
+        class Fake:
+            secretary_active = True
+
+            def deactivate_secretary(self):
+                calls["deactivate"] += 1
+                self.secretary_active = False
+                return {"ok": True}
+
+            def _queue_ws_broadcast(self, *a, **k):
+                pass
+
+        f = Fake()
+        StationController._yield_secretary_to(f, "peer", "10.0.0.4", 80)
+        StationController._yield_secretary_to(f, "peer", "10.0.0.4", 80)
+        assert calls["deactivate"] == 1 and f.secretary_active is False
