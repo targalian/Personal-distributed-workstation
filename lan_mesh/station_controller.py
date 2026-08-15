@@ -456,7 +456,7 @@ class StationController:
         online_hosts.sort(key=_host_sort_key)
         target_host = online_hosts[0]
 
-        # 构造 Secretary URL (始终用 localhost, 避免 Tailscale IP 不可达)
+        # 构造 Secretary URL: 本机派发用 localhost; 远程派发在回退分支重建可达地址
         secretary_url = f"http://127.0.0.1:{self.state.api_port}"
 
         # 优先本机派发 (内嵌 Worker, 无需单独 Worker 进程)
@@ -504,12 +504,18 @@ class StationController:
         target_ip = target_host.ip
         if target_host.device_id == self.state.device_id:
             target_ip = "127.0.0.1"
+        # 修复 (任务③): 远程 PM 必须回报到本机 Secretary, 不能用 127.0.0.1
+        from .host_info import pick_reachable_ip
+        reach_ip = pick_reachable_ip(target_ip)
+        remote_secretary_url = (
+            f"http://{reach_ip}:{self.state.api_port}" if reach_ip else secretary_url
+        )
         try:
             resp = http_post(
                 f"http://{target_ip}:{target_host.api_port}/role/start-pm",
                 json={
                     "task_id": task.task_id,
-                    "secretary_url": secretary_url,
+                    "secretary_url": remote_secretary_url,
                     "task_data": task.to_dict(),
                 },
                 timeout=15,
@@ -1255,10 +1261,17 @@ class StationController:
         if not ip or not port:
             return
 
+        # 修复 (任务③): 远程 PM 回报地址用本机对目标可达的 IP, 非 127.0.0.1
+        from .host_info import pick_reachable_ip
+        reach_ip = pick_reachable_ip(ip)
+        sec_url = (
+            f"http://{reach_ip}:{self.state.api_port}"
+            if reach_ip else f"http://127.0.0.1:{self.state.api_port}"
+        )
         try:
             resp = http_post(
                 f"http://{ip}:{port}/role/start-pm",
-                json={"task_id": task_id, "secretary_url": f"http://127.0.0.1:{self.state.api_port}"},
+                json={"task_id": task_id, "secretary_url": sec_url},
                 timeout=10,
             )
             if resp.status_code == 200:
