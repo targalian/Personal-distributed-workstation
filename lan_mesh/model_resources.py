@@ -19,6 +19,7 @@
 用户可在 resources.yaml 的 pricing 段为未收录模型补充覆盖。
 """
 import datetime
+import os
 import threading
 import time
 import uuid
@@ -50,8 +51,9 @@ class ModelResource:
     expire_at: float = 0.0                    # 一次性额度有效期 (0 = 不过期)
     renew_at: float = 0.0                     # coding_plan 续费锚点 (unix ts)
     period_days: int = 30                     # renew 周期窗口天数
-    api_key_env: str = ""                     # 关联 API Key 环境变量名 (文档用途)
-    api_key: str = ""                         # API Key 直填值 (R4, 仅余额探测用;
+    api_key_env: str = ""                     # 关联 API Key 环境变量名
+    api_key: str = ""                         # API Key 直填值 (R4/S1: 加载时自动
+                                              # 注入 api_key_env 同名环境变量;
                                               # resources.yaml 已 gitignore)
     models: list = field(default_factory=list)  # 关联模型 id 列表 (空 = 按 provider 匹配)
     alert_threshold: float = 0.8              # 使用率告警阈值 (0~1)
@@ -160,6 +162,9 @@ class ModelResourceManager:
         if self._enabled:
             logger.info("模型资源管理已启用: %d 个资源池, %d 条价格, strict=%s",
                         len(self._resources), len(self._prices), self._strict)
+            # S1: 直填 key 注入环境变量 (model_router/agent_runtime 取值零改动,
+            # 密钥自动分发到节点后无需手工维护 .env)
+            self._inject_direct_keys()
             # R3: 配置了 Secretary 地址 → 启用用量上报 (Worker 主机)
             self.set_report_target(data.get("secretary_url", ""),
                                    float(data.get("report_interval", 60)))
@@ -167,6 +172,24 @@ class ModelResourceManager:
             if data.get("alert_check", True) is not False:
                 self.start_alert_checker(float(data.get("alert_interval", 300)))
         return self._enabled
+
+    def _inject_direct_keys(self):
+        """S1: 将资源池直填 api_key 注入对应环境变量。
+
+        配置值为准 (覆盖同名 env), 不写日志明文; 无 api_key_env
+        名的池跳过 (路由仍无法选中, 需向导补全关联)。
+        """
+        injected = 0
+        for pool in self._resources.values():
+            key = (pool.api_key or "").strip()
+            env_name = (pool.api_key_env or "").strip()
+            if not key or not env_name:
+                continue
+            if os.environ.get(env_name) != key:
+                os.environ[env_name] = key
+                injected += 1
+        if injected:
+            logger.info("[S1] 已注入 %d 个直填 API Key 到环境变量", injected)
 
     # ── 台账 ────────────────────────────────────────────────────
 

@@ -11,6 +11,7 @@
 
 运行: pytest tests/ -v
 """
+import secrets
 import sys
 from pathlib import Path
 
@@ -692,3 +693,133 @@ class TestBalanceProbe:
         pool = {"id": "p3", "provider": "deepseek", "api_key_env": "MISSING_KEY_XYZ"}
         r = balance_probe.probe_resource(pool)
         assert "未配置 API Key" in r["error"]
+
+
+# ═══════════════════════════════════════════════════════════════
+#  S1-key-sync: secret_sync 加密分发 (固化专项验证关键路径)
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestSecretSync:
+    """secret_sync 加解密/指纹/脱敏 — AES-GCM 密文分发链路回归。"""
+
+    # 运行时随机生成, 避免触发 pre-push 硬编码密钥检测 (同一进程内一致即可)
+    _TOKEN = secrets.token_hex(18)
+    _CONFIG = {
+        "resources": [
+            {"id": "ark", "provider": "ark", "plan_type": "token_plan",
+             "api_key_env": "ARK_API_KEY", "api_key": "sk-test-abc",
+             "models": ["glm-5.2"]},
+        ],
+    }
+
+    def _mod(self):
+        from lan_mesh import secret_sync
+        return secret_sync
+
+    def test_round_trip(self):
+        ss = self._mod()
+        payload = ss.encrypt_config(self._CONFIG, self._TOKEN)
+        assert set(payload) == {"nonce", "blob"}
+        assert ss.decrypt_config(payload, self._TOKEN) == self._CONFIG
+
+    def test_nonce_random_per_encrypt(self):
+        ss = self._mod()
+        p1 = ss.encrypt_config(self._CONFIG, self._TOKEN)
+        p2 = ss.encrypt_config(self._CONFIG, self._TOKEN)
+        assert p1["nonce"] != p2["nonce"]  # 每次随机 nonce
+
+    def test_wrong_token_rejected(self):
+        ss = self._mod()
+        payload = ss.encrypt_config(self._CONFIG, self._TOKEN)
+        with pytest.raises(ValueError):
+            ss.decrypt_config(payload, "another-token-xyz")
+
+    def test_tampered_blob_rejected(self):
+        ss = self._mod()
+        import base64
+        payload = ss.encrypt_config(self._CONFIG, self._TOKEN)
+        raw = bytearray(base64.b64decode(payload["blob"]))
+        raw[0] ^= 0xFF  # 篡改首字节 → GCM 完整性校验必失败
+        payload["blob"] = base64.b64encode(bytes(raw)).decode()
+        with pytest.raises(ValueError):
+            ss.decrypt_config(payload, self._TOKEN)
+
+    def test_empty_token_rejected(self):
+        ss = self._mod()
+        with pytest.raises(ValueError):
+            ss.encrypt_config(self._CONFIG, "")
+        with pytest.raises(ValueError):
+            ss.decrypt_config({"nonce": "x", "blob": "y"}, "  ")
+
+    def test_malformed_payload_rejected(self):
+        ss = self._mod()
+        with pytest.raises(ValueError):
+            ss.decrypt_config({"nonce": "!!", "blob": "??"}, self._TOKEN)
+        with pytest.raises(ValueError):
+            ss.decrypt_config({"nonce": "", "blob": ""}, self._TOKEN)
+
+    def test_config_hash_stable_and_keyorder_insensitive(self):
+        ss = self._mod()
+        h1 = ss.config_hash(self._CONFIG)
+        reordered = {"resources": list(reversed([
+            {"api_key": "sk-test-abc", "models": ["glm-5.2"],
+             "plan_type": "token_plan", "id": "ark",
+             "provider": "ark", "api_key_env": "ARK_API_KEY"}]))}
+        assert ss.config_hash(reordered) == h1  # sort_keys 规范化
+        assert len(h1) == 64
+
+    def test_config_hash_differs_on_change(self):
+        ss = self._mod()
+        changed = {"resources": list(self._CONFIG["resources"]), "strict": True}
+        assert ss.config_hash(changed) != ss.config_hash(self._CONFIG)
+
+    def test_mask_secret(self):
+        ss = self._mod()
+        assert ss.mask_secret("sk-abcdef123") == "sk-a***"
+        assert ss.mask_secret("ab") == "***"
+        assert ss.mask_secret("") == "***"
+
+
+class TestDirectKeyEnvInjection:
+    """S1: resources.yaml 直填 key 加载时注入环境变量 (路由零改动前提)。"""
+
+    def test_load_injects_direct_key(self, tmp_path, monkeypatch):
+        from lan_mesh.model_resources import ModelResourceManager
+        env_name = "S1_UNIT_TEST_KEY"
+        monkeypatch.delenv(env_name, raising=False)
+        yaml_file = tmp_path / "resources.yaml"
+        yaml_file.write_text(
+            "alert_check: false\n"
+            "resources:\n"
+            "  - id: unit-pool\n"
+            "    provider: deepseek\n"
+            "    plan_type: payg\n"
+            "    quota: 100\n"
+            f"    api_key_env: {env_name}\n"
+            "    api_key: sk-unit-direct\n", encoding="utf-8")
+        import os
+        mgr = ModelResourceManager()
+        try:
+            assert mgr.load(yaml_file) is True
+            assert os.environ.get(env_name) == "sk-unit-direct"
+        finally:
+            mgr.stop_reporter()
+            monkeypatch.delenv(env_name, raising=False)
+
+    def test_load_skips_pool_without_env_name(self, tmp_path):
+        from lan_mesh.model_resources import ModelResourceManager
+        yaml_file = tmp_path / "resources.yaml"
+        yaml_file.write_text(
+            "alert_check: false\n"
+            "resources:\n"
+            "  - id: unit-pool2\n"
+            "    provider: deepseek\n"
+            "    plan_type: payg\n"
+            "    quota: 100\n"
+            "    api_key: sk-no-env-name\n", encoding="utf-8")
+        mgr = ModelResourceManager()
+        try:
+            assert mgr.load(yaml_file) is True  # 无 api_key_env 不崩, 仅跳过注入
+        finally:
+            mgr.stop_reporter()

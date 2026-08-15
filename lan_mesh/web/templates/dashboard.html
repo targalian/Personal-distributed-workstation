@@ -570,6 +570,7 @@
     <button class="btn" onclick="showResourceConfig()">⚙️ 配置资源</button>
     <button class="btn" onclick="withFeedback(this,probeBalances)">🔍 探测余额</button>
     <button class="btn" onclick="withFeedback(this,checkResourceAlerts)">🔔 检查预警</button>
+    <button class="btn" onclick="withFeedback(this,syncSecretsAll)" title="将本机 API Key (AES-GCM 加密) 推送到全部在线节点">🔑 同步密钥</button>
     <span style="margin-left:auto;font-size:14px;color:var(--dim)">
       资源池 <b id="res-total" style="color:var(--accent)">0</b> · 状态 <b id="res-state" style="color:var(--dim)">未启用</b>
     </span>
@@ -1218,6 +1219,14 @@ async function checkResourceAlerts(){
     await apiFetch('/api/resources/alerts/check',{method:'POST'});
   }catch(e){console.error(e);}
   await refreshResources();
+}
+async function syncSecretsAll(){
+  // S1: 手动将本机资源密钥 (加密) 推送到全部在线节点
+  const r=await apiFetch('/api/secrets/sync-all',{method:'POST'});
+  const d=await r.json();
+  if(!r.ok){showToast('同步失败: '+(d.detail||d.message||''),'err');return;}
+  const lines=(d.results||[]).map(x=>`${x.device_name||x.device_id||'?'}: ${x.ok?'✅':'❌'} ${x.detail||''}`);
+  showToast(`🔑 密钥同步 ${d.pushed||0}/${d.total||0} 成功${lines.length?' — '+lines.join('；'):''}`,(d.pushed||0)?'ok':'err');
 }
 async function refreshCostByTask(){
   // R6: 成本分摊聚合 (按 task_id 分组)

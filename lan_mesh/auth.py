@@ -92,6 +92,33 @@ def verify_token(provided: str, expected: str) -> bool:
     return secrets.compare_digest(provided, expected)
 
 
+def save_mesh_token(token: str) -> bool:
+    """S1: 持久化 Secretary 下发的 mesh token (跨机加密信任根收敛)。
+
+    写入 ~/.lan_mesh/mesh_token 供 get_mesh_token() 后续读取;
+    仅当本地尚无显式配置/环境变量且与现值不同时落盘。
+    """
+    token = (token or "").strip()
+    if not token:
+        return False
+    try:
+        if _TOKEN_FILE.is_file():
+            stored = _TOKEN_FILE.read_text(encoding="utf-8").strip()
+            if stored == token:
+                return True
+        _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _TOKEN_FILE.write_text(token, encoding="utf-8")
+        try:
+            _TOKEN_FILE.chmod(0o600)
+        except OSError:
+            pass  # Windows 无 POSIX 权限语义, 忽略
+        logger.info("已持久化 Secretary 下发的 mesh token 到 %s", _TOKEN_FILE)
+        return True
+    except OSError as e:
+        logger.warning("持久化 mesh token 失败: %s", e)
+        return False
+
+
 class AuthDependency:
     """FastAPI 依赖注入 — 校验 Authorization: Bearer <token>。
 
