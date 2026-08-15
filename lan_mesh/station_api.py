@@ -73,7 +73,7 @@ _API_KEY = _os.environ.get("LAN_MESH_API_KEY", "")  # 空 = 不启用认证
 #   /api/station/auth-token: Web UI 引导获取 token (信任根: 能访问 UI 者视为内网成员)
 _AUTH_WHITELIST = {"/health", "/api/register", "/api/heartbeat", "/ws",
                    "/api/station/auth-token", "/api/station/bootstrap-token",
-                   "/api/version/upgrade-notice"}
+                   "/api/version/upgrade-notice", "/api/secrets/fetch"}
 
 
 # Phase 0: 节点间 mesh token 认证 (默认关闭, config.yaml security.auth_enabled 开启)
@@ -1388,6 +1388,35 @@ def create_station_router(controller) -> APIRouter:
         return {"ok": True, "enabled": mgr.enabled,
                 "pools": len(mgr.list_resources()),
                 "backup": saved.get("backup", "")}
+
+    @router.get("/api/secrets/fetch")
+    async def fetch_secrets():
+        """S3: 提供本机资源配置加密密文, 供新节点启动时拉取 (API Key 自动同步)。
+
+        与 bootstrap-token 同一信任假设 (局域网成员); 密文受
+        AES-256-GCM 保护, 无 mesh_token 无法解密。本机无可用
+        密钥配置时返回空 blob (调用方幂等跳过)。
+        """
+        from pathlib import Path
+        from .auth import get_mesh_token
+        from .model_resources import read_config_data
+        from .secret_sync import config_hash, encrypt_config
+        target = Path(__file__).parent / "resources.yaml"
+        if not target.is_file():
+            return {"blob": "", "detail": "本机无 resources.yaml"}
+        cfg = read_config_data(target)
+        data = cfg.get("data") or {}
+        pools = data.get("resources") or []
+        key_count = sum(1 for p in pools if (p.get("api_key") or "").strip())
+        if not key_count:
+            return {"blob": "", "detail": "本机无 api_key 直填配置"}
+        token = _mesh_auth_token or get_mesh_token()
+        if not token:
+            return {"blob": "", "detail": "无 mesh_token, 无法加密"}
+        payload = encrypt_config(data, token)
+        payload["config_hash"] = config_hash(data)
+        payload["pools"] = len(pools)
+        return payload
 
     @router.post("/api/secrets/receive")
     async def receive_secrets(payload: dict):

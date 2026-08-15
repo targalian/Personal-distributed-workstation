@@ -80,6 +80,8 @@ class StationDirector:
                 rating_tier=rating.tier,
                 rating_score=rating.score,
                 rating_summary=rating.summary,
+                code_version=getattr(info, "code_version", ""),
+                version_ts=getattr(info, "version_ts", 0.0),
             )
 
             # 获取真实 IP: 优先 UDP 发现列表, 其次 HostInfo.ip_addresses
@@ -134,6 +136,12 @@ class StationDirector:
             record.shared_file_count = metrics.get("shared_file_count", record.shared_file_count)
             record.online = True
             record.last_seen = time.time()
+
+            # S2/S3: 心跳携带代码版本时同步落库 (跨主机版本统计)
+            if metrics.get("code_version"):
+                record.code_version = metrics["code_version"]
+            if metrics.get("version_ts"):
+                record.version_ts = metrics["version_ts"]
 
             # 更新 IP: 优先 UDP 发现, 其次 metrics 传入的 ip
             if self.discovery:

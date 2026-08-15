@@ -19,7 +19,7 @@ logger = get_logger("database")
 # 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
 # 迁移函数签名: (conn: sqlite3.Connection) -> None
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -86,11 +86,26 @@ def _migration_v3(conn: sqlite3.Connection):
         pass
 
 
+def _migration_v4(conn: sqlite3.Connection):
+    """迁移 v4: hosts 表增加代码版本列 (S2/S3 跨主机版本统计与升级提醒)。"""
+    try:
+        conn.execute("ALTER TABLE hosts "
+                     "ADD COLUMN code_version TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE hosts "
+                     "ADD COLUMN version_ts REAL NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+
+
 # 迁移注册表: version → 迁移函数
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
     2: _migration_v2,
     3: _migration_v3,
+    4: _migration_v4,
 }
 
 
@@ -147,7 +162,9 @@ class Database:
                 online        INTEGER NOT NULL DEFAULT 1,
                 registered_at REAL NOT NULL DEFAULT 0,
                 last_seen     REAL NOT NULL DEFAULT 0,
-                latency_ms    REAL
+                latency_ms    REAL,
+                code_version  TEXT NOT NULL DEFAULT '',
+                version_ts    REAL NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS heartbeat_log (
@@ -432,14 +449,16 @@ class Database:
                 cpu_percent, memory_percent, disk_percent,
                 shared_folder, shared_file_count, online,
                 registered_at, last_seen, latency_ms,
-                rating_tier, rating_score, rating_summary
+                rating_tier, rating_score, rating_summary,
+                code_version, version_ts
             ) VALUES (
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
-                ?, ?, ?
+                ?, ?, ?,
+                ?, ?
             )
             ON CONFLICT(device_id) DO UPDATE SET
                 device_name=excluded.device_name,
@@ -461,7 +480,9 @@ class Database:
                 latency_ms=excluded.latency_ms,
                 rating_tier=excluded.rating_tier,
                 rating_score=excluded.rating_score,
-                rating_summary=excluded.rating_summary
+                rating_summary=excluded.rating_summary,
+                code_version=excluded.code_version,
+                version_ts=excluded.version_ts
         """, (
             record.device_id, record.device_name, record.role,
             record.hostname, record.platform,
@@ -472,6 +493,7 @@ class Database:
             1 if record.online else 0,
             record.registered_at, record.last_seen, record.latency_ms,
             record.rating_tier, record.rating_score, record.rating_summary,
+            record.code_version, record.version_ts,
         ))
         conn.commit()
 
@@ -510,6 +532,8 @@ class Database:
             rating_tier=r["rating_tier"] if "rating_tier" in r.keys() else "",
             rating_score=r["rating_score"] if "rating_score" in r.keys() else 0,
             rating_summary=r["rating_summary"] if "rating_summary" in r.keys() else "",
+            code_version=r["code_version"] if "code_version" in r.keys() else "",
+            version_ts=r["version_ts"] if "version_ts" in r.keys() else 0.0,
         )
 
     def get_host(self, device_id: str) -> Optional[HostRecord]:

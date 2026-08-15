@@ -147,6 +147,9 @@ class HostRecord:
     rating_tier: str = ""       # S/A/B/C/D
     rating_score: int = 0       # 综合得分 (0~100)
     rating_summary: str = ""    # 人类可读摘要
+    # ── S2/S3: 代码版本 (跨主机版本统计与升级提醒) ──
+    code_version: str = ""      # git 短 commit
+    version_ts: float = 0.0     # commit 提交时间戳
 
     def to_dict(self) -> dict:
         return asdict(self)
