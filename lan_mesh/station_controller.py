@@ -403,36 +403,78 @@ class StationController:
             logger.info("Secretary 选举: 网络中已有 Secretary [%s], 本站保持 Station 模式", existing)
             self._converge_mesh_token()
 
-    def _converge_mesh_token(self):
+    def _converge_mesh_token(self, target_ip: str = "", target_port: int = 0):
         """S1: 从 Secretary 拉取 mesh token 收敛加密信任根。
 
         Station 间无注册链路 (注册仅 Worker 用), 非 Secretary 节点
         在此处引导拉取并持久化; 与注册下发同一信任假设 (LAN 成员)。
+        E4: 支持直接传入目标 (冲突仲裁时 DB 角色可能尚未刷新)。
         """
         from .auth import save_mesh_token
-        from .http_retry import http_get
-        sec_host = None
-        for h in self.db.list_hosts():
-            if (getattr(h, "device_id", "") != self.state.device_id
-                    and getattr(h, "role", "") == "secretary"
-                    and getattr(h, "online", False)
-                    and getattr(h, "ip", "") and getattr(h, "api_port", 0)):
-                sec_host = h
-                break
-        if not sec_host:
+        from .http_retry import http_get, set_auth_token
+        ip, port = (target_ip or "").strip(), int(target_port or 0)
+        if not ip or not port:
+            for h in self.db.list_hosts():
+                if (getattr(h, "device_id", "") != self.state.device_id
+                        and getattr(h, "role", "") == "secretary"
+                        and getattr(h, "online", False)
+                        and getattr(h, "ip", "") and getattr(h, "api_port", 0)):
+                    ip, port = h.ip, h.api_port
+                    break
+        if not ip or not port:
             return
         try:
             resp = http_get(
-                f"http://{sec_host.ip}:{sec_host.api_port}"
+                f"http://{ip}:{port}"
                 "/api/station/bootstrap-token", timeout=10)
             token = (resp.json() or {}).get("mesh_token", "")
             if token and token != self._mesh_token:
                 if save_mesh_token(token):
                     self._mesh_token = token
-                    logger.info("[S1] mesh token 已收敛 (拉取自 Secretary %s)",
-                                sec_host.ip)
+                    set_auth_token(token if self._mesh_auth_enabled else "")
+                    logger.info("[S1] mesh token 已收敛 (拉取自 Secretary %s)", ip)
         except Exception as e:
             logger.warning("[S1] mesh token 收敛失败: %s", e)
+
+    def _yield_secretary_to(self, peer_name: str, ip: str, port: int):
+        """E4: 向仲裁优先级更高 (device_id 更小) 的节点让位 Secretary。
+
+        选举 5s 窗口丢包/时机错开会致双 Secretary 脑裂 (各自生成
+        mesh_token, 密钥互推解密失败)。双端对称规则: device_id
+        字典序较大者降级。让位后收敛 token 并拉取资源密钥,
+        保证加密信任根与配置全网一致。
+        """
+        if getattr(self, "_secretary_yielded", False):
+            return
+        self._secretary_yielded = True
+        logger.warning("[E4] Secretary 冲突: %s (%s) 仲裁优先, 本站让位为 Station 模式",
+                       peer_name, ip)
+        try:
+            self.deactivate_secretary()
+        except Exception as e:
+            logger.error("[E4] Secretary 让位失败: %s", e)
+            return
+        try:
+            self._queue_ws_broadcast("secretary_yielded", {
+                "message": "Secretary 冲突仲裁: 本站已让位, %s 接管" % peer_name,
+                "peer": peer_name,
+            })
+        except Exception:
+            pass
+
+        def _converge_after_yield():
+            time.sleep(2)  # 等对端服务稳定
+            try:
+                self._converge_mesh_token(target_ip=ip, target_port=port)
+            except Exception as e:
+                logger.warning("[E4] 让位后 token 收敛失败: %s", e)
+            try:
+                self.pull_resource_secrets(ip, port)
+            except Exception as e:
+                logger.warning("[E4] 让位后密钥拉取失败: %s", e)
+
+        threading.Thread(target=_converge_after_yield,
+                         name="station-yield-converge", daemon=True).start()
 
     def _find_existing_secretary(self) -> str:
         """查找网络中已存在的在线 Secretary。返回设备名或空字符串。"""
@@ -987,7 +1029,9 @@ class StationController:
         """生成 Station 的 UDP 发现包。"""
         info = self._collect_info()
         packet = make_discovery_packet(info)
-        packet.role = "station"
+        # E4: 广播真实角色 (此前固定 station, 导致对端永远无法经 UDP
+        # 感知 Secretary 身份, 冲突仲裁与选举避让全部失效)
+        packet.role = "secretary" if self.secretary_active else "station"
         return packet
 
     def _on_device_seen(self, packet: DiscoveryPacket, ip: str):
@@ -1000,12 +1044,12 @@ class StationController:
         if not packet.device_id or packet.device_id == self.state.device_id:
             return
 
-        # Secretary 冲突检测: 发现另一个 Secretary 且本站也是 Secretary
+        # E4: Secretary 冲突仲裁 — 选举时机错开致双 Secretary 时,
+        # 按 device_id 字典序确定性让位 (较大者降级为 Station),
+        # 双端对称规则保证全网收敛到同一 Secretary
         if (packet.role == "secretary" and self.secretary_active
-                and not getattr(self, '_secretary_conflict_warned', False)):
-            logger.warning("[Secretary 冲突] 网络中发现另一个 Secretary: %s (%s), 请手动决定保留哪个",
-                          packet.device_name, ip)
-            self._secretary_conflict_warned = True
+                and packet.device_id < self.state.device_id):
+            self._yield_secretary_to(packet.device_name, ip, packet.api_port)
 
         existing = self.db.get_host(packet.device_id)
         if existing:
@@ -1018,6 +1062,8 @@ class StationController:
                     "ip": ip,
                     "code_version": packet.code_version,
                     "version_ts": packet.version_ts,
+                    # E4: 携带真实角色, 修复 DB role 陈旧致选举误判
+                    "role": packet.role,
                 })
             except Exception:
                 pass
@@ -1095,6 +1141,8 @@ class StationController:
                     "ip": info.ip_addresses[0] if info.ip_addresses else "",
                     "code_version": info.code_version,
                     "version_ts": info.version_ts,
+                    # E4: 自身角色同步落库 (secretary/station 切换即时可见)
+                    "role": info.role,
                 })
             except Exception:
                 pass
@@ -1213,7 +1261,19 @@ class StationController:
         try:
             data = decrypt_config(payload, token)
         except (ValueError, RuntimeError) as e:
-            return {"ok": False, "applied": False, "detail": f"解密失败: {e}"}
+            # S1 自愈: 加密信任根分歧 (历史双 Secretary 脑裂 / token
+            # 文件重建) 时, 先向目标 Secretary 收敛 mesh_token 再重试
+            if "mesh_token 不匹配" in str(e):
+                try:
+                    self._converge_mesh_token(target_ip=ip, target_port=port)
+                    token = get_mesh_token()
+                    data = decrypt_config(payload, token)
+                    logger.info("[S1] mesh_token 收敛后密钥解密重试成功 (来自 %s)", ip)
+                except Exception as retry_err:
+                    return {"ok": False, "applied": False,
+                            "detail": f"解密失败: {retry_err}"}
+            else:
+                return {"ok": False, "applied": False, "detail": f"解密失败: {e}"}
         expected = (payload.get("config_hash") or "").strip()
         if expected and config_hash(data) != expected:
             return {"ok": False, "applied": False, "detail": "配置指纹不匹配"}
@@ -1630,6 +1690,8 @@ class StationController:
             try:
                 payload = encrypt_config(data, self._mesh_token)
                 payload["config_hash"] = cfg_hash
+                # S1 自愈: 附带本机端口, 对端解密失败时据此收敛信任根
+                payload["src_port"] = self.state.api_port
                 resp = http_post(
                     f"http://{ip}:{port}/api/secrets/receive",
                     json=payload,

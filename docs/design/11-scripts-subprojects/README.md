@@ -4,13 +4,17 @@
 
 ## 模块清单
 
+<!-- AUTO:module-list -->
 | 文件/目录 | 职责一句话 |
 |---|---|
-| scripts/start_workstation.{bat,ps1,sh} | 跨平台一键启动 Station |
+| quicklan-main/ | 独立子项目: Tauri + React 桌面文件共享应用 |
+| scripts/start_workstation.bat | 跨平台一键启动 Station (bat/ps1/sh) |
+| scripts/start_workstation.ps1 | 跨平台一键启动 Station (bat/ps1/sh) |
+| scripts/start_workstation.sh | 跨平台一键启动 Station (bat/ps1/sh) |
+| scripts/sync_docs.py | docs/design 模块清单一致性校验/生成器 (D2-docs-sync)。 |
 | scripts/sync_push.ps1 | ★ 双库同步推送脚本 (上库唯一入口) |
 | skills/ | 技能库资产 (SKILL.md 格式, 中央分发) |
-| quicklan-main/ | 独立子项目: Tauri + React 桌面文件共享应用 |
-
+<!-- /AUTO:module-list -->
 ---
 
 ## scripts/sync_push.ps1 — 双库推送（上库唯一入口）

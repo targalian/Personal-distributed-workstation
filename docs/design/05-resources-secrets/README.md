@@ -5,18 +5,16 @@ API Key 加密分发与版本同步（S1/S2/S3 迭代成果集中于此）。
 
 ## 模块清单
 
-| 模块 | 职责一句话 |
+<!-- AUTO:module-list -->
+| 文件/目录 | 职责一句话 |
 |---|---|
-| model_resources.py | 资源池预算管家 (R1): 三种计划类型 + 用量记账 + 预警 |
-| model_router.py | 模型路由器: 难度分级 + 加权评分 + 降级链 |
-| balance_probe.py | 余额探测 (R2): 各服务商 API 适配器 |
-| secret_sync.py | API Key 加密分发 (S1): AES-256-GCM + HKDF |
-| version_sync.py | 版本记录与升级提醒 (S2): VERSION.json + commit 比对 |
-| collect_config.py | 主机配置报告采集 (host_config.json 生成) |
-
-**配套文件**: `resources.yaml`（资源池配置，含 api_key，不入版本库）、
-`model_pool.yaml`（模型能力/价格矩阵）、根目录 `VERSION.json`。
-
+| balance_probe.py | 资源余额探测 (R2) — 从服务商 API 自动获取资源池余额 |
+| collect_config.py | LAN Mesh 主机配置独立采集脚本 |
+| model_resources.py | 模型资源管理 — 多主机 / 多 API Key 预算池管理 (R1) |
+| model_router.py | 模型路由器 — Phase 2 核心模块 |
+| secret_sync.py | S1-key-sync: API Key 加密自动分发 (节点间密钥同步) |
+| version_sync.py | S2: 版本记录与升级提醒 — 单机版本文件 + 局域网版本比对 + 领先节点通知 |
+<!-- /AUTO:module-list -->
 ---
 
 ## model_resources.py — 资源池预算管家（R1）
@@ -66,6 +64,15 @@ UI 一键测试入口: `POST /api/resources/test-key`。
 
 接收端统一逻辑: 解密 → config_hash 校验 → 指纹一致幂等跳过（不落盘）→
 validate → 保存 resources.yaml → 热重载资源管理器。
+
+**信任根自愈（S1 演进）**: mesh_token 分歧（历史双 Secretary 脑裂 /
+token 文件重建）会使解密失败。接收端（receive/fetch 两路径）此时
+不直接报错，而是从推送方拉取 `/api/station/bootstrap-token` 收敛
+mesh_token 后重试解密一次：
+- 推送路径：解密失败时用请求来源 IP + 推送报文 `src_port` 定位推送方
+- 拉取路径：用目标 Secretary 的 ip/port 直接收敛
+收敛复用 `_converge_mesh_token`（拉取 + 持久化 + 内存态同步），
+收敛后仍失败才返回错误，保证密钥分发可自愈无需人工对账。
 
 ## version_sync.py — 版本记录与升级提醒（S2-update-notify）
 

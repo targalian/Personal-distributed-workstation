@@ -4,16 +4,17 @@
 
 ## 模块清单
 
-| 模块 | 职责一句话 |
+<!-- AUTO:module-list -->
+| 文件/目录 | 职责一句话 |
 |---|---|
-| config.py | Pydantic 强类型配置 (config.yaml + 环境变量) |
-| logger.py | 结构化日志 (控制台+文件轮转) |
-| event_bus.py | 进程内事件总线 (M5, 发布订阅 → /ws 广播) |
-| error_tracker.py | 本地错误聚合追踪 (F1.4, 环形缓冲+落盘) |
-| host_rating.py | 主机评级 (S/A/B/C/D 五级) |
-| preflight.py | 启动前自检 (11 项检查) |
-| api.py | 旧版路由层 (Worker API + 早期 Secretary API, 部分被 station_api 取代) |
-
+| api.py | FastAPI 路由层 - Worker API 与 Secretary API |
+| config.py | 配置管理 - 基于 Pydantic 的强类型配置校验 |
+| error_tracker.py | F1.4: 本地错误聚合追踪 |
+| event_bus.py | Station 事件总线 (M5)。 |
+| host_rating.py | 主机评级系统 — 基于硬件配置自动计算能力等级 |
+| logger.py | LAN Mesh 结构化日志系统 |
+| preflight.py | 启动前自检模块 - 在程序启动时检查所有前置条件 |
+<!-- /AUTO:module-list -->
 ---
 
 ## config.py — 配置管理

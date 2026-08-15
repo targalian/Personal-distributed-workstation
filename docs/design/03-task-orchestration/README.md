@@ -5,18 +5,19 @@
 
 ## 模块清单
 
-| 模块 | 职责一句话 |
+<!-- AUTO:module-list -->
+| 文件/目录 | 职责一句话 |
 |---|---|
-| task.py | 任务 DAG 数据结构 (邻接表/拓扑排序/条件边/动态路由/序列化) |
-| orchestrator.py | 编排引擎: 分解→DAG→匹配→分发→聚合 (显式状态机+Checkpoint) |
-| pm_agent.py | PM Agent 门面: 持有 Planner/Dispatcher/Monitor |
-| pm_planner.py | 规划器: 模板匹配 + LLM 规划 + 多轮细化 |
-| pm_dispatcher.py | 分发器: 团队创建与依赖感知分发 |
-| pm_monitor.py | 监控器: 进度收集/超时检测/失败接管/质量验证/聚合 |
-| pm_state.py | PM 共享状态容器 (dataclass + lock) |
-| task_templates.py | 任务模板库 (预置 DAG + 变量替换) |
-| project.py | 项目管理与预算护栏 (Phase 3 项目隔离) |
-
+| orchestrator.py | 任务编排引擎 — 借鉴 LangGraph Supervisor 模式 (增强版: 显式状态机 + Checkpoint) |
+| pm_agent.py | PM Agent 协调器/门面 — 持有 Planner/Dispatcher/Monitor, 对外暴露统一接口。 |
+| pm_dispatcher.py | PM 分发器 — 团队创建与子任务分发 |
+| pm_monitor.py | PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证 |
+| pm_planner.py | PM 规划器 — 任务分析与分解 |
+| pm_state.py | PM Agent 共享状态容器 |
+| project.py | 项目管理与预算控制 — Phase 3 项目隔离核心 |
+| task.py | 任务 DAG 管理 — 子任务依赖图与拓扑排序 (增强版: 条件边 + 动态路由 + 图序列化) |
+| task_templates.py | F2.4: 任务模板库 — 预置常见任务 DAG |
+<!-- /AUTO:module-list -->
 ---
 
 ## task.py — 任务 DAG 数据结构

@@ -5,18 +5,19 @@ Worker 侧的任务执行能力：守护进程、Agent 运行时、能力卡片�
 
 ## 模块清单
 
-| 模块 | 职责一句话 |
+<!-- AUTO:module-list -->
+| 文件/目录 | 职责一句话 |
 |---|---|
-| worker.py | Worker 守护进程: 配置采集/共享目录/发现/注册/心跳 |
-| agent_runtime.py | Worker 端任务执行引擎 (LLM 调用/工具执行/结果返回) |
-| agent_card.py | Agent Card 能力卡片 (借鉴 A2A 协议) |
-| agent_prompt.py | 子 Agent Prompt 模板与定制构建器 |
-| tool_registry.py | 插件化工具注册表 (内置 + YAML 插件 + 动态注册) |
-| mcp_client.py | MCP 客户端 (JSON-RPC 2.0, stdio/HTTP 双传输) |
-| mcp_gateway.py | MCP 网关: 中央工具调度枢纽 (连接池/聚合/路由) |
-| sandbox.py | 代码执行沙箱 (F2.2, subprocess 隔离) |
-| skill_registry.py | 技能库注册表 (中央管理与分发) |
-
+| agent_card.py | Agent Card 生成与管理 — 借鉴 A2A 协议的 Agent Card 机制 |
+| agent_prompt.py | 子 Agent 通用 Prompt 模板与定制构建器 |
+| agent_runtime.py | Agent 运行时 — Worker 端任务执行引擎 |
+| mcp_client.py | MCP 客户端 — 轻量级 JSON-RPC 2.0 客户端 |
+| mcp_gateway.py | MCP 网关 — 中央工具调度枢纽 |
+| sandbox.py | F2.2: 代码执行沙箱 — 安全隔离执行 Agent 生成的代码。 |
+| skill_registry.py | 技能库注册表 — 中央技能管理与分发系统 |
+| tool_registry.py | 工具注册表 — 插件化工具管理系统 |
+| worker.py | Worker Agent - 部署在各主机上的守护进程 |
+<!-- /AUTO:module-list -->
 ---
 
 ## worker.py — Worker 守护进程

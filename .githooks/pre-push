@@ -189,6 +189,29 @@ if [ -n "$COMMITS" ]; then
 fi
 echo ""
 
+# ── 8. 设计文档清单一致性校验 ───────────────────────
+echo "── 8. 设计文档清单校验 (sync_docs.py) ──"
+if python scripts/sync_docs.py; then
+    echo -e "  ${GREEN}[PASS]${NC} docs/design 模块清单与代码一致"
+else
+    echo -e "  ${RED}[FAIL]${NC} docs/design 模块清单漂移或未登记 → 修复: python scripts/sync_docs.py --write"
+    ERRORS=$((ERRORS + 1))
+fi
+echo ""
+
+# ── 9. 设计文档同步提醒 ──────────────────────────────
+echo "── 9. 设计文档同步提醒 ──"
+DOCS_CHANGED=$(git diff --name-only --diff-filter=ACM "$BASE" -- 'docs/design/' 2>/dev/null || true)
+if [ -n "$DOCS_CHANGED" ]; then
+    echo -e "  ${GREEN}[PASS]${NC} docs/design/ 已同步更新"
+elif git log --format="%s" "$BASE"..HEAD 2>/dev/null | grep -qE "^(docs|chore)"; then
+    echo -e "  ${GREEN}[SKIP]${NC} 纯文档/杂务提交, 无需设计文档更新"
+else
+    echo -e "  ${YELLOW}[WARN]${NC} 代码变更但 docs/design/ 无更新 — 若涉及职责/接口/设计决策变化请同步 (见 .qoder/skills/docs-sync)"
+    WARNINGS=$((WARNINGS + 1))
+fi
+echo ""
+
 # ── 汇总 ─────────────────────────────────────────────
 echo "======================================"
 echo " 审核汇总"
