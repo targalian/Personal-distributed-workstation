@@ -181,6 +181,11 @@ class StationController:
         self._autoscale_up_threshold: int = 2    # 队列积压 >= 2 时扩容
         self._autoscale_down_threshold: int = 0  # 队列清空时记录缩容观察
 
+        # ── S2: 版本升级提醒 ──
+        from .version_sync import UpgradeNotifier
+        self._upgrade_notifier = UpgradeNotifier()   # 同目标同版本只通知一次
+        self._version_behind_warned: set = set()     # 已提醒过的领先者 commit
+
         # ── Phase 0: 节点间 mesh token 认证 ──
         # 出站请求自动携带 token, 入站由 api_guard_middleware 校验
         from .auth import get_mesh_token
@@ -1087,6 +1092,94 @@ class StationController:
             except Exception as e:
                 logger.error("清理离线主机异常: %s", e)
 
+    # ── S2: 版本升级提醒 ─────────────────────────────────
+
+    def _version_watch_loop(self):
+        """S2: 定期比对局域网内各节点代码版本, 领先者通知落后者升级。"""
+        from .version_sync import local_version_info
+        while self._running:
+            time.sleep(60)
+            try:
+                self_ver = local_version_info()
+                if not self_ver.get("commit") or not self.discovery:
+                    continue
+                peers = [
+                    d for d in self.discovery.list_devices()
+                    if d.get("online") and d.get("device_id") != self.state.device_id
+                    and d.get("code_version")
+                ]
+                if not peers:
+                    continue
+                self._check_version_leadership(self_ver, peers)
+            except Exception as e:
+                logger.warning("[S2] 版本监测异常: %s", e)
+
+    def _check_version_leadership(self, self_ver: dict, peers: list):
+        """S2: 版本领先检测 — 本机领先全网则通知落后节点, 落后则提醒自身升级。
+
+        通知内容仅为升级建议 (git pull + 重启), 不远程操控目标节点。
+        """
+        from .version_sync import compare_versions, find_leader
+        from .http_retry import http_post
+
+        versions = [{"device_id": self.state.device_id,
+                     "commit": self_ver["commit"],
+                     "commit_time": self_ver.get("commit_time", 0.0)}]
+        for p in peers:
+            versions.append({"device_id": p["device_id"],
+                             "device_name": p.get("device_name", ""),
+                             "commit": p.get("code_version", ""),
+                             "commit_time": p.get("version_ts", 0.0),
+                             "ip": p.get("ip", ""),
+                             "api_port": p.get("api_port", 0)})
+        leader = find_leader(versions)
+        if not leader:
+            return
+
+        if leader["device_id"] == self.state.device_id:
+            # 本机严格领先: 通知每个落后节点 (同版本只通知一次)
+            for p in versions[1:]:
+                if compare_versions(self_ver, p) != "ahead":
+                    continue
+                if not self._upgrade_notifier.should_notify(
+                        p["device_id"], self_ver["commit"]):
+                    continue
+                ip, port = p.get("ip", ""), p.get("api_port", 0)
+                if not ip or not port:
+                    continue
+                try:
+                    http_post(
+                        f"http://{ip}:{port}/api/version/upgrade-notice",
+                        json={
+                            "from_device_id": self.state.device_id,
+                            "from_name": self.state.device_name,
+                            "commit": self_ver["commit"],
+                            "version": self_ver.get("version", ""),
+                            "note": self_ver.get("note", ""),
+                            "upgrade_hint": self_ver.get("upgrade_hint", ""),
+                        }, timeout=10)
+                    logger.info("[S2] 已通知 %s (%s) 升级: 本机 %s 领先于 %s",
+                                p.get("device_name") or p["device_id"][:8], ip,
+                                self_ver["commit"], p["commit"])
+                except Exception as e:
+                    logger.warning("[S2] 通知 %s 升级失败: %s", ip, e)
+        else:
+            # 他人领先: 提醒本机升级 (同一领先版本只提醒一次)
+            lead_commit = leader.get("commit", "")
+            if lead_commit in self._version_behind_warned:
+                return
+            self._version_behind_warned.add(lead_commit)
+            lead_name = leader.get("device_name") or lead_commit[:8]
+            logger.warning("[S2] 检测到 %s 版本领先 (%s), 建议本机 git pull 升级后重启",
+                           lead_name, lead_commit)
+            from .event_bus import publish_event
+            publish_event("version_upgrade_notice", {
+                "behind": True,
+                "from_name": lead_name,
+                "commit": lead_commit,
+                "hint": "git pull 升级后重启节点",
+            })
+
     # ── F3.3: PM Agent 故障迁移 ─────────────────────────────────
 
     def _migrate_orphaned_pms(self, gone_device_ids: list[str]):
@@ -1571,6 +1664,13 @@ class StationController:
         )
         prune_thread.start()
         self._threads.append(prune_thread)
+
+        # S2: 启动版本升级提醒监测线程
+        version_thread = threading.Thread(
+            target=self._version_watch_loop, name="station-version-watch", daemon=True
+        )
+        version_thread.start()
+        self._threads.append(version_thread)
 
         # F3.1: 启动自动扩缩容监控
         self._start_autoscaler()

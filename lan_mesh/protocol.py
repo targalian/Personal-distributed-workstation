@@ -51,6 +51,9 @@ class DiscoveryPacket:
     disk_percent: float = 0.0
     shared_folder: str = ""
     ip_addresses: list = field(default_factory=list)
+    # ── S2: 代码版本 (升级提醒) ──
+    code_version: str = ""              # git 短 commit
+    version_ts: float = 0.0             # commit 提交时间戳 (版本全序比较依据)
 
     def is_lanmesh(self) -> bool:
         return self.app == APP_NAME and self.version == PROTOCOL_VERSION
@@ -100,6 +103,9 @@ class HostInfo:
     api_port: int = 0
     uptime_seconds: float = 0.0
     timestamp: float = field(default_factory=time.time)
+    # ── S2: 代码版本 (升级提醒) ──
+    code_version: str = ""
+    version_ts: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)

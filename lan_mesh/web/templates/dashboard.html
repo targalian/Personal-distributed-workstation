@@ -316,9 +316,15 @@
 <div class="topbar">
   <h1><span class="logo">🏢</span> LAN Mesh Station Director</h1>
   <div class="ws-status">
+    <span id="version-badge" title="本机代码版本 (S2 升级提醒)" style="font-size:11px;padding:2px 8px;border-radius:12px;background:var(--surface2);border:1px solid var(--border);margin-right:8px;color:var(--dim)">⏳</span>
     <span id="role-badge" style="font-size:12px;padding:2px 10px;border-radius:12px;background:var(--surface2);border:1px solid var(--border);margin-right:8px">Station</span>
     <span class="ws-dot" id="ws-dot"></span><span id="ws-label">连接中...</span>
   </div>
+</div>
+<div id="upgrade-banner" style="display:none;background:#3a2a10;border-bottom:1px solid #8a6d1a;padding:10px 28px;font-size:13px;color:#ffd75e;align-items:center;gap:12px">
+  <span>⬆️</span><span id="upgrade-banner-text"></span>
+  <code style="background:rgba(0,0,0,.3);padding:2px 8px;border-radius:4px;font-size:12px">git pull 后重启节点</code>
+  <button onclick="document.getElementById('upgrade-banner').style.display='none'" style="margin-left:auto;background:none;border:1px solid #8a6d1a;color:#ffd75e;border-radius:6px;padding:2px 10px;cursor:pointer">知道了</button>
 </div>
 
 <div class="tabs" id="tabs">
@@ -895,6 +901,7 @@ function connectWS(){
 function refreshAllState(){
   refreshHosts();refreshTasks();refreshAgents();refreshProjects();
   checkSecretaryState();refreshPMAgents();loadPMThreads();renderWsOverview();
+  loadVersionBadge();
 }
 function onStationEvent(evt){
   // M5: 事件总线分发 — 资源面板实时刷新 (替代轮询/手动刷新)
@@ -907,6 +914,29 @@ function onStationEvent(evt){
     }
     if(t==='resource_config'){showToast('⚙️ 资源配置已热重载','ok');}
   }
+  if(t==='version_upgrade_notice'){showUpgradeBanner(evt.data||{});}
+}
+// S2: 版本升级提醒横幅 + 顶栏版本徽章
+async function loadVersionBadge(){
+  try{
+    const r=await apiFetch('/api/version');
+    if(!r.ok)return;
+    const v=await r.json();
+    const el=document.getElementById('version-badge');
+    if(!el)return;
+    const label=v.version?`${v.version} · ${v.commit}`:`${v.commit||'未知版本'}`;
+    el.textContent='🏷️ '+label;
+    el.title=(v.note||'本机代码版本')+(v.released_at?` (${v.released_at})`:'');
+  }catch(e){}
+}
+function showUpgradeBanner(d){
+  const banner=document.getElementById('upgrade-banner');
+  const txt=document.getElementById('upgrade-banner-text');
+  if(!banner||!txt)return;
+  const who=d.from_name||'其他主机';
+  txt.innerHTML=`<b>${who}</b> 版本领先 <code style="font-size:12px">${d.commit||''}</code>${d.note?` — ${d.note}`:''}, 建议本机尽快升级`;
+  banner.style.display='flex';
+  showToast(`⬆️ 收到升级提醒: ${who} 版本领先`,'info');
 }
 
 // ── 主机面板 ──
