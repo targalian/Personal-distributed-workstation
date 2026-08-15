@@ -57,6 +57,44 @@ def get_local_ipv4_addresses() -> List[str]:
     return sorted(set(ips))
 
 
+def pick_reachable_ip(target_ip: str) -> str:
+    """选择一个目标主机可达的本机 IPv4 (任务③ 跨机派发用)。
+
+    策略: 与目标同网段优先 (前两段相同, 覆盖常见局域网);
+    目标在 Tailscale CGNAT 段 (100.64/10) 时匹配本机同段 IP;
+    回退时排除链路本地 169.254.x.x 与 VPN 虚拟网段;
+    均无则返回空串由调用方回退。
+    """
+    ips = get_local_ipv4_addresses()
+    if not ips or not target_ip:
+        return ""
+
+    def _prefix(ip: str, seg: int = 2) -> str:
+        return ".".join(ip.split(".")[:seg])
+
+    def _in_tailscale(ip: str) -> bool:
+        parts = ip.split(".")
+        return parts[0] == "100" and 64 <= int(parts[1]) <= 127
+
+    target_prefix = _prefix(target_ip)
+    same_net = [ip for ip in ips if _prefix(ip) == target_prefix]
+    if same_net:
+        return same_net[0]
+
+    if _in_tailscale(target_ip):
+        ts = [ip for ip in ips if _in_tailscale(ip)]
+        if ts:
+            return ts[0]
+
+    for ip in ips:
+        if ip.startswith("169.254."):
+            continue  # 链路本地地址, 跨机不可达
+        if _in_tailscale(ip) or ip.split(".")[0] == "26":
+            continue  # Tailscale/Radmin VPN 虚拟网段
+        return ip
+    return ""
+
+
 def get_mac_address() -> str:
     """获取首个非虚拟网卡的 MAC 地址。
 

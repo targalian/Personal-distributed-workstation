@@ -753,7 +753,7 @@ def create_station_router(controller) -> APIRouter:
         )
         target_host = online_hosts[0]
 
-        # 3. 构造 Secretary URL (始终用 localhost, 避免 Tailscale IP 不可达)
+        # 3. 构造 Secretary URL: 本机派发用 localhost; 远程派发在回退分支重建可达地址
         secretary_url = f"http://127.0.0.1:{state.api_port}"
 
         # 4. 优先本机派发 (内嵌 Worker, 无需网络往返)
@@ -798,12 +798,20 @@ def create_station_router(controller) -> APIRouter:
         target_ip = target_host.ip
         if target_host.device_id == state.device_id:
             target_ip = "127.0.0.1"
+        # 修复 (任务③): 远程 PM 必须回报到本机 Secretary — 127.0.0.1 在
+        # 远端会打到远端自己的 Station, 导致进度上报丢失; 选本机与目标
+        # 同网段的可达 IP (无同网段时回退首个非虚拟 IP)
+        from .host_info import pick_reachable_ip
+        reach_ip = pick_reachable_ip(target_ip)
+        remote_secretary_url = (
+            f"http://{reach_ip}:{state.api_port}" if reach_ip else secretary_url
+        )
         try:
             resp = http_requests.post(
                 f"http://{target_ip}:{target_host.api_port}/role/start-pm",
                 json={
                     "task_id": task.task_id,
-                    "secretary_url": secretary_url,
+                    "secretary_url": remote_secretary_url,
                     "task_data": task.to_dict(),
                 },
                 headers=auth_headers(),
