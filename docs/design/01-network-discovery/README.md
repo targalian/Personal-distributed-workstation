@@ -4,13 +4,14 @@
 
 ## 模块清单
 
-| 模块 | 职责一句话 |
+<!-- AUTO:module-list -->
+| 文件/目录 | 职责一句话 |
 |---|---|
-| discovery.py | UDP 广播设备发现 (presence 包收发 + TTL 离线清理) |
-| protocol.py | 协议定义: 端口常量、DiscoveryPacket、HostInfo/HostRecord 数据模型 |
-| auth.py | 节点间 mesh_token 认证 (Shared Token, 可选启用) |
-| http_retry.py | 节点间 HTTP 调用封装 (指数退避重试 + 自动附加 token) |
-
+| auth.py | 节点间通信认证 — 轻量级 Shared Token 机制 |
+| discovery.py | UDP 广播局域网设备发现 - 参考 QuickLAN 的 DiscoveryService |
+| http_retry.py | 内部 HTTP 通信重试工具 |
+| protocol.py | 协议定义 - 端口常量、发现数据包、主机信息模型 |
+<!-- /AUTO:module-list -->
 ---
 
 ## discovery.py — UDP 广播设备发现

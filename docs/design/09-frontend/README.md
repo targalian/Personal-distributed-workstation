@@ -4,11 +4,12 @@
 
 ## 模块清单
 
-| 文件 | 职责一句话 |
+<!-- AUTO:module-list -->
+| 文件/目录 | 职责一句话 |
 |---|---|
-| lan_mesh/web/templates/dashboard.html | Web UI 单文件 (约 179KB, HTML+CSS+JS 内联) |
-| lan_mesh/web/static/manifest.json | PWA manifest |
-
+| lan_mesh/web/static/ | CSS/JS 静态资源 |
+| lan_mesh/web/templates/dashboard.html | Station Web 控制台 (7 Tab) |
+<!-- /AUTO:module-list -->
 ---
 
 ## dashboard.html — 仪表盘单文件

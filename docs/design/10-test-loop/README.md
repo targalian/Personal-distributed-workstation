@@ -4,22 +4,31 @@
 
 ## 模块清单
 
+<!-- AUTO:module-list -->
 | 文件/目录 | 职责一句话 |
 |---|---|
-| tests/test_core.py | pytest 基线测试 (当前 98 条) |
-| test_bug/run_loop.py | Loop 循环调度入口 |
-| test_bug/dev_loop.py / nightly_loop.py / daily_loop.bat | 开发/夜间/每日循环形态 |
-| test_bug/api_tests.py / ui_tests.py / discover_tests.py | API / UI / 发现层测试 |
-| test_bug/ui_change_log.py | UI 变更登记 (test_checklist.csv) |
+| .githooks/ | commit-msg / pre-push 钩子 |
+| loop_status.json | 迭代状态机 (根目录) |
+| test_bug/api_tests.py | Loop Engineering — 自动化白盒 API 测试 |
+| test_bug/daily_loop.bat | 每日循环定时任务形态 (Windows) |
+| test_bug/dev_loop.py | Dev Loop Engineering — 开发+测试闭环编排器 |
+| test_bug/discover_tests.py | 测试项自动推导工具 — 从源码中机械式提取所有可测试点 |
 | test_bug/loop_config.yaml | 循环配置 |
+| test_bug/nightly_loop.py | Loop Engineering — 夜间自动巡检 (定时任务用) |
+| test_bug/run_loop.py | Loop Engineering — 每日验证循环编排器 |
+| test_bug/setup_scheduler.bat | 定时任务安装脚本 |
 | test_bug/test_checklist.csv | UI 变更清单 (UI-0xx 编号) |
-
+| test_bug/ui_change_log.py | Loop Engineering — UI 改动待检登记工具 |
+| test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
+| tests/test_core.py | 核心模块单元测试 |
+<!-- /AUTO:module-list -->
 ---
 
 ## tests/test_core.py — pytest 基线
 
-**规范**: 全部改动后必须全绿（当前 98/98）。覆盖核心链路:
-协议/DB 迁移/评级/任务 DAG/路由评分/密钥加解密/启动同步幂等等。
+**规范**: 全部改动后必须全绿（当前 105/105）。覆盖核心链路:
+协议/DB 迁移/评级/任务 DAG/路由评分/密钥加解密/启动同步幂等/Secretary
+冲突仲裁（TestSecretaryConflict, E4）等。
 
 **编写约定**:
 - 中文参数场景通过临时 .py 脚本执行，防 GBK 乱码
@@ -49,4 +58,5 @@ current_phase / notes / next_tasks）、.githooks/（commit-msg / pre-push）。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-16 | iter-28 | E4: 新增 TestSecretaryConflict 7 条, 基线 98→105 |
 | 2026-08-16 | iter-27 后 | 初建 |

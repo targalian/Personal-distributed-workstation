@@ -4,12 +4,13 @@
 
 ## 模块清单
 
-| 模块 | 职责一句话 |
+<!-- AUTO:module-list -->
+| 文件/目录 | 职责一句话 |
 |---|---|
-| chat_handler.py | 秘书聊天处理器: Web 对话 + 意图解析执行 + 历史持久化 |
-| bot_gateway.py | Bot 网关: 企业微信/Telegram 手机消息通道 |
-| role_cards.py | 统一角色卡 (M6): Secretary/PM/Worker 人格单一事实源 |
-
+| bot_gateway.py | Bot 网关 — 手机消息通道 |
+| chat_handler.py | 秘书聊天处理器 — Web 端对话接口 |
+| role_cards.py | 统一角色卡定义 (M6) — Secretary/PM/Worker 人格的单一事实源。 |
+<!-- /AUTO:module-list -->
 ---
 
 ## chat_handler.py — 秘书聊天处理器（57KB）

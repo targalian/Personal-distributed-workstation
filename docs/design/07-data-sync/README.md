@@ -4,12 +4,13 @@
 
 ## 模块清单
 
-| 模块 | 职责一句话 |
+<!-- AUTO:module-list -->
+| 文件/目录 | 职责一句话 |
 |---|---|
-| shared_folder.py | 共享文件夹管理 (自动创建/列举/读写 + 配置报告) |
-| cloud_sync.py | 云存储同步 (S3 兼容: OSS/MinIO/AWS, 双向增量) |
-| host_info.py | 主机硬件画像采集 (psutil) |
-
+| cloud_sync.py | 云存储同步管理器 — S3 兼容服务 (阿里云 OSS / MinIO / AWS S3) |
+| host_info.py | 主机配置自动采集 - 使用 psutil 收集 CPU/内存/磁盘/OS/网络信息 |
+| shared_folder.py | 共享文件夹自动管理 - 自动创建、列举、读写共享目录 |
+<!-- /AUTO:module-list -->
 ---
 
 ## shared_folder.py — 共享文件夹
