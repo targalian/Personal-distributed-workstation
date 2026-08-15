@@ -1,0 +1,84 @@
+# 03 任务编排
+
+项目定位的核心竞争力层：任务以 DAG 组织，PM Agent 驱动拆解、组队、分发、
+监控、聚合。架构范式为 **Graph Engineering**（借鉴 LangGraph Supervisor）。
+
+## 模块清单
+
+| 模块 | 职责一句话 |
+|---|---|
+| task.py | 任务 DAG 数据结构 (邻接表/拓扑排序/条件边/动态路由/序列化) |
+| orchestrator.py | 编排引擎: 分解→DAG→匹配→分发→聚合 (显式状态机+Checkpoint) |
+| pm_agent.py | PM Agent 门面: 持有 Planner/Dispatcher/Monitor |
+| pm_planner.py | 规划器: 模板匹配 + LLM 规划 + 多轮细化 |
+| pm_dispatcher.py | 分发器: 团队创建与依赖感知分发 |
+| pm_monitor.py | 监控器: 进度收集/超时检测/失败接管/质量验证/聚合 |
+| pm_state.py | PM 共享状态容器 (dataclass + lock) |
+| task_templates.py | 任务模板库 (预置 DAG + 变量替换) |
+| project.py | 项目管理与预算护栏 (Phase 3 项目隔离) |
+
+---
+
+## task.py — 任务 DAG 数据结构
+
+**职责**: 子任务依赖图（Graph Engineering 基石）。
+
+**能力**: 邻接表、拓扑排序、环检测、就绪子任务判定（依赖已满足）、
+**条件边**（运行时上下文决定是否激活）、动态图操作（运行时增删节点/边）、
+JSON 序列化（前端渲染 + checkpoint 恢复）。
+
+## orchestrator.py — 任务编排引擎
+
+**职责**: 用户任务 → 分解（规则/LLM）→ DAG 构建 → Agent 匹配 →
+HTTP 分发 Worker → 结果聚合 → 交付。
+
+**设计要点**:
+- 显式状态机: `decompose → route → dispatch → monitor → aggregate → deliver`
+- 每次状态转换自动 Checkpoint 持久化，支持断点恢复
+- 借鉴 LangGraph Supervisor 模式，但自研轻量实现
+
+## pm_agent.py / pm_planner.py / pm_dispatcher.py / pm_monitor.py — PM 四件套
+
+**PM Agent 是当前主用的任务驱动者**（orchestrator 为早期实现，能力对齐中）。
+
+- **pm_agent.py**: 门面/协调器，统一持有三子模块并对外暴露接口
+- **pm_planner.py**: 加载 multi-agent-architect skill → 模板匹配（F2.4）
+  或 LLM 规划 → 多轮细化（F2.3）；简单任务直接执行
+- **pm_dispatcher.py**: 获取可用 work_station 列表 → 创建团队与子 Agent →
+  **依赖感知调度**（depends_on 满足才分发）→ 构建子 Agent 定制 prompt →
+  本地执行回退
+- **pm_monitor.py**: progress_loop 轮询 + 主动上报接收 → 超时检测 →
+  **失败接管三级策略**（同站重试 → 换站重试 → PM 本地接管）→
+  质量验证（F2.5 生成-验证器）→ 结果聚合 → 升级上报
+
+**pm_state.py**: planner/dispatcher/monitor 共享的 dataclass 状态容器，
+由 PM Agent 统一持有，`state.lock` 保证线程安全。
+
+**分层混合交互**:
+- L1 项目对话: 与秘书交互（需求/决策/跨 PM 协调）
+- L2 PM 线程: 项目对话内展开，与单个 PM 深度技术讨论
+- PM `_request_clarification` 阻塞时，回复双写 L1 通知 + L2 线程
+
+## task_templates.py — 任务模板库（F2.4）
+
+预定义任务分解模板（DAG 结构），PM 规划时匹配加速；支持用户自定义注册与
+`{{变量}}` 替换。接口: `list_templates()` / `match_template()` /
+`apply_template()`。
+
+## project.py — 项目管理与预算护栏（Phase 3）
+
+**职责**: 项目 CRUD + 成本计算 + 预算护栏。
+
+**设计要点**:
+- 每个项目: 独立工作空间目录、独立预算配额、允许模型白名单、
+  路由策略（cost_first / quality_first / balanced）
+- 超支自动暂停项目并切换经济模型
+- 消费记录基于 model_resources 的用量日志折算
+
+**依赖**: model_resources, model_router, database
+
+## 变更记录
+
+| 日期 | 迭代 | 摘要 |
+|---|---|---|
+| 2026-08-16 | iter-27 后 | 初建 |
