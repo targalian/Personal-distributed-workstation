@@ -71,7 +71,8 @@ _API_KEY = _os.environ.get("LAN_MESH_API_KEY", "")  # 空 = 不启用认证
 #   /health, /api/health: 健康探活 (限流除外)
 #   /ws: WebSocket 实时推送 (会话建立后由 UI 持有 token)
 #   /api/station/auth-token: Web UI 引导获取 token (信任根: 能访问 UI 者视为内网成员)
-_AUTH_WHITELIST = {"/health", "/api/register", "/api/heartbeat", "/ws", "/api/station/auth-token"}
+_AUTH_WHITELIST = {"/health", "/api/register", "/api/heartbeat", "/ws",
+                   "/api/station/auth-token", "/api/station/bootstrap-token"}
 
 
 # Phase 0: 节点间 mesh token 认证 (默认关闭, config.yaml security.auth_enabled 开启)
@@ -328,10 +329,20 @@ def create_station_router(controller) -> APIRouter:
         await _broadcast(state, "host_registered", record.to_dict())
         controller.bot_gateway.notify("host_online", {"device_name": record.device_name or record.hostname or "未知", "ip": record.ip or ""})
         result = {"ok": True, "device_id": info.device_id}
-        # Phase 0: 认证启用时向新节点下发 mesh token (引导注册)
-        if mesh_auth_enabled():
-            result["mesh_token"] = _mesh_auth_token
-            logger.info("已向新节点下发 mesh token: %s", info.device_id[:8])
+        # Phase 0: 向新节点下发 mesh token — S1 起无论认证开关都下发
+        # (加密信任根与认证开关解耦; 认证启用时它同时是传输校验凭证)
+        from .auth import get_mesh_token
+        result["mesh_token"] = _mesh_auth_token or get_mesh_token()
+        logger.info("已向新节点下发 mesh token: %s", info.device_id[:8])
+        # S1: 注册成功后后台推送加密资源密钥 (新节点上线即武装,
+        # 不阻塞注册响应; 发现信息可能尚未入库, 传入回退地址)
+        threading.Thread(
+            target=controller.push_resource_secrets,
+            args=(info.device_id,),
+            kwargs={"fallback_ip": record.ip,
+                    "fallback_port": info.api_port},
+            daemon=True, name="secret-sync-register",
+        ).start()
         return result
 
     @router.get("/api/station/auth-token")
@@ -342,6 +353,15 @@ def create_station_router(controller) -> APIRouter:
         认证关闭时返回空字符串 (前端不附加认证头)。
         """
         return {"auth_enabled": mesh_auth_enabled(), "mesh_token": _mesh_auth_token if mesh_auth_enabled() else ""}
+
+    @router.get("/api/station/bootstrap-token")
+    async def bootstrap_token():
+        """S1: mesh token 引导端点 — Station 间无注册链路, 非 Secretary
+        节点启动选举时从此处拉取信任根并持久化 (与注册下发同一
+        信任假设: 能触及本端口的局域网成员视为内网成员)。
+        """
+        from .auth import get_mesh_token
+        return {"mesh_token": _mesh_auth_token or get_mesh_token()}
 
     @router.post("/api/heartbeat")
     async def heartbeat(payload: dict):
@@ -1323,9 +1343,74 @@ def create_station_router(controller) -> APIRouter:
         set_bot_notify_global(controller.bot_gateway.notify)
         publish_event("resource_config",
                       {"ok": True, "pools": len(mgr.list_resources())})
+        # S1: 保存后后台热推送加密密钥到全部在线节点 (改一次全网生效)
+        threading.Thread(
+            target=controller.push_resource_secrets,
+            daemon=True, name="secret-sync-save",
+        ).start()
         return {"ok": True, "enabled": mgr.enabled,
                 "pools": len(mgr.list_resources()),
                 "backup": saved.get("backup", "")}
+
+    @router.post("/api/secrets/receive")
+    async def receive_secrets(payload: dict):
+        """S1: 接收 Secretary 加密推送的资源配置 (含 API Key 直填)。
+
+        解密用本机 mesh_token (与推送方同信任根, 与认证开关解耦);
+        校验通过后落盘 resources.yaml 并热重载 (直填 key 由 load()
+        注入环境变量); 配置指纹一致时幂等跳过。
+        """
+        from pathlib import Path
+        from .auth import get_mesh_token
+        from .config import load_model_pool
+        from .model_resources import (init_resource_manager, read_config_data,
+                                      save_config, set_bot_notify_global,
+                                      validate_config)
+        from .secret_sync import config_hash, decrypt_config
+        local_token = _mesh_auth_token or get_mesh_token()
+        try:
+            data = decrypt_config(payload, local_token)
+        except (ValueError, RuntimeError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        expected = (payload.get("config_hash") or "").strip()
+        if expected and config_hash(data) != expected:
+            raise HTTPException(status_code=400, detail="配置指纹不匹配, 拒绝落盘")
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=400, detail="解密内容非配置对象")
+        # 幂等: 与现有配置指纹一致 → 跳过落盘与重载
+        target = Path(__file__).parent / "resources.yaml"
+        current = read_config_data(target) if target.is_file() else {}
+        cur_data = current.get("data") or {}
+        if cur_data and config_hash(cur_data) == config_hash(data):
+            return {"ok": True, "applied": False, "detail": "配置一致",
+                    "pools": len(cur_data.get("resources") or [])}
+        errors = validate_config(data)
+        if errors:
+            raise HTTPException(status_code=400,
+                                detail="接收配置校验失败: " + "; ".join(errors))
+        saved = save_config(target, data)
+        if not saved.get("ok"):
+            raise HTTPException(status_code=500,
+                                detail=f"保存失败: {saved.get('error')}")
+        pool = load_model_pool()
+        mgr = init_resource_manager(
+            target, pool.models if pool.models else None, controller.db)
+        set_bot_notify_global(controller.bot_gateway.notify)
+        publish_event("resource_config",
+                      {"ok": True, "pools": len(mgr.list_resources()),
+                       "source": "secret-sync"})
+        logger.info("[S1] 已接收加密密钥分发, 应用 %d 个资源池",
+                    len(mgr.list_resources()))
+        return {"ok": True, "applied": True, "detail": "已应用",
+                "pools": len(mgr.list_resources())}
+
+    @router.post("/api/secrets/sync-all")
+    async def sync_secrets_all():
+        """S1: 手动将本机资源密钥 (加密) 推送到全部在线节点。"""
+        results = controller.push_resource_secrets()
+        ok_count = sum(1 for r in results if r.get("ok"))
+        return {"ok": bool(ok_count), "pushed": ok_count,
+                "total": len(results), "results": results}
 
     @router.post("/api/resources/test-key")
     async def test_resource_key(payload: dict):

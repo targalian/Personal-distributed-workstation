@@ -186,7 +186,9 @@ class StationController:
         from .auth import get_mesh_token
         from .http_retry import http_post, set_auth_token
         self._mesh_auth_enabled = bool(cfg.security.auth_enabled)
-        self._mesh_token = get_mesh_token(cfg) if self._mesh_auth_enabled else ""
+        # S1: 加密信任根 — 无论认证开关如何都加载持久化 token (注册引导
+        # 时已全网下发同一值); 认证开关仅门控传输层校验, 不影响密钥分发
+        self._mesh_token = get_mesh_token(cfg)
         if self._mesh_auth_enabled:
             set_auth_token(self._mesh_token)
             logger.info("节点间认证已启用 (auth_enabled=true), 出站请求将携带 mesh token")
@@ -388,6 +390,38 @@ class StationController:
                 logger.error("Secretary 自动激活失败: %s (可在 Web UI 手动激活)", e)
         else:
             logger.info("Secretary 选举: 网络中已有 Secretary [%s], 本站保持 Station 模式", existing)
+            self._converge_mesh_token()
+
+    def _converge_mesh_token(self):
+        """S1: 从 Secretary 拉取 mesh token 收敛加密信任根。
+
+        Station 间无注册链路 (注册仅 Worker 用), 非 Secretary 节点
+        在此处引导拉取并持久化; 与注册下发同一信任假设 (LAN 成员)。
+        """
+        from .auth import save_mesh_token
+        from .http_retry import http_get
+        sec_host = None
+        for h in self.db.list_hosts():
+            if (getattr(h, "device_id", "") != self.state.device_id
+                    and getattr(h, "role", "") == "secretary"
+                    and getattr(h, "online", False)
+                    and getattr(h, "ip", "") and getattr(h, "api_port", 0)):
+                sec_host = h
+                break
+        if not sec_host:
+            return
+        try:
+            resp = http_get(
+                f"http://{sec_host.ip}:{sec_host.api_port}"
+                "/api/station/bootstrap-token", timeout=10)
+            token = (resp.json() or {}).get("mesh_token", "")
+            if token and token != self._mesh_token:
+                if save_mesh_token(token):
+                    self._mesh_token = token
+                    logger.info("[S1] mesh token 已收敛 (拉取自 Secretary %s)",
+                                sec_host.ip)
+        except Exception as e:
+            logger.warning("[S1] mesh token 收敛失败: %s", e)
 
     def _find_existing_secretary(self) -> str:
         """查找网络中已存在的在线 Secretary。返回设备名或空字符串。"""
@@ -1278,6 +1312,91 @@ class StationController:
                 logger.info("[自动扩容] 任务 %s 已派发到 %s", task_id[:8], ip)
         except Exception as e:
             logger.debug("[自动扩容] 派发失败: %s", e)
+
+    # ── S1: API Key 加密自动分发 ────────────────────────────
+
+    def push_resource_secrets(self, only_device_id: str = "",
+                              fallback_ip: str = "",
+                              fallback_port: int = 0) -> list:
+        """S1: 将本机资源配置 (含 api_key 直填) 加密推送到在线节点。
+
+        信任根为 mesh_token (HKDF 派生 AES-256-GCM 密钥), 与认证
+        开关解耦; token 缺失时拒绝推送 (绝不降级明文)。
+
+        Args:
+            only_device_id: 仅推指定节点 (空 = 本机外全部在线节点)
+            fallback_ip/fallback_port: 目标主机记录缺 ip/port 时的
+                回退地址 (注册即推场景, 发现信息尚未入库)
+
+        Returns:
+            [{"device_id", "device_name", "ok", "detail"}]
+        """
+        if not self._mesh_token:
+            return [{"ok": False,
+                     "detail": "无 mesh_token (加密信任根缺失), 拒绝推送"}]
+
+        from .http_retry import http_post
+        from .model_resources import read_config_data
+        from .secret_sync import config_hash, encrypt_config
+        target = Path(__file__).parent / "resources.yaml"
+        if not target.is_file():
+            return [{"ok": False, "detail": "本机无 resources.yaml, 无密钥可分发"}]
+        cfg = read_config_data(target)
+        data = cfg.get("data") or {}
+        pools = data.get("resources") or []
+        key_count = sum(1 for p in pools if (p.get("api_key") or "").strip())
+        if not key_count:
+            return [{"ok": False, "detail": "无资源池配置 api_key 直填值, 无需推送"}]
+
+        hosts = self.db.list_hosts()
+        targets = [
+            h for h in hosts
+            if h.online and h.device_id != self.state.device_id
+            and (not only_device_id or h.device_id == only_device_id)
+        ]
+        if not targets:
+            return [{"ok": False, "detail": "无其他在线节点"}]
+
+        results = []
+        cfg_hash = config_hash(data)
+        for h in targets:
+            ip = h.ip or (fallback_ip if h.device_id == only_device_id else "")
+            port = h.api_port or (fallback_port if h.device_id == only_device_id else 0)
+            item = {"device_id": h.device_id,
+                    "device_name": h.device_name or h.hostname}
+            if not ip or not port:
+                item["ok"] = False
+                item["detail"] = "目标地址不完整"
+                results.append(item)
+                continue
+            try:
+                payload = encrypt_config(data, self._mesh_token)
+                payload["config_hash"] = cfg_hash
+                resp = http_post(
+                    f"http://{ip}:{port}/api/secrets/receive",
+                    json=payload,
+                    timeout=15,
+                )
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = {}
+                item["ok"] = resp.status_code == 200
+                if resp.status_code == 200 and body.get("applied"):
+                    item["detail"] = f"已应用 ({body.get('pools', 0)} 池)"
+                elif resp.status_code == 200:
+                    item["detail"] = "配置一致, 已跳过"
+                else:
+                    item["detail"] = (body.get("detail")
+                                      or f"HTTP {resp.status_code}")
+            except Exception as e:
+                item["ok"] = False
+                item["detail"] = f"推送失败: {e}"
+            results.append(item)
+            logger.info("[S1] 密钥推送 %s (%s): %s — %s",
+                        item.get("device_name"), ip,
+                        "成功" if item["ok"] else "失败", item["detail"])
+        return results
 
     async def _ws_push_loop(self):
         """定期向 WebSocket 客户端推送最新主机状态 (新主机入站时立即触发)。"""

@@ -160,7 +160,10 @@ class WorkerAgent:
                     self.state.mesh_token = issued
                     from .http_retry import set_auth_token
                     set_auth_token(issued)
-                    logger.info("已接收 Secretary 下发的 mesh token (节点认证启用)")
+                    # S1: 持久化信任根 (重启后仍可解密 Secretary 推送的密钥)
+                    from .auth import save_mesh_token
+                    save_mesh_token(issued)
+                    logger.info("已接收 Secretary 下发的 mesh token")
                 logger.info("主机信息已注册到 Secretary %s:%s", self.state.secretary_ip, self.state.secretary_port)
                 # 2. 注册 Agent Card
                 self._register_agent_card()
