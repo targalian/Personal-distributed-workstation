@@ -9,6 +9,7 @@
 5. role_cards — 角色卡结构、秘书 prompt 关键约束回归 (M6)
 6. balance_probe — 别名归一、各家解析、异常提示、key 优先级 (R2/R4)
 7. version_sync — 版本比对、领先检测、通知去重 (S2)
+8. startup-sync — hosts 版本列、心跳版本落库、启动密钥推/拉路由、拉取幂等 (S3)
 
 运行: pytest tests/ -v
 """
@@ -909,3 +910,88 @@ class TestVersionSync:
         for k in ("version", "commit", "commit_time", "released_at", "note", "upgrade_hint"):
             assert k in info
         assert isinstance(info["commit"], str)
+
+
+class TestStartupSync:
+    """S3 启动同步 — hosts 版本列、心跳版本落库、密钥推/拉路由、拉取幂等。"""
+
+    def test_hosts_version_columns_roundtrip(self, tmp_path):
+        from lan_mesh.database import Database
+        from lan_mesh.protocol import HostRecord
+        db = Database(str(tmp_path / "m.db"))
+        rec = HostRecord(device_id="dev-a", code_version="abc1234",
+                         version_ts=1755300000.0)
+        db.upsert_host(rec)
+        got = db.get_host("dev-a")
+        assert got.code_version == "abc1234"
+        assert got.version_ts == 1755300000.0
+
+    def test_heartbeat_updates_version(self, tmp_path):
+        from lan_mesh.database import Database
+        from lan_mesh.station_director import StationDirector
+        from lan_mesh.protocol import HostInfo
+        db = Database(str(tmp_path / "m.db"))
+        director = StationDirector(db=db, discovery=None)
+        info = HostInfo(device_id="dev-b", code_version="bbb1111",
+                        version_ts=1755300100.0)
+        director.on_host_registered(info)
+        director.on_heartbeat("dev-b", {"code_version": "bbb2222",
+                                        "version_ts": 1755300200.0})
+        got = db.get_host("dev-b")
+        assert got.code_version == "bbb2222"
+        assert got.version_ts == 1755300200.0
+
+    def test_startup_key_sync_routing(self):
+        from lan_mesh.station_controller import StationController
+        calls = {"push": [], "pull": []}
+
+        class Fake:
+            secretary_active = True
+
+            def push_resource_secrets(self, only_device_id="",
+                                      fallback_ip="", fallback_port=0):
+                calls["push"].append(only_device_id)
+                return [{"ok": True}]
+
+            def pull_resource_secrets(self, ip, port):
+                calls["pull"].append((ip, port))
+                return {"ok": True}
+
+        StationController._startup_key_sync(
+            Fake(), [{"device_id": "p1", "role": "worker"}])
+        assert calls["push"] == [""] and not calls["pull"]
+
+        f2 = Fake()
+        f2.secretary_active = False
+        StationController._startup_key_sync(
+            f2, [{"device_id": "p2", "role": "secretary",
+                  "ip": "10.0.0.2", "api_port": 80}])
+        assert calls["pull"] == [("10.0.0.2", 80)]
+
+    def test_pull_idempotent_same_config(self, monkeypatch):
+        from lan_mesh.station_controller import StationController
+        from lan_mesh.secret_sync import encrypt_config, config_hash
+        import types
+        import lan_mesh.http_retry as hr
+        import lan_mesh.model_resources as mres
+        res_file = Path(__file__).parent.parent / "lan_mesh" / "resources.yaml"
+        if not res_file.is_file():
+            import pytest as _pt
+            _pt.skip("resources.yaml 不存在, 跳过幂等验证")
+        data = {"resources": [{"name": "p", "api_key": "sk-x"}]}
+        payload = encrypt_config(data, "unit-test-token")
+        payload["config_hash"] = config_hash(data)
+
+        class FakeResp:
+            def json(self):
+                return payload
+
+        monkeypatch.setattr(hr, "http_get",
+                            lambda url, **kw: FakeResp())
+        # 构造"本机配置与拉取内容一致" → 幂等跳过, 绝不落盘
+        monkeypatch.setattr(mres, "read_config_data",
+                            lambda p: {"data": data})
+        fake_self = types.SimpleNamespace(_mesh_auth_token="unit-test-token")
+        result = StationController.pull_resource_secrets(
+            fake_self, "10.0.0.2", 80)
+        assert result["ok"] is True and result["applied"] is False

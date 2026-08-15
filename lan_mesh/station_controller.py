@@ -297,6 +297,12 @@ class StationController:
         self.secretary_host_id = self.state.device_id
         self.secretary_host_port = self.state.api_port
         logger.info("Secretary 模式已激活 — 聊天处理器/模型路由/MCP工具 已就绪 (PM Agent 架构)")
+        # S3: 激活后立即向在线节点推送密钥 (兜底启动同步时机差)
+        try:
+            threading.Thread(target=self.push_resource_secrets,
+                             name="station-secret-push", daemon=True).start()
+        except Exception as e:
+            logger.warning("[S3] 激活后密钥推送启动失败: %s", e)
 
         # 任务断点恢复: 将上次运行中断的任务标记为 interrupted
         self._recover_stale_tasks()
@@ -1010,6 +1016,8 @@ class StationController:
                     "memory_percent": packet.memory_percent,
                     "disk_percent": packet.disk_percent,
                     "ip": ip,
+                    "code_version": packet.code_version,
+                    "version_ts": packet.version_ts,
                 })
             except Exception:
                 pass
@@ -1032,6 +1040,8 @@ class StationController:
                 shared_folder=packet.shared_folder,
                 ip_addresses=packet.ip_addresses or [ip],
                 api_port=packet.api_port,
+                code_version=packet.code_version,
+                version_ts=packet.version_ts,
             )
             self.station_director.on_host_registered(info)
             # 触发 WS 立即推送 (从非 async 线程安全地设置 event)
@@ -1042,6 +1052,15 @@ class StationController:
                 except Exception:
                     pass
             logger.info("UDP 自动注册: %s (%s)", packet.device_name, ip)
+            # S3: 新主机入网即时同步 (免轮询): 密钥推送/拉取 + 版本通知
+            sync_t = threading.Thread(
+                target=self._sync_with_new_peer,
+                args=(packet.device_id, ip, packet.api_port,
+                      packet.role, packet.code_version, packet.version_ts),
+                name="station-peer-sync", daemon=True,
+            )
+            sync_t.start()
+            self._threads.append(sync_t)
         except Exception as e:
             logger.error("UDP 自动注册异常: %s", e)
 
@@ -1074,6 +1093,8 @@ class StationController:
                     "disk_percent": info.disk_percent,
                     "shared_file_count": info.shared_file_count,
                     "ip": info.ip_addresses[0] if info.ip_addresses else "",
+                    "code_version": info.code_version,
+                    "version_ts": info.version_ts,
                 })
             except Exception:
                 pass
@@ -1094,25 +1115,169 @@ class StationController:
 
     # ── S2: 版本升级提醒 ─────────────────────────────────
 
-    def _version_watch_loop(self):
-        """S2: 定期比对局域网内各节点代码版本, 领先者通知落后者升级。"""
+    def _startup_sync_once(self):
+        """S3: 启动时一次性同步 (替代 60s 轮询) — 版本比对 + API Key 同步。
+
+        等发现层可见对端后执行一次:
+        1. 版本领先检测 (领先则通知落后节点, 落后则提醒自身升级)
+        2. 密钥同步: 本机是 Secretary 则推, 否则从 Secretary 拉取
+        """
         from .version_sync import local_version_info
-        while self._running:
-            time.sleep(60)
+        peers: list = []
+        deadline = time.time() + 60
+        while self._running and time.time() < deadline:
+            time.sleep(5)
             try:
-                self_ver = local_version_info()
-                if not self_ver.get("commit") or not self.discovery:
-                    continue
                 peers = [
-                    d for d in self.discovery.list_devices()
+                    d for d in (self.discovery.list_devices()
+                                if self.discovery else [])
                     if d.get("online") and d.get("device_id") != self.state.device_id
-                    and d.get("code_version")
                 ]
-                if not peers:
-                    continue
-                self._check_version_leadership(self_ver, peers)
-            except Exception as e:
-                logger.warning("[S2] 版本监测异常: %s", e)
+            except Exception:
+                peers = []
+            if not peers:
+                # 回退: 发现层尚无对端时查 DB 既有在线主机记录
+                try:
+                    peers = [
+                        {"device_id": h.device_id, "role": h.role,
+                         "ip": h.ip, "api_port": h.api_port,
+                         "code_version": h.code_version,
+                         "version_ts": h.version_ts}
+                        for h in self.db.list_hosts()
+                        if h.online and h.device_id != self.state.device_id
+                        and h.ip and h.api_port
+                    ]
+                except Exception:
+                    peers = []
+            if peers:
+                break
+        if not peers or not self._running:
+            logger.info("[S3] 启动同步: 未发现对端节点, 跳过")
+            return
+        # 等 Secretary 选举完成 (最长 30s), 确保密钥同步方向判定准确
+        wait_until = time.time() + 30
+        while (self._running and time.time() < wait_until
+               and not self.secretary_active):
+            time.sleep(1)
+        try:
+            self_ver = local_version_info()
+            if self_ver.get("commit"):
+                vpeers = [p for p in peers if p.get("code_version")]
+                if vpeers:
+                    self._check_version_leadership(self_ver, vpeers)
+        except Exception as e:
+            logger.warning("[S3] 启动版本比对异常: %s", e)
+        try:
+            self._startup_key_sync(peers)
+        except Exception as e:
+            logger.warning("[S3] 启动密钥同步异常: %s", e)
+
+    def _startup_key_sync(self, peers: list):
+        """S3: 启动密钥同步 — Secretary 推送, 非 Secretary 从 Secretary 拉取。"""
+        if self.secretary_active:
+            results = self.push_resource_secrets()
+            ok_count = sum(1 for r in results if r.get("ok"))
+            logger.info("[S3] Secretary 启动推送密钥: %d/%d 成功",
+                        ok_count, len(results))
+            return
+        secretaries = [
+            p for p in peers
+            if p.get("role") == "secretary" and p.get("ip") and p.get("api_port")
+        ]
+        if not secretaries:
+            logger.info("[S3] 启动密钥同步: 未发现在线 Secretary, 跳过")
+            return
+        sec = secretaries[0]
+        result = self.pull_resource_secrets(sec["ip"], sec["api_port"])
+        logger.info("[S3] 启动从 Secretary 拉取密钥: %s", result.get("detail", ""))
+
+    def pull_resource_secrets(self, ip: str, port: int) -> dict:
+        """S3: 从指定节点拉取加密资源配置 (含 API Key) 并应用。
+
+        解密用本机 mesh_token; 指纹校验 + 幂等跳过 + validate 后落盘热重载。
+        """
+        from pathlib import Path
+        from .auth import get_mesh_token
+        from .config import load_model_pool
+        from .model_resources import (init_resource_manager, read_config_data,
+                                      save_config, set_bot_notify_global,
+                                      validate_config)
+        from .secret_sync import config_hash, decrypt_config
+        from .http_retry import http_get
+        resp = http_get(f"http://{ip}:{port}/api/secrets/fetch", timeout=15)
+        payload = resp.json()
+        if not payload.get("blob"):
+            return {"ok": False, "applied": False,
+                    "detail": payload.get("detail", "对端无配置")}
+        token = getattr(self, "_mesh_auth_token", None) or get_mesh_token()
+        try:
+            data = decrypt_config(payload, token)
+        except (ValueError, RuntimeError) as e:
+            return {"ok": False, "applied": False, "detail": f"解密失败: {e}"}
+        expected = (payload.get("config_hash") or "").strip()
+        if expected and config_hash(data) != expected:
+            return {"ok": False, "applied": False, "detail": "配置指纹不匹配"}
+        if not isinstance(data, dict):
+            return {"ok": False, "applied": False, "detail": "解密内容非配置对象"}
+        target = Path(__file__).parent / "resources.yaml"
+        current = read_config_data(target) if target.is_file() else {}
+        cur_data = current.get("data") or {}
+        if cur_data and config_hash(cur_data) == config_hash(data):
+            return {"ok": True, "applied": False, "detail": "配置一致"}
+        errors = validate_config(data)
+        if errors:
+            return {"ok": False, "applied": False,
+                    "detail": "校验失败: " + "; ".join(errors)}
+        saved = save_config(target, data)
+        if not saved.get("ok"):
+            return {"ok": False, "applied": False,
+                    "detail": f"保存失败: {saved.get('error')}"}
+        pool = load_model_pool()
+        mgr = init_resource_manager(
+            target, pool.models if pool.models else None, self.db)
+        set_bot_notify_global(self.bot_gateway.notify)
+        from .event_bus import publish_event
+        publish_event("resource_config",
+                      {"ok": True, "pools": len(mgr.list_resources()),
+                       "source": "startup-sync"})
+        logger.info("[S3] 已从 %s 拉取密钥并应用 %d 个资源池",
+                    ip, len(mgr.list_resources()))
+        return {"ok": True, "applied": True, "detail": "已应用",
+                "pools": len(mgr.list_resources())}
+
+    def _sync_with_new_peer(self, device_id: str, ip: str, port: int,
+                            role: str, code_version: str, version_ts: float):
+        """S3: 新主机入网即时同步 (免轮询) — 密钥与版本一次性对齐。
+
+        1. 密钥: 本机是 Secretary 则向新节点推送; 新节点是 Secretary 则向其拉取
+        2. 版本: 本机领先则通知新节点升级, 落后则提醒自身
+        """
+        time.sleep(2)  # 等待对端 API 就绪
+        try:
+            if self.secretary_active:
+                self.push_resource_secrets(only_device_id=device_id,
+                                           fallback_ip=ip,
+                                           fallback_port=port)
+            elif role == "secretary" and ip and port:
+                result = self.pull_resource_secrets(ip, port)
+                logger.info("[S3] 从新入网 Secretary 拉取密钥: %s",
+                            result.get("detail", ""))
+        except Exception as e:
+            logger.warning("[S3] 新主机密钥同步异常: %s", e)
+        try:
+            if code_version and ip and port:
+                from .version_sync import local_version_info
+                self_ver = local_version_info()
+                if self_ver.get("commit"):
+                    self._check_version_leadership(self_ver, [{
+                        "device_id": device_id,
+                        "code_version": code_version,
+                        "version_ts": version_ts,
+                        "ip": ip,
+                        "api_port": port,
+                    }])
+        except Exception as e:
+            logger.warning("[S3] 新主机版本比对异常: %s", e)
 
     def _check_version_leadership(self, self_ver: dict, peers: list):
         """S2: 版本领先检测 — 本机领先全网则通知落后节点, 落后则提醒自身升级。
@@ -1665,12 +1830,12 @@ class StationController:
         prune_thread.start()
         self._threads.append(prune_thread)
 
-        # S2: 启动版本升级提醒监测线程
-        version_thread = threading.Thread(
-            target=self._version_watch_loop, name="station-version-watch", daemon=True
+        # S3: 启动一次性同步 (版本比对 + API Key 拉/推, 替代 60s 轮询)
+        sync_thread = threading.Thread(
+            target=self._startup_sync_once, name="station-startup-sync", daemon=True
         )
-        version_thread.start()
-        self._threads.append(version_thread)
+        sync_thread.start()
+        self._threads.append(sync_thread)
 
         # F3.1: 启动自动扩缩容监控
         self._start_autoscaler()

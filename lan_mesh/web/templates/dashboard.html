@@ -547,7 +547,8 @@
     <span style="margin-left:auto;font-size:14px;color:var(--dim)">
       总计 <b id="stat-total" style="color:var(--text)">0</b> ·
       在线 <b id="stat-online" style="color:var(--green)">0</b> ·
-      离线 <b id="stat-offline" style="color:var(--red)">0</b>
+      离线 <b id="stat-offline" style="color:var(--red)">0</b> ·
+      版本 <b id="stat-versions" style="color:var(--dim)">-</b>
     </span>
   </div>
   <div class="grid" id="host-grid"><div class="empty"><div class="icon">⏳</div><p>正在搜索局域网内的 Work Station...</p><p class="hint">请确保各主机已运行 start_workstation 或 python main.py worker</p></div></div>
@@ -952,13 +953,21 @@ function renderHosts(){
   document.getElementById('stat-total').textContent=allHosts.length;
   document.getElementById('stat-online').textContent=allHosts.filter(h=>h.online).length;
   document.getElementById('stat-offline').textContent=allHosts.filter(h=>!h.online).length;
+  // S3: 跨主机版本统计 — 版本分布汇总 (一致绿色, 不一致告警色)
+  const vMap={};allHosts.forEach(h=>{const v=h.code_version||'未知';vMap[v]=(vMap[v]||0)+1;});
+  const vTxt=Object.entries(vMap).map(([v,c])=>`${v}×${c}`).join(' · ')||'-';
+  const vEl=document.getElementById('stat-versions');
+  vEl.textContent=vTxt;
+  vEl.style.color=Object.keys(vMap).length>1?'var(--amber,#f0ad4e)':'var(--green)';
+  const vMaxTs=Math.max(0,...allHosts.map(h=>h.version_ts||0));
   if(!hosts.length){grid.innerHTML='<div class="empty"><div class="icon">🖥️</div><p>暂无 Work Station</p><p class="hint">请在各主机上运行 start_workstation 或 python main.py worker</p></div>';return;}
   grid.innerHTML=hosts.map(h=>{
     const rc=h.role==='secretary'?'secretary':h.role==='station'?'station':'worker';
     const rl=h.role==='secretary'?'SECRETARY':h.role==='station'?'STATION':'WORKER';
+    const vMark=h.code_version?((h.version_ts||0)>=vMaxTs&&vMaxTs?'✅最新':(vMaxTs?'⚠️落后':'')):'未知版本';
     return `<div class="card ${h.online?'':'offline'} ${rc}" onclick='showHostDetail("${h.device_id}")'>
       <div class="card-head"><div class="card-title">${esc(h.device_name||h.hostname||'未知')}<span class="badge ${rc}">${rl}</span></div><span class="badge ${h.online?'idle':'archived'}">${h.online?'在线':'离线'}</span></div>
-      <div class="card-meta">🖥️ <span>${esc(h.hostname||'-')}</span> | 📡 <span>${esc(h.ip||'-')}</span> | 💻 <span>${esc(h.platform||'-')}</span><br>📁 <span>${esc(h.shared_folder||'-')}</span> (${h.shared_file_count||0}文件)</div>
+      <div class="card-meta">🖥️ <span>${esc(h.hostname||'-')}</span> | 📡 <span>${esc(h.ip||'-')}</span> | 💻 <span>${esc(h.platform||'-')}</span><br>🏷️ <span>${esc(h.code_version||'-')}</span> <span style="color:var(--dim);font-size:11px">${vMark}</span><br>📁 <span>${esc(h.shared_folder||'-')}</span> (${h.shared_file_count||0}文件)</div>
       ${resBar('CPU',h.cpu_count+'核',h.cpu_percent)}${resBar('内存',fmtMem(h.memory_total_mb),h.memory_percent)}${resBar('磁盘',h.disk_total_gb+'GB',h.disk_percent)}
     </div>`;
   }).join('');
@@ -968,7 +977,7 @@ function resBar(l,t,p){p=Math.round(p||0);const c=p<60?'low':p<85?'mid':'high';r
 async function showHostDetail(id){
   const h=allHosts.find(x=>x.device_id===id);if(!h)return;
   document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>${esc(h.device_name||h.hostname)}</h2><p style="color:var(--dim);font-size:13px">${h.online?'在线':'离线'} · ${h.role==='secretary'?'Secretary':h.role==='station'?'Station':'Worker'}</p>
-  <div class="modal-sec"><h3>基本信息</h3><div class="kv-grid"><span class="k">设备ID</span><span class="v">${esc(h.device_id)}</span><span class="k">主机名</span><span class="v">${esc(h.hostname||'-')}</span><span class="k">IP</span><span class="v">${esc(h.ip||'-')}</span><span class="k">平台</span><span class="v">${esc(h.platform||'-')}</span><span class="k">API端口</span><span class="v">${h.api_port||'-'}</span><span class="k">注册时间</span><span class="v">${fmtTime(h.registered_at)}</span><span class="k">最后心跳</span><span class="v">${fmtTime(h.last_seen)}</span></div></div>
+  <div class="modal-sec"><h3>基本信息</h3><div class="kv-grid"><span class="k">设备ID</span><span class="v">${esc(h.device_id)}</span><span class="k">主机名</span><span class="v">${esc(h.hostname||'-')}</span><span class="k">IP</span><span class="v">${esc(h.ip||'-')}</span><span class="k">平台</span><span class="v">${esc(h.platform||'-')}</span><span class="k">API端口</span><span class="v">${h.api_port||'-'}</span><span class="k">代码版本</span><span class="v">${esc(h.code_version||'-')}${h.version_ts?' ('+new Date(h.version_ts*1000).toLocaleString()+')':''}</span><span class="k">注册时间</span><span class="v">${fmtTime(h.registered_at)}</span><span class="k">最后心跳</span><span class="v">${fmtTime(h.last_seen)}</span></div></div>
   <div class="modal-sec"><h3>硬件资源</h3><div class="kv-grid"><span class="k">CPU</span><span class="v">${h.cpu_count||0}核 / ${h.cpu_percent||0}%</span><span class="k">内存</span><span class="v">${fmtMem(h.memory_total_mb)} / ${h.memory_percent||0}%</span><span class="k">磁盘</span><span class="v">${h.disk_total_gb||0}GB / ${h.disk_percent||0}%</span></div></div>
   <div class="modal-sec"><h3>共享文件夹</h3><div class="kv-grid"><span class="k">路径</span><span class="v">${esc(h.shared_folder||'-')}</span><span class="k">文件数</span><span class="v">${h.shared_file_count||0}</span></div>${h.ip&&h.api_port?`<div style="margin-top:10px"><button class="btn primary sm" onclick="browseFiles('${esc(h.ip)}',${h.api_port})">📂 浏览共享文件</button></div>`:''}</div>`;
   document.getElementById('overlay').classList.add('show');
