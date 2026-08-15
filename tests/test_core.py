@@ -8,6 +8,7 @@
 4. EventBus — 发布/订阅、环形历史、sink 投递、边界 (M5)
 5. role_cards — 角色卡结构、秘书 prompt 关键约束回归 (M6)
 6. balance_probe — 别名归一、各家解析、异常提示、key 优先级 (R2/R4)
+7. version_sync — 版本比对、领先检测、通知去重 (S2)
 
 运行: pytest tests/ -v
 """
@@ -823,3 +824,88 @@ class TestDirectKeyEnvInjection:
             assert mgr.load(yaml_file) is True  # 无 api_key_env 不崩, 仅跳过注入
         finally:
             mgr.stop_reporter()
+
+
+class TestVersionSync:
+    """version_sync 版本比对/领先检测/通知去重 — S2 升级提醒链路回归。"""
+
+    def _mod(self):
+        from lan_mesh import version_sync
+        return version_sync
+
+    def test_compare_equal_by_commit(self):
+        vs = self._mod()
+        a = {"commit": "abc1234", "commit_time": 100.0}
+        b = {"commit": "abc1234", "commit_time": 999.0}
+        assert vs.compare_versions(a, b) == "equal"  # commit 相同即同版本
+
+    def test_compare_by_commit_time(self):
+        vs = self._mod()
+        newer = {"commit": "bbb2222", "commit_time": 200.0}
+        older = {"commit": "aaa1111", "commit_time": 100.0}
+        assert vs.compare_versions(newer, older) == "ahead"
+        assert vs.compare_versions(older, newer) == "behind"
+
+    def test_compare_unknown_when_missing(self):
+        vs = self._mod()
+        assert vs.compare_versions({"commit": ""}, {"commit": "x", "commit_time": 1}) == "unknown"
+        assert vs.compare_versions({"commit": "x"}, {"commit": "y"}) == "unknown"  # 无时间戳
+
+    def test_find_leader_single_ahead(self):
+        vs = self._mod()
+        versions = [
+            {"device_id": "a", "commit": "c3", "commit_time": 300.0},
+            {"device_id": "b", "commit": "c1", "commit_time": 100.0},
+            {"device_id": "c", "commit": "c2", "commit_time": 200.0},
+        ]
+        leader = vs.find_leader(versions)
+        assert leader and leader["device_id"] == "a"
+
+    def test_find_leader_none_when_equal(self):
+        vs = self._mod()
+        versions = [
+            {"device_id": "a", "commit": "c1", "commit_time": 100.0},
+            {"device_id": "b", "commit": "c1", "commit_time": 100.0},
+        ]
+        assert vs.find_leader(versions) is None  # 同版本无领先者
+
+    def test_find_leader_none_when_unknown(self):
+        vs = self._mod()
+        versions = [
+            {"device_id": "a", "commit": "c2", "commit_time": 200.0},
+            {"device_id": "b", "commit": "c1", "commit_time": 0.0},  # 不可比
+        ]
+        assert vs.find_leader(versions) is None  # 宁可漏报不可误报
+
+    def test_find_leader_single_host(self):
+        vs = self._mod()
+        assert vs.find_leader([{"device_id": "a", "commit": "c1", "commit_time": 1}]) is None
+
+    def test_notifier_dedup_same_commit(self):
+        vs = self._mod()
+        n = vs.UpgradeNotifier()
+        assert n.should_notify("dev1", "c1") is True
+        assert n.should_notify("dev1", "c1") is False   # 同版本不重复通知
+        assert n.should_notify("dev2", "c1") is True    # 不同目标互不影响
+        assert n.should_notify("dev1", "c2") is True    # 新版本再次通知
+        n.reset()
+        assert n.should_notify("dev1", "c2") is True    # reset 后可重通
+
+    def test_read_version_file_fallback(self, tmp_path):
+        vs = self._mod()
+        missing = vs.read_version_file(tmp_path / "not_exist.json")
+        assert missing["commit"] == "" and "upgrade_hint" in missing
+        bad = tmp_path / "bad.json"
+        bad.write_text("{invalid", encoding="utf-8")
+        assert vs.read_version_file(bad)["version"] == ""  # 损坏不抛异常
+        good = tmp_path / "ok.json"
+        good.write_text('{"version": "9.9.9", "commit": "cafef00d"}', encoding="utf-8")
+        rec = vs.read_version_file(good)
+        assert rec["version"] == "9.9.9" and rec["commit"] == "cafef00d"
+
+    def test_local_version_info_structure(self):
+        vs = self._mod()
+        info = vs.local_version_info(force=True)
+        for k in ("version", "commit", "commit_time", "released_at", "note", "upgrade_hint"):
+            assert k in info
+        assert isinstance(info["commit"], str)

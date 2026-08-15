@@ -72,7 +72,8 @@ _API_KEY = _os.environ.get("LAN_MESH_API_KEY", "")  # 空 = 不启用认证
 #   /ws: WebSocket 实时推送 (会话建立后由 UI 持有 token)
 #   /api/station/auth-token: Web UI 引导获取 token (信任根: 能访问 UI 者视为内网成员)
 _AUTH_WHITELIST = {"/health", "/api/register", "/api/heartbeat", "/ws",
-                   "/api/station/auth-token", "/api/station/bootstrap-token"}
+                   "/api/station/auth-token", "/api/station/bootstrap-token",
+                   "/api/version/upgrade-notice"}
 
 
 # Phase 0: 节点间 mesh token 认证 (默认关闭, config.yaml security.auth_enabled 开启)
@@ -362,6 +363,42 @@ def create_station_router(controller) -> APIRouter:
         """
         from .auth import get_mesh_token
         return {"mesh_token": _mesh_auth_token or get_mesh_token()}
+
+    # ── S2: 版本升级提醒 ─────────────────────────────────────
+
+    @router.get("/api/version")
+    async def get_version():
+        """S2: 返回本机代码版本信息 (VERSION.json 记录 + git HEAD)。"""
+        from .version_sync import local_version_info
+        return local_version_info()
+
+    @router.post("/api/version/upgrade-notice")
+    async def upgrade_notice(request: Request):
+        """S2: 接收领先节点的升级提醒 — 记录日志并发布事件 (Web Toast/横幅)。
+
+        白名单放行 (与 /api/heartbeat 同一信任假设): 能触及本端口的
+        局域网成员视为内网成员; 提醒内容仅展示, 不触发任何自动操作。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "非法报文"}, status_code=400)
+        if not isinstance(body, dict) or not body.get("commit"):
+            return JSONResponse({"ok": False, "error": "缺少 commit 字段"}, status_code=400)
+        from_name = body.get("from_name") or "未知主机"
+        commit = body.get("commit", "")
+        hint = body.get("upgrade_hint") or "git pull 升级后重启节点"
+        logger.warning("[S2] 收到升级提醒: %s 版本领先 (%s), %s",
+                       from_name, commit, hint)
+        publish_event("version_upgrade_notice", {
+            "behind": True,
+            "from_name": from_name,
+            "commit": commit,
+            "version": body.get("version", ""),
+            "note": body.get("note", ""),
+            "hint": hint,
+        })
+        return {"ok": True}
 
     @router.post("/api/heartbeat")
     async def heartbeat(payload: dict):

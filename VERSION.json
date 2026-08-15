@@ -1,0 +1,7 @@
+{
+  "version": "0.27.0",
+  "commit": "595fb7a",
+  "released_at": "2026-08-16",
+  "note": "S2-update-notify: 版本升级提醒 (VERSION.json 记录 + UDP 发现包广播代码版本 + 领先节点自动通知落后节点 git pull 升级)",
+  "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
+}

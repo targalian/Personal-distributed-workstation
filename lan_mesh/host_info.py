@@ -194,6 +194,10 @@ def collect_host_info(
     ips = get_local_ipv4_addresses()
     mac = get_mac_address()
 
+    # S2: 代码版本 (带缓存, 开销可忽)
+    from .version_sync import local_version_info
+    _ver = local_version_info()
+
     return HostInfo(
         device_id=device_id,
         device_name=device_name,
@@ -226,6 +230,9 @@ def collect_host_info(
         api_port=api_port,
         uptime_seconds=round(time.time() - start_time, 1),
         timestamp=time.time(),
+        # S2: 携带代码版本供局域网升级提醒比对
+        code_version=_ver.get("commit", ""),
+        version_ts=_ver.get("commit_time", 0.0),
     )
 
 
@@ -246,4 +253,6 @@ def make_discovery_packet(host: HostInfo) -> DiscoveryPacket:
         disk_percent=host.disk_percent,
         shared_folder=host.shared_folder,
         ip_addresses=host.ip_addresses,
+        code_version=host.code_version,
+        version_ts=host.version_ts,
     )
