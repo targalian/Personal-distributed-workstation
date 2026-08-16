@@ -11,6 +11,7 @@
 7. version_sync — 版本比对、领先检测、通知去重 (S2)
 8. startup-sync — hosts 版本列、心跳版本落库、启动密钥推/拉路由、拉取幂等 (S3)
 9. secretary-conflict — 广播真实角色、双 Secretary 仲裁让位方向与幂等 (E4)
+10. role-free-align — config_ts 仲裁推/拉、池数仲裁、自动升级脏工作区跳过 (F1)
 
 运行: pytest tests/ -v
 """
@@ -958,31 +959,22 @@ class TestStartupSync:
         assert db.get_host("dev-c").role == "secretary"
 
     def test_startup_key_sync_routing(self):
+        """F1: 启动密钥对齐角色无关 — 不再按 Secretary/Station 分流推拉。"""
         from lan_mesh.station_controller import StationController
-        calls = {"push": [], "pull": []}
+        calls = {"align": []}
 
         class Fake:
-            secretary_active = True
+            secretary_active = False  # 非 Secretary 也不再只拉取
 
-            def push_resource_secrets(self, only_device_id="",
-                                      fallback_ip="", fallback_port=0):
-                calls["push"].append(only_device_id)
-                return [{"ok": True}]
+            def _align_config_with_peers(self, peers=None):
+                calls["align"].append(peers)
+                return {"pushed": [], "pulled": [], "skipped": 0,
+                        "failed": []}
 
-            def pull_resource_secrets(self, ip, port):
-                calls["pull"].append((ip, port))
-                return {"ok": True}
-
-        StationController._startup_key_sync(
-            Fake(), [{"device_id": "p1", "role": "worker"}])
-        assert calls["push"] == [""] and not calls["pull"]
-
-        f2 = Fake()
-        f2.secretary_active = False
-        StationController._startup_key_sync(
-            f2, [{"device_id": "p2", "role": "secretary",
-                  "ip": "10.0.0.2", "api_port": 80}])
-        assert calls["pull"] == [("10.0.0.2", 80)]
+        peers = [{"device_id": "p2", "role": "worker",
+                  "ip": "10.0.0.2", "api_port": 80}]
+        StationController._startup_key_sync(Fake(), peers)
+        assert calls["align"] == [peers]  # 角色无关: 直接透传给对齐仲裁
 
     def test_pull_idempotent_same_config(self, monkeypatch):
         from lan_mesh.station_controller import StationController
@@ -1166,3 +1158,279 @@ class TestSecretaryConflict:
         StationController._yield_secretary_to(f, "peer", "10.0.0.4", 80)
         StationController._yield_secretary_to(f, "peer", "10.0.0.4", 80)
         assert calls["deactivate"] == 1 and f.secretary_active is False
+
+
+class TestRoleFreeAlign:
+    """F1 角色无关自动对齐 — config_ts 仲裁、池数仲裁、自动升级安全边界。"""
+
+    def _fake(self):
+        from lan_mesh.station_controller import StationController
+
+        class Fake:
+            state = type("S", (), {"device_id": "self-1"})()
+
+        return StationController, Fake()
+
+    def test_save_config_injects_config_ts(self, tmp_path):
+        from lan_mesh.model_resources import save_config
+        yaml_file = tmp_path / "resources.yaml"
+        data = {"resources": [{"id": "a", "plan_type": "token_plan"}]}
+        res = save_config(yaml_file, data)
+        assert res.get("ok")
+        import yaml
+        saved = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
+        assert saved.get("config_ts", 0) > 0
+
+    def test_config_hash_ignores_config_ts(self):
+        from lan_mesh.secret_sync import config_hash
+        base = {"resources": [{"id": "a"}], "strict": False}
+        h1 = config_hash({**base, "config_ts": 100})
+        h2 = config_hash({**base, "config_ts": 999})
+        assert h1 == h2  # ts 为对齐元数据, 不参与内容指纹
+        assert h1 != config_hash({**base, "strict": True})
+
+    def _mock_io(self, monkeypatch, mine, peer_payload):
+        import lan_mesh.http_retry as hr
+        import lan_mesh.model_resources as mr
+        calls = {"push": [], "pull": []}
+
+        class Resp:
+            def __init__(self, payload):
+                self._p = payload
+
+            def json(self):
+                return self._p
+
+        monkeypatch.setattr(mr, "read_config_data",
+                            lambda p: {"exists": True, "data": mine})
+        monkeypatch.setattr(hr, "http_get",
+                            lambda url, timeout=10: Resp(peer_payload))
+        return calls
+
+    def _bind(self, fake, calls):
+        # push/pull 为实例方法 (Fake 不继承 StationController, 直接挂实例)
+        fake.push_resource_secrets = (
+            lambda **kw: calls["push"].append(kw)
+            or [{"ok": True, "detail": "ok"}])
+        fake.pull_resource_secrets = (
+            lambda ip, port: calls["pull"].append((ip, port))
+            or {"ok": True, "detail": "ok"})
+
+    def test_align_pulls_when_peer_newer(self, monkeypatch):
+        from lan_mesh.secret_sync import config_hash
+        mine = {"resources": [{"id": "a"}], "config_ts": 100.0}
+        peer_cfg = {"resources": [{"id": "b"}], "config_ts": 200.0}
+        calls = self._mock_io(monkeypatch, mine, {
+            "config_hash": config_hash(peer_cfg),
+            "config_ts": 200.0, "pools": 1, "blob": "xx"})
+        SC, fake = self._fake()
+        self._bind(fake, calls)
+        summary = SC._align_config_with_peers(fake, [{
+            "device_id": "p1", "ip": "10.0.0.2", "api_port": 45470,
+            "device_name": "peer"}])
+        assert calls["pull"] and not calls["push"]
+        assert summary["pulled"] and summary["pulled"][0]["ok"]
+
+    def test_align_pushes_when_local_newer(self, monkeypatch):
+        from lan_mesh.secret_sync import config_hash
+        mine = {"resources": [{"id": "a"}], "config_ts": 300.0}
+        peer_cfg = {"resources": [{"id": "b"}], "config_ts": 200.0}
+        calls = self._mock_io(monkeypatch, mine, {
+            "config_hash": config_hash(peer_cfg),
+            "config_ts": 200.0, "pools": 1, "blob": "xx"})
+        SC, fake = self._fake()
+        self._bind(fake, calls)
+        summary = SC._align_config_with_peers(fake, [{
+            "device_id": "p1", "ip": "10.0.0.2", "api_port": 45470,
+            "device_name": "peer"}])
+        assert calls["push"] and not calls["pull"]
+        assert summary["pushed"] and summary["pushed"][0]["ok"]
+
+    def test_align_skips_when_identical(self, monkeypatch):
+        from lan_mesh.secret_sync import config_hash
+        mine = {"resources": [{"id": "a"}], "config_ts": 100.0}
+        calls = self._mock_io(monkeypatch, mine, {
+            "config_hash": config_hash(mine),
+            "config_ts": 100.0, "pools": 1, "blob": "xx"})
+        SC, fake = self._fake()
+        summary = SC._align_config_with_peers(fake, [{
+            "device_id": "p1", "ip": "10.0.0.2", "api_port": 45470,
+            "device_name": "peer"}])
+        assert not calls["push"] and not calls["pull"]
+        assert summary["skipped"] == 1
+
+    def test_align_pool_count_arbitration_without_ts(self, monkeypatch):
+        """双方均无 config_ts 时按资源池数仲裁 (本机多 → 推送)。"""
+        from lan_mesh.secret_sync import config_hash
+        mine = {"resources": [{"id": "a"}, {"id": "c"}]}
+        peer_cfg = {"resources": [{"id": "b"}]}
+        calls = self._mock_io(monkeypatch, mine, {
+            "config_hash": config_hash(peer_cfg),
+            "pools": 1, "blob": "xx"})
+        SC, fake = self._fake()
+        self._bind(fake, calls)
+        summary = SC._align_config_with_peers(fake, [{
+            "device_id": "p1", "ip": "10.0.0.2", "api_port": 45470,
+            "device_name": "peer"}])
+        assert calls["push"] and not calls["pull"]
+        assert summary["pushed"]
+
+    def test_align_unreachable_peer_recorded(self, monkeypatch):
+        import lan_mesh.http_retry as hr
+        monkeypatch.setattr(hr, "http_get",
+                            lambda url, timeout=10: (_ for _ in ()).throw(
+                                ConnectionError("boom")))
+        SC, fake = self._fake()
+        summary = SC._align_config_with_peers(fake, [{
+            "device_id": "p1", "ip": "10.0.0.9", "api_port": 45470,
+            "device_name": "peer"}])
+        assert summary["failed"] and "boom" in summary["failed"][0]["detail"]
+
+    def test_auto_upgrade_skips_dirty_workspace(self, monkeypatch):
+        import subprocess as _sub
+        from lan_mesh.station_controller import StationController
+        calls = []
+
+        class R:
+            def __init__(self, out="", err="", code=0):
+                self.stdout, self.stderr, self.returncode = out, err, code
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            if cmd[:3] == ["git", "status", "--porcelain"]:
+                return R(out=" M dirty.py\n")
+            return R()
+
+        monkeypatch.setattr(_sub, "run", fake_run)
+        SC, fake = self._fake()
+        fake.auto_upgrade_enabled = True
+        fake._upgrade_attempted = set()
+        SC._auto_upgrade(fake, "abc123", "leader")
+        import time
+        deadline = time.time() + 2
+        while time.time() < deadline and not calls:
+            time.sleep(0.05)
+        time.sleep(0.2)
+        assert calls and calls[0][:3] == ["git", "status", "--porcelain"]
+        assert all(c[:2] != ["git", "pull"] for c in calls)  # 脏工作区不 pull
+
+    def test_auto_upgrade_disabled_no_action(self, monkeypatch):
+        import subprocess as _sub
+        from lan_mesh.station_controller import StationController
+        calls = []
+        monkeypatch.setattr(
+            _sub, "run",
+            lambda cmd, **kw: calls.append(cmd) or type(
+                "R", (), {"stdout": "", "stderr": "", "returncode": 0})())
+        SC, fake = self._fake()
+        fake.auto_upgrade_enabled = False
+        fake._upgrade_attempted = set()
+        SC._auto_upgrade(fake, "abc123", "leader")
+        import time
+        time.sleep(0.2)
+        assert not calls and "abc123" not in fake._upgrade_attempted
+
+    def test_auto_upgrade_once_per_commit(self, monkeypatch):
+        import subprocess as _sub
+        from lan_mesh.station_controller import StationController
+        calls = []
+        monkeypatch.setattr(
+            _sub, "run",
+            lambda cmd, **kw: calls.append(cmd) or type(
+                "R", (), {"stdout": "", "stderr": "", "returncode": 0})())
+        SC, fake = self._fake()
+        fake.auto_upgrade_enabled = True
+        fake._upgrade_attempted = set()
+        SC._auto_upgrade(fake, "abc123", "leader")
+        SC._auto_upgrade(fake, "abc123", "leader")  # 同 commit 去重
+        import time
+        deadline = time.time() + 2
+        while (time.time() < deadline
+               and sum(1 for c in calls if c[:2] == ["git", "pull"]) < 1):
+            time.sleep(0.05)
+        # 升级链完整跑完 (status+pull+pip) 但仅一次, 第二次调用被去重
+        assert sum(1 for c in calls
+                   if c[:3] == ["git", "status", "--porcelain"]) == 1
+        assert sum(1 for c in calls if c[:2] == ["git", "pull"]) == 1
+
+
+class TestSecretaryFailover:
+    """E5 Secretary 离线接管 — 接管判定、仲裁方向、有活 Secretary 不接管。"""
+
+    def _host(self, device_id, role="station", online=True):
+        return type("H", (), {"device_id": device_id,
+                              "role": role, "online": online})()
+
+    def _ctrl(self, self_id, hosts, active=False, activate_raises=False):
+        class Fake:
+            secretary_active = active
+            state = type("S", (), {"device_id": self_id,
+                                   "device_name": "本机"})()
+            db = type("D", (), {"list_hosts": lambda self_: hosts})()
+            bot_gateway = type(
+                "B", (), {"notify": lambda self, *a, **k: None})()
+            activated = []
+
+            def activate_secretary(self):
+                if activate_raises:
+                    raise RuntimeError("boom")
+                self.secretary_active = True
+                self.activated.append(True)
+                return {"ok": True}
+
+            def _queue_ws_broadcast(self, *a, **k):
+                pass
+
+        return Fake()
+
+    def _check(self, fake):
+        from lan_mesh.station_controller import StationController
+        StationController._secretary_failover_check(fake)
+
+    def test_takeover_when_secretary_offline_and_self_min(self):
+        """Secretary 离线且本站 device_id 仲裁最小 → 接管。"""
+        f = self._ctrl("aaa-self", [
+            self._host("mmm-sec", role="secretary", online=False),
+            self._host("zzz-peer", online=True),
+        ])
+        self._check(f)
+        assert f.secretary_active is True and f.activated
+
+    def test_no_takeover_when_secretary_online(self):
+        """仍有在线 Secretary → 不接管。"""
+        f = self._ctrl("aaa-self", [
+            self._host("mmm-sec", role="secretary", online=True),
+        ])
+        self._check(f)
+        assert f.secretary_active is False and not f.activated
+
+    def test_no_takeover_when_smaller_station_online(self):
+        """存在 device_id 更小的在线 Station → 由对方接管, 本站不动。"""
+        f = self._ctrl("zzz-self", [
+            self._host("mmm-sec", role="secretary", online=False),
+            self._host("aaa-peer", online=True),
+        ])
+        self._check(f)
+        assert f.secretary_active is False and not f.activated
+
+    def test_already_secretary_noop(self):
+        """本站已是 Secretary → 直接返回, 不重复激活。"""
+        f = self._ctrl("aaa-self", [], active=True)
+        self._check(f)
+        assert not f.activated
+
+    def test_activate_failure_does_not_crash(self):
+        """激活异常被吃掉, 不阻断清理循环, 状态保持未激活。"""
+        f = self._ctrl("aaa-self", [
+            self._host("mmm-sec", role="secretary", online=False),
+        ], activate_raises=True)
+        self._check(f)
+        assert f.secretary_active is False and not f.activated
+
+    def test_single_node_network_takes_over(self):
+        """单机网络 (仅本站在线) Secretary 离线后自我接管。"""
+        f = self._ctrl("solo-self", [
+            self._host("old-sec", role="secretary", online=False),
+        ])
+        self._check(f)
+        assert f.secretary_active is True

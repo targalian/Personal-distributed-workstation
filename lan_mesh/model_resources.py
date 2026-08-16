@@ -774,11 +774,16 @@ def validate_config(data: dict) -> list:
 def save_config(yaml_path: Union[str, Path], data: dict) -> dict:
     """保存配置到 resources.yaml (先备份 .bak)。
 
+    F1: 自动注入 config_ts (Unix 时间戳) — 角色无关密钥对齐的
+    仲裁依据 (谁新谁胜); config_hash 计算时排除该字段。
+
     Returns:
         {"ok": bool, "error": str, "backup": str}
     """
     path = Path(yaml_path)
     backup = ""
+    data = dict(data)
+    data["config_ts"] = time.time()  # F1: 对齐仲裁时间戳
     try:
         if path.is_file():
             backup = str(path) + ".bak"

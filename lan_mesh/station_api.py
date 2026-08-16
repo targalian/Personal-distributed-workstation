@@ -405,6 +405,12 @@ def create_station_router(controller) -> APIRouter:
         hint = body.get("upgrade_hint") or "git pull 升级后重启节点"
         logger.warning("[S2] 收到升级提醒: %s 版本领先 (%s), %s",
                        from_name, commit, hint)
+        # F1: 角色无关版本对齐 — 落后节点自动 git pull + 依赖安装
+        try:
+            if controller and getattr(controller, "auto_upgrade_enabled", True):
+                controller._auto_upgrade(commit, from_name)
+        except Exception as e:
+            logger.warning("[F1] 自动升级触发失败: %s", e)
         publish_event("version_upgrade_notice", {
             "behind": True,
             "from_name": from_name,
@@ -1340,8 +1346,9 @@ def create_station_router(controller) -> APIRouter:
         """保存资源配置并热重载 (UI 配置向导)。
 
         校验不通过 → 400 携带具体错误; 保存前自动备份 .bak。
+        F1: 任意节点均可保存 (不再限 Secretary) — 保存后与全网
+        对端自动对齐, 主从无关。
         """
-        _check_secretary()
         from pathlib import Path
         from .config import load_model_pool
         from .model_resources import (init_resource_manager, save_config,
@@ -1395,10 +1402,10 @@ def create_station_router(controller) -> APIRouter:
         set_bot_notify_global(controller.bot_gateway.notify)
         publish_event("resource_config",
                       {"ok": True, "pools": len(mgr.list_resources())})
-        # S1: 保存后后台热推送加密密钥到全部在线节点 (改一次全网生效)
+        # F1: 保存后后台与全网对齐 (本机 config_ts 最新 → 自动推送)
         threading.Thread(
-            target=controller.push_resource_secrets,
-            daemon=True, name="secret-sync-save",
+            target=controller._align_config_with_peers,
+            daemon=True, name="secret-align-save",
         ).start()
         return {"ok": True, "enabled": mgr.enabled,
                 "pools": len(mgr.list_resources()),
@@ -1431,6 +1438,11 @@ def create_station_router(controller) -> APIRouter:
         payload = encrypt_config(data, token)
         payload["config_hash"] = config_hash(data)
         payload["pools"] = len(pools)
+        # F1: 附配置时间戳 (角色无关对齐的仲裁依据)
+        try:
+            payload["config_ts"] = float(data.get("config_ts") or 0)
+        except (TypeError, ValueError):
+            payload["config_ts"] = 0.0
         return payload
 
     @router.post("/api/secrets/receive")
@@ -1506,11 +1518,13 @@ def create_station_router(controller) -> APIRouter:
 
     @router.post("/api/secrets/sync-all")
     async def sync_secrets_all():
-        """S1: 手动将本机资源密钥 (加密) 推送到全部在线节点。"""
-        results = controller.push_resource_secrets()
-        ok_count = sum(1 for r in results if r.get("ok"))
-        return {"ok": bool(ok_count), "pushed": ok_count,
-                "total": len(results), "results": results}
+        """F1: 手动触发全网密钥对齐 (角色无关, config_ts 仲裁)。"""
+        summary = controller._align_config_with_peers()
+        return {"ok": bool(summary["pushed"] or summary["pulled"]),
+                "pushed": len(summary["pushed"]),
+                "pulled": len(summary["pulled"]),
+                "skipped": summary["skipped"],
+                "failed": summary["failed"]}
 
     @router.post("/api/resources/test-key")
     async def test_resource_key(payload: dict):

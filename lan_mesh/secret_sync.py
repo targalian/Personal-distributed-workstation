@@ -121,11 +121,16 @@ def config_hash(data: Union[dict, str]) -> str:
 
     dict 先规范化 (sort_keys), 字符串直接哈希;
     相同语义配置必得相同指纹。
+
+    F1: config_ts 为对齐仲裁元数据, 不计入内容指纹 —
+    否则接收方落盘刷新时间戳后与推送方指纹永久不同,
+    引发周期对齐 ping-pong 漂移。
     """
     if isinstance(data, str):
         raw = data
     else:
-        raw = json.dumps(data, ensure_ascii=False, sort_keys=True)
+        clean = {k: v for k, v in data.items() if k != "config_ts"}
+        raw = json.dumps(clean, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 

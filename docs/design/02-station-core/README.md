@@ -33,14 +33,18 @@
 携带真实角色（`packet.role`），修复对端永远无法经 UDP 感知 Secretary
 身份的问题。
 
-**S1/S3 密钥与版本同步**（本模块近期核心增量）:
-- `push_resource_secrets()`: Secretary 将 resources.yaml 加密推送到在线节点
+**S1/S3 密钥与版本同步 + F1 角色无关自动对齐**（本模块近期核心增量）:
+- `_align_config_with_peers()`: **F1 核心** — 与主从无关的对齐仲裁。
+  内容指纹一致跳过；不一致时按 `config_ts` 新者胜（本机新推、
+  对端新拉）；ts 缺失/相等按资源池数仲裁
+- `_align_loop()`: 周期对齐线程（60s），任意节点主动与对端收敛
+- `_auto_upgrade()`: 版本落后自动对齐 — git pull + 依赖安装
+  （工作区脏则跳过；同 commit 仅试一次；`auto_upgrade: false` 可关）
+- `push_resource_secrets()`: 加密推送（角色无关，对齐仲裁选择推时调用）
+- `pull_resource_secrets()`: 加密拉取，解密 → 指纹校验 → 幂等跳过/落盘热重载
 - `_startup_sync_once()`: 启动一次性同步（发现层 + DB 双通道查对端 →
-  等选举 → 版本领先检测 + 密钥推/拉），**替代 60s 轮询**
-- `pull_resource_secrets()`: 非 Secretary 节点向 Secretary 拉取密文，
-  解密 → 指纹校验 → 幂等跳过/落盘热重载
-- `_sync_with_new_peer()`: 新主机入网即时同步（免轮询）
-- `activate_secretary()` 激活后兜底推送一次（覆盖选举晚于启动同步的时机差）
+  等选举 → 版本领先检测 + 密钥对齐），**替代 60s 轮询**
+- `_sync_with_new_peer()`: 新主机入网即时对齐（免轮询，主从无关）
 - `_converge_mesh_token()`: mesh_token 信任根收敛（token 分歧自愈，
   详见 [05-resources-secrets](../05-resources-secrets/README.md)）
 
@@ -68,9 +72,12 @@ http_retry, config, event_bus
 
 **路由分层**:
 - 基础路由（始终可用）: 主机注册/心跳/查询、角色激活、bootstrap-token、
-  `/api/secrets/fetch`（S3 拉取端点）、`/api/version/*`（S2）
+  `/api/secrets/fetch`（S3 拉取端点，F1 起附带 `config_ts`）、
+  `/api/secrets/sync-all`（F1 起角色无关对齐，任意节点可用）、
+  `/api/resources/config`（F1 起放开 Secretary 限制，任意节点可保存后
+  自动全网对齐）、`/api/version/*`（S2）
 - Secretary 路由（`secretary_active` 为真才可用，否则 503）: 任务/Agent/
-  项目/MCP 工具/模型路由/聊天/`/api/secrets/sync-all`（手动推送）
+  项目/MCP 工具/模型路由/聊天
 - `/ws`: WebSocket 实时推送（event_bus sink 装配于此）
 
 **设计要点**:
@@ -79,6 +86,8 @@ http_retry, config, event_bus
 - `/api/secrets/receive` 接收端自愈: 解密失败且报 mesh_token 不匹配时,
   自动从推送方（请求来源 IP + 报文 src_port）收敛信任根后重试一次
   （`_heal_mesh_token_from`，E4）
+- `/api/version/upgrade-notice` 收到领先通知时触发 `_auto_upgrade`
+  自动升级（F1，工作区脏则安全跳过）
 
 ## secretary.py — 旧版中心控制器（历史遗留）
 
@@ -111,5 +120,6 @@ skill_assignments、resource_usage_log、events 等。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-16 | iter-30 | F1: 角色无关自动对齐 — config_ts 仲裁密钥收敛 (推/拉主从解耦) + 落后节点自动 git pull 升级 + 保存端点/周期对齐线程 |
 | 2026-08-16 | iter-28 | E4: 双 Secretary 冲突仲裁 (真实角色广播 + device_id 字典序让位) + role 落库 + 密钥接收端自愈 |
 | 2026-08-16 | iter-27 后 | 初建；收录 S1/S2/S3 同步链路设计 |

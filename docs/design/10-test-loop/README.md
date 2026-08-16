@@ -26,9 +26,10 @@
 
 ## tests/test_core.py — pytest 基线
 
-**规范**: 全部改动后必须全绿（当前 105/105）。覆盖核心链路:
+**规范**: 全部改动后必须全绿（当前 115/115）。覆盖核心链路:
 协议/DB 迁移/评级/任务 DAG/路由评分/密钥加解密/启动同步幂等/Secretary
-冲突仲裁（TestSecretaryConflict, E4）等。
+冲突仲裁（TestSecretaryConflict, E4）/角色无关对齐（TestRoleFreeAlign,
+F1）等。
 
 **编写约定**:
 - 中文参数场景通过临时 .py 脚本执行，防 GBK 乱码
@@ -47,7 +48,7 @@
 **配套文件**: loop_status.json（根目录，迭代状态机: iteration_count /
 current_phase / notes / next_tasks）、.githooks/（commit-msg / pre-push / post-merge）。
 
-## 版本更新后自动验证（post-merge hook）
+## 版本更新后自动验证（post-merge hook + F1 自动对齐）
 
 `.githooks/post-merge` 在 git pull 合并升级完成后自动触发 `pytest tests/ -q`
 回归验证（约 2s），失败输出红色告警但不阻断合并（合并已完成，告警提醒
@@ -58,10 +59,14 @@ current_phase / notes / next_tasks）、.githooks/（commit-msg / pre-push / pos
 - **跳过场景**: squash 合并（参数=1，工作区含未提交合并内容时跳过）
 - **Python 环境**: 优先 `.venv/Scripts/python.exe`，fallback 系统 python
 - **退出码**: 恒为 0，验证失败不阻断 pull，仅告警
-- **注册方式**: 由 `scripts/start_workstation.ps1` 统一配置
-  `core.hooksPath -> .githooks`，新增 hook 文件即自动生效，无需改脚本
+- **注册方式**: `core.hooksPath -> .githooks`，新增 hook 文件即自动生效
 
-配合机制: pre-push 静态审核（上库前 7 项检查）+ 每日 Loop 循环兜底
+F1 起版本对齐与主从无关: 落后节点收到领先通知/自检落后 → 自动
+`git pull` + 依赖安装（工作区脏则跳过），代码更新后由 dev-reload
+自动重启（未开 dev 模式则提示手动重启）。自动 pull 同样触发
+post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
+
+配合机制: pre-push 静态审核（上库前 9 项检查）+ 每日 Loop 循环兜底
 （`test_bug/setup_scheduler.bat` 注册计划任务，需管理员权限）。
 
 ## 四层验证流程（每个迭代必走）
@@ -75,6 +80,7 @@ current_phase / notes / next_tasks）、.githooks/（commit-msg / pre-push / pos
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-16 | iter-30 | F1: 新增 TestRoleFreeAlign 10 条, 基线 105→115; 自动升级与 post-merge 回归验证闭环 |
 | 2026-08-16 | iter-29 | 新增 .githooks/post-merge: git pull 升级后自动 pytest 回归验证 |
 | 2026-08-16 | iter-28 | E4: 新增 TestSecretaryConflict 7 条, 基线 98→105 |
 | 2026-08-16 | iter-27 后 | 初建 |
