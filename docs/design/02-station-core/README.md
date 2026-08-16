@@ -33,6 +33,14 @@
 携带真实角色（`packet.role`），修复对端永远无法经 UDP 感知 Secretary
 身份的问题。
 
+**E5 Secretary Failover**: 选举只在启动时进行，Secretary 宕机后无人
+接管。`_prune_loop` 每轮清理后调用 `_secretary_failover_check()`：
+Secretary 超时离线且网络无其他在线 Secretary 时，由 `device_id`
+字典序最小的在线 Station 接任（与 E4 同一对称仲裁规则，多节点并发
+接管亦自然收敛；双 Secretary 短暂并存时由 `_on_device_seen` 让位
+逻辑裁决）。接管复用 `activate_secretary()`（含密钥对齐与断点恢复），
+并广播 `secretary_failover` WS 事件 + Bot 通知。
+
 **S1/S3 密钥与版本同步 + F1 角色无关自动对齐**（本模块近期核心增量）:
 - `_align_config_with_peers()`: **F1 核心** — 与主从无关的对齐仲裁。
   内容指纹一致跳过；不一致时按 `config_ts` 新者胜（本机新推、
@@ -121,5 +129,6 @@ skill_assignments、resource_usage_log、events 等。
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
 | 2026-08-16 | iter-30 | F1: 角色无关自动对齐 — config_ts 仲裁密钥收敛 (推/拉主从解耦) + 落后节点自动 git pull 升级 + 保存端点/周期对齐线程 |
+| 2026-08-16 | iter-30 补 | E5: Secretary 离线故障转移 (prune 循环挂接管检查 + device_id 仲裁接任 + WS/Bot 通知) |
 | 2026-08-16 | iter-28 | E4: 双 Secretary 冲突仲裁 (真实角色广播 + device_id 字典序让位) + role 落库 + 密钥接收端自愈 |
 | 2026-08-16 | iter-27 后 | 初建；收录 S1/S2/S3 同步链路设计 |

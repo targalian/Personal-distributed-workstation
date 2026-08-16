@@ -641,6 +641,22 @@ class APITestSuite:
     #  运行入口
     # ═══════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _declared_ids(test_fn) -> list:
+        """从测试函数 docstring 提取关联编号 (BUG-xxx/yyy, BTN-xxx)。
+
+        用于 only 过滤的前置判定 — 替代"先执行再按结果筛选":
+        SKIP 分支记录的编号可能与正常路径不同 (如聊天 SKIP 记
+        BUG-001 而正常路径记 BUG-018), 事后筛选会误删目标项结果。
+        """
+        import re
+        doc = test_fn.__doc__ or ""
+        ids = []
+        for m in re.findall(r"BUG-(\d+(?:/\d+)*)", doc):
+            ids += [f"BUG-{part}" for part in m.split("/")]
+        ids += re.findall(r"BTN-\d+", doc)
+        return ids
+
     def run_all(self, only: list[str] = None) -> list[TestResult]:
         """运行全部测试 (或指定 bug_id 列表)。"""
         all_tests = [
@@ -688,16 +704,11 @@ class APITestSuite:
 
         for test_fn in all_tests[1:]:  # 跳过已执行的 health
             if only:
-                # 检查该测试是否关联指定的 bug_id
-                # 通过执行后检查 results 中是否有匹配的 bug_id
-                before = len(self.results)
-                test_fn()
-                after_results = self.results[before:]
-                if not any(r.bug_id in only for r in after_results):
-                    # 移除不相关的结果
-                    self.results = self.results[:before]
-            else:
-                test_fn()
+                # 前置判定: docstring 声明的编号不含目标则直接跳过
+                # (避免执行无关 LLM 测试, 也避免 SKIP 分支结果被误删)
+                if not any(i in only for i in self._declared_ids(test_fn)):
+                    continue
+            test_fn()
 
         return self.results
 
