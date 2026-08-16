@@ -13,6 +13,7 @@
 | scripts/start_workstation.sh | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/sync_docs.py | docs/design 模块清单一致性校验/生成器 (D2-docs-sync)。 |
 | scripts/sync_push.ps1 | ★ 双库同步推送脚本 (上库唯一入口) |
+| scripts/update_version.py | VERSION.json 自动同步脚本 (P2 #10: commit/released_at 对齐 HEAD + 可选 bump) |
 | skills/ | 技能库资产 (SKILL.md 格式, 中央分发) |
 <!-- /AUTO:module-list -->
 ---
@@ -21,7 +22,14 @@
 
 **规范**: 禁止 git push 直推；所有上库必须经此脚本。
 
-**流程**: master → gitee/master；master 合并到 en → origin/CN + origin/EN。
+**流程**: 干净/分支检查 → VERSION.json 自动同步 (P2 #10, 变更自动提交)
+→ master → gitee/master；master 合并到 en → origin/CN + origin/EN。
+
+## scripts/update_version.py — VERSION.json 自动同步 (P2 #10)
+
+commit/released_at 自动对齐 git HEAD (幂等); `--bump patch/minor/major`
+递增版本号 (低位归零), `--note` 更新说明。由 sync_push.ps1 推送前自动
+调用, 消除 VERSION.json 手工维护遗漏。
 
 **已知坑**（历次迭代沉淀）:
 - origin 固定 push refspec（master:CN、en:EN）导致显式推送报
@@ -55,4 +63,5 @@ React + TypeScript 前端、Rust/Tauri 后端的桌面文件共享应用。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-16 | iter-30 补③ | P2 #10: VERSION.json 自动化 (update_version.py 幂等同步 + sync_push 推送前自动调用提交) |
 | 2026-08-16 | iter-27 后 | 初建 |

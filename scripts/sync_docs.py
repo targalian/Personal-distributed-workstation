@@ -123,6 +123,7 @@ MAPPING = {
     ".githooks/": ("10-test-loop", "commit-msg / pre-push / post-merge 钩子"),
     # 11-scripts-subprojects — 运维脚本/技能库/独立子项目
     "scripts/sync_docs.py": "11-scripts-subprojects",
+    "scripts/update_version.py": "11-scripts-subprojects",
     "scripts/sync_push.ps1": ("11-scripts-subprojects",
                               "★ 双库同步推送脚本 (上库唯一入口)"),
     "scripts/start_workstation.bat": ("11-scripts-subprojects",
