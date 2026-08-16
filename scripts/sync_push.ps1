@@ -21,10 +21,10 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 
 function Invoke-Git {
-    param([string[]]$GitArgs)
-    & git -C $root @GitArgs
+    # 用 $args 透传 (避免 [string[]] 具名参数绑定在部分场景丢失实参)
+    & git -C $root @args
     if ($LASTEXITCODE -ne 0) {
-        throw "git $($GitArgs -join ' ') 执行失败 (exit $LASTEXITCODE)"
+        throw "git $($args -join ' ') 执行失败 (exit $LASTEXITCODE)"
     }
 }
 
