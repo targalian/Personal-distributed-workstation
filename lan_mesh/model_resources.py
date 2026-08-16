@@ -19,6 +19,7 @@
 用户可在 resources.yaml 的 pricing 段为未收录模型补充覆盖。
 """
 import datetime
+import json
 import os
 import threading
 import time
@@ -37,6 +38,26 @@ if TYPE_CHECKING:
 logger = get_logger("resources")
 
 VALID_PLAN_TYPES = ("payg", "token_plan", "coding_plan")
+
+
+def _build_ws_url(http_url: str, token: str = "") -> str:
+    """M5-2: Secretary http(s) 地址 → /ws/worker 直推地址。
+
+    mesh_token 以 query 参数携带 (握手阶段无 header 注入点);
+    空地址返回空串。
+    """
+    u = (http_url or "").strip().rstrip("/")
+    if u.startswith("https://"):
+        u = "wss://" + u[len("https://"):]
+    elif u.startswith("http://"):
+        u = "ws://" + u[len("http://"):]
+    else:
+        return ""
+    u += "/ws/worker"
+    if token:
+        from urllib.parse import quote
+        u += f"?token={quote(str(token), safe='')}"
+    return u
 
 
 @dataclass
@@ -91,6 +112,12 @@ class ModelResourceManager:
         self._secretary_url = ""                            # 上报目标 (R3)
         self._report_interval = 60.0                        # 上报周期 (秒, R3)
         self._reporter = None                               # 上报线程 (R3)
+        # ── M5-2: WS 直推 (Worker → Secretary 实时用量通道) ──
+        self._ws_push_thread = None                         # WS 推送线程
+        self._ws_url = ""                                   # ws://…/ws/worker?token=…
+        self._ws_token = ""                                 # mesh_token (鉴权参数)
+        self._ws_last_ok = 0.0                              # 最近一次 WS 成功轮次 ts
+        self._ws_push_interval = 3.0                        # WS 轮询推送周期 (秒)
         # ── R7: 到期/额度预警 ──
         self._bot_notify = None                             # Bot 推送回调 (可选注入)
         self._alert_state: dict[tuple, int] = {}            # (rid,kind) → 已推档位 (仅升级重推)
@@ -445,12 +472,14 @@ class ModelResourceManager:
 
     # ── R3: 跨主机用量上报 (Worker → Secretary) ──────────────────
 
-    def set_report_target(self, url: str, interval: float = 60.0) -> bool:
+    def set_report_target(self, url: str, interval: float = 60.0,
+                          token: str = "") -> bool:
         """设置/启动用量上报目标 (Worker 主机配置或运行时注入)。
 
         Args:
             url: Secretary 站点地址 (空 → 不启用上报)
             interval: 上报周期 (秒)
+            token: mesh_token (M5-2: 非空时启用 WS 直推通道鉴权)
 
         Returns:
             是否已启用上报线程
@@ -458,21 +487,35 @@ class ModelResourceManager:
         target = (url or "").strip().rstrip("/")
         self._secretary_url = target
         self._report_interval = max(5.0, float(interval or 60.0))
+        # M5-2: 派生 WS 直推地址 (token 变化时即时刷新; 未传 token
+        # 沿用旧值, 支持 yaml 配置与注册注入两种来源交替)
+        if token:
+            self._ws_token = str(token)
+        ws_url = _build_ws_url(target, self._ws_token)
+        if ws_url:
+            self._ws_url = ws_url
         if not target or not self._enabled or self._db is None:
             return False
-        if self._reporter and self._reporter.is_alive():
-            return True  # 线程已在运行 (仅更新目标地址)
         self._stop_evt.clear()
-        self._reporter = threading.Thread(
-            target=self._report_loop, name="resource-usage-reporter",
-            daemon=True)
-        self._reporter.start()
-        logger.info("[resources] 用量上报已启用 → %s (周期 %.0fs)",
-                    target, self._report_interval)
+        if not (self._reporter and self._reporter.is_alive()):
+            self._reporter = threading.Thread(
+                target=self._report_loop, name="resource-usage-reporter",
+                daemon=True)
+            self._reporter.start()
+            logger.info("[resources] 用量上报已启用 → %s (周期 %.0fs)",
+                        target, self._report_interval)
+        # M5-2: WS 直推线程 (幂等启动; 断线期间 HTTP 批量兜底不变)
+        if self._ws_url and not (
+                self._ws_push_thread and self._ws_push_thread.is_alive()):
+            self._ws_push_thread = threading.Thread(
+                target=self._ws_push_loop,
+                name="resource-usage-ws-push", daemon=True)
+            self._ws_push_thread.start()
+            logger.info("[resources] WS 直推已启用 → %s", self._ws_url)
         return True
 
     def stop_reporter(self):
-        """停止上报线程 (进程退出前调用)。"""
+        """停止上报线程 (含 M5-2 WS 推送线程, 共用 _stop_evt)。"""
         self._stop_evt.set()
 
     def report_once(self, batch: int = 200) -> dict:
@@ -486,6 +529,12 @@ class ModelResourceManager:
         """
         if not self._secretary_url or self._db is None:
             return {"reported": 0, "error": "no_report_target"}
+        # M5-2: WS 直推通道健康 (最近一轮成功) → 跳过 HTTP 批量,
+        # 避免双通道重复推送 (Secretary 按 usage_id 幂等去重, 重复亦无害)
+        if self._ws_last_ok and (
+                time.time() - self._ws_last_ok
+                < max(30.0, self._report_interval)):
+            return {"reported": 0, "via": "ws"}
         try:
             rows = self._db.query_unreported_usage(batch)
         except Exception as e:
@@ -526,6 +575,111 @@ class ModelResourceManager:
                 self.report_once()
             except Exception as e:  # 双保险 (report_once 内部已兜底)
                 logger.warning("[resources] 上报轮次异常: %s", e)
+
+    # ── M5-2: WS 直推 (实时用量通道, HTTP 批量兜底) ────────────
+
+    def _push_once_ws(self, conn) -> bool:
+        """一轮 WS 推送: 查未上报记录 → 发批 → 等 ack 推游标。
+
+        Returns:
+            True  — 连接可继续使用 (含空轮次/ack 超时重试/被拒暂缓)
+            False — 连接已坏或不可用, 外层断开重连
+        """
+        if self._db is None:
+            return False
+        try:
+            rows = self._db.query_unreported_usage(200)
+        except Exception as e:
+            logger.warning("[resources] WS 推送查询失败: %s", e)
+            return not self._stop_evt.wait(self._ws_push_interval)
+        if not rows:
+            self._ws_last_ok = time.time()
+            return not self._stop_evt.wait(self._ws_push_interval)
+        payload = {
+            "type": "usage_batch",
+            "records": [
+                {"usage_id": r["usage_id"], "model": r["model_id"],
+                 "input_tokens": r["input_tokens"],
+                 "output_tokens": r["output_tokens"],
+                 "task_id": r.get("task_id", ""),
+                 "project_id": r.get("project_id", "")}
+                for r in rows
+            ],
+        }
+        try:
+            conn.send(json.dumps(payload))
+            raw = conn.recv(timeout=10)
+        except TimeoutError:
+            # ack 超时: 不推游标, 下轮重发 (Secretary 幂等去重)
+            logger.debug("[resources] WS ack 超时, %d 条下轮重发",
+                         len(rows))
+            return True
+        except Exception as e:
+            logger.warning("[resources] WS 收发失败: %s", e)
+            return False
+        try:
+            ack = json.loads(raw if isinstance(raw, str)
+                             else raw.decode("utf-8"))
+        except Exception:
+            logger.warning("[resources] WS ack 解析失败")
+            return False
+        if isinstance(ack, dict) and ack.get("ok"):
+            self._db.mark_usage_reported([r["id"] for r in rows])
+            self._ws_last_ok = time.time()
+            logger.info("[resources] 用量已 WS 直推 Secretary: %d 条 "
+                        "(重复 %d)", len(rows),
+                        int(ack.get("duplicate", 0)))
+            return True
+        # Secretary 拒绝 (未激活等): 不推游标, 暂缓等待 HTTP 兜底接手
+        logger.debug("[resources] WS 推送被拒: %s",
+                     ack.get("error", "") if isinstance(ack, dict) else "?")
+        return not self._stop_evt.wait(self._report_interval)
+
+    def _ws_push_loop(self):
+        """M5-2: WS 直推线程主循环 — 实时推送未上报用量。
+
+        连接失败/断开按指数退避重连 (5s→60s 封顶); 断线期间记录
+        留存本地库, report_once (HTTP 批量) 自动接手兜底。
+        异常隔离, 直到 stop 才退出。
+        """
+        try:
+            from websockets.sync.client import connect as ws_connect
+        except Exception as e:
+            logger.warning("[resources] websockets 不可用, WS 直推停用 "
+                           "(HTTP 批量兜底仍有效): %s", e)
+            return
+        backoff = 5.0
+        while not self._stop_evt.is_set():
+            url = self._ws_url
+            if not url:
+                if self._stop_evt.wait(10.0):
+                    return
+                continue
+            try:
+                conn = ws_connect(url, open_timeout=5)
+            except Exception as e:
+                logger.debug("[resources] WS 直推连接失败 "
+                             "(%.0fs 后重试): %s", backoff, e)
+                if self._stop_evt.wait(backoff):
+                    return
+                backoff = min(backoff * 2, 60.0)
+                continue
+            backoff = 5.0
+            self._ws_last_ok = time.time()
+            logger.info("[resources] WS 直推通道已建立")
+            try:
+                while not self._stop_evt.is_set():
+                    if not self._push_once_ws(conn):
+                        break
+            except Exception as e:
+                logger.warning("[resources] WS 直推轮次异常: %s", e)
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            logger.info("[resources] WS 直推断开, 稍后重连")
+            self._stop_evt.wait(5.0)
 
     def summarize(self) -> dict:
         """全池汇总报告 (API / CLI / Web UI 使用)。"""
@@ -838,10 +992,14 @@ def record_usage_global(model_id: str, input_tokens: int, output_tokens: int,
         return {"tracked": False}
 
 
-def set_report_target_global(url: str, interval: float = 60.0) -> bool:
-    """上报目标注入钩子 (R3) — Worker 收到任务后注入 Secretary 地址。"""
+def set_report_target_global(url: str, interval: float = 60.0,
+                             token: str = "") -> bool:
+    """上报目标注入钩子 (R3/M5-2) — Worker 注册后注入 Secretary 地址。
+
+    token 非空时同步启用 WS 直推通道鉴权 (M5-2)。
+    """
     try:
-        return _mgr.set_report_target(url, interval)
+        return _mgr.set_report_target(url, interval, token)
     except Exception:
         return False
 

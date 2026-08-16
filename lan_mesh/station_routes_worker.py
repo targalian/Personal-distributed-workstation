@@ -66,9 +66,14 @@ def build_worker_routes(controller) -> APIRouter:
         task_data = payload.get("task_data")
         if not task_id or not secretary_url:
             raise HTTPException(status_code=400, detail="缺少 task_id 或 secretary_url")
-        # R3: 注入用量上报目标 (本机作为 Worker, 记账汇总到 Secretary)
+        # R3/M5-2: 注入用量上报目标 (本机作为 Worker, 记账汇总到
+        # Secretary; 携带 mesh_token 启用 WS 直推通道)
+        from .auth import get_mesh_token
         from .model_resources import set_report_target_global
-        set_report_target_global(secretary_url)
+        from .station_routes_common import get_mesh_auth_token
+        set_report_target_global(
+            secretary_url,
+            token=get_mesh_auth_token() or get_mesh_token())
         result = controller._local_start_pm(task_id, secretary_url, task_data)
         if not result.get("ok"):
             raise HTTPException(status_code=409, detail=result.get("message", "启动失败"))

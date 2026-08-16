@@ -28,6 +28,19 @@ API Key 加密分发与版本同步（S1/S2/S3 迭代成果集中于此）。
 （每次 LLM 调用一行，可审计可聚合）；R7 到期/额度预警周期检查；
 保存配置后热重载并触发全网密钥推送。
 
+**跨主机用量上报（R3 → M5-2 双通道）**:
+- **WS 直推（M5-2, 实时主通道）**: Worker 注册后 `set_report_target(url, token)`
+  派生 `ws://<secretary>/ws/worker?token=…` 并启动推送线程
+  （`websockets.sync` 同步客户端）；每 3s 轮询未上报记录 → 发
+  `usage_batch` 帧 → 收到 ack 后推游标；断线指数退避重连
+  （5s→60s 封顶）；Secretary 拒绝（未激活）时不推游标交给兜底
+- **HTTP 批量（R3, 兜底通道）**: `report_once` 60s 周期批量 POST
+  `/api/resources/usage`（usage_id 幂等去重）；WS 通道新鲜
+  （最近一轮成功 < 上报周期）时自动跳过，避免双通道重复推送
+- 两端点共用 `apply_usage_batch`（station_routes_resources）同一
+  幂等路径；Secretary 端 `/ws/worker` 见
+  [02-station-core](../02-station-core/README.md)
+
 ## model_router.py — 模型路由器
 
 **职责**: 任务难度分级（L1-L4）→ 加权评分选模型 → 降级链重试。
@@ -105,6 +118,7 @@ mesh_token 后重试解密一次：
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-17 | iter-32 | M5-2: Worker 用量 WS 直推通道 (websockets.sync 推送线程 + 断线重连; HTTP 批量降为兜底, 双通道 usage_id 幂等) |
 | 2026-08-16 | iter-30 | F1: 角色无关密钥对齐 (config_ts 仲裁 + config_hash 排除 ts) + 版本落后自动升级 |
 | 2026-08-16 | iter-30 补③ | P2 #6: resources.yaml 备份移位 (~/.lan_mesh/backups/, 留 3 代; 含密钥明文的备份不再与源码同目录) |
 | 2026-08-16 | iter-27 后 | 初建；收录 S1/S2/S3 完整链路设计 |
