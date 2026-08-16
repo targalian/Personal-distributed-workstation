@@ -33,8 +33,8 @@ JSON 序列化（前端渲染 + checkpoint 恢复）。
 **历史职责**: 用户任务 → 分解 → DAG 构建 → Agent 匹配 → HTTP 分发
 Worker → 结果聚合（显式状态机 + Checkpoint, 借鉴 LangGraph Supervisor）。
 
-**收敛裁定**: 编排能力已由 PM 四件套全面接管, Orchestrator 类降级为
-兼容 stub（实例化即抛 RuntimeError, 指引迁移方向）, 仅保留:
+**收敛裁定**: 编排能力已由 PM 四件套全面接管, Orchestrator 兼容 stub
+类已随 secretary.py 历史入口一并删除 (P3 清理), 仅保留:
 - `_classify_task()`: 任务类型分类工具函数 (单测覆盖中)
 - `GraphState` / `PHASE_TRANSITIONS`: 早期状态机数据定义 (考古资产)
 
@@ -42,7 +42,6 @@ Worker → 结果聚合（显式状态机 + Checkpoint, 借鉴 LangGraph Supervi
 `POST /api/tasks/{id}/resume`、`GET /api/tasks/{id}/graph-state` 三端点
 （原本永远 503）已删除; `GET /api/tasks/{id}/graph` 改为纯 DB 重建
 （checkpoint 优先）; 前端图编辑器保存按钮改为停用提示。
-待 secretary.py 历史入口清理后, 兼容 stub 可整体删除。
 
 ## pm_agent.py / pm_planner.py / pm_dispatcher.py / pm_monitor.py — PM 四件套
 

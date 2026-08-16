@@ -13,7 +13,6 @@ work_station/
 │   ├── station_controller.py  # Station Director 主控制器 (Secretary/Worker 统一入口)
 │   ├── station_api.py         # Secretary 侧 API (任务/PM/团队/聊天)
 │   ├── station_director.py    # 主机管理与评级
-│   ├── secretary.py           # Secretary 控制器 (向后兼容)
 │   ├── worker.py              # Worker 守护进程 (含 PM Agent 内嵌支持)
 │   ├── pm_agent.py            # 项目经理 Agent (任务分解/团队组建/进度管理/结果聚合)
 │   ├── chat_handler.py        # 秘书聊天处理器 (Web 对话 + 状态注入 + 意图检测)
@@ -25,7 +24,7 @@ work_station/
 │   ├── project.py             # 项目管理与预算控制
 │   ├── mcp_gateway.py         # MCP 工具网关
 │   ├── mcp_client.py          # MCP 客户端
-│   ├── orchestrator.py        # (已废弃, 被 PM Agent 替代)
+│   ├── orchestrator.py        # (已废弃, 仅留任务分类工具函数, 被 PM Agent 替代)
 │   ├── host_info.py           # 主机硬件信息采集
 │   ├── host_rating.py         # 主机评级 (S/A/B/C/D)
 │   ├── shared_folder.py       # 共享文件夹管理
@@ -35,7 +34,7 @@ work_station/
 │   ├── config.py              # Pydantic 配置加载
 │   ├── tool_registry.py       # 工具注册表
 │   ├── preflight.py           # 启动前自检
-│   └── api.py                 # FastAPI 路由层 (Worker API + Secretary API)
+│   └── api.py                 # FastAPI 路由层 (Worker API)
 ├── quicklan-main/             # Tauri/React 局域网文件共享桌面应用
 ├── scripts/                   # 跨平台一键启动脚本
 │   ├── start_workstation.bat  # Windows 双击启动
@@ -182,9 +181,6 @@ python main.py station
 
 # Worker (工作节点)
 python main.py worker
-
-# 向后兼容: 直接启动 Secretary
-python main.py secretary
 ```
 
 ### 在其他主机上启动 Worker

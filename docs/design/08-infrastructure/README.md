@@ -7,7 +7,7 @@
 <!-- AUTO:module-list -->
 | 文件/目录 | 职责一句话 |
 |---|---|
-| api.py | FastAPI 路由层 - Worker API 与 Secretary API |
+| api.py | FastAPI 路由层 - Worker API |
 | config.py | 配置管理 - 基于 Pydantic 的强类型配置校验 |
 | error_tracker.py | F1.4: 本地错误聚合追踪 |
 | event_bus.py | Station 事件总线 (M5)。 |
