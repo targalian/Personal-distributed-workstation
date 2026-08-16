@@ -137,7 +137,7 @@ def build_resource_routes(controller) -> APIRouter:
     async def save_resources_config(payload: dict):
         """保存资源配置并热重载 (UI 配置向导)。
 
-        校验不通过 → 400 携带具体错误; 保存前自动备份 .bak。
+        校验不通过 → 400 携带具体错误; 保存前自动备份至 ~/.lan_mesh/backups/。
         F1: 任意节点均可保存 (不再限 Secretary) — 保存后与全网
         对端自动对齐, 主从无关。
         """

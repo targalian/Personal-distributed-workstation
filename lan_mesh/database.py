@@ -2,7 +2,9 @@
 SQLite 数据库存储层 - Secretary 端主机注册记录持久化
 
 参考 QuickLAN 的 SQLite 使用方式，用于存储主机信息与心跳历史。
+P2 #7: 启动时自动备份 DB 到 ~/.lan_mesh/backups/ (保留最近 3 代)。
 """
+import datetime
 import json
 import sqlite3
 import threading
@@ -120,6 +122,34 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._init_db()
+        self.backup()  # P2 #7: 启动时快照备份 (失败不阻断启动)
+
+    def backup(self, keep: int = 3) -> str:
+        """P2 #7: 将 DB 安全快照到 ~/.lan_mesh/backups/, 保留最近 keep 代。
+
+        使用 sqlite3 在线备份 API (一致性快照, 无需停写);
+        备份失败仅告警不抛异常。返回备份文件路径 (失败时为空串)。
+        """
+        try:
+            bak_dir = Path.home() / ".lan_mesh" / "backups"
+            bak_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            dst = bak_dir / f"{self.path.stem}-{ts}.sqlite3"
+            src = self._get_conn()
+            with sqlite3.connect(str(dst)) as target:
+                src.backup(target)
+            # 仅保留最近 keep 代 (同名前缀)
+            olds = sorted(bak_dir.glob(f"{self.path.stem}-*.sqlite3"))
+            for stale in olds[:-keep]:
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+            logger.info("[DB] 已备份至 %s", dst.name)
+            return str(dst)
+        except Exception as e:
+            logger.warning("[DB] 备份失败 (不影响运行): %s", e)
+            return ""
 
     def _get_conn(self) -> sqlite3.Connection:
         """每个线程获取独立的连接 (SQLite 线程安全要求)。"""

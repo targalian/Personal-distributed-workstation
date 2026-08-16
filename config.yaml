@@ -42,7 +42,7 @@ auto_upgrade: true
 
 # 安全配置
 security:
-  auth_enabled: false        # 是否启用节点间 Token 认证
+  auth_enabled: true         # 是否启用节点间 Token 认证 (P2 #5 起默认启用)
   # mesh_token: ""          # 显式指定全网共享 token (留空则自动生成/持久化)
   # token 来源优先级: security.mesh_token > 环境变量 LAN_MESH_TOKEN > ~/.lan_mesh/mesh_token
   # 启用后所有内部 API 请求需携带 Authorization: Bearer <token>

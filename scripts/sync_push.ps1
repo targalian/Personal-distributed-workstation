@@ -21,10 +21,10 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 
 function Invoke-Git {
-    param([string[]]$GitArgs)
-    & git -C $root @GitArgs
+    # 用 $args 透传 (避免 [string[]] 具名参数绑定在部分场景丢失实参)
+    & git -C $root @args
     if ($LASTEXITCODE -ne 0) {
-        throw "git $($GitArgs -join ' ') 执行失败 (exit $LASTEXITCODE)"
+        throw "git $($args -join ' ') 执行失败 (exit $LASTEXITCODE)"
     }
 }
 
@@ -38,6 +38,16 @@ if ($status) {
 $branch = (& git -C $root branch --show-current).Trim()
 if ($branch -ne "master") {
     throw "请在 master 分支上运行本脚本（当前分支: $branch）"
+}
+
+# 2.5 P2 #10: VERSION.json 自动同步 (commit/released_at 对齐 HEAD, 变更自动提交)
+# 注: VERSION.json 必须加引号 — 裸词含点会被 PowerShell 解析为成员访问表达式而丢失
+Write-Host "==> 同步 VERSION.json"
+& python "$root\scripts\update_version.py"
+$verDiff = & git -C $root status --porcelain -- "VERSION.json"
+if ($verDiff) {
+    Invoke-Git add "VERSION.json"
+    Invoke-Git commit -m "chore(config): VERSION.json 自动同步 (commit/released_at 对齐 HEAD, sync_push 自动生成)"
 }
 
 # 3. 同步 master 代码变更到 en 分支（英文 README 由 merge=ours 属性保护）

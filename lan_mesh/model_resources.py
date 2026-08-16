@@ -771,8 +771,34 @@ def validate_config(data: dict) -> list:
     return errors
 
 
+def _backup_config(path: Path) -> str:
+    """P2 #6: 配置备份移位到数据目录 (~/.lan_mesh/backups/), 保留最近 3 代。
+
+    备份含 API Key 明文, 不再与源码同目录 (避免误入版本库/代码分发)。
+    备份失败不阻断保存, 返回空串。
+    """
+    import shutil
+    try:
+        bak_dir = Path.home() / ".lan_mesh" / "backups"
+        bak_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        dst = bak_dir / f"resources-{ts}.bak"
+        shutil.copy2(path, dst)
+        # 仅保留最近 3 代
+        olds = sorted(bak_dir.glob("resources-*.bak"))
+        for stale in olds[:-3]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+        return str(dst)
+    except Exception as e:
+        logger.warning("[resources] 配置备份失败 (不影响保存): %s", e)
+        return ""
+
+
 def save_config(yaml_path: Union[str, Path], data: dict) -> dict:
-    """保存配置到 resources.yaml (先备份 .bak)。
+    """保存配置到 resources.yaml (先备份到数据目录)。
 
     F1: 自动注入 config_ts (Unix 时间戳) — 角色无关密钥对齐的
     仲裁依据 (谁新谁胜); config_hash 计算时排除该字段。
@@ -786,8 +812,7 @@ def save_config(yaml_path: Union[str, Path], data: dict) -> dict:
     data["config_ts"] = time.time()  # F1: 对齐仲裁时间戳
     try:
         if path.is_file():
-            backup = str(path) + ".bak"
-            path.replace(backup)
+            backup = _backup_config(path)
         header = ("# 模型资源管理配置 (由 Web 配置向导生成, 可手工编辑)\n"
                   "# 本文件已在 .gitignore 中排除, 不会提交到版本库\n")
         path.write_text(

@@ -147,7 +147,11 @@ skill_assignments、resource_usage_log、events 等。
 - 迁移函数必须幂等（ALTER TABLE 包 try/except）；新增列的索引放迁移函数内
 
 **关键接口**: `upsert_host()` / `list_hosts()` / `on_heartbeat` 相关 /
-`record_usage()` 等
+`record_usage()` / `backup()` (P2 #7) 等
+
+**P2 #7 DB 自动备份**: `__init__` 末尾调用 `backup()` — sqlite3 在线
+备份 API 一致性快照至 `~/.lan_mesh/backups/<stem>-<时间戳>.sqlite3`,
+保留最近 3 代; 失败仅告警不阻断启动。
 
 **依赖**: 无外部依赖（标准库 sqlite3）
 
@@ -158,5 +162,6 @@ skill_assignments、resource_usage_log、events 等。
 | 2026-08-16 | iter-30 | F1: 角色无关自动对齐 — config_ts 仲裁密钥收敛 (推/拉主从解耦) + 落后节点自动 git pull 升级 + 保存端点/周期对齐线程 |
 | 2026-08-16 | iter-30 补 | E5: Secretary 离线故障转移 (prune 循环挂接管检查 + device_id 仲裁接任 + WS/Bot 通知) |
 | 2026-08-16 | iter-30 补② | P1 #2: station_api 按路由分层拆分 (2594 行 → 装配层 + common + 7 路由域; 路由集合/行为不变, 兼容再导出保外部导入不破) |
+| 2026-08-16 | iter-30 补③ | P2 #7: DB 启动自动备份 (sqlite3 在线快照 → ~/.lan_mesh/backups/, 留 3 代, 失败不阻断) |
 | 2026-08-16 | iter-28 | E4: 双 Secretary 冲突仲裁 (真实角色广播 + device_id 字典序让位) + role 落库 + 密钥接收端自愈 |
 | 2026-08-16 | iter-27 后 | 初建；收录 S1/S2/S3 同步链路设计 |
