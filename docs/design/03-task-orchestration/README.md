@@ -8,7 +8,7 @@
 <!-- AUTO:module-list -->
 | 文件/目录 | 职责一句话 |
 |---|---|
-| orchestrator.py | 任务编排引擎 — 借鉴 LangGraph Supervisor 模式 (增强版: 显式状态机 + Checkpoint) |
+| orchestrator.py | 任务编排引擎 — 已废弃, 降级为工具库 (iter-30 收敛裁定) |
 | pm_agent.py | PM Agent 协调器/门面 — 持有 Planner/Dispatcher/Monitor, 对外暴露统一接口。 |
 | pm_dispatcher.py | PM 分发器 — 团队创建与子任务分发 |
 | pm_monitor.py | PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证 |
