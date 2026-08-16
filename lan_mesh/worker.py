@@ -169,10 +169,12 @@ class WorkerAgent:
                 self._register_agent_card()
                 # 3. 拉取已授权技能到本地缓存
                 self._pull_skills()
-                # 4. R3: 注入资源用量上报目标 (记账汇总到 Secretary)
+                # 4. R3/M5-2: 注入资源用量上报目标 (记账汇总到 Secretary,
+                #    携带 mesh_token 启用 WS 直推通道)
                 from .model_resources import set_report_target_global
                 set_report_target_global(
-                    f"http://{self.state.secretary_ip}:{self.state.secretary_port}")
+                    f"http://{self.state.secretary_ip}:{self.state.secretary_port}",
+                    token=self.state.mesh_token)
                 return True
         except requests.RequestException as e:
             logger.error("注册失败: %s", e)

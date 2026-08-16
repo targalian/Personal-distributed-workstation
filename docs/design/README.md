@@ -106,6 +106,7 @@ work_station/
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-17 | iter-32 | M5-2-ws-direct-push: Worker→Secretary 用量 WS 直推通道 (/ws/worker 端点 mesh_token 鉴权 + websockets.sync 推送线程断线重连; HTTP 批量降为兜底, usage_id 幂等双通道) |
 | 2026-08-16 | iter-30 | F1-role-free-align: 密钥与版本对齐与主从无关 (config_ts 仲裁 + 60s 对齐线程 + 落后节点自动升级); E5-secretary-failover: Secretary 离线故障转移收录至关键机制 |
 | 2026-08-16 | iter-28 | D2-docs-sync: 模块清单自动化 (sync_docs.py + pre-push 第 8/9 项 + docs-sync skill) |
 | 2026-08-16 | iter-27 后 | 设计文档库初建: 11 个功能域, 覆盖全部 lan_mesh 模块 |

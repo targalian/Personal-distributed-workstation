@@ -14,6 +14,8 @@
 10. role-free-align — config_ts 仲裁推/拉、池数仲裁、自动升级脏工作区跳过 (F1)
 11. secretary-failover — Secretary 离线接管判定、device_id 仲裁、单节点自愈 (E5)
 12. pm-trio — PMPlanner/PMMonitor/PMDispatcher 接口级单测 (P1 #9)
+13. worker-ws-push — Worker→Secretary WS 直推通道: URL 派生/推送轮次/
+    HTTP 兜底跳过/Secretary 端点鉴权与帧协议 (M5-2)
 
 运行: pytest tests/ -v
 """
@@ -1955,3 +1957,200 @@ class TestPMDispatcher:
         assert "B" in prompt and "审查代码" in prompt
         # 依赖提示: B 依赖 A, 应包含等待前序输出的说明
         assert "前序" in prompt
+
+
+# ═══════════════════════════════════════════════════════════
+# Worker WS 直推测试 (M5-2)
+# ═══════════════════════════════════════════════════════════
+
+class _FakeWsDb:
+    """database.query_unreported_usage / mark_usage_reported 最小替身。"""
+
+    def __init__(self, rows=None):
+        self.rows = rows or []
+        self.marked = []
+
+    def query_unreported_usage(self, batch):
+        return self.rows[:batch]
+
+    def mark_usage_reported(self, ids):
+        self.marked.extend(ids)
+
+
+class _FakeWsConn:
+    """websockets sync 连接最小替身 (send/recv)。"""
+
+    def __init__(self, ack=None, recv_error=None):
+        self.sent = []
+        self._ack = {"ok": True, "duplicate": 0} if ack is None else ack
+        self._recv_error = recv_error
+
+    def send(self, text):
+        self.sent.append(text)
+
+    def recv(self, timeout=None):
+        if self._recv_error:
+            raise self._recv_error
+        import json as _json
+        return _json.dumps(self._ack)
+
+
+def _ws_usage_row(uid="u1"):
+    return {"id": uid, "usage_id": uid, "model_id": "m1",
+            "input_tokens": 10, "output_tokens": 20,
+            "task_id": "", "project_id": ""}
+
+
+class TestWorkerWsPush:
+    """M5-2: WS 直推 — URL 派生/推送轮次/HTTP 兜底跳过/Secretary 端点。"""
+
+    # ── Worker 端单元 ──
+
+    def test_build_ws_url_scheme_and_token(self):
+        from lan_mesh.model_resources import _build_ws_url
+        assert _build_ws_url("http://10.0.0.1:45470/", "tk") == \
+            "ws://10.0.0.1:45470/ws/worker?token=tk"
+        assert _build_ws_url("https://sec:443") == \
+            "wss://sec:443/ws/worker"
+        assert _build_ws_url("") == ""
+        assert _build_ws_url("not-a-url", "tk") == ""
+
+    def test_push_once_ws_marks_reported_on_ack(self):
+        import json as _json
+        from lan_mesh.model_resources import ModelResourceManager
+        mgr = ModelResourceManager()
+        mgr._db = _FakeWsDb([_ws_usage_row("u1"), _ws_usage_row("u2")])
+        conn = _FakeWsConn()
+        assert mgr._push_once_ws(conn) is True
+        assert mgr._db.marked == ["u1", "u2"]
+        assert mgr._ws_last_ok > 0
+        payload = _json.loads(conn.sent[0])
+        assert payload["type"] == "usage_batch"
+        assert len(payload["records"]) == 2
+
+    def test_push_once_ws_rejected_not_marked(self):
+        from lan_mesh.model_resources import ModelResourceManager
+        mgr = ModelResourceManager()
+        mgr._report_interval = 5.0  # 缩短被拒后的暂缓等待
+        mgr._db = _FakeWsDb([_ws_usage_row()])
+        conn = _FakeWsConn(ack={"ok": False, "error": "secretary_inactive"})
+        assert mgr._push_once_ws(conn) is True  # 连接保留, 等 HTTP 兜底
+        assert mgr._db.marked == [] and mgr._ws_last_ok == 0.0
+
+    def test_push_once_ws_broken_conn_returns_false(self):
+        from lan_mesh.model_resources import ModelResourceManager
+        mgr = ModelResourceManager()
+        mgr._db = _FakeWsDb([_ws_usage_row()])
+        conn = _FakeWsConn(recv_error=ConnectionError("断开"))
+        assert mgr._push_once_ws(conn) is False
+        assert mgr._db.marked == []
+
+    def test_push_once_ws_empty_round_keeps_alive(self):
+        from lan_mesh.model_resources import ModelResourceManager
+        mgr = ModelResourceManager()
+        mgr._ws_push_interval = 0.01
+        mgr._db = _FakeWsDb([])
+        conn = _FakeWsConn()
+        assert mgr._push_once_ws(conn) is True
+        assert conn.sent == [] and mgr._ws_last_ok > 0
+
+    def test_report_once_skips_when_ws_healthy(self):
+        import time as _time
+        from lan_mesh.model_resources import ModelResourceManager
+        mgr = ModelResourceManager()
+        mgr._secretary_url = "http://sec:1"
+        mgr._db = _FakeWsDb([_ws_usage_row()])
+        mgr._ws_last_ok = _time.time()  # WS 通道新鲜 → HTTP 批量跳过
+        assert mgr.report_once() == {"reported": 0, "via": "ws"}
+        assert mgr._db.marked == []  # 未走 HTTP, 游标不动
+
+    def test_set_report_target_derives_ws_url(self):
+        from lan_mesh.model_resources import ModelResourceManager
+        mgr = ModelResourceManager()
+        mgr._enabled = True
+        # db 缺失 → 线程不启动但地址已派生 (待 db 就绪后重注入即生效)
+        assert mgr.set_report_target("http://10.0.0.1:45470",
+                                     token="tk") is False
+        assert mgr._ws_url == "ws://10.0.0.1:45470/ws/worker?token=tk"
+        assert mgr._ws_token == "tk"
+
+    # ── Secretary 端点 (/ws/worker) ──
+
+    def _station_client(self, controller):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.station_api import create_station_router
+        app = FastAPI()
+        app.include_router(create_station_router(controller))
+        return TestClient(app)
+
+    def _controller(self, active=True):
+        import types
+
+        class _Ctl:
+            def __getattr__(self, name):
+                from unittest.mock import MagicMock
+                return MagicMock()
+
+        ctl = _Ctl()
+        ctl.db = None
+        ctl.state = types.SimpleNamespace(ws_clients=set(),
+                                          p2p_messages={},
+                                          shared_folder=None)
+        ctl.secretary_active = active
+        return ctl
+
+    def test_ws_worker_endpoint_batch_ack(self, monkeypatch):
+        import lan_mesh.model_resources as mr
+        monkeypatch.setattr(
+            mr, "record_usage_global",
+            lambda model, itok, otok, usage_id="", task_id="",
+            project_id="": {"tracked": True, "duplicate": False})
+        client = self._station_client(self._controller())
+        with client.websocket_connect("/ws/worker") as ws:
+            ws.send_json({"type": "usage_batch",
+                          "records": [_ws_usage_row("u1")]})
+            ack = ws.receive_json()
+        assert ack["ok"] is True and ack["recorded"] == 1
+        assert ack["total"] == 1 and ack["duplicate"] == 0
+
+    def test_ws_worker_endpoint_token_required(self, monkeypatch):
+        import lan_mesh.station_routes_common as common
+        monkeypatch.setattr(common, "_mesh_auth_enabled", True)
+        monkeypatch.setattr(common, "_mesh_auth_token", "secret-tk")
+        from starlette.websockets import WebSocketDisconnect
+        client = self._station_client(self._controller())
+        # 无 token / 错 token → 握手即拒
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/worker"):
+                pass
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/worker?token=bad"):
+                pass
+        # 正确 token → 可连通
+        with client.websocket_connect("/ws/worker?token=secret-tk") as ws:
+            ws.send_json({"type": "host_event", "data": {"k": 1}})
+            assert ws.receive_json()["ok"] is True
+
+    def test_ws_worker_endpoint_event_forwarded_to_bus(self):
+        from lan_mesh.event_bus import get_event_bus
+        bus = get_event_bus()
+        before = len(bus.recent(100))
+        client = self._station_client(self._controller())
+        with client.websocket_connect("/ws/worker") as ws:
+            ws.send_json({"type": "host_event",
+                          "data": {"device_id": "h9", "online": True}})
+            assert ws.receive_json()["ok"] is True
+        events = bus.recent(100)
+        assert len(events) == before + 1
+        assert events[-1]["type"] == "host_event"
+        assert events[-1]["data"]["device_id"] == "h9"
+
+    def test_ws_worker_endpoint_secretary_inactive_ack_fails(self):
+        client = self._station_client(self._controller(active=False))
+        with client.websocket_connect("/ws/worker") as ws:
+            ws.send_json({"type": "usage_batch",
+                          "records": [_ws_usage_row()]})
+            ack = ws.receive_json()
+        assert ack["ok"] is False
+        assert ack["error"] == "secretary_inactive"

@@ -83,7 +83,8 @@ http_retry, config, event_bus
 ## station_api.py — 路由装配层 (P1 #2 拆分后)
 
 **职责**: 装配入口 — 原 2500+ 行单文件按路由域拆为公共层 + 7 个
-路由模块，本文件仅负责 `include_router` 装配与 `/ws` WebSocket 通道。
+路由模块，本文件仅负责 `include_router` 装配与 `/ws`、`/ws/worker`
+WebSocket 通道。
 
 **拆分结构** (路由函数名/端点路径/行为逐字保留, 装配后路由集合与
 拆分前一致):
@@ -108,6 +109,11 @@ http_retry, config, event_bus
   项目/MCP 工具/模型路由/聊天；守卫统一走 common 的
   `check_secretary(controller)`
 - `/ws`: WebSocket 实时推送（event_bus sink 装配于 station_api.py）
+- `/ws/worker`: M5-2 Worker 事件直推通道 — 认证启用时握手前校验
+  query 参数 token（mesh_token 恒定时间比较，不通过直接拒绝）；
+  `usage_batch` 帧复用 HTTP 批量同一幂等路径（`apply_usage_batch`）
+  并回 ack，Secretary 未激活时 ack 失败（Worker 不推游标，HTTP
+  兜底链路后续补报）；其他 type 转发 event_bus → 自动广播前端 /ws
 
 **设计要点**:
 - 所有组件经 `controller` 可变引用访问，支持免重启激活/停用 Secretary
@@ -157,6 +163,7 @@ skill_assignments、resource_usage_log、events 等。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-17 | iter-32 | M5-2: /ws/worker Worker 事件直推端点 (mesh_token 鉴权 + usage_batch 幂等复用 + 通用事件转发 event_bus; 白名单收录) |
 | 2026-08-16 | iter-30 | F1: 角色无关自动对齐 — config_ts 仲裁密钥收敛 (推/拉主从解耦) + 落后节点自动 git pull 升级 + 保存端点/周期对齐线程 |
 | 2026-08-16 | iter-30 补 | E5: Secretary 离线故障转移 (prune 循环挂接管检查 + device_id 仲裁接任 + WS/Bot 通知) |
 | 2026-08-16 | iter-30 补② | P1 #2: station_api 按路由分层拆分 (2594 行 → 装配层 + common + 7 路由域; 路由集合/行为不变, 兼容再导出保外部导入不破) |

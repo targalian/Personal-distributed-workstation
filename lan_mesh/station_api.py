@@ -27,7 +27,7 @@ from .station_routes_basic import build_basic_routes
 from .station_routes_chat import build_chat_routes
 from .station_routes_pm import build_pm_routes
 from .station_routes_projects import build_project_routes
-from .station_routes_resources import build_resource_routes
+from .station_routes_resources import apply_usage_batch, build_resource_routes
 from .station_routes_tasks import build_task_routes
 from .station_routes_worker import build_worker_routes
 
@@ -36,7 +36,7 @@ from .station_routes_worker import build_worker_routes
 from .station_routes_common import (  # noqa: F401
     _broadcast, _heal_mesh_token_from, _merge_db_and_udp_hosts,
     _RateLimiter, api_guard_middleware, configure_mesh_auth,
-    mesh_auth_enabled,
+    get_mesh_auth_token, mesh_auth_enabled,
 )
 
 logger = get_logger("station_api")
@@ -93,5 +93,51 @@ def create_station_router(controller) -> APIRouter:
             pass
         finally:
             state.ws_clients.discard(websocket)
+
+    @router.websocket("/ws/worker")
+    async def worker_ws_endpoint(websocket: WebSocket):
+        """M5-2: Worker 事件直推通道 (替代 60s HTTP 批量轮询的实时路径)。
+
+        鉴权: 认证启用时校验 query 参数 token (mesh_token, 恒定时间
+        比较), 不通过直接拒绝握手。帧协议 (JSON):
+          - {"type": "usage_batch", "records": [...]} → 复用 HTTP 批量
+            同一幂等路径 (usage_id 去重), 回 ack {ok, total,
+            recorded, duplicate}; Secretary 未激活时 ack 失败,
+            Worker 不推游标 (HTTP 兜底链路后续补报)。
+          - 其他 type → 转发 event_bus → 自动广播前端 /ws。
+        """
+        from .auth import verify_token
+        if mesh_auth_enabled():
+            token = websocket.query_params.get("token", "")
+            if not token or not verify_token(token, get_mesh_auth_token()):
+                await websocket.close(code=4003)
+                return
+        await websocket.accept()
+        try:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(
+                        websocket.receive_json(), timeout=60)
+                except asyncio.TimeoutError:
+                    await websocket.send_json({"type": "ping"})
+                    continue
+                if not isinstance(msg, dict):
+                    continue
+                msg_type = str(msg.get("type", ""))
+                if msg_type == "usage_batch":
+                    if not controller.secretary_active:
+                        await websocket.send_json(
+                            {"ok": False, "error": "secretary_inactive"})
+                        continue
+                    result = apply_usage_batch(msg.get("records") or [])
+                    await websocket.send_json({"ok": True, **result})
+                elif msg_type:
+                    from .event_bus import publish_event
+                    publish_event(msg_type, msg.get("data") or {})
+                    await websocket.send_json({"ok": True})
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
 
     return router
