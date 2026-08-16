@@ -118,8 +118,10 @@ def update_csv_from_results(csv_path: Path, results: list[TestResult]) -> dict:
         old_status = row.get("状态", "")
 
         if old_status == "已修复":
-            # 复测逻辑
-            if result.passed:
+            # 复测逻辑 (SKIP 不算复测通过: 前置不满足时状态保持不变)
+            if result.passed and "SKIP" in result.message:
+                unchanged.append(bug_id)
+            elif result.passed:
                 row["状态"] = "复测通过"
                 row["备注"] = (row.get("备注", "") + f" | 复测通过@{today}").strip(" |")
                 confirmed.append(bug_id)

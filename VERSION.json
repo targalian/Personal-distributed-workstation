@@ -1,7 +1,7 @@
 {
-  "version": "0.28.0",
-  "commit": "595fb7a",
+  "version": "0.30.0",
+  "commit": "e402162",
   "released_at": "2026-08-16",
-  "note": "S3-startup-sync: 启动时自动同步版本与 API key 替代 60s 轮询 + 跨主机版本统计表 (DB v4 版本列 + secrets 拉取端点 + 新主机入网即时同步)",
+  "note": "F1 密钥与版本对齐与主从无关 (config_ts 仲裁 + 60s 对齐线程 + 落后节点自动 git pull 升级) + TestRoleFreeAlign 单测 115",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }

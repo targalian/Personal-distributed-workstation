@@ -118,6 +118,7 @@ class AppConfig(BaseModel):
     bot: BotConfig = Field(default_factory=BotConfig)
     cloud_storage: CloudStorageConfig = Field(default_factory=CloudStorageConfig)
     security: "SecurityConfig" = Field(default_factory=lambda: SecurityConfig())
+    auto_upgrade: bool = True  # F1: 版本落后时自动 git pull 对齐 (工作区脏则跳过)
 
 
 class SecurityConfig(BaseModel):

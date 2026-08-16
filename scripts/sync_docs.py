@@ -112,7 +112,7 @@ MAPPING = {
     "test_bug/test_checklist.csv": ("10-test-loop", "UI 变更清单 (UI-0xx 编号)"),
     "test_bug/setup_scheduler.bat": ("10-test-loop", "定时任务安装脚本"),
     "loop_status.json": ("10-test-loop", "迭代状态机 (根目录)"),
-    ".githooks/": ("10-test-loop", "commit-msg / pre-push 钩子"),
+    ".githooks/": ("10-test-loop", "commit-msg / pre-push / post-merge 钩子"),
     # 11-scripts-subprojects — 运维脚本/技能库/独立子项目
     "scripts/sync_docs.py": "11-scripts-subprojects",
     "scripts/sync_push.ps1": ("11-scripts-subprojects",

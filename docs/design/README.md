@@ -46,6 +46,7 @@ Work Station (LAN Mesh) 是一个**分布式个人 AI 工作站**：将局域网
 
 关键机制：
 - **Secretary 选举**: 局域网第一台启动 `station` 的主机自动当选，其余保持 station 模式
+- **Secretary Failover (E5)**: Secretary 超时离线后由 device_id 字典序最小的在线 Station 自动接任
 - **跨主机版本统计 (S2/S3)**: UDP 包/注册/心跳三通道携带 git commit，落库 hosts 表，Web 端展示版本分布
 - **API Key 加密分发 (S1/S3)**: AES-256-GCM (mesh_token 派生密钥)，Secretary 推送 + 新节点启动拉取，替代轮询
 - **事件实时推送**: event_bus 进程内发布订阅 → /ws WebSocket 广播
@@ -105,5 +106,6 @@ work_station/
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-16 | iter-30 | F1-role-free-align: 密钥与版本对齐与主从无关 (config_ts 仲裁 + 60s 对齐线程 + 落后节点自动升级); E5-secretary-failover: Secretary 离线故障转移收录至关键机制 |
 | 2026-08-16 | iter-28 | D2-docs-sync: 模块清单自动化 (sync_docs.py + pre-push 第 8/9 项 + docs-sync skill) |
 | 2026-08-16 | iter-27 后 | 设计文档库初建: 11 个功能域, 覆盖全部 lan_mesh 模块 |

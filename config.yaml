@@ -35,6 +35,11 @@ cloud_storage:
   auto_sync: true          # 启动时自动同步
   sync_interval: 300       # 自动同步间隔 (秒), 0 表示仅启动时同步一次
 
+# 版本自动对齐 (F1): 落后节点自动 git pull + 依赖安装
+# 安全边界: 工作区有未提交改动时自动跳过, 绝不覆盖本地改动
+# 关闭方式: auto_upgrade: false
+auto_upgrade: true
+
 # 安全配置
 security:
   auth_enabled: false        # 是否启用节点间 Token 认证

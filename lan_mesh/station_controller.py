@@ -186,6 +186,13 @@ class StationController:
         self._upgrade_notifier = UpgradeNotifier()   # 同目标同版本只通知一次
         self._version_behind_warned: set = set()     # 已提醒过的领先者 commit
 
+        # ── F1: 角色无关自动对齐 ──
+        # 密钥对齐: 周期线程 + 启动/新机/保存后触发, 主从无关按 config_ts 收敛
+        self._align_interval: float = 60.0           # 对齐周期 (秒)
+        # 版本对齐: 落后节点自动 git pull (工作区脏则跳过)
+        self.auto_upgrade_enabled = bool(getattr(cfg, "auto_upgrade", True))
+        self._upgrade_attempted: set = set()         # 已自动尝试过的领先者 commit
+
         # ── Phase 0: 节点间 mesh token 认证 ──
         # 出站请求自动携带 token, 入站由 api_guard_middleware 校验
         from .auth import get_mesh_token
@@ -297,12 +304,12 @@ class StationController:
         self.secretary_host_id = self.state.device_id
         self.secretary_host_port = self.state.api_port
         logger.info("Secretary 模式已激活 — 聊天处理器/模型路由/MCP工具 已就绪 (PM Agent 架构)")
-        # S3: 激活后立即向在线节点推送密钥 (兜底启动同步时机差)
+        # F1: 激活后立即与在线节点对齐密钥 (角色无关, 兜底启动同步时机差)
         try:
-            threading.Thread(target=self.push_resource_secrets,
-                             name="station-secret-push", daemon=True).start()
+            threading.Thread(target=self._align_config_with_peers,
+                             name="station-secret-align", daemon=True).start()
         except Exception as e:
-            logger.warning("[S3] 激活后密钥推送启动失败: %s", e)
+            logger.warning("[F1] 激活后密钥对齐启动失败: %s", e)
 
         # 任务断点恢复: 将上次运行中断的任务标记为 interrupted
         self._recover_stale_tasks()
@@ -485,6 +492,55 @@ class StationController:
                     and getattr(h, 'online', False)):
                 return getattr(h, 'device_name', h.device_id[:8])
         return ""
+
+    # ── E5: Secretary Failover ─────────────────────────────────
+
+    def _secretary_failover_check(self):
+        """E5: Secretary 离线接管检查 (由 _prune_loop 每轮调用)。
+
+        选举只在启动时进行 (First-Station-Wins), Secretary 宕机后无人接管。
+        本检查在 Secretary 超时离线且网络无其他在线 Secretary 时,
+        由 device_id 字典序最小的在线 Station 接任 — 与 E4 同一对称
+        仲裁规则, 多节点并发接管亦自然收敛 (双 Secretary 出现时
+        _on_device_seen 的让位逻辑兼容裁决)。
+        """
+        if self.secretary_active:
+            return
+        hosts = self.db.list_hosts()
+        for h in hosts:
+            if (getattr(h, "device_id", "") != self.state.device_id
+                    and getattr(h, "role", "") == "secretary"
+                    and getattr(h, "online", False)):
+                return  # 仍有在线 Secretary, 无需接管
+        # 候选集 = 本站 + 全部在线非 Secretary 主机
+        candidate_ids = [self.state.device_id]
+        for h in hosts:
+            if (getattr(h, "device_id", "") != self.state.device_id
+                    and getattr(h, "online", False)
+                    and getattr(h, "role", "") != "secretary"):
+                candidate_ids.append(h.device_id)
+        if min(candidate_ids) != self.state.device_id:
+            return  # 存在仲裁优先级更高 (device_id 更小) 的在线 Station
+        try:
+            self.activate_secretary()
+        except Exception as e:
+            logger.error("[E5] Secretary failover 激活失败: %s", e)
+            return
+        logger.warning("[E5] Secretary failover: 原 Secretary 离线, 本站接管 "
+                       "(device_id 仲裁最小)")
+        try:
+            self._queue_ws_broadcast("secretary_failover", {
+                "message": "Secretary 离线故障转移: 本站接管",
+                "device_id": self.state.device_id,
+            })
+        except Exception:
+            pass
+        try:
+            self.bot_gateway.notify("secretary_failover", {
+                "device": self.state.device_name,
+            })
+        except Exception:
+            pass
 
     def submit_task_from_chat(self, name: str, description: str, created_by: str = "secretary",
                               priority: str = "normal") -> dict:
@@ -1151,13 +1207,14 @@ class StationController:
                 self._try_periodic_report()
 
     def _prune_loop(self):
-        """定期清理超时离线主机, 并触发 F3.3 PM 迁移。"""
+        """定期清理超时离线主机, 触发 F3.3 PM 迁移与 E5 Secretary 接管检查。"""
         while self._running:
             time.sleep(PRUNE_INTERVAL_SECS)
             try:
                 gone_ids = self.station_director.prune_offline(self.cfg.discovery.device_ttl)
                 if gone_ids:
                     self._migrate_orphaned_pms(gone_ids)
+                self._secretary_failover_check()
             except Exception as e:
                 logger.error("清理离线主机异常: %s", e)
 
@@ -1221,23 +1278,142 @@ class StationController:
             logger.warning("[S3] 启动密钥同步异常: %s", e)
 
     def _startup_key_sync(self, peers: list):
-        """S3: 启动密钥同步 — Secretary 推送, 非 Secretary 从 Secretary 拉取。"""
-        if self.secretary_active:
-            results = self.push_resource_secrets()
-            ok_count = sum(1 for r in results if r.get("ok"))
-            logger.info("[S3] Secretary 启动推送密钥: %d/%d 成功",
-                        ok_count, len(results))
-            return
-        secretaries = [
-            p for p in peers
-            if p.get("role") == "secretary" and p.get("ip") and p.get("api_port")
-        ]
-        if not secretaries:
-            logger.info("[S3] 启动密钥同步: 未发现在线 Secretary, 跳过")
-            return
-        sec = secretaries[0]
-        result = self.pull_resource_secrets(sec["ip"], sec["api_port"])
-        logger.info("[S3] 启动从 Secretary 拉取密钥: %s", result.get("detail", ""))
+        """F1: 启动密钥对齐 — 角色无关, 与在线对端按 config_ts 自动收敛。
+
+        不再依赖 Secretary/Station 主从方向: 谁新谁胜,
+        任意节点启动都会与对端对齐 (推或拉由仲裁结果决定)。
+        """
+        summary = self._align_config_with_peers(peers)
+        total = len(summary["pushed"]) + len(summary["pulled"])
+        if total or summary["failed"]:
+            logger.info("[F1] 启动密钥对齐: 推 %d / 拉 %d / 失败 %d",
+                        len(summary["pushed"]), len(summary["pulled"]),
+                        len(summary["failed"]))
+
+    def _align_config_with_peers(self, peers: list = None) -> dict:
+        """F1: 角色无关密钥对齐 — 与主从无关, 内容不一致时自动收敛。
+
+        仲裁规则 (与 Secretary/Station 角色无关):
+        - 内容指纹一致 (config_hash 排除 config_ts) → 跳过
+        - config_ts 新者胜: 本机新 → 推送; 对端新 → 拉取
+        - ts 缺失/相等 → 资源池数多者胜; 仍相同 → 跳过告警
+
+        Returns:
+            {"pushed": [...], "pulled": [...], "skipped": n, "failed": [...]}
+        """
+        from pathlib import Path
+        from .http_retry import http_get
+        from .model_resources import read_config_data
+        from .secret_sync import config_hash
+
+        target = Path(__file__).parent / "resources.yaml"
+        cfg = read_config_data(target) if target.is_file() else {}
+        mine = cfg.get("data") or {}
+        mine_hash = config_hash(mine) if mine else ""
+        try:
+            mine_ts = float(mine.get("config_ts") or 0)
+        except (TypeError, ValueError):
+            mine_ts = 0.0
+        mine_pools = len(mine.get("resources") or [])
+
+        summary = {"pushed": [], "pulled": [], "skipped": 0, "failed": []}
+        if peers is None:
+            peers = [
+                {"device_id": h.device_id,
+                 "device_name": getattr(h, "device_name", "") or h.hostname,
+                 "ip": getattr(h, "ip", "") or "",
+                 "api_port": getattr(h, "api_port", 0)}
+                for h in self.db.list_hosts()
+                if h.online and h.device_id != self.state.device_id
+                and getattr(h, "ip", "") and getattr(h, "api_port", 0)
+            ]
+        for p in peers:
+            ip = (p.get("ip") or "").strip()
+            try:
+                port = int(p.get("api_port") or 0)
+            except (TypeError, ValueError):
+                port = 0
+            name = p.get("device_name") or str(p.get("device_id", ""))[:8]
+            if not ip or not port:
+                continue
+            try:
+                resp = http_get(f"http://{ip}:{port}/api/secrets/fetch", timeout=10)
+                payload = resp.json() or {}
+            except Exception as e:
+                summary["failed"].append({"peer": name, "detail": f"探测失败: {e}"})
+                continue
+            peer_hash = (payload.get("config_hash") or "").strip()
+            if not peer_hash or not payload.get("blob"):
+                summary["skipped"] += 1  # 对端无可用密钥配置
+                continue
+            if peer_hash == mine_hash:
+                summary["skipped"] += 1  # 内容一致
+                continue
+            try:
+                peer_ts = float(payload.get("config_ts") or 0)
+            except (TypeError, ValueError):
+                peer_ts = 0.0
+            try:
+                peer_pools = int(payload.get("pools") or 0)
+            except (TypeError, ValueError):
+                peer_pools = 0
+            if mine_ts and peer_ts:
+                if mine_ts > peer_ts:
+                    action = "push"
+                elif mine_ts < peer_ts:
+                    action = "pull"
+                else:
+                    action = ("push" if mine_pools > peer_pools
+                              else "pull" if mine_pools < peer_pools else "")
+            else:
+                # ts 缺失视为旧配置; 双方都无仲裁依据时按规模收敛
+                if mine_ts:
+                    action = "push"
+                elif peer_ts:
+                    action = "pull"
+                else:
+                    action = ("push" if mine_pools > peer_pools
+                              else "pull" if mine_pools < peer_pools else "")
+            if not action:
+                logger.warning("[F1] 与 %s 配置不一致但无仲裁依据 "
+                               "(ts 相同且池数相同), 跳过", name)
+                summary["failed"].append({"peer": name, "detail": "无仲裁依据"})
+                continue
+            try:
+                if action == "push":
+                    res = self.push_resource_secrets(
+                        only_device_id=p.get("device_id", ""),
+                        fallback_ip=ip, fallback_port=port)
+                    ok = any(r.get("ok") for r in res)
+                    detail = (res[0].get("detail", "") if res else "无结果")
+                    summary["pushed"].append({"peer": name, "ok": ok,
+                                              "detail": detail})
+                else:
+                    res = self.pull_resource_secrets(ip, port)
+                    summary["pulled"].append({"peer": name,
+                                              "ok": bool(res.get("ok")),
+                                              "detail": res.get("detail", "")})
+            except Exception as e:
+                summary["failed"].append(
+                    {"peer": name, "detail": f"{action} 失败: {e}"})
+        if summary["pushed"] or summary["pulled"] or summary["failed"]:
+            logger.info("[F1] 密钥对齐: 推 %d / 拉 %d / 跳过 %d / 失败 %d",
+                        len(summary["pushed"]), len(summary["pulled"]),
+                        summary["skipped"], len(summary["failed"]))
+        return summary
+
+    def _align_loop(self):
+        """F1: 周期角色无关对齐 — 任意节点每 60s 与在线对端收敛密钥配置。
+
+        内容一致时静默跳过 (不刷日志); 不一致时自动推/拉并落盘。
+        """
+        time.sleep(30)  # 先让选举/让位稳定
+        while self._running:
+            try:
+                self._align_config_with_peers()
+            except Exception as e:
+                logger.debug("[F1] 周期对齐异常: %s", e)
+            time.sleep(self._align_interval)
 
     def pull_resource_secrets(self, ip: str, port: int) -> dict:
         """S3: 从指定节点拉取加密资源配置 (含 API Key) 并应用。
@@ -1314,16 +1490,14 @@ class StationController:
         """
         time.sleep(2)  # 等待对端 API 就绪
         try:
-            if self.secretary_active:
-                self.push_resource_secrets(only_device_id=device_id,
-                                           fallback_ip=ip,
-                                           fallback_port=port)
-            elif role == "secretary" and ip and port:
-                result = self.pull_resource_secrets(ip, port)
-                logger.info("[S3] 从新入网 Secretary 拉取密钥: %s",
-                            result.get("detail", ""))
+            # F1: 角色无关密钥对齐 (推/拉由 config_ts 仲裁决定)
+            self._align_config_with_peers([{
+                "device_id": device_id,
+                "ip": ip, "api_port": port,
+                "device_name": "", "role": role,
+            }])
         except Exception as e:
-            logger.warning("[S3] 新主机密钥同步异常: %s", e)
+            logger.warning("[F1] 新主机密钥对齐异常: %s", e)
         try:
             if code_version and ip and port:
                 from .version_sync import local_version_info
@@ -1397,6 +1571,8 @@ class StationController:
             lead_name = leader.get("device_name") or lead_commit[:8]
             logger.warning("[S2] 检测到 %s 版本领先 (%s), 建议本机 git pull 升级后重启",
                            lead_name, lead_commit)
+            # F1: 角色无关版本对齐 — 落后节点自动 git pull + 依赖安装
+            self._auto_upgrade(lead_commit, lead_name)
             from .event_bus import publish_event
             publish_event("version_upgrade_notice", {
                 "behind": True,
@@ -1404,6 +1580,64 @@ class StationController:
                 "commit": lead_commit,
                 "hint": "git pull 升级后重启节点",
             })
+
+    def _auto_upgrade(self, leader_commit: str, leader_name: str = ""):
+        """F1: 版本落后自动对齐 — git pull + 依赖安装, 与主从无关。
+
+        代码更新后由 dev-reload 自动重启 (未开 dev 模式则提示手动重启)。
+
+        安全边界:
+        - 工作区脏 (未提交改动) → 跳过并告警, 绝不覆盖本地改动
+        - 同一领先 commit 仅自动尝试一次 (失败转人工)
+        - config.yaml auto_upgrade: false 可整体关闭
+        """
+        if not self.auto_upgrade_enabled:
+            return
+        if not leader_commit or leader_commit in self._upgrade_attempted:
+            return
+        self._upgrade_attempted.add(leader_commit)
+
+        def _run():
+            import subprocess
+            root = Path(__file__).resolve().parent.parent
+            try:
+                status = subprocess.run(
+                    ["git", "status", "--porcelain"], cwd=root,
+                    capture_output=True, text=True, timeout=15)
+                if status.stdout.strip():
+                    logger.warning("[F1] 自动升级跳过: 工作区有未提交改动 "
+                                   "(领先者 %s @ %s)", leader_name, leader_commit)
+                    return
+                logger.info("[F1] 版本落后, 自动升级: git pull "
+                            "(领先者 %s @ %s)", leader_name, leader_commit)
+                pull = subprocess.run(
+                    ["git", "pull", "--ff-only"], cwd=root,
+                    capture_output=True, text=True, timeout=120)
+                if pull.returncode != 0:
+                    logger.warning("[F1] 自动升级失败 (git pull): %s",
+                                   (pull.stderr or pull.stdout).strip()[-300:])
+                    return
+                deps = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-q",
+                     "-r", "requirements.txt"], cwd=root,
+                    capture_output=True, text=True, timeout=600)
+                if deps.returncode != 0:
+                    logger.warning("[F1] 依赖安装失败 (代码已更新): %s",
+                                   (deps.stderr or deps.stdout).strip()[-300:])
+                    return
+                logger.info("[F1] 自动升级完成: git pull 成功 → "
+                            "等待重启加载新代码")
+                from .event_bus import publish_event
+                publish_event("version_upgrade_notice", {
+                    "behind": False, "auto_upgraded": True,
+                    "commit": leader_commit, "from_name": leader_name,
+                    "hint": "代码已更新, dev 模式自动重启或手动重启节点",
+                })
+            except Exception as e:
+                logger.warning("[F1] 自动升级异常: %s", e)
+
+        threading.Thread(target=_run, name="auto-upgrade",
+                         daemon=True).start()
 
     # ── F3.3: PM Agent 故障迁移 ─────────────────────────────────
 
@@ -1669,7 +1903,8 @@ class StationController:
         hosts = self.db.list_hosts()
         targets = [
             h for h in hosts
-            if h.online and h.device_id != self.state.device_id
+            if h.device_id != self.state.device_id
+            and (h.online or h.device_id == only_device_id)
             and (not only_device_id or h.device_id == only_device_id)
         ]
         if not targets:
@@ -1892,12 +2127,19 @@ class StationController:
         prune_thread.start()
         self._threads.append(prune_thread)
 
-        # S3: 启动一次性同步 (版本比对 + API Key 拉/推, 替代 60s 轮询)
+        # S3: 启动一次性同步 (版本比对 + API Key 对齐, 替代 60s 轮询)
         sync_thread = threading.Thread(
             target=self._startup_sync_once, name="station-startup-sync", daemon=True
         )
         sync_thread.start()
         self._threads.append(sync_thread)
+
+        # F1: 周期角色无关密钥对齐 (主从无关, config_ts 仲裁收敛)
+        align_thread = threading.Thread(
+            target=self._align_loop, name="station-align", daemon=True
+        )
+        align_thread.start()
+        self._threads.append(align_thread)
 
         # F3.1: 启动自动扩缩容监控
         self._start_autoscaler()

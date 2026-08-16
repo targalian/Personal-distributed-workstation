@@ -55,12 +55,17 @@ UI 一键测试入口: `POST /api/resources/test-key`。
 
 **安全边界**: 防局域网嗅探，不替代 TLS（与 auth.py 信任模型一致）。
 
-**分发链路**（station_controller 编排）:
-1. Secretary 保存资源配置 → 热推送全部在线节点
-2. 新主机注册成功 → 定向推送
-3. 节点启动 → 主动拉取（`GET /api/secrets/fetch`，S3）
-4. Secretary 激活后 → 兜底推送一次
-5. 手动触发: `POST /api/secrets/sync-all`
+**分发链路**（station_controller 编排，F1 起角色无关）:
+1. 任意节点保存资源配置 → 自动与全网对端对齐（本机 config_ts 最新 → 推送）
+2. 新主机入网 → 即时对齐（推/拉由仲裁决定，与 Secretary/Station 角色无关）
+3. 节点启动 → 主动对齐（`GET /api/secrets/fetch` 探测 + 仲裁，S3）
+4. 周期对齐线程（60s）→ 内容一致静默跳过，不一致自动收敛
+5. 手动触发: `POST /api/secrets/sync-all`（任意节点，非 Secretary 专属）
+
+**对齐仲裁规则（F1）**: 内容指纹一致（config_hash **排除 config_ts**
+元数据，防止落盘时间戳引发 ping-pong 漂移）→ 跳过；不一致时
+`config_ts` 新者胜（本机新推、对端新拉）；ts 缺失/相等按资源池数
+仲裁，仍相同则跳过告警。`config_ts` 由 `save_config()` 自动注入。
 
 接收端统一逻辑: 解密 → config_hash 校验 → 指纹一致幂等跳过（不落盘）→
 validate → 保存 resources.yaml → 热重载资源管理器。
@@ -84,6 +89,9 @@ mesh_token 后重试解密一次：
    `git pull` 升级；落后方自检同样发提醒（双保险）
 4. 版本比较用 commit 时间戳（同仓库线性历史可靠全序）；相同视为同版本，
    时间戳缺失不告警
+5. **F1 自动对齐**: 落后节点收到通知/自检落后 → `_auto_upgrade` 自动
+   git pull + 依赖安装（工作区脏则跳过；同 commit 仅试一次；
+   `config.yaml auto_upgrade: false` 可关闭）
 
 **S3 演进**: 60s 轮询检测已删除，改为启动一次性同步 + 入网即时同步
 （见 [02-station-core](../02-station-core/README.md)）。
@@ -97,4 +105,5 @@ mesh_token 后重试解密一次：
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-16 | iter-30 | F1: 角色无关密钥对齐 (config_ts 仲裁 + config_hash 排除 ts) + 版本落后自动升级 |
 | 2026-08-16 | iter-27 后 | 初建；收录 S1/S2/S3 完整链路设计 |
