@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# post-merge hook — git pull 合并升级后自动回归验证
+# 安装: core.hooksPath 指向 .githooks, 无需手动复制
+# 行为: 合并完成后自动执行 pytest tests/ -q, 失败仅告警不阻断 (合并已完成)
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+SQUASH_FLAG="${1:-0}"
+
+echo "======================================"
+echo " LAN Mesh Post-Merge 回归验证"
+echo "======================================"
+
+# squash 合并后工作区含未提交内容, 跳过自动验证
+if [ "$SQUASH_FLAG" = "1" ]; then
+    echo -e "${YELLOW}[SKIP] squash 合并, 工作区存在未提交合并内容, 跳过自动验证${NC}"
+    exit 0
+fi
+
+# 选择 Python 环境 (优先项目 venv)
+if [ -f ".venv/Scripts/python.exe" ]; then
+    PYTHON=".venv/Scripts/python.exe"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON="python"
+else
+    echo -e "${RED}[FAIL] 未找到 Python 环境, 无法执行回归验证${NC}"
+    exit 0
+fi
+
+echo -e "Python: ${GREEN}${PYTHON}${NC}"
+echo ""
+
+# 执行 pytest 回归验证
+if "$PYTHON" -m pytest tests/ -q; then
+    echo ""
+    echo -e "${GREEN}[PASS] 版本更新后回归验证全部通过${NC}"
+else
+    echo ""
+    echo -e "${RED}======================================${NC}"
+    echo -e "${RED} 回归验证失败: git pull 更新后测试未通过${NC}"
+    echo -e "${RED} 请运行: .venv/Scripts/python.exe -m pytest tests/ -q 查看详情${NC}"
+    echo -e "${RED} 合并已完成, 本告警不阻断 pull; 修复后请重新验证${NC}"
+    echo -e "${RED}======================================${NC}"
+fi
+
+exit 0
