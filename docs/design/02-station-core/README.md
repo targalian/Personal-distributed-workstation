@@ -9,8 +9,6 @@
 | 文件/目录 | 职责一句话 |
 |---|---|
 | database.py | SQLite 数据库存储层 - Secretary 端主机注册记录持久化 |
-| master.py | Master 占位模块 — 历史遗留空文件, 保留以兼容旧引用 (职责已并入 Station Director)。 |
-| secretary.py | Secretary Controller - 中心控制节点 |
 | station_api.py | Station Director API 路由层 (装配入口) |
 | station_controller.py | Station Director 独立控制器 — 基础设施管理入口 |
 | station_director.py | Station Director (工作站主管) — 基础设施资源管理器 |
@@ -124,16 +122,16 @@ http_retry, config, event_bus
 - `/api/version/upgrade-notice` 收到领先通知时触发 `_auto_upgrade`
   自动升级（F1，工作区脏则安全跳过）
 
-## secretary.py — 旧版中心控制器（历史遗留）
+## 历史遗留清理 (P3)
 
-早期独立 Secretary 进程实现（UDP 发现 + 注册 + SQLite + Web UI），
-能力已被 station_controller + station_api 取代。保留供考古，
-新代码一律走 station_* 三件套。
-
-## master.py — 空占位文件（待清理）
-
-历史遗留文件（原 0 字节，现仅补模块 docstring 满足钩子检查），
-保留供考古，清理时需确认无 import 引用。
+- **secretary.py 已删除**: 早期独立 Secretary 进程实现，能力早已由
+  station_controller + station_api 取代；`main.py secretary` 入口一并
+  移除，唯一启动入口为 `python main.py station`
+- **master.py 已删除**: 历史遗留空占位文件（全库零引用）
+- **api.py 瘦身**: 旧 `create_secretary_router` / `broadcast_ws` 及其
+  专用 payload 模型随 secretary.py 删除，仅保留 Worker 路由
+  （Secretary 端路由由 station_routes_* 承担，端点全覆盖已在
+  P1 #2 路由对比中验证）
 
 ## database.py — SQLite 存储层
 
@@ -163,5 +161,6 @@ skill_assignments、resource_usage_log、events 等。
 | 2026-08-16 | iter-30 补 | E5: Secretary 离线故障转移 (prune 循环挂接管检查 + device_id 仲裁接任 + WS/Bot 通知) |
 | 2026-08-16 | iter-30 补② | P1 #2: station_api 按路由分层拆分 (2594 行 → 装配层 + common + 7 路由域; 路由集合/行为不变, 兼容再导出保外部导入不破) |
 | 2026-08-16 | iter-30 补③ | P2 #7: DB 启动自动备份 (sqlite3 在线快照 → ~/.lan_mesh/backups/, 留 3 代, 失败不阻断) |
+| 2026-08-16 | iter-30 补④ | P3: 删除历史遗留 secretary.py/master.py 与 main.py secretary 入口; api.py 移除旧 Secretary 路由及专用模型; Orchestrator stub 随之下线 |
 | 2026-08-16 | iter-28 | E4: 双 Secretary 冲突仲裁 (真实角色广播 + device_id 字典序让位) + role 落库 + 密钥接收端自愈 |
 | 2026-08-16 | iter-27 后 | 初建；收录 S1/S2/S3 同步链路设计 |

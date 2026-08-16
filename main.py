@@ -3,8 +3,7 @@
 LAN Mesh - 统一入口
 
 用法:
-  python main.py station             # 启动 Station Director (推荐, 含 Web UI)
-  python main.py secretary           # 启动 Secretary 节点 (向后兼容)
+  python main.py station             # 启动 Station Director (含 Web UI)
   python main.py worker              # 启动 Worker 节点
   python main.py resources           # 查看模型资源用量报告
   python main.py resources --init    # 生成 resources.yaml 配置模板
@@ -12,7 +11,7 @@ LAN Mesh - 统一入口
   python main.py --config config.yaml worker
 
 参数:
-  role              station | secretary | worker | resources
+  role              station | worker | resources
   --port, -p        指定 API 端口
   --name, -n        指定设备名称
   --shared          指定共享文件夹路径
@@ -48,15 +47,12 @@ def main():
   # 自定义配置
   python main.py station --port 8080 --name "控制中心"
   python main.py worker --shared /data/shared --name "计算节点-01"
-
-  # 向后兼容: 直接启动 Secretary
-  python main.py secretary
 """,
     )
     parser.add_argument(
         "role",
-        choices=["station", "secretary", "worker", "resources"],
-        help="节点角色: station (推荐) | secretary | worker | resources (资源管理)",
+        choices=["station", "worker", "resources"],
+        help="节点角色: station | worker | resources (资源管理)",
     )
     parser.add_argument("--port", "-p", type=int, default=None, help="HTTP API 端口")
     parser.add_argument("--name", "-n", type=str, default=None, help="设备名称")
@@ -78,17 +74,17 @@ def main():
 
     # 命令行参数覆盖配置
     if args.name:
-        if args.role in ("station", "secretary"):
+        if args.role == "station":
             cfg.secretary.device_name = args.name
         else:
             cfg.worker.device_name = args.name
     if args.port:
-        if args.role in ("station", "secretary"):
+        if args.role == "station":
             cfg.secretary.api_port = args.port
         else:
             cfg.worker.api_port = args.port
     if args.shared:
-        if args.role in ("station", "secretary"):
+        if args.role == "station":
             cfg.secretary.shared_folder = args.shared
         else:
             cfg.worker.shared_folder = args.shared
@@ -98,10 +94,6 @@ def main():
         from lan_mesh.station_controller import StationController
         controller = StationController(cfg)
         controller.start(dev_reload=args.dev)
-    elif args.role == "secretary":
-        from lan_mesh.secretary import SecretaryController
-        controller = SecretaryController(cfg)
-        controller.start()
     elif args.role == "resources":
         _run_resources_cli(cfg, args)
     else:
