@@ -177,10 +177,60 @@ class APITestSuite:
             ok = r.status_code == 200 and "reply" in d and len(d.get("reply", "")) > 0
             self._record("BUG-001", "秘书聊天API回复", ok,
                          f"reply_len={len(d.get('reply', ''))}", r.status_code, t0)
+            # BUG-018: 正常路径也要记录超时保护结果 (否则复测过滤后无结果, 复测空转)
+            elapsed = time.time() - t0
+            self._record("BUG-018", "秘书聊天超时保护", ok and elapsed <= self.llm_timeout,
+                         f"{elapsed:.1f}s内响应(阈值{self.llm_timeout}s)", r.status_code, t0)
         except requests.Timeout:
             self._record("BUG-018", "秘书聊天超时保护", False, f"超过{self.llm_timeout}s未响应", None, t0)
         except Exception as e:
             self._record("BUG-001", "秘书聊天API回复", False, str(e), None, t0)
+
+    def test_chat_action_executed(self):
+        """BUG-026: 对话触发的动作必须真实执行 (action_taken 由关键词链路判定, 不依赖 LLM 自述)。"""
+        if not self._secretary_active:
+            self._record("BUG-026", "对话动作真实执行", True, "SKIP: Secretary未激活")
+            return
+        t0 = time.time()
+        try:
+            r = self._post("/api/secretary/chat",
+                           json={"message": "帮我新建项目: LoopTest复测工程, 用于每日验证循环的自动化复测"},
+                           timeout=self.llm_timeout)
+            d = r.json()
+            action = d.get("action_taken", "")
+            ok = r.status_code == 200 and action == "create_project"
+            self._record("BUG-026", "对话动作真实执行", ok,
+                         f"action_taken={action or '空'}", r.status_code, t0)
+        except Exception as e:
+            self._record("BUG-026", "对话动作真实执行", False, str(e), None, t0)
+
+    def test_chat_create_project_effective(self):
+        """BUG-027: 通过对话创建的项目必须真实落库可查 (创建后清理)。"""
+        if not self._secretary_active:
+            self._record("BUG-027", "对话创建项目落库", True, "SKIP: Secretary未激活")
+            return
+        t0 = time.time()
+        try:
+            before = len(self._get("/api/projects").json().get("projects", []))
+            r = self._post("/api/secretary/chat",
+                           json={"message": "创建项目: LoopTest复测工程, 用于每日验证循环的自动化复测"},
+                           timeout=self.llm_timeout)
+            d = r.json()
+            listing = self._get("/api/projects").json().get("projects", [])
+            created = [p for p in listing
+                       if "LoopTest复测工程" in (p.get("name") or "")]
+            ok = (r.status_code == 200
+                  and d.get("action_taken") == "create_project"
+                  and (len(listing) > before or created))
+            self._record("BUG-027", "对话创建项目落库", ok,
+                         f"action={d.get('action_taken') or '空'}, 项目数 {before}→{len(listing)}",
+                         r.status_code, t0)
+            for p in created:  # 清理测试产物, 避免项目列表堆积
+                pid = p.get("project_id") or p.get("id")
+                if pid:
+                    self._delete(f"/api/projects/{pid}")
+        except Exception as e:
+            self._record("BUG-027", "对话创建项目落库", False, str(e), None, t0)
 
     def test_chat_history(self):
         """BUG-023: 聊天历史 API 结构正确。"""
@@ -602,6 +652,8 @@ class APITestSuite:
             self.test_hosts_list,
             self.test_network_info,
             self.test_chat_send,
+            self.test_chat_action_executed,
+            self.test_chat_create_project_effective,
             self.test_chat_history,
             self.test_tasks_list,
             self.test_task_dag,
