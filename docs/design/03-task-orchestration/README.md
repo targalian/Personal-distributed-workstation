@@ -28,19 +28,25 @@
 **条件边**（运行时上下文决定是否激活）、动态图操作（运行时增删节点/边）、
 JSON 序列化（前端渲染 + checkpoint 恢复）。
 
-## orchestrator.py — 任务编排引擎
+## orchestrator.py — 已废弃, 降级为工具库 (iter-30 收敛裁定)
 
-**职责**: 用户任务 → 分解（规则/LLM）→ DAG 构建 → Agent 匹配 →
-HTTP 分发 Worker → 结果聚合 → 交付。
+**历史职责**: 用户任务 → 分解 → DAG 构建 → Agent 匹配 → HTTP 分发
+Worker → 结果聚合（显式状态机 + Checkpoint, 借鉴 LangGraph Supervisor）。
 
-**设计要点**:
-- 显式状态机: `decompose → route → dispatch → monitor → aggregate → deliver`
-- 每次状态转换自动 Checkpoint 持久化，支持断点恢复
-- 借鉴 LangGraph Supervisor 模式，但自研轻量实现
+**收敛裁定**: 编排能力已由 PM 四件套全面接管, Orchestrator 类降级为
+兼容 stub（实例化即抛 RuntimeError, 指引迁移方向）, 仅保留:
+- `_classify_task()`: 任务类型分类工具函数 (单测覆盖中)
+- `GraphState` / `PHASE_TRANSITIONS`: 早期状态机数据定义 (考古资产)
+
+**配套下线**: station_api 的 `PUT /api/tasks/{id}/graph`、
+`POST /api/tasks/{id}/resume`、`GET /api/tasks/{id}/graph-state` 三端点
+（原本永远 503）已删除; `GET /api/tasks/{id}/graph` 改为纯 DB 重建
+（checkpoint 优先）; 前端图编辑器保存按钮改为停用提示。
+待 secretary.py 历史入口清理后, 兼容 stub 可整体删除。
 
 ## pm_agent.py / pm_planner.py / pm_dispatcher.py / pm_monitor.py — PM 四件套
 
-**PM Agent 是当前主用的任务驱动者**（orchestrator 为早期实现，能力对齐中）。
+**PM Agent 是当前唯一的任务驱动者**（orchestrator 已于 iter-30 收敛废弃）。
 
 - **pm_agent.py**: 门面/协调器，统一持有三子模块并对外暴露接口
 - **pm_planner.py**: 加载 multi-agent-architect skill → 模板匹配（F2.4）
@@ -82,4 +88,5 @@ HTTP 分发 Worker → 结果聚合 → 交付。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-16 | iter-30 补 | orchestrator 收敛裁定: 降级工具库 + stub 兼容, 3 个死端点下线, graph 端点改 DB 重建 |
 | 2026-08-16 | iter-27 后 | 初建 |
