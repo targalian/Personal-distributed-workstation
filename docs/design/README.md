@@ -27,11 +27,11 @@ Work Station (LAN Mesh) 是一个**分布式个人 AI 工作站**：将局域网
                     └──────────────┬──────────────────────────┘
                                    │ HTTP + WebSocket
 ┌────────────── Secretary 主机 (第一台启动者自动当选) ──────────────┐
-│  station_api.py ── 路由层 (基础路由 + Secretary 路由 + /ws)      │
+│  station_api.py ── 路由装配层 (station_routes_* 7 域 + /ws)      │
 │       │                                                          │
 │  station_controller.py ── 控制器 (发现/注册/心跳/选举/密钥同步)   │
 │       ├── station_director.py ── 主机评级/舰队管理 (只管机器)     │
-│       ├── orchestrator.py + pm_*.py ── 任务编排 (只管项目)        │
+│       ├── pm_*.py + task.py ── 任务编排 (只管项目; orchestrator 已废弃降级) │
 │       ├── model_router.py + model_resources.py ── 模型路由/预算   │
 │       ├── chat_handler.py ── 秘书对话                             │
 │       └── database.py ── SQLite 持久化 (迁移 v1~v4)               │
@@ -76,7 +76,7 @@ work_station/
 | 子目录 | 功能域 | 覆盖模块 |
 |---|---|---|
 | [01-network-discovery](01-network-discovery/README.md) | 网络与发现 | discovery, protocol, auth, http_retry |
-| [02-station-core](02-station-core/README.md) | Station 核心 | station_controller, station_director, station_api, secretary, master, database |
+| [02-station-core](02-station-core/README.md) | Station 核心 | station_controller, station_director, station_api (装配层) + station_routes_* (common/basic/tasks/resources/pm/chat/projects/worker), secretary, master, database |
 | [03-task-orchestration](03-task-orchestration/README.md) | 任务编排 | orchestrator, task, pm_agent/planner/dispatcher/monitor/state, task_templates, project |
 | [04-execution-engine](04-execution-engine/README.md) | 执行引擎 | worker, agent_runtime, agent_card, agent_prompt, tool_registry, mcp_client, mcp_gateway, sandbox, skill_registry |
 | [05-resources-secrets](05-resources-secrets/README.md) | 资源与密钥 | model_resources, model_router, balance_probe, secret_sync, version_sync, collect_config |

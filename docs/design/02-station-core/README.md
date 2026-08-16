@@ -11,9 +11,17 @@
 | database.py | SQLite 数据库存储层 - Secretary 端主机注册记录持久化 |
 | master.py | Master 占位模块 — 历史遗留空文件, 保留以兼容旧引用 (职责已并入 Station Director)。 |
 | secretary.py | Secretary Controller - 中心控制节点 |
-| station_api.py | Station Director API 路由层 |
+| station_api.py | Station Director API 路由层 (装配入口) |
 | station_controller.py | Station Director 独立控制器 — 基础设施管理入口 |
 | station_director.py | Station Director (工作站主管) — 基础设施资源管理器 |
+| station_routes_basic.py | Station 基础路由 — 健康/错误/角色/注册心跳/主机网络/Director (P1 #2 拆分产物) |
+| station_routes_chat.py | Station 交互路由 — 秘书聊天/多对话/PM 线程/Bot 消息入口 (P1 #2 拆分产物) |
+| station_routes_common.py | Station API 路由公共层 — 限流/认证中间件与共享工具 (P1 #2 拆分产物) |
+| station_routes_pm.py | Station PM 路由 — PM Agent 管理/进度上报/子任务同步/团队 (P1 #2 拆分产物) |
+| station_routes_projects.py | Station 项目与能力路由 — 项目管理/MCP 工具/模型路由/技能库/Bot 通道 (P1 #2 拆分产物) |
+| station_routes_resources.py | Station 资源与密钥路由 — 模型资源池/配置向导/密钥同步/事件与角色卡 (P1 #2 拆分产物) |
+| station_routes_tasks.py | Station 任务路由 — Agent 管理/任务生命周期/图结构/交付闭环/任务记忆 (P1 #2 拆分产物) |
+| station_routes_worker.py | Station Worker 侧路由 — 内嵌 Worker 端点/P2P 通讯/云存储同步 (P1 #2 拆分产物) |
 <!-- /AUTO:module-list -->
 ---
 
@@ -74,9 +82,23 @@ http_retry, config, event_bus
 
 **依赖**: database, host_rating, event_bus
 
-## station_api.py — 路由层（最大文件 115KB）
+## station_api.py — 路由装配层 (P1 #2 拆分后)
 
-**职责**: 全部 HTTP/WebSocket 端点定义。
+**职责**: 装配入口 — 原 2500+ 行单文件按路由域拆为公共层 + 7 个
+路由模块，本文件仅负责 `include_router` 装配与 `/ws` WebSocket 通道。
+
+**拆分结构** (路由函数名/端点路径/行为逐字保留, 装配后路由集合与
+拆分前一致):
+| 模块 | 职责 | 可用性 |
+|---|---|---|
+| station_routes_common.py | 限流/认证中间件与共享工具 (单一事实源) | — |
+| station_routes_basic.py | 健康/错误/角色/注册心跳/主机/Director | 始终 |
+| station_routes_tasks.py | Agent/任务/图/交付闭环/任务记忆 | Secretary |
+| station_routes_resources.py | 模型资源/配置向导/密钥同步/事件 | Secretary |
+| station_routes_pm.py | PM Agent 管理/进度/子任务/团队 | Secretary |
+| station_routes_chat.py | 秘书聊天/多对话/PM 线程/Bot 入口 | Secretary |
+| station_routes_projects.py | 项目/MCP 工具/模型路由/技能库/Bot 通道 | Secretary |
+| station_routes_worker.py | 内嵌 Worker 端点/P2P/云同步 | 始终 |
 
 **路由分层**:
 - 基础路由（始终可用）: 主机注册/心跳/查询、角色激活、bootstrap-token、
@@ -85,12 +107,17 @@ http_retry, config, event_bus
   `/api/resources/config`（F1 起放开 Secretary 限制，任意节点可保存后
   自动全网对齐）、`/api/version/*`（S2）
 - Secretary 路由（`secretary_active` 为真才可用，否则 503）: 任务/Agent/
-  项目/MCP 工具/模型路由/聊天
-- `/ws`: WebSocket 实时推送（event_bus sink 装配于此）
+  项目/MCP 工具/模型路由/聊天；守卫统一走 common 的
+  `check_secretary(controller)`
+- `/ws`: WebSocket 实时推送（event_bus sink 装配于 station_api.py）
 
 **设计要点**:
 - 所有组件经 `controller` 可变引用访问，支持免重启激活/停用 Secretary
 - `_AUTH_WHITELIST`: 免认证端点白名单（注册引导/版本查询/secrets 拉取）
+- mesh 认证态与 token 访问器 `get_mesh_auth_token()` 位于 common
+  (原闭包全局迁移, 避免跨模块引用失效)
+- station_api.py 兼容再导出 common 的中间件/工具，station_controller /
+  worker 的既有导入路径不变
 - `/api/secrets/receive` 接收端自愈: 解密失败且报 mesh_token 不匹配时,
   自动从推送方（请求来源 IP + 报文 src_port）收敛信任根后重试一次
   （`_heal_mesh_token_from`，E4）
@@ -130,5 +157,6 @@ skill_assignments、resource_usage_log、events 等。
 |---|---|---|
 | 2026-08-16 | iter-30 | F1: 角色无关自动对齐 — config_ts 仲裁密钥收敛 (推/拉主从解耦) + 落后节点自动 git pull 升级 + 保存端点/周期对齐线程 |
 | 2026-08-16 | iter-30 补 | E5: Secretary 离线故障转移 (prune 循环挂接管检查 + device_id 仲裁接任 + WS/Bot 通知) |
+| 2026-08-16 | iter-30 补② | P1 #2: station_api 按路由分层拆分 (2594 行 → 装配层 + common + 7 路由域; 路由集合/行为不变, 兼容再导出保外部导入不破) |
 | 2026-08-16 | iter-28 | E4: 双 Secretary 冲突仲裁 (真实角色广播 + device_id 字典序让位) + role 落库 + 密钥接收端自愈 |
 | 2026-08-16 | iter-27 后 | 初建；收录 S1/S2/S3 同步链路设计 |
