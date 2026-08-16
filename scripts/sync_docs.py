@@ -100,6 +100,9 @@ MAPPING = {
     "lan_mesh/host_rating.py": "08-infrastructure",
     "lan_mesh/preflight.py": "08-infrastructure",
     "lan_mesh/api.py": "08-infrastructure",
+    "lan_mesh/worker_routes_basic.py": "08-infrastructure",
+    "lan_mesh/worker_routes_pm.py": "08-infrastructure",
+    "lan_mesh/worker_routes_p2p.py": "08-infrastructure",
     # 09-frontend — Web UI (非 py 条目)
     "lan_mesh/web/templates/dashboard.html": (
         "09-frontend", "Station Web 控制台 (7 Tab)"),
