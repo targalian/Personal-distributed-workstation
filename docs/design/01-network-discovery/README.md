@@ -52,7 +52,7 @@ database.py 迁移三处，缺一不可（S2 迭代教训）。
 内部 API 请求携带 `Authorization: Bearer <token>`。
 
 **设计要点**:
-- 可选启用（config.yaml `security.auth_enabled`，当前默认关闭）
+- 默认启用（config.yaml `security.auth_enabled`，P2 #5 起默认 true，可显式关闭）
 - 安全边界: 仅防未授权设备误接入，不替代 TLS；token 经明文 HTTP 注册引导下发
   （局域网信任假设，全项目一致）
 - mesh_token 同时是密钥同步（secret_sync）的 HKDF 信任根
@@ -77,4 +77,5 @@ orchestrator（任务分发）
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-16 | iter-30 补③ | P2 #5: 节点间认证默认启用 (auth_enabled 默认 true, 可显式关闭; 白名单保障注册引导/健康检查免认证) |
 | 2026-08-16 | iter-27 后 | 初建 |

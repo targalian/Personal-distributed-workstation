@@ -63,7 +63,7 @@ _AUTH_WHITELIST = {"/health", "/api/register", "/api/heartbeat", "/ws",
                    "/api/version/upgrade-notice", "/api/secrets/fetch"}
 
 
-# Phase 0: 节点间 mesh token 认证 (默认关闭, config.yaml security.auth_enabled 开启)
+# Phase 0: 节点间 mesh token 认证 (P2 #5 起默认启用, config.yaml security.auth_enabled 可关)
 _mesh_auth_enabled = False
 _mesh_auth_token = ""
 
