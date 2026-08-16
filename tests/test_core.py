@@ -12,6 +12,8 @@
 8. startup-sync — hosts 版本列、心跳版本落库、启动密钥推/拉路由、拉取幂等 (S3)
 9. secretary-conflict — 广播真实角色、双 Secretary 仲裁让位方向与幂等 (E4)
 10. role-free-align — config_ts 仲裁推/拉、池数仲裁、自动升级脏工作区跳过 (F1)
+11. secretary-failover — Secretary 离线接管判定、device_id 仲裁、单节点自愈 (E5)
+12. pm-trio — PMPlanner/PMMonitor/PMDispatcher 接口级单测 (P1 #9)
 
 运行: pytest tests/ -v
 """
@@ -1434,3 +1436,522 @@ class TestSecretaryFailover:
         ])
         self._check(f)
         assert f.secretary_active is True
+
+
+# ── PM 三件套接口级单测 (P1 #9) ─────────────────────────────────
+
+class _RecordingAgent:
+    """PM 协调器 Fake: 记录全部上报调用, 供 planner/monitor/dispatcher 共用。"""
+
+    secretary_url = ""
+    running = True
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        def _record(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return None
+        return _record
+
+
+class TestPMPlanner:
+    """PMPlanner — 类型推断、模板直通、LLM 回退、任务细化。"""
+
+    def _planner(self, runtime=None):
+        from lan_mesh.pm_planner import PMPlanner
+        from lan_mesh.pm_state import PMState
+        return PMPlanner("pm-test-1234", runtime or object(),
+                         PMState(), _RecordingAgent())
+
+    def test_infer_task_type_keywords(self):
+        from lan_mesh.pm_planner import PMPlanner
+        assert PMPlanner.infer_task_type("代码审查", "") == "code_review"
+        assert PMPlanner.infer_task_type("", "开发一个计算器") == "development"
+        assert PMPlanner.infer_task_type("上线", "deploy 发布") == "deployment"
+        assert PMPlanner.infer_task_type("随便做点什么", "") == "general"
+
+    def test_generate_refinement_question_rounds(self):
+        from lan_mesh.pm_planner import PMPlanner
+        q0 = PMPlanner._generate_refinement_question("做个工具", [], 0)
+        assert "做个工具" in q0 and "技术约束" in q0
+        q1 = PMPlanner._generate_refinement_question("做个工具", ["Q1: x"], 1)
+        assert q1
+        assert PMPlanner._generate_refinement_question("做个工具", [], 1) == ""
+        assert PMPlanner._generate_refinement_question("做个工具", ["x"], 2) == ""
+
+    def test_refine_skips_when_desc_long_or_has_input(self):
+        p = self._planner()
+        long_task = {"name": "t", "description": "一段足够长的任务描述内容一二三四五六七八九", "input_data": {}}
+        assert p.refine_requirements(long_task) is long_task
+        short_with_input = {"name": "t", "description": "做", "input_data": {"k": 1}}
+        assert p.refine_requirements(short_with_input) is short_with_input
+
+    def test_refine_accumulates_answers(self):
+        agent = _RecordingAgent()
+        asked = []
+        agent.request_clarification = (
+            lambda **kw: asked.append(kw) or {"response": "用 FastAPI"})
+        p = self._planner()
+        p._agent = agent
+        task = {"name": "t", "description": "做个小工具", "input_data": {}}
+        enriched = p.refine_requirements(task)
+        assert "补充信息" in enriched["description"]
+        assert "用 FastAPI" in enriched["description"]
+        # 两轮追问均发起 (第二轮为开放式补充)
+        assert len(asked) == 2
+
+    def test_refine_breaks_on_timeout(self):
+        agent = _RecordingAgent()
+        agent.request_clarification = lambda **kw: {"timed_out": True}
+        p = self._planner()
+        p._agent = agent
+        task = {"name": "t", "description": "做个小工具", "input_data": {}}
+        result = p.refine_requirements(task)
+        assert result["description"] == "做个小工具"  # 未细化, 原样返回
+
+    def test_analyze_template_hit_skips_llm(self, monkeypatch):
+        import lan_mesh.task_templates as tt
+        monkeypatch.setattr(
+            tt, "match_template",
+            lambda desc: {"name": "tpl", "match_score": 3})
+        monkeypatch.setattr(
+            tt, "apply_template", lambda tpl, variables: {"pattern": "single",
+                                                          "from_template": True})
+        p = self._planner()
+        plan = p.analyze_with_skill({"name": "t", "description": "x", "input_data": {}})
+        assert plan.get("from_template") is True
+
+    def test_analyze_llm_json_parse_failure_falls_back_single(self, monkeypatch):
+        import lan_mesh.task_templates as tt
+        monkeypatch.setattr(tt, "match_template", lambda desc: None)
+
+        class FakeRuntime:
+            def _call_llm_with_routing(self, prompt, opts):
+                return {"content": "这不是 JSON {{{"}
+
+        p = self._planner(runtime=FakeRuntime())
+        plan = p.analyze_with_skill({"name": "任务A", "description": "干活", "input_data": {}})
+        assert plan["pattern"] == "single" and plan["team_size"] == 1
+        assert plan["decomposition"][0]["name"] == "任务A"
+        assert "回退" in plan["reasoning"]
+
+    def test_analyze_llm_valid_json_passthrough(self, monkeypatch):
+        import lan_mesh.task_templates as tt
+        monkeypatch.setattr(tt, "match_template", lambda desc: None)
+
+        class FakeRuntime:
+            def _call_llm_with_routing(self, prompt, opts):
+                return {"content": '```json\n{"complexity": "simple",'
+                        ' "pattern": "single", "team_size": 1,'
+                        ' "decomposition": [], "reasoning": "ok"}\n```'}
+
+        p = self._planner(runtime=FakeRuntime())
+        plan = p.analyze_with_skill({"name": "t", "description": "x", "input_data": {}})
+        assert plan["complexity"] == "simple" and plan["reasoning"] == "ok"
+
+    def test_execute_directly_detects_llm_error_markers(self):
+        class FakeRuntime:
+            def execute(self, subtask):
+                return {"status": "completed",
+                        "output": {"code": "[未配置模型资源]"}}
+
+        p = self._planner(runtime=FakeRuntime())
+        result = p.execute_directly({"task_id": "t1", "name": "n",
+                                     "description": "d", "input_data": {}})
+        assert result["status"] == "failed"
+
+    def test_execute_directly_normal_completion(self):
+        class FakeRuntime:
+            def execute(self, subtask):
+                return {"status": "completed",
+                        "output": {"code": "print('done')"}}
+
+        p = self._planner(runtime=FakeRuntime())
+        result = p.execute_directly({"task_id": "t1", "name": "n",
+                                     "description": "d", "input_data": {}})
+        assert result["status"] == "completed"
+        assert "print('done')" in result["summary"]
+
+    def test_build_memory_hint_empty_on_failure(self, monkeypatch):
+        import lan_mesh.http_retry as hr
+        agent = _RecordingAgent()
+        agent.secretary_url = "http://10.0.0.1:45470"
+        p = self._planner()
+        p._agent = agent
+        monkeypatch.setattr(hr, "http_post",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                ConnectionError("down")))
+        assert p._build_memory_hint({"name": "开发", "description": ""}) == ""
+
+    def test_build_memory_hint_renders_stats(self, monkeypatch):
+        import lan_mesh.http_retry as hr
+
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return {"total": 3, "success_rate": 0.67, "avg_duration": 120.5,
+                        "recommended_mode": "orchestrator",
+                        "common_errors": [["timeout", 2]]}
+
+        agent = _RecordingAgent()
+        agent.secretary_url = "http://10.0.0.1:45470"
+        p = self._planner()
+        p._agent = agent
+        monkeypatch.setattr(hr, "http_post", lambda *a, **k: Resp())
+        hint = p._build_memory_hint({"name": "开发一个功能", "description": ""})
+        assert "3 条" in hint and "orchestrator" in hint and "timeout" in hint
+
+
+class TestPMMonitor:
+    """PMMonitor — 超时检测、进度上报、三级失败接管、质量验证、聚合。"""
+
+    def _monitor(self, state=None, dispatcher=None):
+        from lan_mesh.pm_monitor import PMMonitor
+        from lan_mesh.pm_state import PMState
+        st = state or PMState()
+        disp = dispatcher or _RecordingDispatcher()
+        mon = PMMonitor("pm-mon-1234", _RecordingRuntime(), "http://sec:1",
+                        st, _RecordingAgent(), disp)
+        return mon
+
+    def test_is_global_timed_out(self):
+        import time
+        mon = self._monitor()
+        assert mon.is_global_timed_out() is False
+        mon._state.start_time = time.time() - 4000
+        mon._state.global_timeout = 3600.0
+        assert mon.is_global_timed_out() is True
+
+    def test_check_subtask_timeouts_marks_failed_and_retries(self):
+        import time
+        from lan_mesh.pm_state import PMState
+        st = PMState()
+        st.subtask_timeout = 10.0
+        st.subtask_start_times["A"] = time.time() - 100
+        st.subagents["m1"] = {"current_task": "A", "status": "in_progress"}
+        st.plan = {"decomposition": [{"name": "A", "skill": "code_generation"}]}
+        st.task_station["A"] = {"device_id": "s1"}
+        st.task_agent["A"] = {"agent_id": "a1"}
+        mon = self._monitor(state=st)
+        mon.check_subtask_timeouts()
+        assert "A" not in st.subtask_start_times
+        assert st.subagents["m1"]["status"] == "failed"
+        # 首次失败走同站重试
+        assert st.retry_counts["A"] == 1
+        assert mon._dispatcher.calls and mon._dispatcher.calls[0][0] == "dispatch_subtask"
+
+    def test_failure_strategy1_same_station_retry(self):
+        from lan_mesh.pm_state import PMState
+        st = PMState()
+        st.plan = {"decomposition": [{"name": "A", "skill": "code_generation"}]}
+        st.task_station["A"] = {"device_id": "s1"}
+        st.task_agent["A"] = {"agent_id": "a1"}
+        mon = self._monitor(state=st)
+        mon.handle_subagent_failure("A", "boom")
+        assert st.retry_counts["A"] == 1
+        name, args, _ = mon._dispatcher.calls[0]
+        assert name == "dispatch_subtask" and args[0]["device_id"] == "s1"
+        # 重试上下文注入 input_data
+        retry_task = args[2]
+        assert retry_task["input_data"]["_retry_context"]["attempt"] == 1
+
+    def test_failure_strategy_not_found_in_plan(self):
+        from lan_mesh.pm_state import PMState
+        st = PMState()
+        st.plan = {"decomposition": []}
+        mon = self._monitor(state=st)
+        mon.handle_subagent_failure("ghost", "boom")
+        assert not mon._dispatcher.calls  # plan 中不存在 → 跳过接管
+
+    def test_failure_strategy2_cross_station_retry(self, monkeypatch):
+        from lan_mesh.pm_monitor import PMMonitor
+        from lan_mesh.pm_state import PMState
+        st = PMState()
+        st.max_retries = 1
+        st.retry_counts["A"] = 1  # 同站重试额度已耗尽
+        st.plan = {"decomposition": [{"name": "A", "skill": "code_generation"}]}
+        st.task_station["A"] = {"device_id": "s1"}
+        st.task_agent["A"] = {"agent_id": "a1"}
+        disp = _RecordingDispatcher()
+        disp.get_available_stations = lambda: [
+            {"device_id": "s1"}, {"device_id": "s2"}]
+        disp._create_subagent_on_station = lambda *a, **k: None  # 创建失败
+        mon = self._monitor(state=st, dispatcher=disp)
+        mon.handle_subagent_failure("A", "boom")
+        assert st.retry_counts["A"] == 2
+        # 创建失败 → 不分发, 也不本地接管 (等下一轮)
+        assert not any(c[0] == "dispatch_subtask" for c in disp.calls)
+        assert not any(c[0] == "execute_subtask_locally" for c in disp.calls)
+
+    def test_failure_strategy3_local_takeover_and_escalation(self):
+        from lan_mesh.pm_state import PMState
+        st = PMState()
+        st.max_retries = 1
+        st.retry_counts["A"] = 1
+        st.plan = {"decomposition": [{"name": "A", "skill": "code_generation"}]}
+        st.task_station["A"] = {"device_id": "s1"}
+        st.task_agent["A"] = {"agent_id": "a1"}
+        disp = _RecordingDispatcher()
+        disp.get_available_stations = lambda: [{"device_id": "s1"}]  # 无其他站
+        mon = self._monitor(state=st, dispatcher=disp)
+        mon.handle_subagent_failure("A", "boom")
+        assert "A" in mon._local_takeover_tasks
+        assert any(c[0] == "execute_subtask_locally" for c in disp.calls)
+        # escalated 上报
+        assert any(c[0] == "report_status" and c[1][0] == "escalated"
+                   for c in mon._agent.calls)
+
+    def test_receive_progress_completed_stores_output_and_dispatches(self, monkeypatch):
+        from lan_mesh.pm_monitor import PMMonitor
+        from lan_mesh.pm_state import PMState
+        st = PMState()
+        st.subagents["m1"] = {"agent_id": "a1", "status": "in_progress",
+                              "current_task": ""}
+        monkeypatch.setattr(PMMonitor, "_verify_output_quality",
+                            lambda self, tn, out: None)
+        mon = self._monitor(state=st)
+        mon.receive_progress_report({
+            "reporter_id": "m1", "task_name": "A", "status": "completed",
+            "output": "结果内容", "self_check": {"passed": True, "notes": "ok"},
+            "progress": 1.0})
+        assert st.subtask_outputs["A"] == "结果内容"
+        assert st.subagents["m1"]["status"] == "completed"
+        assert any(c[0] == "try_dispatch_pending" for c in mon._dispatcher.calls)
+
+    def test_receive_progress_failed_in_local_takeover_no_retry(self):
+        from lan_mesh.pm_state import PMState
+        st = PMState()
+        st.subagents["m1"] = {"agent_id": "a1", "status": "in_progress",
+                              "current_task": ""}
+        mon = self._monitor(state=st)
+        mon._local_takeover_tasks.add("A")
+        mon.receive_progress_report({
+            "reporter_id": "m1", "task_name": "A", "status": "failed",
+            "message": "又挂了"})
+        # 本地接管后仍失败 → 放弃重试, 移出接管集合
+        assert "A" not in mon._local_takeover_tasks
+        assert not any(c[0] == "dispatch_subtask" for c in mon._dispatcher.calls)
+
+    def test_receive_progress_failed_triggers_takeover(self):
+        from lan_mesh.pm_state import PMState
+        st = PMState()
+        st.subagents["m1"] = {"agent_id": "a1", "status": "in_progress",
+                              "current_task": ""}
+        st.plan = {"decomposition": [{"name": "A", "skill": "code_generation"}]}
+        st.task_station["A"] = {"device_id": "s1"}
+        st.task_agent["A"] = {"agent_id": "a1"}
+        mon = self._monitor(state=st)
+        mon.receive_progress_report({
+            "reporter_id": "m1", "task_name": "A", "status": "failed",
+            "message": "boom"})
+        assert st.retry_counts["A"] == 1  # 走同站重试策略
+
+    def test_verify_output_quality_skips_short_output(self):
+        mon = self._monitor()
+        assert mon._verify_output_quality("A", "短") is None
+        assert mon._verify_output_quality("A", "") is None
+
+    def test_verify_output_quality_parses_llm_json(self):
+        class FakeRuntime:
+            def _call_llm_with_routing(self, prompt, opts):
+                return {"content": '{"accepted": false, "score": 4,'
+                        ' "issues": "缺少错误处理"}'}
+
+        from lan_mesh.pm_monitor import PMMonitor
+        from lan_mesh.pm_state import PMState
+        mon = PMMonitor("pm-x", FakeRuntime(), "u", PMState(),
+                        _RecordingAgent(), _RecordingDispatcher())
+        result = mon._verify_output_quality("A", "x" * 60)
+        assert result["accepted"] is False and result["score"] == 4.0
+
+    def test_verify_output_quality_exception_returns_none(self):
+        class FakeRuntime:
+            def _call_llm_with_routing(self, prompt, opts):
+                raise RuntimeError("llm down")
+
+        from lan_mesh.pm_monitor import PMMonitor
+        from lan_mesh.pm_state import PMState
+        mon = PMMonitor("pm-x", FakeRuntime(), "u", PMState(),
+                        _RecordingAgent(), _RecordingDispatcher())
+        assert mon._verify_output_quality("A", "x" * 60) is None
+
+    def test_aggregate_results_delivers(self):
+        from lan_mesh.pm_state import PMState
+        st = PMState()
+        st.plan = {"decomposition": [{"name": "A", "skill": "code_generation"}]}
+        st.task = {"name": "总任务", "description": "desc"}
+        st.subtask_outputs["A"] = "子任务结果"
+        st.subagents["m1"] = {"current_task": "A", "status": "completed"}
+        mon = self._monitor(state=st)
+        mon.aggregate_results()
+        assert st.subtask_outputs.get("_aggregated")
+        assert any(c[0] == "deliver_result" for c in mon._agent.calls)
+        assert any(c[0] == "report_status" and c[1][0] == "completed"
+                   for c in mon._agent.calls)
+
+    def test_aggregate_results_noop_without_plan(self):
+        mon = self._monitor()
+        mon.aggregate_results()
+        assert not mon._agent.calls
+
+
+class _RecordingRuntime:
+    def _call_llm_with_routing(self, prompt, opts):
+        return {"content": '{"accepted": true, "score": 8, "issues": ""}'}
+
+
+class _RecordingDispatcher:
+    """PMDispatcher Fake: 记录调用, 默认返回空站点列表。"""
+
+    def __init__(self):
+        self.calls = []
+
+    def get_available_stations(self):
+        return []
+
+    def dispatch_subtask(self, *args, **kwargs):
+        self.calls.append(("dispatch_subtask", args, kwargs))
+
+    def try_dispatch_pending(self):
+        self.calls.append(("try_dispatch_pending", (), {}))
+
+    def execute_subtask_locally(self, *args, **kwargs):
+        self.calls.append(("execute_subtask_locally", args, kwargs))
+
+    def _create_subagent_on_station(self, *args, **kwargs):
+        self.calls.append(("_create_subagent_on_station", args, kwargs))
+        return None
+
+    def _build_subagent_prompt_for_sub(self, *args, **kwargs):
+        return "prompt"
+
+
+class TestPMDispatcher:
+    """PMDispatcher — 站点筛选、依赖分发、本地回退、prompt 构建。"""
+
+    def _dispatcher(self, state=None):
+        from lan_mesh.pm_dispatcher import PMDispatcher
+        from lan_mesh.pm_state import PMState
+        return PMDispatcher("pm-disp-1234", _RecordingRuntime(),
+                            "http://sec:1", "self-1",
+                            state or PMState(), _RecordingAgent())
+
+    def test_get_available_stations_filters_offline(self, monkeypatch):
+        import lan_mesh.pm_dispatcher as pd
+
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return {"hosts": [
+                    {"device_id": "h1", "online": True, "api_port": 45470},
+                    {"device_id": "h2", "online": False, "api_port": 45470},
+                    {"device_id": "h3", "online": True, "api_port": 0},
+                ]}
+
+        monkeypatch.setattr(pd, "http_get", lambda *a, **k: Resp())
+        disp = self._dispatcher()
+        stations = disp.get_available_stations()
+        assert [s["device_id"] for s in stations] == ["h1"]
+
+    def test_get_available_stations_returns_empty_on_error(self, monkeypatch):
+        import lan_mesh.pm_dispatcher as pd
+        monkeypatch.setattr(pd, "http_get",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                ConnectionError("down")))
+        disp = self._dispatcher()
+        assert disp.get_available_stations() == []
+
+    def test_try_dispatch_pending_injects_dependency_outputs(self):
+        from lan_mesh.pm_state import PMState
+        st = PMState()
+        st.task = {"task_id": "t1", "name": "总", "input_data": {}}
+        st.plan = {"decomposition": [
+            {"name": "A", "skill": "code_generation", "depends_on": []},
+            {"name": "B", "skill": "code_review", "depends_on": ["A"]},
+        ]}
+        station = {"device_id": "s1", "ip": "10.0.0.2", "api_port": 45470}
+        st.pending_subtasks["B"] = {
+            "sub": st.plan["decomposition"][1], "station": station,
+            "agent_info": {"agent_id": "a2"}}
+        st.subtask_outputs["A"] = "A 的结果"
+        disp = self._dispatcher(state=st)
+        disp.dispatch_subtask = lambda *a, **k: disp.calls.append(
+            ("dispatch_subtask", a, k))
+        disp.calls = []
+        disp.try_dispatch_pending()
+        assert "B" not in st.pending_subtasks
+        assert "B" in st.dispatched
+        dispatched_task = disp.calls[0][1][2]
+        assert dispatched_task["input_data"]["_dependency_outputs"]["A"] == "A 的结果"
+
+    def test_try_dispatch_pending_waits_for_unsatisfied_deps(self):
+        from lan_mesh.pm_state import PMState
+        st = PMState()
+        st.task = {"task_id": "t1", "input_data": {}}
+        st.plan = {"decomposition": [
+            {"name": "B", "skill": "code_review", "depends_on": ["A"]}]}
+        st.pending_subtasks["B"] = {
+            "sub": st.plan["decomposition"][0],
+            "station": {"device_id": "s1"}, "agent_info": {"agent_id": "a2"}}
+        # A 尚无输出 → B 保持 pending
+        disp = self._dispatcher(state=st)
+        disp.try_dispatch_pending()
+        assert "B" in st.pending_subtasks and "B" not in st.dispatched
+
+    def test_execute_subtask_locally_reports_result(self):
+        class FakeRuntime:
+            def execute(self, subtask):
+                assert subtask["input_data"].get("requirement")
+                return {"status": "completed", "output": {"summary": "done"}}
+
+        from lan_mesh.pm_dispatcher import PMDispatcher
+        from lan_mesh.pm_state import PMState
+        agent = _RecordingAgent()
+        disp = PMDispatcher("pm-disp-1234", FakeRuntime(), "http://sec:1",
+                            "self-1", PMState(), agent)
+        disp.execute_subtask_locally(
+            {"task_id": "t1", "input_data": {}},
+            {"name": "A", "skill": "code_generation", "description": "干活"})
+        result_calls = [c for c in agent.calls if c[0] == "receive_subtask_result"]
+        assert result_calls and result_calls[0][2]["status"] == "completed"
+
+    def test_dispatch_subtask_falls_back_locally_on_error(self, monkeypatch):
+        import lan_mesh.pm_dispatcher as pd
+
+        def boom(*a, **k):
+            raise ConnectionError("refused")
+
+        monkeypatch.setattr(pd.requests, "post", boom)
+        disp = self._dispatcher()
+        disp.calls = []
+        disp.execute_subtask_locally = lambda task, sub: disp.calls.append(
+            ("execute_subtask_locally", (task, sub), {}))
+        disp.dispatch_subtask(
+            {"ip": "10.0.0.2", "api_port": 45470},
+            {"agent_id": "a1"}, {"task_id": "t1", "input_data": {}},
+            {"name": "A", "skill": "code_generation"})
+        assert disp.calls and disp.calls[0][0] == "execute_subtask_locally"
+
+    def test_build_subagent_prompt_includes_context(self):
+        from lan_mesh.pm_dispatcher import PMDispatcher
+        from lan_mesh.pm_state import PMState
+        disp = PMDispatcher("pm-disp-1234", _RecordingRuntime(),
+                            "http://sec:1", "self-1", PMState(),
+                            _RecordingAgent())
+        task = {"name": "总", "input_data": {}}
+        plan = {"pattern": "orchestrator", "decomposition": [
+            {"name": "A", "skill": "code_generation", "depends_on": [],
+             "description": "写代码"},
+            {"name": "B", "skill": "code_review", "depends_on": ["A"],
+             "description": "审查代码"},
+        ]}
+        prompt = disp._build_subagent_prompt_for_sub(
+            task, plan["decomposition"][1], plan, "sub-1", "B")
+        assert isinstance(prompt, str) and prompt
+        assert "B" in prompt and "审查代码" in prompt
+        # 依赖提示: B 依赖 A, 应包含等待前序输出的说明
+        assert "前序" in prompt

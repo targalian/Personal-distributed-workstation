@@ -26,10 +26,11 @@
 
 ## tests/test_core.py — pytest 基线
 
-**规范**: 全部改动后必须全绿（当前 121/121）。覆盖核心链路:
+**规范**: 全部改动后必须全绿（当前 154/154）。覆盖核心链路:
 协议/DB 迁移/评级/任务 DAG/路由评分/密钥加解密/启动同步幂等/Secretary
 冲突仲裁（TestSecretaryConflict, E4）/角色无关对齐（TestRoleFreeAlign,
-F1）/Secretary 离线接管（TestSecretaryFailover, E5）等。
+F1）/Secretary 离线接管（TestSecretaryFailover, E5）/PM 三件套接口级
+（TestPMPlanner/TestPMMonitor/TestPMDispatcher, P1 #9）等。
 
 **编写约定**:
 - 中文参数场景通过临时 .py 脚本执行，防 GBK 乱码
@@ -80,6 +81,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-16 | iter-30 补 | P1 #9: 新增 PM 三件套接口级单测 33 条 (TestPMPlanner/TestPMMonitor/TestPMDispatcher), 基线 121→154 |
 | 2026-08-16 | iter-30 补 | E5: 新增 TestSecretaryFailover 6 条, 基线 115→121 |
 | 2026-08-16 | iter-30 | F1: 新增 TestRoleFreeAlign 10 条, 基线 105→115; 自动升级与 post-merge 回归验证闭环 |
 | 2026-08-16 | iter-29 | 新增 .githooks/post-merge: git pull 升级后自动 pytest 回归验证 |
