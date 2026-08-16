@@ -41,6 +41,22 @@ API Key 加密分发与版本同步（S1/S2/S3 迭代成果集中于此）。
   幂等路径；Secretary 端 `/ws/worker` 见
   [02-station-core](../02-station-core/README.md)
 
+**轮换量化调度（R5 → R5-2）**:
+- 同一模型多池候选时按量化价值公式排序（`_pool_priority` →
+  `_pool_score` 分量拆解, `rotation_plan` 透出审计）:
+  `基线(订阅 10/按量 5) + 沉没成本压力(剩余额度比例 × 窗口紧迫度 ×
+  W_sunk) + 时段折扣(W_time) + 临期加压 + 高水位收尾`
+- 窗口紧迫度: monthly/renew 按窗口已逝比例; one_time 恒 1.0
+  （额度不刷新, 尽早消耗避免沉没）
+- 时段折扣依据供应商能力信息（`docs/reference/vendor-capability/`）:
+  DeepSeek 按量空闲时段半价（高峰 9-12/14-18）、百炼夜间 22-08
+  qwen3.8-max / deepseek-v4-pro-0813 五折；权重与时段可经
+  resources.yaml `rotation:` 段覆盖
+- `rotation.quant: false` 回退 R5 首版纯规则（`_pool_priority_rule`）
+- **合规红线**: 订阅套餐禁非交互式批量调用（供应商条款）;
+  `set_usage_mode_global("batch")` + `batch_block_subscription: true`
+  时订阅池从候选剔除（需 payg 池兜底）；开关默认关闭
+
 ## model_router.py — 模型路由器
 
 **职责**: 任务难度分级（L1-L4）→ 加权评分选模型 → 降级链重试。
@@ -118,6 +134,7 @@ mesh_token 后重试解密一次：
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-17 | iter-33 | R5-2: 轮换量化价值公式 (沉没成本压力 × 窗口紧迫度 + 时段折扣窗口; 供应商能力信息落档 docs/reference/vendor-capability; batch 合规红线开关) |
 | 2026-08-17 | iter-32 | M5-2: Worker 用量 WS 直推通道 (websockets.sync 推送线程 + 断线重连; HTTP 批量降为兜底, 双通道 usage_id 幂等) |
 | 2026-08-16 | iter-30 | F1: 角色无关密钥对齐 (config_ts 仲裁 + config_hash 排除 ts) + 版本落后自动升级 |
 | 2026-08-16 | iter-30 补③ | P2 #6: resources.yaml 备份移位 (~/.lan_mesh/backups/, 留 3 代; 含密钥明文的备份不再与源码同目录) |

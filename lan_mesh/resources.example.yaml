@@ -51,6 +51,27 @@ pricing:
   #   input_per_1k: 0.00125
   #   output_per_1k: 0.01
 
+# ── 轮换量化调度 (R5-2, 默认启用) ─────────────────────────
+# 同一模型多池候选时按量化价值公式排序 (越大越优先消耗):
+#   base      订阅池基线 10 (不用即沉没) / 按量池基线 5 (现金保留)
+#   sunk      沉没成本压力 = 剩余额度比例 × 窗口紧迫度 × weights.sunk
+#   time      时段折扣窗口 × weights.time (按量空闲半价 / 百炼夜间五折模型)
+#   deadline  临期加压 (expire_at 14 天内线性)
+#   watermark 高水位收尾 = 使用率 × weights.watermark
+# 合规红线: 订阅套餐 (token_plan/coding_plan) 禁止非交互式批量调用
+# (供应商条款), 批量任务执行前 set_usage_mode_global("batch"),
+# 结束后恢复; 仅当 batch_block_subscription: true 才从候选剔除订阅池
+# (需确保有 payg 池兜底, 否则无可用模型)。
+# rotation:
+#   quant: true                # false → 回退 R5 首版纯规则
+#   batch_block_subscription: false
+#   weights: {sunk: 4.0, time: 1.5, watermark: 3.0}
+#   payg_offpeak: [[0,9],[12,14],[18,24]]   # DeepSeek 空闲时段 (北京时间)
+#   night_discount:
+#     hours: [22, 8]           # 跨零点区间
+#     models: [qwen3.8-max, deepseek-v4-pro-0813]
+#     providers: [aliyun-tokenplan]
+
 # ── 资源池定义 ───────────────────────────────────────────────────
 resources:
   # 示例 1: 按量付费预算池 (OpenAI, 月度预算 $10)

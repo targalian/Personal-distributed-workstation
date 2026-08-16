@@ -15,9 +15,15 @@
 与 agent_runtime 集成: 每次真实 LLM 调用成功后自动记账。
 未配置 resources.yaml 时全局 no-op (向后兼容, 不影响原有功能)。
 
+轮换调度 (R5 → R5-2): 多池候选按量化价值公式排序 — 订阅池沉没成本
+压力 (剩余额度 × 窗口紧迫度) + 时段折扣窗口 + 临期/高水位加压;
+按量池保守保留, 仅在空闲半价窗口加压。供应商合规红线: batch 模式下
+可配置剔除订阅池 (套餐禁止非交互式批量调用)。
+
 价格目录: 单一事实源 = model_pool.yaml 的 cost_input_per_1k / cost_output_per_1k;
 用户可在 resources.yaml 的 pricing 段为未收录模型补充覆盖。
 """
+import copy
 import datetime
 import json
 import os
@@ -38,6 +44,66 @@ if TYPE_CHECKING:
 logger = get_logger("resources")
 
 VALID_PLAN_TYPES = ("payg", "token_plan", "coding_plan")
+
+# ── R5-2: 轮换量化默认参数 ───────────────────────────────────────────────
+# 供应商能力依据 docs/reference/vendor-capability/ (2026-08):
+# - DeepSeek 按量: 高峰 9-12/14-18 (北京时间), 空闲时段半价
+# - 百炼 Token Plan: qwen3.8-max / deepseek-v4-pro-0813 夜间 22-08 五折
+# - 订阅套餐禁止 API/自动化批量调用 (合规红线, batch_block_subscription)
+ROTATION_DEFAULTS = {
+    "quant": True,                       # false → 回退 R5 首版纯规则
+    "batch_block_subscription": False,   # batch 模式剔除订阅池 (合规开关)
+    "weights": {"sunk": 4.0, "time": 1.5, "watermark": 3.0},
+    "payg_offpeak": [[0, 9], [12, 14], [18, 24]],   # DeepSeek 空闲时段
+    "night_discount": {
+        "hours": [22, 8],
+        "models": ["qwen3.8-max", "deepseek-v4-pro-0813"],
+        "providers": ["aliyun-tokenplan"],
+    },
+}
+
+_BEIJING_TZ = datetime.timezone(datetime.timedelta(hours=8))
+
+
+def _beijing_now() -> datetime.datetime:
+    """当前北京时间 (UTC+8) — 时段折扣判定基准 (可 monkeypatch)。"""
+    return datetime.datetime.now(_BEIJING_TZ)
+
+
+def _hour_in_ranges(hour: int, ranges) -> bool:
+    """小时是否落在 [start, end) 区间列表内 (支持跨零点区间)。"""
+    for start, end in ranges or []:
+        if start <= end:
+            if start <= hour < end:
+                return True
+        elif hour >= start or hour < end:   # 跨零点 (如 22-08)
+            return True
+    return False
+
+
+def _parse_rotation_cfg(rc: dict) -> dict:
+    """合并用户 rotation 配置到默认值 (load 时调用)。"""
+    cfg = copy.deepcopy(ROTATION_DEFAULTS)
+    if not isinstance(rc, dict):
+        return cfg
+    cfg["quant"] = bool(rc.get("quant", True))
+    cfg["batch_block_subscription"] = bool(
+        rc.get("batch_block_subscription", False))
+    for k, v in (rc.get("weights") or {}).items():
+        if k in cfg["weights"]:
+            cfg["weights"][k] = float(v)
+    if rc.get("payg_offpeak"):
+        cfg["payg_offpeak"] = [[int(a), int(b)]
+                               for a, b in rc["payg_offpeak"]]
+    nd = rc.get("night_discount") or {}
+    if nd.get("hours"):
+        cfg["night_discount"]["hours"] = [int(x) for x in nd["hours"]]
+    if nd.get("models"):
+        cfg["night_discount"]["models"] = [str(m) for m in nd["models"]]
+    if nd.get("providers"):
+        cfg["night_discount"]["providers"] = [str(p)
+                                              for p in nd["providers"]]
+    return cfg
 
 
 def _build_ws_url(http_url: str, token: str = "") -> str:
@@ -125,6 +191,9 @@ class ModelResourceManager:
         self._alert_checker = None                          # 预警检查线程
         self._alert_interval = 300.0                        # 检查周期 (秒)
         self._stop_evt = threading.Event()
+        # ── R5-2: 轮换量化 ──
+        self._rotation_cfg = copy.deepcopy(ROTATION_DEFAULTS)
+        self._usage_mode = "interactive"   # interactive | batch (合规红线)
 
     @property
     def enabled(self) -> bool:
@@ -168,6 +237,10 @@ class ModelResourceManager:
             return False
 
         self._strict = bool(data.get("strict", False))
+        # R5-2: 轮换量化配置 (rotation 段, 缺省用 ROTATION_DEFAULTS)
+        self._rotation_cfg = _parse_rotation_cfg(
+            data.get("rotation") or {})
+        self._usage_mode = "interactive"
 
         # 用户定价覆盖 (model_pool 未收录的模型)
         for mid, price in (data.get("pricing") or {}).items():
@@ -235,7 +308,7 @@ class ModelResourceManager:
         ]
 
     def _find_pool(self, model_id: str) -> Optional[ModelResource]:
-        """为模型匹配资源池 (R5 轮换调度)。
+        """为模型匹配资源池 (R5/R5-2 轮换调度)。
     
         候选收集: 显式 models 列表匹配优先, 其次按 provider 兜底。
         多池候选时按调度优先级动态选择 (预付费先耗/临期先耗/
@@ -250,18 +323,36 @@ class ModelResourceManager:
                          if not p.models and p.provider == provider]
         if not cands:
             return None
+        # R5-2: batch 场景合规红线 — 订阅池 (token/coding) 禁批量调用
+        if (self._usage_mode == "batch"
+                and self._rotation_cfg.get("batch_block_subscription")):
+            cands = [p for p in cands if p.is_payg]
+            if not cands:
+                return None
         if len(cands) == 1:
             return cands[0]
         # R5: 优先在 active 且未过期的池中轮换
         now = time.time()
         active = [p for p in cands if p.status == "active"
                   and (not p.expire_at or now <= p.expire_at)]
-        return max(active or cands, key=self._pool_priority)
+        return max(active or cands,
+                   key=lambda p: self._pool_priority(p, model_id))
     
-    def _pool_priority(self, pool: ModelResource) -> float:
-        """R5: 资源池轮换调度优先级 (越大越优先消耗其额度)。
-    
-        规则 (首版纯规则, 量化公式待后续裁定):
+    def _pool_priority(self, pool: ModelResource,
+                       model_id: str = "") -> float:
+        """R5-2: 资源池轮换调度优先级 (越大越优先消耗其额度)。
+
+        quant 模式 (默认): 量化价值公式 = 基线 + 沉没成本压力 +
+        时段折扣 + 临期加压 + 高水位收尾, 分量见 _pool_score;
+        quant=false 回退 R5 首版纯规则 (_pool_priority_rule)。
+        """
+        if not self._rotation_cfg.get("quant", True):
+            return self._pool_priority_rule(pool)
+        return sum(self._pool_score(pool, model_id).values())
+
+    def _pool_priority_rule(self, pool: ModelResource) -> float:
+        """R5 首版纯规则 (quant=false 回退路径, 保留对照)。
+
         - 预付费计划 (token/coding) 优先于按量消耗 — 不用即沉没成本
         - 临期加压: expire_at 14 天内越近越优先; renew 窗口剩余
           <=3 天加压 (到期前用完)
@@ -284,6 +375,95 @@ class ModelResourceManager:
             except Exception:
                 pass
         return score
+
+    def _pool_score(self, pool: ModelResource,
+                    model_id: str = "") -> dict:
+        """R5-2: 量化评分分量拆解 (供 rotation_plan 展示审计)。
+
+        base      预付费基线 10 (不用即沉没) / 按量基线 5 (现金保留)
+        sunk      沉没成本压力 = 剩余额度比例 × 窗口紧迫度 × W_sunk
+        time      时段折扣窗口 (按量空闲半价 / 百炼夜间五折) × W_time
+        deadline  临期加压 (expire_at 14 天内线性)
+        watermark 高水位收尾 = 使用率 × W_watermark
+        """
+        w = self._rotation_cfg["weights"]
+        now = time.time()
+        d = {"base": 5.0 if pool.is_payg else 10.0, "sunk": 0.0,
+             "time": 0.0, "deadline": 0.0, "watermark": 0.0}
+        if not pool.is_payg:
+            rate = 0.0
+            if pool.quota > 0:
+                try:
+                    rate = min(1.0,
+                               self.get_usage(pool.id).get("rate", 0.0))
+                except Exception:
+                    rate = 0.0
+            d["sunk"] = round(w["sunk"] * (1.0 - rate)
+                              * self._window_urgency(pool, now), 3)
+        d["time"] = round(w["time"] * self._time_bonus(pool, model_id), 3)
+        if pool.expire_at > 0:
+            days = (pool.expire_at - now) / 86400
+            if days <= 14:
+                d["deadline"] = round(max(0.0, 14.0 - days), 2)
+        if pool.quota > 0:
+            try:
+                d["watermark"] = round(
+                    self.get_usage(pool.id).get("rate", 0.0)
+                    * w["watermark"], 3)
+            except Exception:
+                pass
+        return d
+
+    def _window_urgency(self, pool: ModelResource, now: float) -> float:
+        """计费窗口紧迫度 (0~1): 窗口已逝比例, 越接近重置越紧迫。
+
+        monthly = 当月已逝比例; renew = 周期窗口已逝比例;
+        one_time 额度不刷新 → 恒 1.0 (尽早消耗避免浪费)。
+        """
+        if pool.billing_period == "monthly":
+            dt = datetime.datetime.fromtimestamp(now, _BEIJING_TZ)
+            cur = datetime.datetime(dt.year, dt.month, 1,
+                                    tzinfo=_BEIJING_TZ)
+            if dt.month == 12:
+                nxt = datetime.datetime(dt.year + 1, 1, 1,
+                                        tzinfo=_BEIJING_TZ)
+            else:
+                nxt = datetime.datetime(dt.year, dt.month + 1, 1,
+                                        tzinfo=_BEIJING_TZ)
+            total = (nxt - cur).total_seconds()
+            return min(1.0, max(0.0, (now - cur.timestamp()) / total))
+        if pool.billing_period == "renew" and pool.renew_at > 0:
+            step = max(1, pool.period_days) * 86400
+            return min(1.0, max(0.0,
+                                (now - pool.window_start(now)) / step))
+        return 1.0
+
+    def _time_bonus(self, pool: ModelResource, model_id: str) -> float:
+        """R5-2: 时段折扣窗口命中 → 1.0, 否则 0。
+
+        payg: DeepSeek 空闲时段半价 → 鼓励低价窗口消耗现金余额;
+        订阅池: 百炼夜间五折模型 (qwen3.8-max 等) 鼓励夜间消耗。
+        """
+        hour = _beijing_now().hour
+        cfg = self._rotation_cfg
+        if pool.is_payg:
+            return 1.0 if _hour_in_ranges(
+                hour, cfg["payg_offpeak"]) else 0.0
+        nd = cfg["night_discount"]
+        if (model_id and pool.provider in nd["providers"]
+                and model_id in nd["models"]
+                and _hour_in_ranges(hour, [tuple(nd["hours"])])):
+            return 1.0
+        return 0.0
+
+    def set_usage_mode(self, mode: str):
+        """R5-2: 设置用量场景模式 — interactive (默认) | batch。
+
+        batch 模式配合 rotation.batch_block_subscription=true 时,
+        订阅池从候选剔除 (供应商合规红线: 套餐禁非交互批量调用)。
+        """
+        self._usage_mode = (mode if mode in ("interactive", "batch")
+                            else "interactive")
     
     def rotation_plan(self) -> list:
         """R5: 模型轮换调度方案 (供 API/Web 展示)。
@@ -298,14 +478,18 @@ class ModelResourceManager:
             cands = [p for p in self._resources.values() if m in p.models]
             if not cands:
                 continue
-            ranked = sorted(cands, key=self._pool_priority, reverse=True)
+            ranked = sorted(cands,
+                            key=lambda p: self._pool_priority(p, m),
+                            reverse=True)
             chosen = self._find_pool(m)
+            quant = self._rotation_cfg.get("quant", True)
             plan.append({
                 "model": m,
                 "chosen": chosen.id if chosen else "",
                 "pools": [
                     {"id": p.id, "plan_type": p.plan_type,
-                     "priority": round(self._pool_priority(p), 1),
+                     "priority": round(self._pool_priority(p, m), 1),
+                     "detail": (self._pool_score(p, m) if quant else {}),
                      "status": p.status}
                     for p in ranked
                 ],
@@ -1066,9 +1250,18 @@ def rotation_bias_global(model_id: str) -> float:
             return 0.0
         # 优先级基线 5~10, 加分项上限 ~17; 映射到 0~0.1 封顶,
         # 确保不会反超能力匹配主导的评分
-        return min(0.1, max(0.0, _mgr._pool_priority(pool) * 0.005))
+        return min(0.1, max(
+            0.0, _mgr._pool_priority(pool, model_id) * 0.005))
     except Exception:
         return 0.0
+
+
+def set_usage_mode_global(mode: str):
+    """R5-2: 用量场景模式钩子 — 批量任务前设 batch, 结束后恢复 interactive。"""
+    try:
+        _mgr.set_usage_mode(mode)
+    except Exception:
+        pass
 
 
 def report_usage_global() -> dict:

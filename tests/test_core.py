@@ -16,6 +16,8 @@
 12. pm-trio — PMPlanner/PMMonitor/PMDispatcher 接口级单测 (P1 #9)
 13. worker-ws-push — Worker→Secretary WS 直推通道: URL 派生/推送轮次/
     HTTP 兜底跳过/Secretary 端点鉴权与帧协议 (M5-2)
+14. rotation-quant — 轮换量化价值公式: 沉没成本压力/窗口紧迫度/
+    时段折扣/规则回退/batch 合规红线/方案透明化 (R5-2)
 
 运行: pytest tests/ -v
 """
@@ -2154,3 +2156,157 @@ class TestWorkerWsPush:
             ack = ws.receive_json()
         assert ack["ok"] is False
         assert ack["error"] == "secretary_inactive"
+
+
+# ── 14. R5-2 轮换量化 ──────────────────────────────────────────
+
+
+class TestRotationQuant:
+    """R5-2: 轮换调度量化价值公式与合规红线。"""
+
+    def _pool(self, rid, plan="token_plan", provider="aliyun-tokenplan",
+              models=None, quota=1e8, period="one_time"):
+        from lan_mesh.model_resources import ModelResource
+        return ModelResource(id=rid, provider=provider, plan_type=plan,
+                             quota=quota, models=models or [],
+                             billing_period=period)
+
+    def _mgr(self, pools):
+        from lan_mesh.model_resources import ModelResourceManager
+        m = ModelResourceManager()
+        m._resources = {p.id: p for p in pools}
+        m._enabled = True
+        for p in pools:
+            for mid in p.models:
+                m._model_provider[mid] = p.provider
+        return m
+
+    @staticmethod
+    def _patch_hour(monkeypatch, hour):
+        import datetime as _dt
+        import lan_mesh.model_resources as mr
+        monkeypatch.setattr(mr, "_beijing_now", lambda: _dt.datetime(
+            2026, 8, 17, hour, 0, tzinfo=mr._BEIJING_TZ))
+
+    @staticmethod
+    def _patch_rates(mgr, rates):
+        mgr.get_usage = lambda rid: {"rate": rates.get(rid, 0.0)}
+
+    def test_subscription_beats_payg(self):
+        """订阅池沉没成本基线高于按量池 → 优先消耗订阅额度。"""
+        m = self._mgr([
+            self._pool("payg1", plan="payg", provider="deepseek",
+                       models=["m1"]),
+            self._pool("sub1", models=["m1"]),
+        ])
+        assert m._find_pool("m1").id == "sub1"
+
+    def test_sunk_pressure_prefers_high_remaining(self, monkeypatch):
+        """剩余额度多的订阅池沉没成本压力更大 → 优先消耗。"""
+        self._patch_hour(monkeypatch, 10)   # 非折扣时段, 隔离 time 分量
+        m = self._mgr([
+            self._pool("low_used", models=["m1"]),
+            self._pool("high_used", models=["m1"]),
+        ])
+        self._patch_rates(m, {"low_used": 0.2, "high_used": 0.9})
+        assert m._find_pool("m1").id == "low_used"
+        d = m._pool_score(m._resources["low_used"], "m1")
+        assert d["sunk"] == pytest.approx(4.0 * 0.8, abs=0.01)
+
+    def test_payg_offpeak_time_bonus(self, monkeypatch):
+        """payg 池在 DeepSeek 空闲时段获得折扣窗口加分。"""
+        m = self._mgr([self._pool("payg1", plan="payg",
+                                  provider="deepseek", models=["m1"])])
+        self._patch_hour(monkeypatch, 3)    # 空闲 (0-9)
+        assert m._pool_score(m._resources["payg1"], "m1")["time"] == 1.5
+        self._patch_hour(monkeypatch, 10)   # 高峰 (9-12)
+        assert m._pool_score(m._resources["payg1"], "m1")["time"] == 0.0
+
+    def test_night_discount_subscription(self, monkeypatch):
+        """百炼夜间五折模型在 22-08 获得消耗加分, 其他模型/时段无。"""
+        m = self._mgr([
+            self._pool("sub1", models=["qwen3.8-max", "qwen3.7-max"]),
+        ])
+        p = m._resources["sub1"]
+        self._patch_hour(monkeypatch, 23)
+        assert m._time_bonus(p, "qwen3.8-max") == 1.0
+        assert m._time_bonus(p, "qwen3.7-max") == 0.0
+        self._patch_hour(monkeypatch, 3)    # 跨零点区间命中
+        assert m._time_bonus(p, "qwen3.8-max") == 1.0
+        self._patch_hour(monkeypatch, 12)
+        assert m._time_bonus(p, "qwen3.8-max") == 0.0
+
+    def test_window_urgency_monthly_ramps(self):
+        """monthly 窗口紧迫度随月份推进从 0 升到近 1。"""
+        import datetime as _dt
+        from lan_mesh.model_resources import _BEIJING_TZ
+        m = self._mgr([self._pool("sub1", models=["m1"], period="monthly")])
+        p = m._resources["sub1"]
+        early = _dt.datetime(2026, 8, 1, 12, tzinfo=_BEIJING_TZ).timestamp()
+        late = _dt.datetime(2026, 8, 30, 12, tzinfo=_BEIJING_TZ).timestamp()
+        u_early = m._window_urgency(p, early)
+        u_late = m._window_urgency(p, late)
+        assert u_early < 0.1
+        assert u_late > 0.9
+
+    def test_one_time_urgency_constant(self):
+        """one_time 额度不刷新 → 紧迫度恒 1.0。"""
+        import time
+        m = self._mgr([self._pool("sub1", models=["m1"])])
+        assert m._window_urgency(m._resources["sub1"], time.time()) == 1.0
+
+    def test_rule_mode_fallback(self):
+        """quant=false 回退 R5 首版纯规则基线。"""
+        m = self._mgr([
+            self._pool("sub1", models=["m1"]),
+            self._pool("payg1", plan="payg", provider="deepseek",
+                       models=["m1"]),
+        ])
+        m._rotation_cfg["quant"] = False
+        assert m._pool_priority(m._resources["sub1"], "m1") == 10.0
+        assert m._pool_priority(m._resources["payg1"], "m1") == 5.0
+
+    def test_batch_block_subscription(self):
+        """batch 模式 + 合规开关 → 订阅池剔除, payg 保留。"""
+        m = self._mgr([
+            self._pool("sub1", models=["m1"]),
+            self._pool("sub2", models=["m2"]),
+            self._pool("payg1", plan="payg", provider="deepseek",
+                       models=["m2"]),
+        ])
+        m._rotation_cfg["batch_block_subscription"] = True
+        m.set_usage_mode("batch")
+        assert m._find_pool("m1") is None          # 仅订阅池 → 无候选
+        assert m._find_pool("m2").id == "payg1"    # 保留 payg
+        m.set_usage_mode("interactive")
+        assert m._find_pool("m1").id == "sub1"     # 恢复交互模式
+
+    def test_batch_flag_off_keeps_subscription(self):
+        """合规开关关闭 (默认) 时 batch 模式不剔除订阅池。"""
+        m = self._mgr([self._pool("sub1", models=["m1"])])
+        m.set_usage_mode("batch")
+        assert m._find_pool("m1").id == "sub1"
+
+    def test_rotation_plan_detail(self):
+        """rotation_plan 量化模式返回分量拆解 (审计透明)。"""
+        m = self._mgr([
+            self._pool("sub1", models=["m1"]),
+            self._pool("payg1", plan="payg", provider="deepseek",
+                       models=["m1"]),
+        ])
+        plan = m.rotation_plan()
+        assert len(plan) == 1
+        pools = plan[0]["pools"]
+        assert plan[0]["chosen"] == "sub1"
+        assert pools[0]["id"] == "sub1"
+        assert set(pools[0]["detail"].keys()) == {
+            "base", "sunk", "time", "deadline", "watermark"}
+
+    def test_rotation_bias_global_quant(self, monkeypatch):
+        """rotation_bias_global 走量化优先级且映射在 0~0.1。"""
+        import lan_mesh.model_resources as mr
+        m = self._mgr([self._pool("sub1", models=["m1"])])
+        monkeypatch.setattr(mr, "_mgr", m)
+        bias = mr.rotation_bias_global("m1")
+        assert 0.0 < bias <= 0.1
+        assert mr.rotation_bias_global("no_such_model") == 0.0
