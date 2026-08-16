@@ -12,8 +12,7 @@
   任务模板在 task_templates.py
 - 本文件仅保留仍被引用的工具函数 (_classify_task 任务分类)
   与状态机数据定义 (GraphState/PHASE_TRANSITIONS, 供考古与文档参考)
-- Orchestrator 类为兼容 stub: 实例化即抛 RuntimeError,
-  待 secretary.py 历史入口清理后可整体删除本类
+- Orchestrator 兼容 stub 类已随 secretary.py 历史入口一并删除 (P3 清理)
 """
 from dataclasses import dataclass, field
 from typing import Optional
@@ -79,18 +78,3 @@ def _classify_task(task: Task) -> str:
     if any(k in desc for k in ["系统", "system", "监控", "monitor", "shell", "命令"]):
         return "system_task"
     return "simple_task"
-
-
-class Orchestrator:
-    """已废弃的编排引擎兼容 stub (能力由 PM Agent 四件套接管)。
-
-    保留类定义仅为 secretary.py 历史入口的 import 兼容;
-    任何实例化都会明确报错, 指引迁移方向。
-    """
-
-    def __init__(self, *args, **kwargs):
-        raise RuntimeError(
-            "Orchestrator 已废弃: 任务编排由 PM Agent 四件套承担 "
-            "(pm_agent/pm_planner/pm_dispatcher/pm_monitor), "
-            "请勿再实例化; 本 stub 待 secretary.py 历史入口清理后删除"
-        )
