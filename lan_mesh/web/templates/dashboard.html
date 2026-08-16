@@ -2730,16 +2730,9 @@ function dagDeleteSelected(){
 }
 
 async function saveDAG(){
-  if(!dagTaskId){showToast('请先加载任务','err');return;}
-  try{
-    const r=await apiFetch(`/api/tasks/${dagTaskId}/graph`,{
-      method:'PUT',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({nodes:dagNodes,edges:dagEdges})
-    });
-    const d=await r.json();
-    if(r.ok&&d.ok)showToast('DAG 图已保存','ok');
-    else showToast(d.detail||d.message||'保存失败','err');
-  }catch(e){showToast('保存失败: '+e.message,'err');}
+  // Orchestrator 已废弃 (PM 架构): 手工编辑图保存端点已下线,
+  // DAG 由 PM 规划自动生成, 本面板仅供只读查看/演示
+  showToast('手工保存已停用: DAG 由 PM 自动生成维护','info');
 }
 
 async function refreshDagTaskSelect(){

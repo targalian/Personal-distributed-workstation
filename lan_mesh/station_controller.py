@@ -14,7 +14,7 @@ Station Director 独立控制器 — 基础设施管理入口
 
 设计原则:
 - Station Director 只管「机器」, Secretary 只管「项目」
-- 激活 Secretary 后同进程加载 Orchestrator/ProjectManager/ModelRouter/MCPGateway
+- 激活 Secretary 后同进程加载 ChatHandler/ProjectManager/ModelRouter/MCPGateway
 - 停用 Secretary 后卸载上述组件, 回到纯基础设施管理模式
 """
 import asyncio
@@ -147,7 +147,6 @@ class StationController:
         # Secretary 组件 (初始未加载, activate_secretary() 时创建)
         self.secretary_active = False
         self.project_manager = None
-        self.orchestrator = None  # 保留属性以兼容旧引用, 但不再使用
         self.model_router = None
         self._default_model = ""  # 全局默认模型 (model_pool.yaml)
         self.mcp_gateway = None
@@ -346,7 +345,6 @@ class StationController:
         self.secretary_host_id = None
         self.secretary_host_port = None
         self.project_manager = None
-        self.orchestrator = None
         self.model_router = None
         self.mcp_gateway = None
         self.chat_handler = None
@@ -1026,13 +1024,6 @@ class StationController:
         enabled_count = sum(1 for c in bot_cfg.channels if c.enabled)
         if enabled_count:
             logger.info("Bot 通道已加载: %d 个启用", enabled_count)
-
-    def _on_orchestrator_event(self, event_type: str, data: dict):
-        """Orchestrator 事件回调 → 转发到 Bot 通道。"""
-        try:
-            self.bot_gateway.notify(event_type, data)
-        except Exception as e:
-            logger.error("Bot 事件转发失败: %s", e)
 
     def _on_bot_command(self, command: str, args: str, chat_id: str) -> str:
         """处理来自 Telegram 的命令。"""
