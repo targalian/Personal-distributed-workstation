@@ -1,7 +1,7 @@
 {
-  "version": "0.28.0",
-  "commit": "595fb7a",
+  "version": "0.29.0",
+  "commit": "0463e7e",
   "released_at": "2026-08-16",
-  "note": "S3-startup-sync: 启动时自动同步版本与 API key 替代 60s 轮询 + 跨主机版本统计表 (DB v4 版本列 + secrets 拉取端点 + 新主机入网即时同步)",
+  "note": "E4 双 Secretary 冲突仲裁 (发现包广播真实角色 + device_id 字典序让位 + 心跳 role 落库) + S1 密钥分发解密失败自愈收敛 + D2 模块清单自动化",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }
