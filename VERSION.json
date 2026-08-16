@@ -1,7 +1,7 @@
 {
-  "version": "0.29.0",
-  "commit": "0463e7e",
+  "version": "0.30.0",
+  "commit": "e402162",
   "released_at": "2026-08-16",
-  "note": "E4 双 Secretary 冲突仲裁 (发现包广播真实角色 + device_id 字典序让位 + 心跳 role 落库) + S1 密钥分发解密失败自愈收敛 + D2 模块清单自动化",
+  "note": "F1 密钥与版本对齐与主从无关 (config_ts 仲裁 + 60s 对齐线程 + 落后节点自动 git pull 升级) + TestRoleFreeAlign 单测 115",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }
