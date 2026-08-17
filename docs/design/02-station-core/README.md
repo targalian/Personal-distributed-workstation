@@ -117,7 +117,8 @@ WebSocket 通道。
 
 **设计要点**:
 - 所有组件经 `controller` 可变引用访问，支持免重启激活/停用 Secretary
-- `_AUTH_WHITELIST`: 免认证端点白名单（注册引导/版本查询/secrets 拉取）
+- `_AUTH_WHITELIST`: 免认证端点白名单（含 `/` 仪表盘 HTML 入口 —
+  auth 开启时页面必须先加载才能执行 auth-token 自举; 注册引导/版本查询/secrets 拉取）
 - mesh 认证态与 token 访问器 `get_mesh_auth_token()` 位于 common
   (原闭包全局迁移, 避免跨模块引用失效)
 - station_api.py 兼容再导出 common 的中间件/工具，station_controller /
@@ -163,6 +164,7 @@ skill_assignments、resource_usage_log、events 等。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-18 | iter-34 | auth 白名单补 `/` 仪表盘 HTML 入口 (auth_enabled 时 Web UI 可自举加载, 与 auth-token 同一信任假设; 回归测试锁定其余 API 仍 401) |
 | 2026-08-17 | iter-32 | M5-2: /ws/worker Worker 事件直推端点 (mesh_token 鉴权 + usage_batch 幂等复用 + 通用事件转发 event_bus; 白名单收录) |
 | 2026-08-16 | iter-30 | F1: 角色无关自动对齐 — config_ts 仲裁密钥收敛 (推/拉主从解耦) + 落后节点自动 git pull 升级 + 保存端点/周期对齐线程 |
 | 2026-08-16 | iter-30 补 | E5: Secretary 离线故障转移 (prune 循环挂接管检查 + device_id 仲裁接任 + WS/Bot 通知) |
