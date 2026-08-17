@@ -54,13 +54,15 @@ import os as _os
 _API_KEY = _os.environ.get("LAN_MESH_API_KEY", "")  # 空 = 不启用认证
 
 # 无需认证的白名单路径
+#   /: Web UI 仪表盘 HTML 入口 (页面加载后才能执行 auth-token 自举,
+#      信任假设与 /api/station/auth-token 一致: 能访问 UI 者视为内网成员)
 #   /api/register, /api/heartbeat: 节点引导注册 (注册响应中下发 mesh token)
 #   /health, /api/health: 健康探活 (限流除外)
 #   /ws: WebSocket 实时推送 (会话建立后由 UI 持有 token)
 #   /ws/worker: M5-2 Worker 事件直推通道 (握手后在端点内自验 mesh_token)
 #   /api/station/auth-token: Web UI 引导获取 token (信任根: 能访问 UI 者视为内网成员)
-_AUTH_WHITELIST = {"/health", "/api/register", "/api/heartbeat", "/ws",
-                   "/ws/worker",
+_AUTH_WHITELIST = {"/", "/health", "/api/register", "/api/heartbeat",
+                   "/ws", "/ws/worker",
                    "/api/station/auth-token", "/api/station/bootstrap-token",
                    "/api/version/upgrade-notice", "/api/secrets/fetch"}
 

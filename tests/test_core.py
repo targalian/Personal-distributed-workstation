@@ -15,7 +15,8 @@
 11. secretary-failover — Secretary 离线接管判定、device_id 仲裁、单节点自愈 (E5)
 12. pm-trio — PMPlanner/PMMonitor/PMDispatcher 接口级单测 (P1 #9)
 13. worker-ws-push — Worker→Secretary WS 直推通道: URL 派生/推送轮次/
-    HTTP 兜底跳过/Secretary 端点鉴权与帧协议 (M5-2)
+    HTTP 兜底跳过/Secretary 端点鉴权与帧协议 (M5-2);
+    auth 开启时 '/' 仪表盘免认证白名单回归
 14. rotation-quant — 轮换量化价值公式: 沉没成本压力/窗口紧迫度/
     时段折扣/规则回退/batch 合规红线/方案透明化 (R5-2)
 
@@ -2133,6 +2134,31 @@ class TestWorkerWsPush:
         with client.websocket_connect("/ws/worker?token=secret-tk") as ws:
             ws.send_json({"type": "host_event", "data": {"k": 1}})
             assert ws.receive_json()["ok"] is True
+
+    def test_dashboard_html_whitelisted_under_auth(self, monkeypatch):
+        # auth 开启时 "/" 必须免认证: 页面加载后才能执行 auth-token 自举
+        import lan_mesh.station_routes_common as common
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        monkeypatch.setattr(common, "_mesh_auth_enabled", True)
+        monkeypatch.setattr(common, "_mesh_auth_token", "secret-tk")
+        app = FastAPI()
+        app.middleware("http")(common.api_guard_middleware)
+
+        @app.get("/")
+        def _dash():
+            return {"html": "ok"}
+
+        @app.get("/api/resources")
+        def _res():
+            return {"pools": []}
+
+        client = TestClient(app)
+        r = client.get("/")
+        assert r.status_code == 200
+        # 其余 API 路径仍要求 token
+        r2 = client.get("/api/resources")
+        assert r2.status_code == 401
 
     def test_ws_worker_endpoint_event_forwarded_to_bus(self):
         from lan_mesh.event_bus import get_event_bus
