@@ -56,6 +56,12 @@ API Key 加密分发与版本同步（S1/S2/S3 迭代成果集中于此）。
 - **合规红线**: 订阅套餐禁非交互式批量调用（供应商条款）;
   `set_usage_mode_global("batch")` + `batch_block_subscription: true`
   时订阅池从候选剔除（需 payg 池兜底）；开关默认关闭
+- 实际配置 (iter-34): ark 池已设 `billing_period: monthly` (按自然月
+  逼近火山订阅月重置, 窗口紧迫度随月内日期生效); 百炼 Token Plan
+  为 7 天滚动窗口但缺锚点, 暂保持 one_time (紧迫度恒 1.0)
+- 模型 ID 同步 (iter-34): 官方下线 `qwen3.8-max-preview` 后,
+  agent_runtime CLI 模板 / model_pool.example.yaml 已全量替换为
+  `qwen3.8-max` (旧 ID 仍可调但自动路由, 不再使用)
 
 ## model_router.py — 模型路由器
 
@@ -134,6 +140,7 @@ mesh_token 后重试解密一次：
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-18 | iter-34 | 轮换配置落地: ark 池 billing_period=monthly 窗口紧迫度生效 (自然月口径); qwen3.8-max-preview 下线 ID 全量替换 (CLI 模板/示例配置) |
 | 2026-08-17 | iter-33 | R5-2: 轮换量化价值公式 (沉没成本压力 × 窗口紧迫度 + 时段折扣窗口; 供应商能力信息落档 docs/reference/vendor-capability; batch 合规红线开关) |
 | 2026-08-17 | iter-32 | M5-2: Worker 用量 WS 直推通道 (websockets.sync 推送线程 + 断线重连; HTTP 批量降为兜底, 双通道 usage_id 幂等) |
 | 2026-08-16 | iter-30 | F1: 角色无关密钥对齐 (config_ts 仲裁 + config_hash 排除 ts) + 版本落后自动升级 |
