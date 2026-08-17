@@ -147,7 +147,7 @@ CLI_AGENT_BACKENDS = {
         "detect": "claude",
         "build_cmd": lambda prompt, cwd: [
             "claude", "--print", "--output-format", "json",
-            "--model", "qwen3.8-max-preview",
+            "--model", "qwen3.8-max",
             "--max-turns", "30", prompt,
         ],
         "timeout": 600,
@@ -157,7 +157,7 @@ CLI_AGENT_BACKENDS = {
         "detect": "aider",
         "build_cmd": lambda prompt, cwd: [
             "aider", "--yes", "--no-auto-commits",
-            "--model", "openai/qwen3.8-max-preview",
+            "--model", "openai/qwen3.8-max",
             "--architect-model", "openai/qwen3.6-flash",
             "--message", prompt,
         ],
@@ -1227,7 +1227,7 @@ class AgentRuntime:
         """获取指定 provider 下所有模型 ID, 按 quality_score 降序排列。
 
         同 provider 内尝试多个模型实现自动降级:
-        qwen3.8-max-preview → qwen3.7-max → qwen3.7-plus → qwen3.6-flash
+        qwen3.8-max → qwen3.7-max → qwen3.7-plus → qwen3.6-flash
         """
         pool = _load_model_pool_entries()
         candidates = [

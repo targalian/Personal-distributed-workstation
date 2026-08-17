@@ -146,7 +146,7 @@ models:
   # 夜间折扣: 22:00-08:00 qwen3.7系列低至2折
 
   # -- 千问系列 --
-  - id: qwen3.8-max-preview
+  - id: qwen3.8-max
     provider: aliyun-tokenplan
     api_key_env: ALIYUN_TOKENPLAN_API_KEY
     base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
