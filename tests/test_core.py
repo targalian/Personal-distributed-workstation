@@ -19,6 +19,8 @@
     auth 开启时 '/' 仪表盘免认证白名单回归
 14. rotation-quant — 轮换量化价值公式: 沉没成本压力/窗口紧迫度/
     时段折扣/规则回退/batch 合规红线/方案透明化 (R5-2)
+15. single-instance — 主机级单实例守护: 无锁/僵尸锁接管、同版本
+    取消启动、新版杀旧接管、更旧退出、dev-reload 同版接管 (E6)
 
 运行: pytest tests/ -v
 """
@@ -2336,3 +2338,122 @@ class TestRotationQuant:
         bias = mr.rotation_bias_global("m1")
         assert 0.0 < bias <= 0.1
         assert mr.rotation_bias_global("no_such_model") == 0.0
+
+
+class TestSingleInstance:
+    """主机级单实例守护 (E6) — 锁仲裁: 接管/同版退出/新版杀旧/更旧退出。"""
+
+    def _setup(self, monkeypatch, tmp_path, alive=True):
+        import lan_mesh.singleton as sg
+        lock = tmp_path / "station.lock"
+        killed = []
+        monkeypatch.setattr(sg, "_lock_path", lambda: lock)
+        monkeypatch.setattr(sg, "_pid_alive", lambda pid: alive)
+        monkeypatch.setattr(sg, "_kill_process",
+                            lambda pid: killed.append(pid) or True)
+        monkeypatch.setattr(sg, "_wait_port_free", lambda port, timeout=8: True)
+        monkeypatch.setattr(sg, "_port_holder", lambda port: 0)
+        monkeypatch.setattr(sg, "_is_station_process", lambda pid: False)
+        return sg, lock, killed
+
+    def _seed(self, lock, pid=1111, commit="c1", commit_time=100.0, port=45470):
+        import json
+        lock.write_text(json.dumps({
+            "pid": pid, "commit": commit, "commit_time": commit_time,
+            "port": port, "started_at": 0.0}), encoding="utf-8")
+
+    def test_no_lock_takeover(self, monkeypatch, tmp_path):
+        """无锁 → 接管写锁 (记录本进程身份/版本/端口)。"""
+        sg, lock, killed = self._setup(monkeypatch, tmp_path)
+        assert sg.ensure_single_instance(45470, "c2", 200.0) == "proceed"
+        import os, json
+        info = json.loads(lock.read_text(encoding="utf-8"))
+        assert info["pid"] == os.getpid()
+        assert info["commit"] == "c2" and info["port"] == 45470
+        assert not killed
+
+    def test_zombie_lock_takeover(self, monkeypatch, tmp_path):
+        """锁 PID 已死 (僵尸锁) → 接管覆盖, 不杀进程。"""
+        sg, lock, killed = self._setup(monkeypatch, tmp_path, alive=False)
+        self._seed(lock, pid=9999)
+        assert sg.ensure_single_instance(45470, "c2", 200.0) == "proceed"
+        assert not killed
+
+    def test_same_version_exit(self, monkeypatch, tmp_path):
+        """同版本实例在跑 (非 dev) → 取消启动, 不杀旧。"""
+        sg, lock, killed = self._setup(monkeypatch, tmp_path)
+        self._seed(lock, pid=1111, commit="c1", commit_time=100.0)
+        assert sg.ensure_single_instance(45470, "c1", 100.0) == "exit_same"
+        assert not killed
+
+    def test_same_version_dev_reload_takeover(self, monkeypatch, tmp_path):
+        """dev-reload 同版本 → 杀旧接管 (旧进程已请求退出)。"""
+        sg, lock, killed = self._setup(monkeypatch, tmp_path)
+        self._seed(lock, pid=1111, commit="c1", commit_time=100.0)
+        assert sg.ensure_single_instance(45470, "c1", 100.0,
+                                         dev_reload=True) == "proceed"
+        assert killed == [1111]
+
+    def test_older_current_exits(self, monkeypatch, tmp_path):
+        """已有更新版本实例 → 取消启动, 不杀旧。"""
+        sg, lock, killed = self._setup(monkeypatch, tmp_path)
+        self._seed(lock, pid=1111, commit="c9", commit_time=900.0)
+        assert sg.ensure_single_instance(45470, "c1", 100.0) == "exit_newer"
+        assert not killed
+
+    def test_newer_current_kills_old(self, monkeypatch, tmp_path):
+        """当前更新 (升级场景) → 关闭旧版实例后接管写锁。"""
+        sg, lock, killed = self._setup(monkeypatch, tmp_path)
+        self._seed(lock, pid=1111, commit="c1", commit_time=100.0)
+        assert sg.ensure_single_instance(45470, "c2", 200.0) == "proceed"
+        assert killed == [1111]
+        import json
+        info = json.loads(lock.read_text(encoding="utf-8"))
+        assert info["commit"] == "c2"
+
+    def test_both_unknown_commit_exit(self, monkeypatch, tmp_path):
+        """非 git 环境双方无 commit → 视为同版本, 取消启动。"""
+        sg, lock, killed = self._setup(monkeypatch, tmp_path)
+        self._seed(lock, pid=1111, commit="", commit_time=0.0)
+        assert sg.ensure_single_instance(45470, "", 0.0) == "exit_same"
+        assert not killed
+
+    def test_mismatched_commit_unknown_exit(self, monkeypatch, tmp_path):
+        """一方有 commit 一方无 (无法比较) → 保守取消启动。"""
+        sg, lock, killed = self._setup(monkeypatch, tmp_path)
+        self._seed(lock, pid=1111, commit="c1", commit_time=100.0)
+        assert sg.ensure_single_instance(45470, "", 0.0) == "exit_same"
+        assert not killed
+
+    def test_clear_lock_only_own(self, tmp_path, monkeypatch):
+        """正常退出只清自己的锁, 他人锁保留 (防误删活跃实例锁)。"""
+        sg, lock, killed = self._setup(monkeypatch, tmp_path)
+        self._seed(lock, pid=1111)
+        sg._clear_lock(9999)   # 非本人 → 不删
+        assert lock.exists()
+        sg._clear_lock(1111)   # 本人 → 删
+        assert not lock.exists()
+
+    def test_corrupt_lock_takeover(self, monkeypatch, tmp_path):
+        """锁文件损坏 → 视为无锁接管 (不抛异常)。"""
+        sg, lock, killed = self._setup(monkeypatch, tmp_path)
+        lock.write_text("{invalid json", encoding="utf-8")
+        assert sg.ensure_single_instance(45470, "c2", 200.0) == "proceed"
+        assert not killed
+
+    def test_no_lock_station_holder_killed(self, monkeypatch, tmp_path):
+        """无锁但端口被工作站进程占用 (旧版无锁遗留) → 关闭后接管。"""
+        sg, lock, killed = self._setup(monkeypatch, tmp_path, alive=False)
+        monkeypatch.setattr(sg, "_port_holder", lambda port: 5555)
+        monkeypatch.setattr(sg, "_is_station_process", lambda pid: True)
+        self._seed(lock, pid=9999)
+        assert sg.ensure_single_instance(45470, "c2", 200.0) == "proceed"
+        assert killed == [5555]
+
+    def test_no_lock_foreign_holder_kept(self, monkeypatch, tmp_path):
+        """无锁但端口被非工作站占用 → 不杀, 正常接管写锁。"""
+        sg, lock, killed = self._setup(monkeypatch, tmp_path, alive=False)
+        monkeypatch.setattr(sg, "_port_holder", lambda port: 7777)
+        self._seed(lock, pid=9999)
+        assert sg.ensure_single_instance(45470, "c2", 200.0) == "proceed"
+        assert not killed

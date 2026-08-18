@@ -56,6 +56,7 @@ MAPPING = {
     "lan_mesh/station_routes_chat.py": "02-station-core",
     "lan_mesh/station_routes_projects.py": "02-station-core",
     "lan_mesh/station_routes_worker.py": "02-station-core",
+    "lan_mesh/singleton.py": "02-station-core",
     "lan_mesh/database.py": "02-station-core",
     # 03-task-orchestration — 任务编排与 PM
     "lan_mesh/task.py": "03-task-orchestration",
