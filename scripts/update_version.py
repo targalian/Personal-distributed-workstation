@@ -23,7 +23,8 @@ VERSION_FILE = ROOT / "VERSION.json"
 
 def _git(cmd: list) -> str:
     r = subprocess.run(["git", "-C", str(ROOT)] + cmd,
-                       capture_output=True, text=True, timeout=10)
+                       capture_output=True, text=True, timeout=10,
+                       encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise RuntimeError(f"git {' '.join(cmd)} 失败: {r.stderr.strip()}")
     return r.stdout.strip()
@@ -38,6 +39,19 @@ def _bump(version: str, part: str) -> str:
     for i in range(idx + 1, 3):
         parts[i] = "0"
     return ".".join(parts)
+
+
+def _is_version_sync_commit(commit: str) -> bool:
+    """判断提交是否为 sync_push 的 VERSION.json 自动同步提交。
+
+    收敛规则: 同步提交只改 VERSION.json, 记录目标应为真实代码提交
+    (其父), HEAD 停在同步提交时不再触发新一轮同步。
+    """
+    try:
+        subject = _git(["log", "-1", "--format=%s", commit])
+    except Exception:
+        return False
+    return subject.startswith("chore(config): VERSION.json 自动同步")
 
 
 def main():
@@ -62,6 +76,17 @@ def main():
     except Exception as e:
         print(f"[VersionSync] 读取 git HEAD 失败: {e}")
         sys.exit(1)
+
+    # 收敛: HEAD 为自动同步提交时, 同步目标应为真实代码提交 (其父)
+    if _is_version_sync_commit(head):
+        try:
+            parent = _git(["rev-parse", "--short", head + "~1"])
+        except Exception:
+            parent = ""
+        if data.get("commit") == parent:
+            print("[VersionSync] VERSION.json 已是最新 (自动同步提交收敛)")
+            print("SAME")
+            return
 
     changed = False
     if args.bump:

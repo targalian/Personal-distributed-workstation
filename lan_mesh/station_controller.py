@@ -2043,6 +2043,22 @@ class StationController:
         """
         self._running = True
 
+        # E6: 主机级单实例守护 — 同版本/更新实例在跑则取消启动;
+        # 旧版实例在跑则关闭后由本进程接管 (杜绝端口回退双实例)
+        from .singleton import ensure_single_instance, register_cleanup
+        from .version_sync import local_version_info
+        _ver = local_version_info()
+        action = ensure_single_instance(
+            self.cfg.secretary.api_port,
+            commit=_ver.get("commit", ""),
+            commit_time=_ver.get("commit_time", 0.0),
+            dev_reload=dev_reload,
+        )
+        if action != "proceed":
+            logger.warning("[E6] 单实例仲裁: %s, 本进程退出", action)
+            sys.exit(0)
+        register_cleanup()
+
         # 启动前自检 (复用 secretary 自检: 含 DB 路径 + Web 模板检查)
         from .preflight import run_preflight
         if not run_preflight("secretary", self.cfg):

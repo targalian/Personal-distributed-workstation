@@ -22,7 +22,10 @@ $root = Split-Path -Parent $PSScriptRoot
 
 function Invoke-Git {
     # 用 $args 透传 (避免 [string[]] 具名参数绑定在部分场景丢失实参)
-    & git -C $root @args
+    # hook 提示经 stderr 转发: PS 5.1 + ErrorActionPreference=Stop 下
+    # 即使 2>&1 合并仍会抛 NativeCommandError 中断, 故函数内局部降级
+    $ErrorActionPreference = "Continue"
+    & git -C $root @args 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "git $($args -join ' ') 执行失败 (exit $LASTEXITCODE)"
     }
