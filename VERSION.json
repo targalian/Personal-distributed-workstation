@@ -1,6 +1,6 @@
 {
   "version": "0.30.0",
-  "commit": "a4aaba0",
+  "commit": "c26bf83",
   "released_at": "2026-08-25",
   "note": "F1 密钥与版本对齐与主从无关 (config_ts 仲裁 + 60s 对齐线程 + 落后节点自动 git pull 升级) + TestRoleFreeAlign 单测 115",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
