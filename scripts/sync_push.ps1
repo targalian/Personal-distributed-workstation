@@ -1,21 +1,21 @@
 ﻿<#
 .SYNOPSIS
-    双仓库同步推送：master -> Gitee（中文版），master/en -> GitHub CN/EN 分支
+    双仓库同步推送：master -> Gitee + GitHub CN；EN 按需同步
 
 .DESCRIPTION
     1. 要求工作区干净且当前在 master 分支
-    2. 将 master 的代码变更合并进 en 分支（en 分支 .gitattributes 中
-       README.md 配置了 merge=ours，合并时自动保留英文 README）
-    3. 推送 master 到 gitee 远程，推送 master/en 到 origin(GitHub) 的 CN/EN 分支
+    2. 推送 master 到 gitee 远程 + origin(GitHub) CN 分支 (默认)
+    3. 指定 -WithEN 时额外: 将 master 合并进 en 分支 (.gitattributes
+       中 README.md 配置了 merge=ours, 自动保留英文 README) 并推送 EN
 
-.PARAMETER SkipMerge
-    跳过 master -> en 的同步合并，仅执行推送
+.PARAMETER WithEN
+    额外同步 master -> en 并推送 origin/EN (默认跳过, CN 到阶段性里程碑时手动触发)
 
 .EXAMPLE
-    .\scripts\sync_push.ps1
-    .\scripts\sync_push.ps1 -SkipMerge
+    .\scripts\sync_push.ps1              # 默认: Gitee + GitHub CN
+    .\scripts\sync_push.ps1 -WithEN     # 里程碑: Gitee + GitHub CN + EN
 #>
-param([switch]$SkipMerge)
+param([switch]$WithEN)
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -53,8 +53,17 @@ if ($verDiff) {
     Invoke-Git commit -m "chore(config): VERSION.json 自动同步 (commit/released_at 对齐 HEAD, sync_push 自动生成)"
 }
 
-# 3. 同步 master 代码变更到 en 分支（英文 README 由 merge=ours 属性保护）
-if (-not $SkipMerge) {
+# 3. 推送 Gitee + GitHub CN (每次必推)
+Write-Host "==> 推送 master -> Gitee（中文版）"
+Invoke-Git push gitee master
+
+Write-Host "==> 推送 master -> GitHub CN 分支"
+Invoke-Git push origin master:CN
+
+$pushedEndpoints = "Gitee(master) + GitHub(CN)"
+
+# 4. EN 分支按需同步 (CN 到阶段性里程碑时手动 -WithEN 触发)
+if ($WithEN) {
     Write-Host "==> 同步 master -> en（保留英文 README）"
     Invoke-Git checkout en
     try {
@@ -62,13 +71,9 @@ if (-not $SkipMerge) {
     } finally {
         Invoke-Git checkout master
     }
+    Write-Host "==> 推送 en -> GitHub EN 分支"
+    Invoke-Git push origin en:EN
+    $pushedEndpoints += " + GitHub(EN)"
 }
 
-# 4. 双端推送
-Write-Host "==> 推送 master -> Gitee（中文版）"
-Invoke-Git push gitee master
-
-Write-Host "==> 推送 master/en -> GitHub CN/EN 分支"
-Invoke-Git push origin master:CN en:EN
-
-Write-Host "完成：Gitee(master 中文) 与 GitHub(CN 中文 / EN 英文) 已同步更新" -ForegroundColor Green
+Write-Host "完成：${pushedEndpoints} 已同步更新" -ForegroundColor Green

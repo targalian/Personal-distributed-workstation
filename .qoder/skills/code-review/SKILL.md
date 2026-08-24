@@ -186,19 +186,19 @@ scope: `pm`, `runtime`, `router`, `api`, `ws`, `ui`, `config`, `discovery`, `db`
 
 ## 双仓库上库流程
 
-项目采用双仓库结构，上库必须同时推送两端：
+项目采用双仓库结构，默认推送两端（EN 按需）：
 
-| 远程 | 分支映射 | 内容版本 |
-|------|----------|----------|
-| `gitee` | `master` → `master` | 中文 README |
-| `origin` (GitHub) | `master` → `CN` | 中文 README |
-| `origin` (GitHub) | `en` → `EN` | 英文 README（`.gitattributes` merge=ours 保护） |
+| 远程 | 分支映射 | 内容版本 | 触发 |
+|------|----------|----------|------|
+| `gitee` | `master` → `master` | 中文 README | 每次必推 |
+| `origin` (GitHub) | `master` → `CN` | 中文 README | 每次必推 |
+| `origin` (GitHub) | `en` → `EN` | 英文 README（`.gitattributes` merge=ours 保护） | `-WithEN` 按需 |
 
-在 `master` 提交后，运行同步脚本一键合并到 `en` 并双端推送：
+在 `master` 提交后，运行同步脚本推送：
 
 ```powershell
-.\scripts\sync_push.ps1            # 同步合并 + 双端推送
-.\scripts\sync_push.ps1 -SkipMerge # 仅推送，跳过 master -> en 合并
+.\scripts\sync_push.ps1              # 默认: Gitee + GitHub CN
+.\scripts\sync_push.ps1 -WithEN     # 里程碑: Gitee + GitHub CN + EN
 ```
 
 脚本要求工作区干净且在 master 分支。禁止单独 `git push` 到某一端导致双库失联。

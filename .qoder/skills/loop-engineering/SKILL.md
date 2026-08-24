@@ -301,11 +301,11 @@ Boss 消息 → ChatHandler (意图检测)
    - 实现了什么功能
    - 遗留问题
 3. 如果发现新 Bug → 加入 blocked 或创建新任务
-4. 三端推送 (禁止 git push 直推):
+4. 推送 (禁止 git push 直推):
    powershell -ExecutionPolicy Bypass -File scripts/sync_push.ps1
-   → gitee/master (中文) + origin/CN (中文) + origin/EN (英文) 三端一致
-   脚本自动: VERSION.json 同步 → master 合并到 en → 双端推送
-   工作区必须干净且在 master 分支, 否则脚本拒绝执行
+   → 默认: gitee/master (中文) + origin/CN (中文) 两端一致
+   → 里程碑时: sync_push.ps1 -WithEN 额外同步 origin/EN (英文)
+   脚本自动: VERSION.json 同步; 工作区必须干净且在 master 分支
 ```
 
 ### 4.4 调度配置
