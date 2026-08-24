@@ -182,7 +182,7 @@ print(f"使用 Key: {api_key[:8]}...")
 | chore | 构建/依赖/脚本 |
 | perf | 性能优化 |
 
-scope: `pm`, `runtime`, `router`, `api`, `ws`, `ui`, `config`, `discovery`, `db`
+scope: `pm`, `runtime`, `router`, `api`, `ws`, `ui`, `config`, `discovery`, `db`, `auth`, `skill`, `station`, `deploy`, `scripts`
 
 ## 双仓库上库流程
 
@@ -208,7 +208,7 @@ scope: `pm`, `runtime`, `router`, `api`, `ws`, `ui`, `config`, `discovery`, `db`
 项目 `.githooks/` 包含两个钩子，运行启动脚本时自动启用：
 
 - **commit-msg**: 校验 `<type>(<scope>): <subject>` 格式，不合规则拒绝提交
-- **pre-push**: 7 项自动检查（语法、硬编码密钥、函数长度、docstring、类型标注、日志格式、commit 格式）
+- **pre-push**: 9 项自动检查（语法、硬编码密钥、函数长度、docstring、类型标注、日志格式、commit 格式、sync_docs 清单校验、设计文档同步提醒）
   - 审核基线按当前分支上游自动解析（master→`gitee/master`，en→`origin/EN`）
   - Blocker（语法/密钥）→ 阻止 push
   - Warning（其余）→ 仅提示
