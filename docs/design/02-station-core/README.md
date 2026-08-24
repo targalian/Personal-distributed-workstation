@@ -114,7 +114,8 @@ WebSocket 通道。
   query 参数 token（mesh_token 恒定时间比较，不通过直接拒绝）；
   `usage_batch` 帧复用 HTTP 批量同一幂等路径（`apply_usage_batch`）
   并回 ack，Secretary 未激活时 ack 失败（Worker 不推游标，HTTP
-  兜底链路后续补报）；其他 type 转发 event_bus → 自动广播前端 /ws
+  兜底链路后续补报）；其他 type 转发 event_bus → 自动广播前端 /ws；
+  连接建立/断开记录 client IP 供运维观察
 
 **设计要点**:
 - 所有组件经 `controller` 可变引用访问，支持免重启激活/停用 Secretary
@@ -165,6 +166,7 @@ skill_assignments、resource_usage_log、events 等。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-25 | iter-35 | M5-2 多主机联验: /ws/worker 连接建立/断开记录 client IP (运维观察); 分机升级后双机 WS 直推端到端验证 7/7 全过 |
 | 2026-08-18 | iter-35 | E6: 主机级单实例守护 — ~/.lan_mesh/station.lock 锁仲裁 (同版本/更新实例取消启动, 旧版实例关闭接管, 僵尸锁覆盖, dev-reload 同版接管; 无锁时按端口占用者是否为工作站进程兜底清理旧版遗留) |
 | 2026-08-18 | iter-34 | auth 白名单补 `/` 仪表盘 HTML 入口 (auth_enabled 时 Web UI 可自举加载, 与 auth-token 同一信任假设; 回归测试锁定其余 API 仍 401) |
 | 2026-08-17 | iter-32 | M5-2: /ws/worker Worker 事件直推端点 (mesh_token 鉴权 + usage_batch 幂等复用 + 通用事件转发 event_bus; 白名单收录) |

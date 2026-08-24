@@ -113,6 +113,8 @@ def create_station_router(controller) -> APIRouter:
                 await websocket.close(code=4003)
                 return
         await websocket.accept()
+        client = websocket.client.host if websocket.client else "?"
+        logger.info("[WS] /ws/worker 连接建立: %s", client)
         try:
             while True:
                 try:
@@ -136,8 +138,8 @@ def create_station_router(controller) -> APIRouter:
                     publish_event(msg_type, msg.get("data") or {})
                     await websocket.send_json({"ok": True})
         except WebSocketDisconnect:
-            pass
+            logger.info("[WS] /ws/worker 断开: %s", client)
         except Exception:
-            pass
+            logger.info("[WS] /ws/worker 异常断开: %s", client)
 
     return router
