@@ -9,6 +9,7 @@
 | 文件/目录 | 职责一句话 |
 |---|---|
 | database.py | SQLite 数据库存储层 - Secretary 端主机注册记录持久化 |
+| runtime_trace.py | 运行时追踪与性能审计 — P0/P1 运行时分析引擎 |
 | singleton.py | 主机级工作站单实例守护 (E6)。 |
 | station_api.py | Station Director API 路由层 (装配入口) |
 | station_controller.py | Station Director 独立控制器 — 基础设施管理入口 |
@@ -92,7 +93,7 @@ WebSocket 通道。
 | 模块 | 职责 | 可用性 |
 |---|---|---|
 | station_routes_common.py | 限流/认证中间件与共享工具 (单一事实源) | — |
-| station_routes_basic.py | 健康/错误/角色/注册心跳/主机/Director | 始终 |
+| station_routes_basic.py | 健康/错误/角色/注册心跳/主机/Director/运行时追踪 | 始终 |
 | station_routes_tasks.py | Agent/任务/图/交付闭环/任务记忆 | Secretary |
 | station_routes_resources.py | 模型资源/配置向导/密钥同步/事件 | Secretary |
 | station_routes_pm.py | PM Agent 管理/进度/子任务/团队 | Secretary |
@@ -149,12 +150,45 @@ WebSocket 通道。
 **表结构**: hosts（主机 + 版本列）、tasks/subtasks、chat_history、skills、
 skill_assignments、resource_usage_log、events 等。
 
-**迁移机制**: `SCHEMA_VERSION` + `_MIGRATIONS` 字典（当前 **v4**）：
+**迁移机制**: `SCHEMA_VERSION` + `_MIGRATIONS` 字典（当前 **v5**）：
+- v5: llm_call_log 审计表 (运行时 LLM 调用性能追踪)
 - v4: hosts 表新增 `code_version` / `version_ts` 列（S2/S3 版本统计）
 - 迁移函数必须幂等（ALTER TABLE 包 try/except）；新增列的索引放迁移函数内
 
 **关键接口**: `upsert_host()` / `list_hosts()` / `on_heartbeat` 相关 /
-`record_usage()` / `backup()` (P2 #7) 等
+`record_usage()` / `insert_llm_call()` / `query_llm_metrics()` /
+`backup()` (P2 #7) 等
+
+## runtime_trace.py — 运行时追踪与性能审计
+
+**职责**: P0/P1 运行时分析引擎 — 记录子任务执行轨迹与 LLM 调用性能明细。
+
+**双写机制**:
+- **JSONL 文件** (`~/.lan_mesh/trace.jsonl`): 子任务 start/end + LLM 调用记录; 50MB 自动轮转; 可用 `jq` / `pandas` 快速聚合
+- **SQLite llm_call_log 表**: LLM 调用审计明细 (延迟/token/状态); 供 `/api/runtime/metrics` 聚合查询
+
+**数据流向**:
+```
+agent_runtime.execute()
+    → trace_subtask_start() → trace_subtask_end()
+    → _call_openai_compatible() / _call_openai_with_tools()
+        → trace_llm_call()  (JSONL + SQLite 双写)
+```
+
+**写入钩子**:
+- `trace_subtask_start()` / `trace_subtask_end()`: 包裹 `execute()` 方法, 记录技能类型、耗时、状态
+- `trace_llm_call()`: 嵌入 `_call_openai_compatible` (流式, chat)、`_call_openai_with_tools` (ReAct, tools)、`_handle_cli_agent` (CLI Agent)
+- `set_db(db)`: station_api.py 装配时注入 Database 引用 (避免循环导入)
+
+**查询端点** (station_routes_basic.py, 始终可用):
+| 端点 | 数据源 | 用途 |
+|---|---|---|
+| `/api/runtime/metrics?hours=1` | SQLite | 聚合指标: 调用次数/延迟/P99/Token/按模型拆分 |
+| `/api/runtime/trace?limit=50&type=` | JSONL | 最近追踪记录明细 (子任务+LLM) |
+| `/api/runtime/calls?limit=50` | SQLite | LLM 调用明细 (调试/排查) |
+| `/api/runtime/stats?hours=1` | JSONL | 子任务成功率/模型分布/错误 Top5 |
+
+**线程安全**: JSONL 追加写入用 `threading.Lock`; SQLite 经 Database 线程局部连接。
 
 **P2 #7 DB 自动备份**: `__init__` 末尾调用 `backup()` — sqlite3 在线
 备份 API 一致性快照至 `~/.lan_mesh/backups/<stem>-<时间戳>.sqlite3`,
@@ -166,6 +200,7 @@ skill_assignments、resource_usage_log、events 等。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-25 | iter-36 | P0/P1 运行时追踪与性能审计: runtime_trace.py (JSONL 子任务轨迹 + SQLite llm_call_log 审计表); agent_runtime execute() 计时钩子; LLM 三路径 (chat/tools/cli) trace_llm_call; /api/runtime/{metrics,trace,calls,stats} 端点; database v5 迁移 |
 | 2026-08-25 | iter-35 | M5-2 多主机联验: /ws/worker 连接建立/断开记录 client IP (运维观察); 分机升级后双机 WS 直推端到端验证 7/7 全过 |
 | 2026-08-18 | iter-35 | E6: 主机级单实例守护 — ~/.lan_mesh/station.lock 锁仲裁 (同版本/更新实例取消启动, 旧版实例关闭接管, 僵尸锁覆盖, dev-reload 同版接管; 无锁时按端口占用者是否为工作站进程兜底清理旧版遗留) |
 | 2026-08-18 | iter-34 | auth 白名单补 `/` 仪表盘 HTML 入口 (auth_enabled 时 Web UI 可自举加载, 与 auth-token 同一信任假设; 回归测试锁定其余 API 仍 401) |

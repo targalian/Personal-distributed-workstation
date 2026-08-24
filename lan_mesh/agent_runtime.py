@@ -304,10 +304,23 @@ class AgentRuntime:
         Returns:
             {"output": {...}, "status": "completed"|"failed", "error": "..."}
         """
+        import time as _time
+        from . import runtime_trace
+
         skill = subtask.get("required_skill", "")
         handler = self._handlers.get(skill)
+        task_id = subtask.get("parent_task_id", "")
+        model_pref = subtask.get("model_preference", "")
+
+        # P0: 子任务执行追踪
+        trace_id = runtime_trace.trace_subtask_start(
+            skill=skill, task_id=task_id, model_pref=model_pref)
+        exec_start = _time.time()
 
         if not handler:
+            runtime_trace.trace_subtask_end(
+                trace_id, skill, "failed", 0,
+                error=f"未知的技能类型: {skill}", task_id=task_id)
             return {
                 "output": {},
                 "status": "failed",
@@ -320,15 +333,17 @@ class AgentRuntime:
         # R6: 注入成本归因上下文 — 本线程内后续 LLM 记账自动带上 task_id
         try:
             from .model_resources import set_usage_context
-            set_usage_context(task_id=subtask.get("parent_task_id", ""),
+            set_usage_context(task_id=task_id,
                               project_id=subtask.get("project_id", ""))
         except Exception:
             pass
 
         # 提取路由器注入的模型偏好 (由 orchestrator 写入 payload)
         input_data = dict(subtask.get("input_data", {}))
-        input_data["_model_preference"] = subtask.get("model_preference", "")
+        input_data["_model_preference"] = model_pref
         input_data["_fallback_models"] = subtask.get("fallback_models", [])
+        # 传递 trace_id 供 LLM 调用钩子关联
+        input_data["_trace_id"] = trace_id
 
         try:
             result = handler(input_data)
@@ -336,8 +351,19 @@ class AgentRuntime:
             usage = {}
             if isinstance(result, dict) and "usage" in result:
                 usage = result.pop("usage", {})
+            elapsed_ms = (_time.time() - exec_start) * 1000
+            runtime_trace.trace_subtask_end(
+                trace_id, skill, "completed", elapsed_ms,
+                model=usage.get("model", ""),
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                task_id=task_id)
             return {"output": result, "status": "completed", "usage": usage}
         except Exception as e:
+            elapsed_ms = (_time.time() - exec_start) * 1000
+            runtime_trace.trace_subtask_end(
+                trace_id, skill, "failed", elapsed_ms,
+                error=str(e), task_id=task_id)
             return {"output": {}, "status": "failed", "error": str(e)}
 
     # ── 技能处理器 ──────────────────────────────────────────────
@@ -726,11 +752,34 @@ class AgentRuntime:
             else:
                 logger.warning("[CLI Agent] 非零退出 (code=%d, %.1fs)", result.returncode, elapsed)
 
+            # P0/P1: CLI Agent 性能追踪
+            try:
+                from . import runtime_trace
+                runtime_trace.trace_llm_call(
+                    model=f"cli:{backend}",
+                    input_tokens=0, output_tokens=0,
+                    ttft_ms=0, total_ms=elapsed * 1000,
+                    status="ok" if result.returncode == 0 else "error",
+                    call_type="cli")
+            except Exception:
+                pass
+
             return output
 
         except subprocess.TimeoutExpired:
             elapsed = time.time() - start_time
             logger.error("[CLI Agent] 超时 (%ds, backend=%s)", timeout, backend)
+            # P0/P1: 超时追踪
+            try:
+                from . import runtime_trace
+                runtime_trace.trace_llm_call(
+                    model=f"cli:{backend}",
+                    input_tokens=0, output_tokens=0,
+                    ttft_ms=0, total_ms=elapsed * 1000,
+                    status="timeout", error=f"超时 {timeout}s",
+                    call_type="cli")
+            except Exception:
+                pass
             return {
                 "error": f"CLI Agent 执行超时 ({timeout}s)",
                 "backend": backend,
@@ -842,6 +891,7 @@ class AgentRuntime:
     def _call_openai_with_tools(self, messages: list[dict], tools: list[dict],
                                  model_id: str, base_url: str, api_key: str) -> dict:
         """F2.1: OpenAI 兼容 API 调用 (支持 tools 参数)。"""
+        import time as _time
         url = f"{base_url.rstrip('/')}/chat/completions"
         payload = {
             "model": model_id,
@@ -852,6 +902,7 @@ class AgentRuntime:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
+        call_start = _time.time()
         resp = requests.post(
             url,
             headers={
@@ -863,6 +914,7 @@ class AgentRuntime:
         )
         resp.raise_for_status()
         data = resp.json()
+        call_ms = (_time.time() - call_start) * 1000
         usage = data.get("usage", {})
         choice_msg = data["choices"][0]["message"]
 
@@ -876,6 +928,17 @@ class AgentRuntime:
         try:
             from .model_resources import record_usage_global
             record_usage_global(model_id, result["input_tokens"], result["output_tokens"])
+        except Exception:
+            pass
+        # P0/P1: LLM 调用性能追踪
+        try:
+            from . import runtime_trace
+            runtime_trace.trace_llm_call(
+                model=model_id,
+                input_tokens=result["input_tokens"],
+                output_tokens=result["output_tokens"],
+                ttft_ms=call_ms, total_ms=call_ms,
+                status="ok", call_type="tools")
         except Exception:
             pass
         return result
@@ -1167,6 +1230,19 @@ class AgentRuntime:
         try:
             from .model_resources import record_usage_global
             record_usage_global(model_id, result["input_tokens"], result["output_tokens"])
+        except Exception:
+            pass
+        # P0/P1: LLM 调用性能追踪 (JSONL + SQLite 双写)
+        try:
+            from . import runtime_trace
+            total_ms = (_time.time() - start_time) * 1000
+            ttft_ms = ttft * 1000 if first_token_received else 0
+            runtime_trace.trace_llm_call(
+                model=model_id,
+                input_tokens=result["input_tokens"],
+                output_tokens=result["output_tokens"],
+                ttft_ms=ttft_ms, total_ms=total_ms,
+                status="ok", call_type="chat")
         except Exception:
             pass
         return result

@@ -58,6 +58,7 @@ MAPPING = {
     "lan_mesh/station_routes_worker.py": "02-station-core",
     "lan_mesh/singleton.py": "02-station-core",
     "lan_mesh/database.py": "02-station-core",
+    "lan_mesh/runtime_trace.py": "02-station-core",
     # 03-task-orchestration — 任务编排与 PM
     "lan_mesh/task.py": "03-task-orchestration",
     "lan_mesh/orchestrator.py": "03-task-orchestration",

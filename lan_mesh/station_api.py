@@ -64,6 +64,10 @@ def create_station_router(controller) -> APIRouter:
     db = controller.db
     state = controller.state
 
+    # P0/P1: 注入 Database 引用供运行时追踪双写 SQLite
+    from .runtime_trace import set_db as _trace_set_db
+    _trace_set_db(db)
+
     @router.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         """WebSocket 实时推送主机状态变更 + M5 事件总线事件。"""

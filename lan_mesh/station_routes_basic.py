@@ -564,4 +564,46 @@ def build_basic_routes(controller) -> APIRouter:
             "secretary_pid": remote_status.get("pid"),
         }
 
+    # ════════════════════════════════════════════════════════════
+    #  P0/P1: 运行时性能追踪端点
+    # ════════════════════════════════════════════════════════════
+
+    @router.get("/api/runtime/metrics")
+    async def runtime_metrics(hours: float = 1.0):
+        """P1: LLM 调用性能指标 (SQLite 聚合, 最近 N 小时)。
+
+        返回: 调用次数、平均/P99 延迟、Token 用量、按模型/状态拆分。
+        """
+        hours = max(0.1, min(hours, 168))  # 0.1h ~ 7d
+        return db.query_llm_metrics(hours=hours)
+
+    @router.get("/api/runtime/trace")
+    async def runtime_trace_log(limit: int = 50, type: str = ""):
+        """P0: 最近 JSONL 追踪记录 (子任务执行 + LLM 调用)。
+
+        Args:
+            limit: 返回条数 (上限 200)
+            type: 过滤类型 ("llm_call" / "subtask_end" / ""全部)
+        """
+        from .runtime_trace import read_trace_lines
+        limit = max(1, min(limit, 200))
+        return {"records": read_trace_lines(limit=limit, line_type=type)}
+
+    @router.get("/api/runtime/calls")
+    async def runtime_call_log(limit: int = 50):
+        """P1: LLM 调用明细 (SQLite 最近 N 条, 调试/排查用)。"""
+        limit = max(1, min(limit, 200))
+        return {"calls": db.query_llm_recent(limit=limit)}
+
+    @router.get("/api/runtime/stats")
+    async def runtime_stats(hours: float = 1.0):
+        """P0: JSONL 追踪统计 (子任务成功率、模型分布、错误 Top5)。
+
+        与 /api/runtime/metrics 互补: metrics 走 SQLite 审计表,
+        stats 走 JSONL 文件 (含子任务执行层数据)。
+        """
+        from .runtime_trace import trace_stats
+        hours = max(0.1, min(hours, 168))
+        return trace_stats(hours=hours)
+
     return router

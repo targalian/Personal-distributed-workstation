@@ -21,7 +21,7 @@ logger = get_logger("database")
 # 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
 # 迁移函数签名: (conn: sqlite3.Connection) -> None
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -102,12 +102,49 @@ def _migration_v4(conn: sqlite3.Connection):
         pass
 
 
+def _migration_v5(conn: sqlite3.Connection):
+    """迁移 v5: llm_call_log 审计表 (运行时 LLM 调用性能追踪)。
+
+    新库由 executescript 创建; 旧库走迁移保证幂等。
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS llm_call_log (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            call_type     TEXT NOT NULL DEFAULT 'chat',
+            model         TEXT NOT NULL DEFAULT '',
+            input_tokens  INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            ttft_ms       REAL NOT NULL DEFAULT 0,
+            total_ms      REAL NOT NULL DEFAULT 0,
+            status        TEXT NOT NULL DEFAULT 'ok',
+            task_id       TEXT NOT NULL DEFAULT '',
+            error         TEXT NOT NULL DEFAULT '',
+            created_at    REAL NOT NULL DEFAULT 0
+        )
+    """)
+    try:
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_llm_call_model_ts
+                ON llm_call_log(model, created_at)
+        """)
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_llm_call_status
+                ON llm_call_log(status, created_at)
+        """)
+    except sqlite3.OperationalError:
+        pass
+
+
 # 迁移注册表: version → 迁移函数
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
     2: _migration_v2,
     3: _migration_v3,
     4: _migration_v4,
+    5: _migration_v5,
 }
 
 
@@ -428,6 +465,26 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_checkpoint_task
                 ON graph_checkpoints(task_id, created_at);
+
+            -- P0/P1: LLM 调用审计表 (运行时性能追踪)
+            CREATE TABLE IF NOT EXISTS llm_call_log (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                call_type     TEXT NOT NULL DEFAULT 'chat',
+                model         TEXT NOT NULL DEFAULT '',
+                input_tokens  INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                ttft_ms       REAL NOT NULL DEFAULT 0,
+                total_ms      REAL NOT NULL DEFAULT 0,
+                status        TEXT NOT NULL DEFAULT 'ok',
+                task_id       TEXT NOT NULL DEFAULT '',
+                error         TEXT NOT NULL DEFAULT '',
+                created_at    REAL NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_llm_call_model_ts
+                ON llm_call_log(model, created_at);
+            CREATE INDEX IF NOT EXISTS idx_llm_call_status
+                ON llm_call_log(status, created_at);
         """)
         conn.commit()
 
@@ -1634,3 +1691,125 @@ class Database:
         conn = self._get_conn()
         conn.execute("DELETE FROM graph_checkpoints WHERE task_id = ?", (task_id,))
         conn.commit()
+
+    # ── P0/P1: LLM 调用审计 ─────────────────────────────────────
+
+    def insert_llm_call(self, call_type: str, model: str,
+                        input_tokens: int, output_tokens: int,
+                        ttft_ms: float, total_ms: float,
+                        status: str = "ok", task_id: str = "",
+                        error: str = "") -> None:
+        """写入一条 LLM 调用审计记录 (runtime_trace 双写入口)。"""
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO llm_call_log
+                (call_type, model, input_tokens, output_tokens,
+                 ttft_ms, total_ms, status, task_id, error, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (call_type, model, int(input_tokens), int(output_tokens),
+              float(ttft_ms), float(total_ms), status, task_id,
+              error[:500], time.time()))
+        conn.commit()
+
+    def query_llm_metrics(self, hours: float = 1.0) -> dict:
+        """聚合最近 N 小时的 LLM 调用指标 (供 /api/runtime/metrics 使用)。
+
+        Returns:
+            {
+                "window_hours": 1.0,
+                "total_calls": 47,
+                "avg_latency_ms": 3200,
+                "p99_latency_ms": 12000,
+                "avg_ttft_ms": 1200,
+                "total_input_tokens": 85000,
+                "total_output_tokens": 12000,
+                "by_model": {"qwen3.8-max": {"calls": 30, "tokens": 50000, "avg_ms": 2500}},
+                "by_status": {"ok": 45, "timeout": 2},
+                "recent_errors": [{"model": "...", "error": "...", "count": 3}],
+            }
+        """
+        conn = self._get_conn()
+        cutoff = time.time() - hours * 3600
+
+        # 总量 + 平均延迟
+        row = conn.execute("""
+            SELECT COUNT(*) AS total_calls,
+                   COALESCE(AVG(total_ms), 0) AS avg_latency_ms,
+                   COALESCE(AVG(ttft_ms), 0) AS avg_ttft_ms,
+                   COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS total_output_tokens
+            FROM llm_call_log WHERE created_at >= ?
+        """, (cutoff,)).fetchone()
+        total_calls = row["total_calls"]
+        avg_latency = row["avg_latency_ms"]
+        avg_ttft = row["avg_ttft_ms"]
+        total_in = row["total_input_tokens"]
+        total_out = row["total_output_tokens"]
+
+        # P99 延迟
+        p99_row = conn.execute("""
+            SELECT total_ms FROM llm_call_log
+            WHERE created_at >= ?
+            ORDER BY total_ms ASC
+        """, (cutoff,)).fetchall()
+        if p99_row:
+            idx = min(int(len(p99_row) * 0.99), len(p99_row) - 1)
+            p99_latency = p99_row[idx]["total_ms"]
+        else:
+            p99_latency = 0
+
+        # 按模型聚合
+        model_rows = conn.execute("""
+            SELECT model, COUNT(*) AS calls,
+                   COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens,
+                   COALESCE(AVG(total_ms), 0) AS avg_ms
+            FROM llm_call_log WHERE created_at >= ?
+            GROUP BY model ORDER BY calls DESC
+        """, (cutoff,)).fetchall()
+        by_model = {
+            r["model"]: {"calls": r["calls"], "tokens": r["tokens"],
+                         "avg_ms": round(r["avg_ms"], 1)}
+            for r in model_rows
+        }
+
+        # 按状态聚合
+        status_rows = conn.execute("""
+            SELECT status, COUNT(*) AS cnt
+            FROM llm_call_log WHERE created_at >= ?
+            GROUP BY status
+        """, (cutoff,)).fetchall()
+        by_status = {r["status"]: r["cnt"] for r in status_rows}
+
+        # 最近错误 Top5
+        err_rows = conn.execute("""
+            SELECT model, error, COUNT(*) AS cnt
+            FROM llm_call_log
+            WHERE created_at >= ? AND status != 'ok' AND error != ''
+            GROUP BY model, error ORDER BY cnt DESC LIMIT 5
+        """, (cutoff,)).fetchall()
+        recent_errors = [{"model": r["model"], "error": r["error"][:200],
+                          "count": r["cnt"]} for r in err_rows]
+
+        return {
+            "window_hours": hours,
+            "total_calls": total_calls,
+            "avg_latency_ms": round(avg_latency, 1),
+            "p99_latency_ms": round(p99_latency, 1),
+            "avg_ttft_ms": round(avg_ttft, 1),
+            "total_input_tokens": int(total_in),
+            "total_output_tokens": int(total_out),
+            "by_model": by_model,
+            "by_status": by_status,
+            "recent_errors": recent_errors,
+        }
+
+    def query_llm_recent(self, limit: int = 50) -> list[dict]:
+        """查询最近 N 条 LLM 调用明细 (供调试/排查)。"""
+        conn = self._get_conn()
+        rows = conn.execute("""
+            SELECT id, call_type, model, input_tokens, output_tokens,
+                   ttft_ms, total_ms, status, task_id, error, created_at
+            FROM llm_call_log
+            ORDER BY id DESC LIMIT ?
+        """, (int(limit),)).fetchall()
+        return [dict(r) for r in rows]
