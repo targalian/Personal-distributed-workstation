@@ -67,6 +67,10 @@ EVENT_TEMPLATES = {
     "resource_alert_low": "🔔 资源提醒 [{resource_id}] {message}",
     "resource_alert": "⚠️ 资源预警 [{resource_id}] {message}",
     "resource_alert_high": "🚨 资源紧急 [{resource_id}] {message}",
+    # iter-41: 任务停滞告警 (三档, 与资源预警对齐)
+    "task_stall_alert_low": "🕐 任务停滞提醒 [{task_id}] {message}",
+    "task_stall_alert": "⚠️ 任务停滞告警 [{task_id}] {message}",
+    "task_stall_alert_high": "🚨 任务停滞紧急 [{task_id}] {message}",
 }
 
 # 事件严重级别 → 决定是否推送（避免低优先级事件打扰）
@@ -91,6 +95,9 @@ EVENT_PRIORITY = {
     "resource_alert_low": "low",
     "resource_alert": "normal",
     "resource_alert_high": "high",
+    "task_stall_alert_low": "low",
+    "task_stall_alert": "normal",
+    "task_stall_alert_high": "high",
 }
 
 # 事件图标 (聚合消息时使用)

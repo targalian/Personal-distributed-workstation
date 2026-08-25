@@ -26,9 +26,9 @@
 - 表格: 按模型统计 (调用数降序) + 调用明细 50 条 + 子任务轨迹 30 条 (过滤 subtask_start 无终态记录)
 - 渲染函数: `refreshRuntime()` / `renderRuntimeMetrics()` / `renderRuntimeCalls()` / `renderRuntimeTrace()`
 
-**任务流总览 + 瀑布** (iter-38~40, P3):
+**任务流总览 + 瀑布** (iter-38~41, P3):
 - 数据源: `/api/runtime/task-flow-list` (最近任务阶段聚合总览) + `/api/runtime/task-flow?task_id=` (单任务瀑布)
-- 总览表 `loadTaskFlowList()` / `renderTaskFlowList()`: 任务(点击复制)/最新阶段徽章/状态/阶段数/总耗时/末活动/「瀑布」按钮 `jumpTaskFlow()` 自动填充并查询；状态列三态 ✅已收尾/🔄进行中/⚠️可能停滞 (iter-40 停滞检测: 未到终态且超 30 分钟无事件, 红色带空闲时长提示) + 顶部红色停滞告警横幅
+- 总览表 `loadTaskFlowList()` / `renderTaskFlowList()`: 任务(点击复制)/最新阶段徽章/状态/阶段数/总耗时/末活动/「瀑布」按钮 `jumpTaskFlow()` 自动填充并查询；状态列三态 ✅已收尾/🔄进行中/⚠️可能停滞 (iter-40 停滞检测: 未到终态且超 30 分钟无事件, 红色带空闲时长提示) + 顶部红色停滞告警横幅；iter-41 实时告警: `onStationEvent` 收 `task_stall_alert` 事件 → toast 提示停滞任务数+ID (Lv3 红色) + 自动调 `loadTaskFlowList()` 刷新总览表 (无需手动切 Tab)
 - 瀑布: `queryTaskFlow()` / `renderTaskFlow()` — 阶段徽章 + 详情 + 间隔(gap_ms) + 总耗时；空输入与未知任务均渲染占位提示；调用明细表任务列点击 `copyTaskId()` 复制
 
 **关键渲染函数**（改动时注意同步更新本文档）:
@@ -54,3 +54,4 @@
 | 2026-08-25 | iter-38 | 运行时 Tab 增任务流瀑布查询 (task_id → 生命周期阶段时间线)，UI-036 实测通过 |
 | 2026-08-26 | iter-39 | 运行时 Tab 增任务流总览表 (最近任务阶段聚合 + 一键查瀑布)，UI-037 实测通过 |
 | 2026-08-26 | iter-40 | 总览表增停滞检测 (状态列三态 + 红色告警横幅)，UI-038 实测通过 |
+| 2026-08-26 | iter-41 | 停滞告警实时推送 (WS task_stall_alert → toast + 总览表自动刷新)，UI-039 实测通过 |

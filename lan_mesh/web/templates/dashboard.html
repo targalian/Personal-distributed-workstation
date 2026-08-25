@@ -953,6 +953,13 @@ function onStationEvent(evt){
     if(t==='resource_config'){showToast('⚙️ 资源配置已热重载','ok');}
   }
   if(t==='version_upgrade_notice'){showUpgradeBanner(evt.data||{});}
+  if(t==='task_stall_alert'){
+    // iter-41: 任务停滞主动告警 — toast + 总览表实时刷新 (无需手动切 Tab)
+    const lv=(evt.data&&evt.data.max_level)||0;
+    const ids=(evt.data&&evt.data.tasks)||[];
+    showToast(`⚠️ ${evt.data.count||0} 个任务可能停滞${ids.length?': '+ids.join(', '):''}`,lv>=3?'err':'info');
+    if(typeof loadTaskFlowList==='function'){loadTaskFlowList();}
+  }
 }
 // S2: 版本升级提醒横幅 + 顶栏版本徽章
 async function loadVersionBadge(){

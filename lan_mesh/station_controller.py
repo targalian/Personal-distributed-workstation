@@ -277,6 +277,15 @@ class StationController:
         except Exception as e:
             logger.warning("模型资源管理初始化失败 (no-op): %s", e)
 
+        # iter-41: 任务停滞主动告警守护 (基于 task_flow 追踪, 异常不影响激活)
+        try:
+            from .runtime_trace import set_stall_bot_notify, start_stall_watcher
+            if self.bot_gateway:
+                set_stall_bot_notify(self.bot_gateway.notify)
+            start_stall_watcher(interval=60.0, stall_minutes=30.0)
+        except Exception as e:
+            logger.warning("任务停滞检测启动失败 (no-op): %s", e)
+
         # MCP 工具网关
         self.mcp_gateway = MCPGateway()
 

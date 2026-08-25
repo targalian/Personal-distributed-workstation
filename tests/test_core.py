@@ -2468,6 +2468,11 @@ class TestTaskFlowTrace:
         from lan_mesh import runtime_trace
         monkeypatch.setattr(runtime_trace, "_TRACE_DIR", tmp_path)
         monkeypatch.setattr(runtime_trace, "_TRACE_FILE", tmp_path / "trace.jsonl")
+        # iter-41: 停滞告警全局状态隔离 (防测试间互相污染)
+        monkeypatch.setattr(runtime_trace, "_stall_state", {})
+        monkeypatch.setattr(runtime_trace, "_stall_active", [])
+        monkeypatch.setattr(runtime_trace, "_stall_minutes", 30.0)
+        monkeypatch.setattr(runtime_trace, "_stall_bot_notify", None)
         return runtime_trace
 
     def _lines(self, rt):
@@ -2704,5 +2709,132 @@ class TestTaskFlowTrace:
         r2 = client.get("/api/runtime/task-flow-list",
                         params={"limit": 5, "stall_minutes": 9999})
         assert r2.json()["stall_minutes"] == 1440.0
+
+    # ── 任务停滞主动告警 (iter-41) ──
+
+    def _inject_old_task(self, rt, task_id, stage, idle_min):
+        """手写一条空闲 idle_min 分钟前的任务流事件 (绕过当前时间戳)。"""
+        import json as _json
+        import time as _t
+        rec = {"type": "task_flow", "task_id": task_id, "stage": stage,
+               "ts": _t.time() - idle_min * 60}
+        with open(rt._TRACE_FILE, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(rec) + "\n")
+
+    def test_stall_level_thresholds(self, rt):
+        """档位边界: 1/2/4 倍阈值 → Lv1/2/3; 无效阈值 → 0。"""
+        stall_ms = 30 * 60 * 1000
+        assert rt._stall_level(stall_ms * 1.5, stall_ms) == 1
+        assert rt._stall_level(stall_ms * 2, stall_ms) == 2
+        assert rt._stall_level(stall_ms * 3.9, stall_ms) == 2
+        assert rt._stall_level(stall_ms * 4, stall_ms) == 3
+        assert rt._stall_level(stall_ms * 10, 0) == 0
+
+    def test_check_stall_alerts_new_and_dedupe(self, rt):
+        """新停滞推送一次; 同档位重复检查不重推 (防刷屏)。"""
+        self._inject_old_task(rt, "task-stall-x", "pm:executing", 35)
+        pushed1 = rt.check_stall_alerts()
+        assert len(pushed1) == 1
+        assert pushed1[0]["task_id"] == "task-stall-x"
+        assert pushed1[0]["level"] == 1
+        # 第二轮: 仍停滞但档位未升 → 不重推; 活跃告警仍保留全量
+        pushed2 = rt.check_stall_alerts()
+        assert pushed2 == []
+        assert len(rt.active_stall_alerts()) == 1
+
+    def test_check_stall_alerts_level_upgrade(self, rt):
+        """空闲加深导致档位升级时重新推送 (Lv1 → Lv2 → Lv3)。"""
+        self._inject_old_task(rt, "task-up", "pm:executing", 35)
+        p1 = rt.check_stall_alerts()
+        assert p1[0]["level"] == 1
+        # 覆写事件时间: 空闲 65 分钟 (>2 倍阈值)
+        rt._TRACE_FILE.unlink()
+        self._inject_old_task(rt, "task-up", "pm:executing", 65)
+        p2 = rt.check_stall_alerts()
+        assert len(p2) == 1 and p2[0]["level"] == 2
+        # 空闲 4 倍以上 → Lv3
+        rt._TRACE_FILE.unlink()
+        self._inject_old_task(rt, "task-up", "pm:executing", 130)
+        p3 = rt.check_stall_alerts()
+        assert len(p3) == 1 and p3[0]["level"] == 3
+
+    def test_check_stall_alerts_recovery_clears_state(self, rt):
+        """任务恢复活动后清除档位, 再次停滞可重新告警。"""
+        self._inject_old_task(rt, "task-re", "pm:executing", 35)
+        assert len(rt.check_stall_alerts()) == 1
+        # 恢复: 写入一条当前时刻的新事件 → 不再停滞 → 状态清除
+        rt.trace_task_event("task-re", "subtask_result")
+        assert rt.check_stall_alerts() == []
+        assert "task-re" not in rt._stall_state
+        # 再次停滞 → 重新告警 (而非被去重吞掉)
+        rt._TRACE_FILE.unlink()
+        self._inject_old_task(rt, "task-re", "pm:executing", 40)
+        assert len(rt.check_stall_alerts()) == 1
+
+    def test_check_stall_alerts_done_never_alert(self, rt):
+        """已到终态的任务即使空闲很久也永不告警。"""
+        self._inject_old_task(rt, "task-done-x", "pm:completed", 500)
+        assert rt.check_stall_alerts() == []
+        assert rt.active_stall_alerts() == []
+
+    def test_check_stall_alerts_bot_notify(self, rt):
+        """Bot 推送回调按档位映射事件类型。"""
+        calls = []
+        rt.set_stall_bot_notify(lambda evt, data: calls.append((evt, data)))
+        self._inject_old_task(rt, "task-bot", "pm:executing", 35)
+        rt.check_stall_alerts()
+        assert len(calls) == 1
+        assert calls[0][0] == "task_stall_alert_low"
+        assert calls[0][1]["task_id"] == "task-bot"
+        # 回调异常不影响检查主流程 (异常隔离)
+        rt.set_stall_bot_notify(lambda evt, data: (_ for _ in ()).throw(RuntimeError("boom")))
+        rt._TRACE_FILE.unlink()
+        self._inject_old_task(rt, "task-bot2", "pm:executing", 130)
+        pushed = rt.check_stall_alerts()
+        assert len(pushed) == 1 and pushed[0]["level"] == 3
+
+    def test_stall_watcher_disabled_when_threshold_le_zero(self, rt):
+        """stall_minutes≤0 禁用检测: 不启动线程且检查无输出。"""
+        assert rt.start_stall_watcher(interval=60, stall_minutes=0) is False
+        assert rt.stall_watcher_status()["watching"] is False
+
+    def test_stall_alerts_endpoints(self, rt):
+        """GET/POST /api/runtime/task-stall-alerts 端点。"""
+        import types
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.station_api import create_station_router
+
+        class _Ctl:
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        ctl.db = None
+        ctl.state = types.SimpleNamespace(
+            ws_clients=set(), p2p_messages={}, shared_folder=None)
+        ctl.secretary_active = True
+
+        self._inject_old_task(rt, "task-ep", "pm:executing", 35)
+
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+
+        # 手动触发一轮检查 → 新推送 1 条
+        r = client.post("/api/runtime/task-stall-alerts/check")
+        assert r.status_code == 200
+        pushed = r.json()["pushed"]
+        assert len(pushed) == 1 and pushed[0]["task_id"] == "task-ep"
+
+        # 查询活跃告警 + 守护状态结构
+        r2 = client.get("/api/runtime/task-stall-alerts")
+        assert r2.status_code == 200
+        body = r2.json()
+        assert len(body["alerts"]) == 1
+        assert body["alerts"][0]["message"].startswith("已 ")
+        assert "watching" in body and "interval" in body
+        assert "stall_minutes" in body
 
 

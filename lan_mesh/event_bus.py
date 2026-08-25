@@ -10,6 +10,7 @@ station_api 在启动时装配 sink (经 asyncio 事件循环线程安全地
 - usage_reported   Worker 用量批次到达 Secretary
 - resource_alert   R7 到期/额度预警 (新推送)
 - resource_config  资源配置保存热重载
+- task_stall_alert iter-41 任务停滞告警 (新推/档位升级)
 - host_event       主机上线/离线 (预留)
 
 线程安全: publish 可从任意线程调用; sink 投递由 asyncio loop 兜底。

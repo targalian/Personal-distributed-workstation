@@ -635,4 +635,21 @@ def build_basic_routes(controller) -> APIRouter:
         return {"tasks": task_flow_overview(limit=limit, stall_minutes=stall_minutes),
                 "stall_minutes": stall_minutes}
 
+    @router.get("/api/runtime/task-stall-alerts")
+    async def runtime_task_stall_alerts():
+        """iter-41: 任务停滞主动告警 — 当前活跃告警 + 守护状态。
+
+        返回: {alerts: [{task_id, level, last_stage, last_label, idle_min, message}],
+               watching, interval, stall_minutes}
+        """
+        from .runtime_trace import active_stall_alerts, stall_watcher_status
+        status = stall_watcher_status()
+        return {"alerts": active_stall_alerts(), **status}
+
+    @router.post("/api/runtime/task-stall-alerts/check")
+    async def runtime_task_stall_check():
+        """iter-41: 手动触发一轮停滞检测 (返回新推送的告警)。"""
+        from .runtime_trace import check_stall_alerts
+        return {"pushed": check_stall_alerts()}
+
     return router

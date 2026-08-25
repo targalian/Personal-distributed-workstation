@@ -19,6 +19,8 @@ P1: SQLite llm_call_log 审计表 (via database.py)
 P3: Task Flow Trace 任务流全链路追踪 (iter-38)
     - 任务提交/PM 状态转换/子任务结果/交付 各阶段写 task_flow 记录
     - task_flow_waterfall() 按 task_id 聚合出瀑布时间线
+    - iter-40: task_flow_overview 停滞检测 (stalled/idle_ms)
+    - iter-41: check_stall_alerts 后台守护 — 停滞档位升级主动告警 (event_bus + Bot)
 
 线程安全: JSONL 追加写入使用 Lock 保护; SQLite 通过 Database 线程局部连接。
 """
@@ -27,7 +29,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .logger import get_logger
 
@@ -458,4 +460,158 @@ def trace_stats(hours: float = 1.0) -> dict:
             "success_rate": round(st_completed / st_total, 3) if st_total else 0,
         },
         "errors": errors,
+    }
+
+
+# ── 任务停滞主动告警 (iter-41) ───────────────────────────
+
+_stall_watcher: Optional[threading.Thread] = None
+_stall_stop_evt = threading.Event()
+_stall_interval = 60.0            # 后台检查周期 (秒)
+_stall_minutes = 30.0             # 停滞判定阈值 (分钟)
+_stall_state: dict[str, int] = {}      # task_id → 已推档位 (仅升级重推; 恢复清除)
+_stall_active: list[dict] = []         # 最近一轮活跃停滞告警 (全量, 供 API/总览)
+_stall_bot_notify: Optional[Callable] = None  # Bot 推送回调 (可选注入)
+
+# 告警事件档位 → Bot 事件类型 (三档, 与资源预警对齐)
+_STALL_ALERT_EVENT = {1: "task_stall_alert_low", 2: "task_stall_alert",
+                      3: "task_stall_alert_high"}
+
+
+def _stall_level(idle_ms: float, stall_ms: float) -> int:
+    """停滞档位: 空闲达阈值 1 倍→Lv1, 2 倍→Lv2, 4 倍→Lv3。"""
+    if stall_ms <= 0:
+        return 0
+    ratio = idle_ms / stall_ms
+    if ratio >= 4:
+        return 3
+    if ratio >= 2:
+        return 2
+    return 1
+
+
+def set_stall_bot_notify(callback: Optional[Callable]) -> None:
+    """注入停滞告警 Bot 推送回调 fn(event_type, data); 未注入时仅日志+事件总线。"""
+    global _stall_bot_notify
+    _stall_bot_notify = callback
+
+
+def check_stall_alerts(now: float = None) -> list[dict]:
+    """执行一轮停滞告警检查: 仅新停滞/档位升级时推送 (防刷屏)。
+
+    任务恢复活动 (不再停滞) 后清除其档位记录, 再次停滞可重新告警。
+    已收尾 (终态) 任务永不告警。返回本轮新推送的告警。
+    """
+    global _stall_active
+    now = now if now is not None else time.time()
+    stall_ms = _stall_minutes * 60 * 1000
+    alerts: list[dict] = []
+    if stall_ms > 0:
+        try:
+            for r in task_flow_overview(limit=100,
+                                        stall_minutes=_stall_minutes):
+                if not r.get("stalled"):
+                    continue
+                lv = _stall_level(r["idle_ms"], stall_ms)
+                idle_min = r["idle_ms"] / 60000
+                alerts.append({
+                    "task_id": r["task_id"],
+                    "level": lv,
+                    "last_stage": r["last_stage"],
+                    "last_label": r["last_label"],
+                    "idle_min": round(idle_min, 1),
+                    "message": (f"已 {idle_min:.0f} 分钟无阶段事件, "
+                                f"末阶段 {r['last_label']}"),
+                })
+        except Exception as e:
+            logger.debug("[Trace] 停滞检查聚合失败: %s", e)
+    _stall_active = alerts
+    stalled_ids = {a["task_id"] for a in alerts}
+    # 恢复清理: 不再停滞的任务清除档位, 允许再次停滞时重新告警
+    for tid in list(_stall_state.keys()):
+        if tid not in stalled_ids:
+            del _stall_state[tid]
+    pushed: list[dict] = []
+    for a in alerts:
+        if a["level"] <= _stall_state.get(a["task_id"], 0):
+            continue
+        _stall_state[a["task_id"]] = a["level"]
+        pushed.append(a)
+        logger.warning("[Trace] 任务停滞告警 %s (Lv%d): %s",
+                       a["task_id"], a["level"], a["message"])
+        if _stall_bot_notify:
+            try:
+                _stall_bot_notify(
+                    _STALL_ALERT_EVENT.get(a["level"], "task_stall_alert"),
+                    {"task_id": a["task_id"], "message": a["message"]})
+            except Exception as e:
+                logger.warning("[Trace] 停滞告警推送失败: %s", e)
+    # M5: 事件总线实时推送 (Dashboard 总览表刷新 + toast)
+    if pushed:
+        try:
+            from .event_bus import publish_event
+            publish_event("task_stall_alert",
+                          {"count": len(pushed),
+                           "max_level": max(x["level"] for x in pushed),
+                           "tasks": [x["task_id"] for x in pushed][:5]})
+        except Exception:
+            pass
+    return pushed
+
+
+def start_stall_watcher(interval: float = 60.0,
+                        stall_minutes: float = 30.0) -> bool:
+    """启动停滞检测守护线程 (daemon, 异常隔离); 启动时立即检查一轮。
+
+    Args:
+        interval: 检查周期 (秒, 最小 10)
+        stall_minutes: 停滞阈值 (分钟); ≤0 禁用检测 (不启动线程)
+    """
+    global _stall_watcher, _stall_interval, _stall_minutes
+    if stall_minutes <= 0:
+        logger.info("[Trace] 停滞检测已禁用 (stall_minutes≤0)")
+        return False
+    _stall_interval = max(10.0, float(interval or 60.0))
+    _stall_minutes = float(stall_minutes)
+    if _stall_watcher is not None and _stall_watcher.is_alive():
+        return True
+    _stall_stop_evt.clear()
+
+    def _loop():
+        while not _stall_stop_evt.wait(_stall_interval):
+            try:
+                check_stall_alerts()
+            except Exception as e:
+                logger.debug("[Trace] 停滞检查轮次异常: %s", e)
+
+    _stall_watcher = threading.Thread(target=_loop, daemon=True,
+                                      name="task-stall-watcher")
+    _stall_watcher.start()
+    try:
+        check_stall_alerts()
+    except Exception as e:
+        logger.warning("[Trace] 首次停滞检查异常: %s", e)
+    logger.info("[Trace] 停滞检测已启动 (周期 %.0fs, 阈值 %.0f 分钟)",
+                _stall_interval, _stall_minutes)
+    return True
+
+
+def stop_stall_watcher() -> None:
+    """停止停滞检测守护线程 (幂等)。"""
+    global _stall_watcher
+    _stall_stop_evt.set()
+    _stall_watcher = None
+
+
+def active_stall_alerts() -> list[dict]:
+    """当前活跃停滞告警 (最近一轮全量, 未做档位去重)。"""
+    return list(_stall_active)
+
+
+def stall_watcher_status() -> dict:
+    """停滞检测守护状态 (API 展示用)。"""
+    return {
+        "watching": _stall_watcher is not None and _stall_watcher.is_alive(),
+        "interval": _stall_interval,
+        "stall_minutes": _stall_minutes,
     }
