@@ -2588,4 +2588,87 @@ class TestTaskFlowTrace:
         assert r3.status_code == 200
         assert r3.json()["stage_count"] == 0
 
+    # ── 任务流总览 (iter-39) ──
+
+    def test_overview_aggregates_by_task(self, rt):
+        """多任务事件聚合: 每任务一行, 末活动时间倒序。"""
+        import time as _t
+        rt.trace_task_event("task-old", "submitted")
+        rt.trace_task_event("task-old", "pm:executing")
+        _t.sleep(0.01)
+        rt.trace_task_event("task-new", "submitted")
+        rows = rt.task_flow_overview()
+        assert len(rows) == 2
+        # 末活动最新在前 (sleep 保证 task-new 的 ts 更大)
+        assert rows[0]["task_id"] == "task-new"
+        assert rows[0]["stage_count"] == 1
+        assert rows[0]["last_stage"] == "submitted"
+        assert rows[1]["task_id"] == "task-old"
+        assert rows[1]["stage_count"] == 2
+        assert rows[1]["last_stage"] == "pm:executing"
+        assert rows[1]["last_label"] == "PM 执行中"
+        assert rows[1]["total_ms"] >= 0
+
+    def test_overview_done_flag(self, rt):
+        """终态阶段 (完成/失败/取消/交付) 标记 done, 其余进行中。"""
+        rt.trace_task_event("task-done", "submitted")
+        rt.trace_task_event("task-done", "pm:completed")
+        rt.trace_task_event("task-run", "submitted")
+        rt.trace_task_event("task-run", "pm:executing")
+        rows = {r["task_id"]: r for r in rt.task_flow_overview()}
+        assert rows["task-done"]["done"] is True
+        assert rows["task-run"]["done"] is False
+
+    def test_overview_empty_and_limit(self, rt):
+        """无记录返回空列表; limit 裁剪生效。"""
+        assert rt.task_flow_overview() == []
+        for i in range(5):
+            rt.trace_task_event(f"task-{i}", "submitted")
+        rows = rt.task_flow_overview(limit=3)
+        assert len(rows) == 3
+
+    def test_overview_ignores_other_types(self, rt):
+        """非 task_flow 记录与空 task_id 不进入总览。"""
+        import json as _json
+        rt.trace_task_event("task-x", "submitted")
+        with open(rt._TRACE_FILE, "a", encoding="utf-8") as f:
+            f.write(_json.dumps({"type": "llm_call", "model": "m"}) + "\n")
+            f.write(_json.dumps({"type": "task_flow", "task_id": "", "stage": "submitted"}) + "\n")
+        rows = rt.task_flow_overview()
+        assert len(rows) == 1
+        assert rows[0]["task_id"] == "task-x"
+
+    def test_task_flow_list_endpoint(self, rt):
+        """GET /api/runtime/task-flow-list 端点: 200 + tasks 结构。"""
+        import types
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.station_api import create_station_router
+
+        class _Ctl:
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        ctl.db = None
+        ctl.state = types.SimpleNamespace(
+            ws_clients=set(), p2p_messages={}, shared_folder=None)
+        ctl.secretary_active = True
+
+        rt.trace_task_event("task-list-a", "submitted")
+        rt.trace_task_event("task-list-a", "delivered")
+
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+
+        r = client.get("/api/runtime/task-flow-list", params={"limit": 10})
+        assert r.status_code == 200
+        tasks = r.json()["tasks"]
+        assert len(tasks) == 1
+        assert tasks[0]["task_id"] == "task-list-a"
+        assert tasks[0]["done"] is True
+        assert tasks[0]["stage_count"] == 2
+
 

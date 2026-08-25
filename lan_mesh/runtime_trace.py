@@ -269,6 +269,68 @@ def task_flow_waterfall(task_id: str, limit: int = 200) -> dict:
     }
 
 
+# 终态阶段: 到达其一视为任务流已收尾 (供总览表状态判断)
+TASK_FLOW_TERMINAL_STAGES = frozenset({
+    "pm:completed", "pm:failed", "pm:cancelled", "delivered",
+})
+
+
+def task_flow_overview(limit: int = 20) -> list[dict]:
+    """任务流总览: 按任务聚合最近阶段事件, 末活动时间倒序。
+
+    用于总览表一眼看清哪些任务在跑/已收尾/可能停滞。
+    最多回溯 5000 行。
+
+    Returns:
+        [{"task_id", "first_ts", "last_ts", "stage_count",
+          "last_stage", "last_label", "total_ms", "done"}, ...]
+    """
+    if not _TRACE_FILE.is_file():
+        return []
+    agg: dict[str, dict] = {}
+    try:
+        with open(_TRACE_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()[-5000:]
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if rec.get("type") != "task_flow":
+                continue
+            tid = rec.get("task_id", "")
+            if not tid:
+                continue
+            ts = float(rec.get("ts", 0) or 0)
+            stage = rec.get("stage", "")
+            cur = agg.get(tid)
+            if cur is None:
+                agg[tid] = {
+                    "task_id": tid, "first_ts": ts, "last_ts": ts,
+                    "stage_count": 1, "last_stage": stage,
+                }
+            else:
+                cur["stage_count"] += 1
+                if ts < cur["first_ts"]:
+                    cur["first_ts"] = ts
+                if ts >= cur["last_ts"]:
+                    cur["last_ts"] = ts
+                    cur["last_stage"] = stage
+    except Exception as e:
+        logger.debug("[Trace] task_flow 总览聚合失败: %s", e)
+    rows = []
+    for cur in agg.values():
+        cur["last_label"] = TASK_STAGE_LABELS.get(cur["last_stage"], cur["last_stage"])
+        cur["total_ms"] = round((cur["last_ts"] - cur["first_ts"]) * 1000, 1)
+        cur["done"] = cur["last_stage"] in TASK_FLOW_TERMINAL_STAGES
+        rows.append(cur)
+    rows.sort(key=lambda r: r["last_ts"], reverse=True)
+    return rows[:max(1, limit)]
+
+
 # ── 读取与分析 ─────────────────────────────────────────────────
 
 def read_trace_lines(limit: int = 100, line_type: str = "") -> list[dict]:

@@ -733,6 +733,8 @@
   <div id="runtime-call-table" style="overflow-x:auto"><div class="empty"><p>暂无数据</p></div></div>
   <div class="stitle">🧵 子任务轨迹 (最近 30 条)</div>
   <div id="runtime-trace-list"><div class="empty"><p>暂无数据</p></div></div>
+  <div class="stitle">📋 任务流总览 (最近任务)</div>
+  <div id="taskflow-list" style="overflow-x:auto"><div class="empty"><p>加载中...</p></div></div>
   <div class="stitle">🔍 任务流瀑布 (Task Flow)</div>
   <div class="toolbar" style="padding:0 0 10px">
     <input type="text" id="taskflow-id" placeholder="输入 task_id, 如 task-xxxxxxxxxxxx" style="flex:1;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:13px" onkeydown="if(event.key==='Enter')queryTaskFlow()">
@@ -2815,6 +2817,37 @@ async function refreshRuntime(){
     console.error('运行时性能加载失败:',e);
     document.getElementById('runtime-stat-cards').innerHTML='<div class="empty" style="grid-column:1/-1"><p>加载失败: '+esc(e.message)+'</p></div>';
   }
+  loadTaskFlowList();
+}
+async function loadTaskFlowList(){
+  const box=document.getElementById('taskflow-list');
+  try{
+    const r=await apiFetch('/api/runtime/task-flow-list?limit=20');
+    if(!r.ok){box.innerHTML='<div class="empty"><p>加载失败: '+r.status+'</p></div>';return;}
+    const d=await r.json();
+    renderTaskFlowList((d.tasks)||[]);
+  }catch(e){
+    console.error('任务流总览加载失败:',e);
+    box.innerHTML='<div class="empty"><p>加载失败: '+esc(e.message)+'</p></div>';
+  }
+}
+function renderTaskFlowList(tasks){
+  const box=document.getElementById('taskflow-list');
+  if(!tasks.length){box.innerHTML='<div class="empty"><p>暂无任务流记录</p><p class="hint">任务提交/执行/交付的阶段事件会自动记录于此</p></div>';return;}
+  box.innerHTML=`<table class="fleet-table"><thead><tr><th>任务</th><th>最新阶段</th><th>状态</th><th>阶段数</th><th>总耗时</th><th>末活动</th><th>操作</th></tr></thead><tbody>`+
+    tasks.map(t=>`<tr>
+      <td><span style="cursor:pointer;color:var(--accent)" title="点击复制: ${esc(t.task_id)}" onclick="copyTaskId('${esc(t.task_id)}')">${esc(t.task_id)}</span></td>
+      <td><span style="background:rgba(91,140,255,.12);color:var(--accent);padding:2px 10px;border-radius:12px;font-size:12px;font-weight:700">${esc(t.last_label||t.last_stage)}</span></td>
+      <td>${t.done?'<span style="color:#4ade80;font-weight:700">✅ 已收尾</span>':'<span style="color:#ffa94d;font-weight:700">🔄 进行中</span>'}</td>
+      <td>${t.stage_count}</td>
+      <td>${_rtFmtMs(t.total_ms)}</td>
+      <td style="white-space:nowrap">${_rtFmtTs(t.last_ts)}</td>
+      <td><button class="btn" style="padding:2px 10px;font-size:12px" onclick="jumpTaskFlow('${esc(t.task_id)}')">瀑布</button></td>
+    </tr>`).join('')+`</tbody></table>`;
+}
+function jumpTaskFlow(tid){
+  document.getElementById('taskflow-id').value=tid;
+  queryTaskFlow();
 }
 function renderRuntimeMetrics(m){
   document.getElementById('runtime-window-info').textContent=`窗口: ${m.window_hours||0}h · ${new Date().toLocaleTimeString()}`;

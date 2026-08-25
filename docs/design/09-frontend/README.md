@@ -26,10 +26,10 @@
 - 表格: 按模型统计 (调用数降序) + 调用明细 50 条 + 子任务轨迹 30 条 (过滤 subtask_start 无终态记录)
 - 渲染函数: `refreshRuntime()` / `renderRuntimeMetrics()` / `renderRuntimeCalls()` / `renderRuntimeTrace()`
 
-**任务流瀑布** (iter-38, P3):
-- 数据源: `/api/runtime/task-flow?task_id=` (JSONL task_flow 事件按任务聚合)
-- 交互: 输入 task_id 查询全链路时间线；调用明细表任务列点击 `copyTaskId()` 复制
-- 渲染: `queryTaskFlow()` / `renderTaskFlow()` — 阶段徽章 + 详情 + 间隔(gap_ms) + 总耗时；空输入与未知任务均渲染占位提示
+**任务流总览 + 瀑布** (iter-38/39, P3):
+- 数据源: `/api/runtime/task-flow-list` (最近任务阶段聚合总览) + `/api/runtime/task-flow?task_id=` (单任务瀑布)
+- 总览表 `loadTaskFlowList()` / `renderTaskFlowList()`: 任务(点击复制)/最新阶段徽章/状态(✅已收尾/🔄进行中)/阶段数/总耗时/末活动/「瀑布」按钮 `jumpTaskFlow()` 自动填充并查询
+- 瀑布: `queryTaskFlow()` / `renderTaskFlow()` — 阶段徽章 + 详情 + 间隔(gap_ms) + 总耗时；空输入与未知任务均渲染占位提示；调用明细表任务列点击 `copyTaskId()` 复制
 
 **关键渲染函数**（改动时注意同步更新本文档）:
 - `renderHosts()`: 主机卡片 + 统计行（含版本分布 `vMap`/`vTxt`，
@@ -52,3 +52,4 @@
 | 2026-08-16 | iter-27 后 | 初建；收录 S2/S3 版本统计 UI |
 | 2026-08-25 | iter-37 | 新增 📈 运行时性能 Tab (指标卡/按模型统计/调用明细/子任务轨迹)，UI-035 实测通过 |
 | 2026-08-25 | iter-38 | 运行时 Tab 增任务流瀑布查询 (task_id → 生命周期阶段时间线)，UI-036 实测通过 |
+| 2026-08-26 | iter-39 | 运行时 Tab 增任务流总览表 (最近任务阶段聚合 + 一键查瀑布)，UI-037 实测通过 |
