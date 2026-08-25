@@ -606,4 +606,17 @@ def build_basic_routes(controller) -> APIRouter:
         hours = max(0.1, min(hours, 168))
         return trace_stats(hours=hours)
 
+    @router.get("/api/runtime/task-flow")
+    async def runtime_task_flow(task_id: str, limit: int = 200):
+        """P3: 任务流瀑布 — 按 task_id 聚合生命周期阶段时间线。
+
+        返回: 各阶段事件 (提交/规划/执行/子任务结果/交付/失败)
+        + 阶段间隔 (gap_ms) + 总耗时。
+        """
+        from .runtime_trace import task_flow_waterfall
+        if not task_id or len(task_id) > 64:
+            raise HTTPException(status_code=400, detail="task_id 必填且不超过 64 字符")
+        limit = max(1, min(limit, 500))
+        return task_flow_waterfall(task_id, limit=limit)
+
     return router

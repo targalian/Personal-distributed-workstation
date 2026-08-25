@@ -30,6 +30,7 @@ class ProjectManagerAgent:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._progress_thread: Optional[threading.Thread] = None
+        self._task_id = ""  # P3: 当前任务 ID, 供任务流追踪归因
 
         # ── 共享状态 ──
         self._state = PMState()
@@ -86,6 +87,7 @@ class ProjectManagerAgent:
     def _run_task(self, task: dict):
         st = self._state
         st.start_time = time.time()
+        self._task_id = (task or {}).get("task_id", "")
         try:
             if self._monitor.is_global_timed_out():
                 raise TimeoutError(f"全局任务超时 ({st.global_timeout}s)")
@@ -177,6 +179,14 @@ class ProjectManagerAgent:
             "output": output_data,
             "message": f"子任务 {task_name} {status}",
         }
+        # P3: 任务流追踪 — 子任务结果阶段点 (异常静默)
+        try:
+            from . import runtime_trace
+            runtime_trace.trace_task_event(
+                self._task_id, "subtask_result",
+                detail=f"{task_name} → {status}", pm_id=self.pm_id)
+        except Exception:
+            pass
         self._monitor.receive_progress_report(report)
 
     def receive_input(self, input_data: dict):
@@ -230,6 +240,19 @@ class ProjectManagerAgent:
 
     def report_status(self, status: str, team_structure: dict = None,
                       task_list: list = None, collaboration_mode: str = None):
+        # P3: 任务流追踪 — 所有生命周期状态必经此出口 (异常静默)
+        try:
+            from . import runtime_trace
+            detail_parts = []
+            if collaboration_mode:
+                detail_parts.append(f"模式={collaboration_mode}")
+            if task_list:
+                detail_parts.append(f"子任务={len(task_list)}")
+            runtime_trace.trace_task_event(
+                self._task_id, f"pm:{status}",
+                detail=", ".join(detail_parts), pm_id=self.pm_id)
+        except Exception:
+            pass
         try:
             payload = {"status": status}
             if team_structure is not None:
@@ -342,6 +365,15 @@ class ProjectManagerAgent:
             },
             "delivered_at": time.time(),
         }
+
+        # P3: 任务流追踪 — 交付阶段点 (异常静默)
+        try:
+            from . import runtime_trace
+            runtime_trace.trace_task_event(
+                self._task_id, "delivered",
+                detail=f"{completed_count}/{total_count} 子任务完成", pm_id=self.pm_id)
+        except Exception:
+            pass
 
         try:
             resp = http_post(

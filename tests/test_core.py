@@ -2457,3 +2457,135 @@ class TestSingleInstance:
         self._seed(lock, pid=9999)
         assert sg.ensure_single_instance(45470, "c2", 200.0) == "proceed"
         assert not killed
+
+
+class TestTaskFlowTrace:
+    """P3 Task Flow Trace: 任务流阶段事件写入/读取/瀑布聚合 (iter-38)。"""
+
+    @pytest.fixture
+    def rt(self, monkeypatch, tmp_path):
+        """将 JSONL 追踪文件重定向到临时目录, 避免污染真实 ~/.lan_mesh。"""
+        from lan_mesh import runtime_trace
+        monkeypatch.setattr(runtime_trace, "_TRACE_DIR", tmp_path)
+        monkeypatch.setattr(runtime_trace, "_TRACE_FILE", tmp_path / "trace.jsonl")
+        return runtime_trace
+
+    def _lines(self, rt):
+        f = rt._TRACE_FILE
+        if not f.is_file():
+            return []
+        import json as _json
+        return [_json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    def test_event_written(self, rt):
+        rt.trace_task_event("task-a", "submitted", detail="测试任务", pm_id="pm-1")
+        rows = self._lines(rt)
+        assert len(rows) == 1
+        rec = rows[0]
+        assert rec["type"] == "task_flow"
+        assert rec["task_id"] == "task-a"
+        assert rec["stage"] == "submitted"
+        assert rec["detail"] == "测试任务"
+        assert rec["pm_id"] == "pm-1"
+        assert rec["ts"] > 0
+
+    def test_empty_task_id_skipped(self, rt):
+        rt.trace_task_event("", "submitted")
+        assert self._lines(rt) == []
+
+    def test_detail_truncated(self, rt):
+        rt.trace_task_event("task-a", "pm:planning", detail="长" * 500)
+        assert len(self._lines(rt)[0]["detail"]) == 200
+
+    def test_read_filters_task_and_type(self, rt):
+        rt.trace_task_event("task-a", "submitted")
+        rt.trace_task_event("task-b", "submitted")
+        rt.trace_task_event("task-a", "pm:planning")
+        rt.trace_llm_call("m", 10, 20, 1.0, 2.0)  # 异类型记录不干扰 (db 未注入跳过 sqlite)
+        events = rt.read_task_flow("task-a")
+        assert [e["stage"] for e in events] == ["submitted", "pm:planning"]
+
+    def test_read_sorted_and_limit(self, rt):
+        # 乱序写入 (模拟多线程先后), 读取应按时间正序且受 limit 约束取尾部
+        rt.trace_task_event("task-a", "pm:completed")
+        import time as _t; _t.sleep(0.01)
+        rt.trace_task_event("task-a", "submitted")
+        events = rt.read_task_flow("task-a")
+        assert events[0]["ts"] <= events[1]["ts"]
+        limited = rt.read_task_flow("task-a", limit=1)
+        assert len(limited) == 1
+        assert limited[0]["stage"] == "submitted"  # 取最新一条 (尾裁)
+
+    def test_waterfall_structure(self, rt):
+        rt.trace_task_event("task-a", "submitted", detail="提效任务")
+        rt.trace_task_event("task-a", "pm:planning", pm_id="pm-1")
+        rt.trace_task_event("task-a", "pm:completed")
+        flow = rt.task_flow_waterfall("task-a")
+        assert flow["task_id"] == "task-a"
+        assert flow["stage_count"] == 3
+        labels = [e["label"] for e in flow["events"]]
+        assert labels == ["任务提交", "PM 规划中", "任务完成"]
+        assert flow["events"][0]["gap_ms"] == 0
+        assert flow["total_ms"] >= 0
+
+    def test_waterfall_empty_task(self, rt):
+        flow = rt.task_flow_waterfall("task-none")
+        assert flow["stage_count"] == 0
+        assert flow["events"] == []
+        assert flow["total_ms"] == 0
+
+    def test_pm_report_status_hook(self, rt):
+        """PM report_status 必经出口写任务流事件 (HTTP 失败不影响追踪)。"""
+        from lan_mesh.pm_agent import ProjectManagerAgent
+        pm = ProjectManagerAgent("pm-test-0001", None, "http://127.0.0.1:1", "dev-1")
+        pm._task_id = "task-hook"
+        pm.report_status("planning", collaboration_mode="single", task_list=[{"name": "a"}])
+        events = rt.read_task_flow("task-hook")
+        assert len(events) == 1
+        assert events[0]["stage"] == "pm:planning"
+        assert "模式=single" in events[0]["detail"]
+        assert "子任务=1" in events[0]["detail"]
+        assert events[0]["pm_id"] == "pm-test-0001"
+
+    def test_task_flow_endpoint(self, rt):
+        """GET /api/runtime/task-flow 端点: 正常返回/超长 task_id 400/未知任务空。"""
+        import types
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.station_api import create_station_router
+
+        class _Ctl:
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        ctl.db = None
+        ctl.state = types.SimpleNamespace(
+            ws_clients=set(), p2p_messages={}, shared_folder=None)
+        ctl.secretary_active = True
+
+        rt.trace_task_event("task-ep", "submitted", detail="端点测试")
+        rt.trace_task_event("task-ep", "pm:completed")
+
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+
+        r = client.get("/api/runtime/task-flow", params={"task_id": "task-ep"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["stage_count"] == 2
+        assert body["events"][0]["label"] == "任务提交"
+        assert body["total_ms"] >= 0
+
+        # 超长 task_id → 400
+        r2 = client.get("/api/runtime/task-flow", params={"task_id": "x" * 100})
+        assert r2.status_code == 400
+
+        # 未知任务 → 200 + 空事件列表 (不报错)
+        r3 = client.get("/api/runtime/task-flow", params={"task_id": "task-none"})
+        assert r3.status_code == 200
+        assert r3.json()["stage_count"] == 0
+
+

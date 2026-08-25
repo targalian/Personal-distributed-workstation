@@ -100,6 +100,14 @@ def build_task_routes(controller) -> APIRouter:
         controller.bot_gateway.notify("task_submitted", {
             "name": task.name, "task_id": task.task_id[:8],
         })
+        # P3: 任务流追踪 — 提交阶段点 (异常静默)
+        try:
+            from . import runtime_trace
+            runtime_trace.trace_task_event(
+                task.task_id, "submitted",
+                detail=f"{task.name} (created_by={task.created_by})")
+        except Exception:
+            pass
 
         # 2. 选择合适的 work_station (按评级排序, 取在线最高评级)
         from .protocol import PMAgent

@@ -566,6 +566,14 @@ class StationController:
         logger.info("对话提交任务: %s (%s) 优先级=%s", task.task_id, name, priority)
         # WS 广播: 通知前端任务面板刷新
         self._queue_ws_broadcast("task_submitted", task.to_dict())
+        # P3: 任务流追踪 — 提交阶段点 (异常静默)
+        try:
+            from . import runtime_trace
+            runtime_trace.trace_task_event(
+                task.task_id, "submitted",
+                detail=f"{name} (created_by={created_by}, 优先级={priority})")
+        except Exception:
+            pass
 
         # 选择在线 work_station (优化13: 评级 + 负载感知)
         hosts = self.db.list_hosts()

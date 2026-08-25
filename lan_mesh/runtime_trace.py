@@ -16,6 +16,10 @@ P1: SQLite llm_call_log 审计表 (via database.py)
         → _call_openai_compatible() / _call_openai_with_tools()
             → trace_llm_call()  (同时写 JSONL + SQLite)
 
+P3: Task Flow Trace 任务流全链路追踪 (iter-38)
+    - 任务提交/PM 状态转换/子任务结果/交付 各阶段写 task_flow 记录
+    - task_flow_waterfall() 按 task_id 聚合出瀑布时间线
+
 线程安全: JSONL 追加写入使用 Lock 保护; SQLite 通过 Database 线程局部连接。
 """
 import json
@@ -157,6 +161,112 @@ def _write_sqlite(record: dict) -> None:
         )
     except Exception as e:
         logger.debug("[Trace] SQLite 写入失败: %s", e)
+
+
+# ── 任务流追踪 (P3: Task Flow Trace) ─────────────────────
+
+# 任务生命周期阶段 → 展示名映射 (供瀑布图渲染)
+TASK_STAGE_LABELS: dict[str, str] = {
+    "submitted": "任务提交",
+    "pm:planning": "PM 规划中",
+    "pm:executing": "PM 执行中",
+    "pm:monitoring": "PM 监控中",
+    "pm:awaiting_input": "等待 Boss 决策",
+    "pm:completed": "任务完成",
+    "pm:failed": "任务失败",
+    "pm:cancelled": "任务取消",
+    "pm:paused": "任务暂停",
+    "subtask_result": "子任务结果",
+    "delivered": "交付上报",
+}
+
+
+def trace_task_event(task_id: str, stage: str, detail: str = "",
+                     pm_id: str = "") -> None:
+    """记录一条任务流阶段事件 (P3 Task Flow Trace, 异常静默)。
+
+    Args:
+        task_id: 任务 ID (空则不写)
+        stage: 阶段标识 (submitted / pm:<status> / subtask_result / delivered)
+        detail: 阶段补充说明 (截断 200 字)
+        pm_id: 关联 PM Agent ID (可空)
+    """
+    if not task_id:
+        return
+    try:
+        record = {
+            "type": "task_flow",
+            "task_id": task_id,
+            "stage": stage,
+            "detail": (detail or "")[:200],
+            "pm_id": pm_id,
+            "ts": time.time(),
+        }
+        _write_jsonl(record)
+    except Exception as e:
+        logger.debug("[Trace] task_flow 写入失败: %s", e)
+
+
+def read_task_flow(task_id: str, limit: int = 200) -> list[dict]:
+    """按时间正序读取指定任务的阶段事件 (最多回溯 5000 行)。"""
+    if not task_id or not _TRACE_FILE.is_file():
+        return []
+    events: list[dict] = []
+    try:
+        with open(_TRACE_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()[-5000:]
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if rec.get("type") != "task_flow":
+                continue
+            if rec.get("task_id") != task_id:
+                continue
+            events.append(rec)
+    except Exception as e:
+        logger.debug("[Trace] task_flow 读取失败: %s", e)
+    events.sort(key=lambda r: r.get("ts", 0))
+    return events[-limit:]
+
+
+def task_flow_waterfall(task_id: str, limit: int = 200) -> dict:
+    """聚合任务流瀑布: 事件按时间排序, 附每阶段距上一步的间隔与总耗时。
+
+    Returns:
+        {
+            "task_id": "...",
+            "events": [{"stage", "label", "detail", "pm_id", "ts", "gap_ms"}, ...],
+            "total_ms": 12345.6,
+            "stage_count": 6,
+        }
+    """
+    events = read_task_flow(task_id, limit=limit)
+    rows: list[dict] = []
+    prev_ts = 0.0
+    for rec in events:
+        ts = float(rec.get("ts", 0) or 0)
+        stage = rec.get("stage", "")
+        rows.append({
+            "stage": stage,
+            "label": TASK_STAGE_LABELS.get(stage, stage),
+            "detail": rec.get("detail", ""),
+            "pm_id": rec.get("pm_id", ""),
+            "ts": ts,
+            "gap_ms": round((ts - prev_ts) * 1000, 1) if prev_ts else 0,
+        })
+        prev_ts = ts
+    total_ms = round((rows[-1]["ts"] - rows[0]["ts"]) * 1000, 1) if len(rows) > 1 else 0
+    return {
+        "task_id": task_id,
+        "events": rows,
+        "total_ms": total_ms,
+        "stage_count": len(rows),
+    }
 
 
 # ── 读取与分析 ─────────────────────────────────────────────────

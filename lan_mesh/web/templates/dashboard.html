@@ -733,6 +733,12 @@
   <div id="runtime-call-table" style="overflow-x:auto"><div class="empty"><p>暂无数据</p></div></div>
   <div class="stitle">🧵 子任务轨迹 (最近 30 条)</div>
   <div id="runtime-trace-list"><div class="empty"><p>暂无数据</p></div></div>
+  <div class="stitle">🔍 任务流瀑布 (Task Flow)</div>
+  <div class="toolbar" style="padding:0 0 10px">
+    <input type="text" id="taskflow-id" placeholder="输入 task_id, 如 task-xxxxxxxxxxxx" style="flex:1;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:13px" onkeydown="if(event.key==='Enter')queryTaskFlow()">
+    <button class="btn primary" onclick="queryTaskFlow()">🔍 查询瀑布</button>
+  </div>
+  <div id="taskflow-box"><div class="empty"><div class="icon">🔍</div><p>输入 task_id 查看任务全链路时间线</p><p class="hint">可在调用明细表的任务列复制 task_id</p></div></div>
 </div>
 
 <!-- 通用详情弹窗 -->
@@ -2845,7 +2851,7 @@ function renderRuntimeCalls(calls){
       <td>${_rtFmtMs(c.ttft_ms)}</td>
       <td>${_rtFmtMs(c.total_ms)}</td>
       <td>${_rtStatusBadge(c.status)}</td>
-      <td title="${esc(c.task_id||'')}">${esc((c.task_id||'').slice(0,8))||'—'}</td>
+      <td>${c.task_id?`<span style="cursor:pointer;color:var(--accent)" title="点击复制: ${esc(c.task_id)}" onclick="copyTaskId('${esc(c.task_id)}')">${esc((c.task_id).slice(0,8))}</span>`:'—'}</td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(c.error||'')}">${esc(c.error||'')}</td>
     </tr>`).join('')+`</tbody></table>`;
 }
@@ -2869,6 +2875,38 @@ function renderRuntimeTrace(records){
         <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(note)}">${esc(note)}</td>
       </tr>`;
     }).join('')+`</tbody></table>`;
+}
+
+function copyTaskId(id){
+  navigator.clipboard.writeText(id).then(()=>showToast('已复制 '+id,'ok')).catch(()=>showToast('复制失败','err'));
+}
+async function queryTaskFlow(){
+  const tid=document.getElementById('taskflow-id').value.trim();
+  const box=document.getElementById('taskflow-box');
+  if(!tid){box.innerHTML='<div class="empty"><p>请输入 task_id</p></div>';return;}
+  try{
+    const r=await apiFetch('/api/runtime/task-flow?task_id='+encodeURIComponent(tid));
+    if(!r.ok){const d=await r.json().catch(()=>({}));box.innerHTML='<div class="empty"><p>查询失败: '+esc(d.detail||r.status)+'</p></div>';return;}
+    const flow=await r.json();
+    renderTaskFlow(flow);
+  }catch(e){
+    console.error('任务流查询失败:',e);
+    box.innerHTML='<div class="empty"><p>查询失败: '+esc(e.message)+'</p></div>';
+  }
+}
+function renderTaskFlow(flow){
+  const box=document.getElementById('taskflow-box');
+  if(!flow.events||!flow.events.length){
+    box.innerHTML='<div class="empty"><p>该任务无追踪记录</p><p class="hint">仅记录启用追踪后发生的阶段事件 (追溯 5000 行)</p></div>';return;
+  }
+  const stageColor={submitted:'var(--accent)','pm:planning':'#ffa94d','pm:executing':'#4ade80','pm:monitoring':'#4ade80','pm:completed':'#4ade80','pm:failed':'#ff6b6b','pm:cancelled':'#ff6b6b','pm:paused':'#ffa94d','pm:awaiting_input':'#ffa94d',subtask_result:'#74c0fc',delivered:'#4ade80'};
+  box.innerHTML=`<div style="font-size:12px;color:var(--dim);margin-bottom:10px">共 ${flow.stage_count} 个阶段 · 总耗时 <b style="color:var(--text)">${_rtFmtMs(flow.total_ms)}</b></div>`+
+    flow.events.map(e=>`<div style="display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <span style="color:var(--dim);white-space:nowrap;min-width:110px">${_rtFmtTs(e.ts)}</span>
+      <span style="background:rgba(91,140,255,.12);color:${stageColor[e.stage]||'var(--accent)'};padding:2px 10px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap;height:fit-content">${esc(e.label)}</span>
+      <span style="color:var(--dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.detail||'')}">${esc(e.detail||'')}</span>
+      ${e.gap_ms?`<span style="color:var(--dim);white-space:nowrap;font-size:12px" title="距上一阶段">+${_rtFmtMs(e.gap_ms)}</span>`:''}
+    </div>`).join('');
 }
 
 // ── 初始化 ──
