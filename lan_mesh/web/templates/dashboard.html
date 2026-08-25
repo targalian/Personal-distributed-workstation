@@ -337,6 +337,7 @@
   <div class="tab secretary-tab" data-tab="resources" style="display:none">💰 模型资源</div>
   <div class="tab" data-tab="bot">📱 手机通道</div>
   <div class="tab" data-tab="p2p">📡 主机通讯</div>
+  <div class="tab" data-tab="runtime">📈 运行时性能</div>
 </div>
 
 <!-- 移动端底部导航 -->
@@ -350,6 +351,7 @@
   <div class="mobile-nav-item secretary-tab" data-tab="resources" style="display:none"><span class="nav-icon">💰</span><span>资源</span></div>
   <div class="mobile-nav-item" data-tab="bot"><span class="nav-icon">📱</span><span>手机</span></div>
   <div class="mobile-nav-item" data-tab="p2p"><span class="nav-icon">📡</span><span>通讯</span></div>
+  <div class="mobile-nav-item" data-tab="runtime"><span class="nav-icon">📈</span><span>性能</span></div>
 </div>
 
 <!-- 面板: 秘书对话 (多项目对话) -->
@@ -707,6 +709,32 @@
   </div>
 </div>
 
+<!-- 面板: 运行时性能 (P0/P1 追踪数据可视化) -->
+<div class="panel" id="panel-runtime">
+  <div class="toolbar">
+    <select id="runtime-hours" onchange="refreshRuntime()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:14px">
+      <option value="1" selected>最近 1 小时</option>
+      <option value="6">最近 6 小时</option>
+      <option value="24">最近 24 小时</option>
+      <option value="72">最近 3 天</option>
+      <option value="168">最近 7 天</option>
+    </select>
+    <button class="btn primary" onclick="withFeedback(this,refreshRuntime)">🔄 刷新</button>
+    <span style="margin-left:auto;font-size:13px;color:var(--dim)" id="runtime-window-info"></span>
+  </div>
+  <div class="stitle">📊 LLM 调用指标</div>
+  <div class="stat-cards" id="runtime-stat-cards">
+    <div class="empty" style="grid-column:1/-1"><p>加载中...</p></div>
+  </div>
+  <div id="runtime-errors"></div>
+  <div class="stitle">🧠 按模型统计</div>
+  <div id="runtime-model-table"><div class="empty"><p>暂无数据</p></div></div>
+  <div class="stitle">📝 调用明细 (最近 50 条)</div>
+  <div id="runtime-call-table" style="overflow-x:auto"><div class="empty"><p>暂无数据</p></div></div>
+  <div class="stitle">🧵 子任务轨迹 (最近 30 条)</div>
+  <div id="runtime-trace-list"><div class="empty"><p>暂无数据</p></div></div>
+</div>
+
 <!-- 通用详情弹窗 -->
 <div class="overlay" id="overlay" onclick="closeOverlay(event)">
   <div class="modal" id="modal"></div>
@@ -847,6 +875,7 @@ function switchTab(tab){
   if(tab==='bot')refreshBotChannels();
   if(tab==='p2p')refreshP2PHosts();
   if(tab==='chat')loadConversations();
+  if(tab==='runtime')refreshRuntime();
 }
 document.querySelectorAll('.tab').forEach(t=>{
   t.addEventListener('click',()=>switchTab(t.dataset.tab));
@@ -2747,6 +2776,99 @@ async function refreshDagTaskSelect(){
       sel.appendChild(opt);
     });
   }catch(e){}
+}
+
+// ── 运行时性能 Tab (P0/P1 追踪数据) ──
+function _rtFmtMs(ms){
+  if(ms==null||ms<=0)return '—';
+  return ms>=1000?(ms/1000).toFixed(2)+'s':Math.round(ms)+'ms';
+}
+function _rtFmtTs(ts){
+  if(!ts)return '—';
+  const d=new Date(ts*1000);
+  const p=n=>String(n).padStart(2,'0');
+  return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function _rtStatusBadge(st){
+  const map={ok:['rgba(74,222,128,.15)','#4ade80'],timeout:['rgba(255,169,77,.15)','#ffa94d'],error:['rgba(255,107,107,.15)','#ff6b6b'],failed:['rgba(255,107,107,.15)','#ff6b6b'],completed:['rgba(74,222,128,.15)','#4ade80']};
+  const c=map[st]||['rgba(91,140,255,.15)','var(--accent)'];
+  return `<span style="background:${c[0]};color:${c[1]};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700">${esc(st||'unknown')}</span>`;
+}
+async function refreshRuntime(){
+  const hours=document.getElementById('runtime-hours').value||'1';
+  try{
+    const [m,c,t]=await Promise.all([
+      apiFetch(`/api/runtime/metrics?hours=${hours}`).then(r=>r.json()),
+      apiFetch('/api/runtime/calls?limit=50').then(r=>r.json()),
+      apiFetch('/api/runtime/trace?limit=30').then(r=>r.json()),
+    ]);
+    renderRuntimeMetrics(m);
+    renderRuntimeCalls((c.calls)||[]);
+    renderRuntimeTrace((t.records)||[]);
+  }catch(e){
+    console.error('运行时性能加载失败:',e);
+    document.getElementById('runtime-stat-cards').innerHTML='<div class="empty" style="grid-column:1/-1"><p>加载失败: '+esc(e.message)+'</p></div>';
+  }
+}
+function renderRuntimeMetrics(m){
+  document.getElementById('runtime-window-info').textContent=`窗口: ${m.window_hours||0}h · ${new Date().toLocaleTimeString()}`;
+  const errCount=(m.by_status||{}).error||0;
+  const timeoutCount=(m.by_status||{}).timeout||0;
+  const tokenTotal=(m.total_input_tokens||0)+(m.total_output_tokens||0);
+  const card=(label,val,sub)=>`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">${label}</div><div style="font-size:22px;font-weight:700;margin-top:4px">${val}</div>${sub?`<div style="font-size:11px;color:var(--dim);margin-top:2px">${sub}</div>`:''}</div>`;
+  document.getElementById('runtime-stat-cards').innerHTML=
+    card('调用总数',m.total_calls||0,`异常 ${errCount} · 超时 ${timeoutCount}`)+
+    card('平均延迟',_rtFmtMs(m.avg_latency_ms),`P99: ${_rtFmtMs(m.p99_latency_ms)}`)+
+    card('平均 TTFT',_rtFmtMs(m.avg_ttft_ms),'首 token 延迟')+
+    card('Token 总量',tokenTotal.toLocaleString(),`入 ${(m.total_input_tokens||0).toLocaleString()} · 出 ${(m.total_output_tokens||0).toLocaleString()}`);
+  // 近期错误汇总 (红/橙横幅)
+  const errs=(m.recent_errors||[]);
+  document.getElementById('runtime-errors').innerHTML=errs.length?
+    `<div style="background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:10px 14px;margin:12px 0;font-size:12px">`+
+    errs.map(e=>`<div style="margin:2px 0">❌ <b>${esc(e.model||'')}</b> × ${e.count}: ${esc((e.error||'').slice(0,120))}</div>`).join('')+`</div>`:'';
+  // 按模型统计表
+  const models=Object.entries(m.by_model||{}).sort((a,b)=>b[1].calls-a[1].calls);
+  document.getElementById('runtime-model-table').innerHTML=models.length?
+    `<table class="fleet-table"><thead><tr><th>模型</th><th>调用数</th><th>Token</th><th>平均延迟</th></tr></thead><tbody>`+
+    models.map(([name,s])=>`<tr><td><b>${esc(name)}</b></td><td>${s.calls}</td><td>${(s.tokens||0).toLocaleString()}</td><td>${_rtFmtMs(s.avg_ms)}</td></tr>`).join('')+
+    `</tbody></table>`:'<div class="empty"><p>窗口内无调用记录</p></div>';
+}
+function renderRuntimeCalls(calls){
+  const box=document.getElementById('runtime-call-table');
+  if(!calls.length){box.innerHTML='<div class="empty"><p>暂无调用记录</p></div>';return;}
+  box.innerHTML=`<table class="fleet-table"><thead><tr><th>时间</th><th>类型</th><th>模型</th><th>Token 入/出</th><th>TTFT</th><th>总时长</th><th>状态</th><th>任务</th><th>错误</th></tr></thead><tbody>`+
+    calls.map(c=>`<tr>
+      <td style="white-space:nowrap">${_rtFmtTs(c.created_at)}</td>
+      <td>${esc(c.call_type||'')}</td>
+      <td>${esc(c.model||'')}</td>
+      <td>${(c.input_tokens||0).toLocaleString()} / ${(c.output_tokens||0).toLocaleString()}</td>
+      <td>${_rtFmtMs(c.ttft_ms)}</td>
+      <td>${_rtFmtMs(c.total_ms)}</td>
+      <td>${_rtStatusBadge(c.status)}</td>
+      <td title="${esc(c.task_id||'')}">${esc((c.task_id||'').slice(0,8))||'—'}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(c.error||'')}">${esc(c.error||'')}</td>
+    </tr>`).join('')+`</tbody></table>`;
+}
+function renderRuntimeTrace(records){
+  const box=document.getElementById('runtime-trace-list');
+  if(!records.length){box.innerHTML='<div class="empty"><p>暂无轨迹记录</p></div>';return;}
+  box.innerHTML=`<table class="fleet-table"><thead><tr><th>时间</th><th>类型</th><th>技能/模型</th><th>状态</th><th>耗时</th><th>Token</th><th>备注</th></tr></thead><tbody>`+
+    records.filter(r=>r.type!=='subtask_start').map(r=>{
+      const isLLM=r.type==='llm_call';
+      const name=isLLM?(r.model||''):(r.model?`${r.skill} (${r.model})`:r.skill||'');
+      const note=isLLM?(r.error||''):(r.error||r.task_id||'');
+      const toks=isLLM?`${(r.input_tokens||0).toLocaleString()}/${(r.output_tokens||0).toLocaleString()}`:
+        ((r.input_tokens||r.output_tokens)?`${(r.input_tokens||0).toLocaleString()}/${(r.output_tokens||0).toLocaleString()}`:'—');
+      return `<tr>
+        <td style="white-space:nowrap">${_rtFmtTs(r.ts)}</td>
+        <td>${isLLM?'LLM':'子任务'}</td>
+        <td><b>${esc(name)}</b></td>
+        <td>${_rtStatusBadge(r.status)}</td>
+        <td>${_rtFmtMs(isLLM?r.total_ms:r.elapsed_ms)}</td>
+        <td>${toks}</td>
+        <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(note)}">${esc(note)}</td>
+      </tr>`;
+    }).join('')+`</tbody></table>`;
 }
 
 // ── 初始化 ──

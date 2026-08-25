@@ -107,7 +107,7 @@ MAPPING = {
     "lan_mesh/worker_routes_p2p.py": "08-infrastructure",
     # 09-frontend — Web UI (非 py 条目)
     "lan_mesh/web/templates/dashboard.html": (
-        "09-frontend", "Station Web 控制台 (7 Tab)"),
+        "09-frontend", "Station Web 控制台 (10 Tab, 含运行时性能)"),
     "lan_mesh/web/static/": ("09-frontend", "CSS/JS 静态资源"),
     # 10-test-loop — 测试与验证循环
     "tests/test_core.py": "10-test-loop",

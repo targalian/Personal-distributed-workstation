@@ -1,6 +1,6 @@
 # 09 Web 前端
 
-单文件深色仪表盘，7 Tab 布局，与 station_api 的 REST/WebSocket 对接。
+单文件深色仪表盘，多 Tab 布局，与 station_api 的 REST/WebSocket 对接。
 
 ## 模块清单
 
@@ -8,7 +8,7 @@
 | 文件/目录 | 职责一句话 |
 |---|---|
 | lan_mesh/web/static/ | CSS/JS 静态资源 |
-| lan_mesh/web/templates/dashboard.html | Station Web 控制台 (7 Tab) |
+| lan_mesh/web/templates/dashboard.html | Station Web 控制台 (10 Tab, 含运行时性能) |
 <!-- /AUTO:module-list -->
 ---
 
@@ -16,8 +16,15 @@
 
 **结构**: 单文件内联 CSS/JS（无构建步骤，便于模板渲染与分发）。
 
-**7 Tab**: 总览 / 主机 / 任务 / 聊天（L1 项目对话 + L2 PM 线程）/
-资源（资源池配置向导 + 余额 + 消费）/ 技能 / 设置。
+**10 Tab**: Station 总览 / 技能库 / 秘书对话（L1 项目对话 + L2 PM 线程）/
+项目工作台 / Work Station 主机 / MCP工具 / 模型资源（配置向导 + 余额 + 消费）/
+手机通道 / 主机通讯 / 运行时性能（其中秘书相关 Tab 激活后才显示）。
+
+**运行时性能 Tab** (iter-37, 📈):
+- 数据源: `/api/runtime/metrics` (SQLite 聚合) + `/api/runtime/calls` (调用明细) + `/api/runtime/trace` (JSONL 轨迹)
+- 指标卡: 调用总数/平均延迟(含P99)/平均TTFT/Token 总量, 时间窗可选 (1h/6h/24h/3d/7d)
+- 表格: 按模型统计 (调用数降序) + 调用明细 50 条 + 子任务轨迹 30 条 (过滤 subtask_start 无终态记录)
+- 渲染函数: `refreshRuntime()` / `renderRuntimeMetrics()` / `renderRuntimeCalls()` / `renderRuntimeTrace()`
 
 **关键渲染函数**（改动时注意同步更新本文档）:
 - `renderHosts()`: 主机卡片 + 统计行（含版本分布 `vMap`/`vTxt`，
@@ -38,3 +45,4 @@
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
 | 2026-08-16 | iter-27 后 | 初建；收录 S2/S3 版本统计 UI |
+| 2026-08-25 | iter-37 | 新增 📈 运行时性能 Tab (指标卡/按模型统计/调用明细/子任务轨迹)，UI-035 实测通过 |
