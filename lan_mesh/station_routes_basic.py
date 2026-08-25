@@ -620,13 +620,19 @@ def build_basic_routes(controller) -> APIRouter:
         return task_flow_waterfall(task_id, limit=limit)
 
     @router.get("/api/runtime/task-flow-list")
-    async def runtime_task_flow_list(limit: int = 20):
+    async def runtime_task_flow_list(limit: int = 20, stall_minutes: float = 30.0):
         """P3: 任务流总览 — 最近任务按阶段事件聚合 (末活动时间倒序)。
 
-        返回: [{task_id, stage_count, last_stage/last_label, total_ms, done}, ...]
+        Args:
+            limit: 最多返回任务数 (1~100)
+            stall_minutes: 停滞判定阈值 (分钟, 0~1440); ≤0 禁用停滞检测 (iter-40)
+
+        返回: [{task_id, stage_count, last_stage/last_label, total_ms, done, idle_ms, stalled}, ...]
         """
         from .runtime_trace import task_flow_overview
         limit = max(1, min(limit, 100))
-        return {"tasks": task_flow_overview(limit=limit)}
+        stall_minutes = max(0.0, min(stall_minutes, 1440))
+        return {"tasks": task_flow_overview(limit=limit, stall_minutes=stall_minutes),
+                "stall_minutes": stall_minutes}
 
     return router

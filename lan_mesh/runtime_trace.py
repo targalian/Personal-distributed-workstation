@@ -275,15 +275,20 @@ TASK_FLOW_TERMINAL_STAGES = frozenset({
 })
 
 
-def task_flow_overview(limit: int = 20) -> list[dict]:
+def task_flow_overview(limit: int = 20, stall_minutes: float = 30.0) -> list[dict]:
     """任务流总览: 按任务聚合最近阶段事件, 末活动时间倒序。
 
     用于总览表一眼看清哪些任务在跑/已收尾/可能停滞。
     最多回溯 5000 行。
 
+    Args:
+        limit: 最多返回任务数
+        stall_minutes: 停滞判定阈值 (分钟); 未到终态且空闲超过该值标记 stalled, ≤0 禁用检测 (iter-40)
+
     Returns:
         [{"task_id", "first_ts", "last_ts", "stage_count",
-          "last_stage", "last_label", "total_ms", "done"}, ...]
+          "last_stage", "last_label", "total_ms", "done",
+          "idle_ms", "stalled"}, ...]
     """
     if not _TRACE_FILE.is_file():
         return []
@@ -322,10 +327,15 @@ def task_flow_overview(limit: int = 20) -> list[dict]:
     except Exception as e:
         logger.debug("[Trace] task_flow 总览聚合失败: %s", e)
     rows = []
+    now = time.time()
+    stall_ms = stall_minutes * 60 * 1000 if stall_minutes > 0 else 0
     for cur in agg.values():
         cur["last_label"] = TASK_STAGE_LABELS.get(cur["last_stage"], cur["last_stage"])
         cur["total_ms"] = round((cur["last_ts"] - cur["first_ts"]) * 1000, 1)
         cur["done"] = cur["last_stage"] in TASK_FLOW_TERMINAL_STAGES
+        # iter-40: 停滞检测 — 未到终态且空闲超阈值 (已收尾任务永不标停滞)
+        cur["idle_ms"] = round(max(0.0, (now - cur["last_ts"]) * 1000), 1)
+        cur["stalled"] = (not cur["done"]) and stall_ms > 0 and cur["idle_ms"] > stall_ms
         rows.append(cur)
     rows.sort(key=lambda r: r["last_ts"], reverse=True)
     return rows[:max(1, limit)]

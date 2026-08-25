@@ -2619,13 +2619,38 @@ class TestTaskFlowTrace:
         assert rows["task-done"]["done"] is True
         assert rows["task-run"]["done"] is False
 
+    def test_overview_stalled_detection(self, rt):
+        """iter-40 停滞检测: 未到终态且空闲超阈值标 stalled, 已收尾永不标。"""
+        import json as _json
+        import time as _t
+        # 手写历史事件: 空闲 2 小时的进行中任务 + 同样久远的已收尾任务
+        old = _t.time() - 7200
+        with open(rt._TRACE_FILE, "a", encoding="utf-8") as f:
+            f.write(_json.dumps({"type": "task_flow", "task_id": "task-stuck",
+                                 "stage": "pm:executing", "ts": old}) + "\n")
+            f.write(_json.dumps({"type": "task_flow", "task_id": "task-old-done",
+                                 "stage": "pm:completed", "ts": old}) + "\n")
+        rows = {r["task_id"]: r for r in rt.task_flow_overview(stall_minutes=30)}
+        assert rows["task-stuck"]["stalled"] is True
+        assert rows["task-stuck"]["idle_ms"] > 30 * 60 * 1000
+        assert rows["task-old-done"]["stalled"] is False  # 终态不标停滞
+        assert rows["task-old-done"]["idle_ms"] > 0  # idle_ms 恒计算供展示
+
     def test_overview_empty_and_limit(self, rt):
-        """无记录返回空列表; limit 裁剪生效。"""
+        """无记录返回空列表; limit 裁剪生效; 禁用检测时全不标停滞。"""
         assert rt.task_flow_overview() == []
+        import json as _json
+        import time as _t
         for i in range(5):
             rt.trace_task_event(f"task-{i}", "submitted")
         rows = rt.task_flow_overview(limit=3)
         assert len(rows) == 3
+        # stall_minutes=0 禁用检测: 即使空闲很久也不标 (手写久远事件)
+        with open(rt._TRACE_FILE, "a", encoding="utf-8") as f:
+            f.write(_json.dumps({"type": "task_flow", "task_id": "task-ancient",
+                                 "stage": "submitted", "ts": _t.time() - 99999}) + "\n")
+        rows2 = rt.task_flow_overview(stall_minutes=0)
+        assert all(r["stalled"] is False for r in rows2)
 
     def test_overview_ignores_other_types(self, rt):
         """非 task_flow 记录与空 task_id 不进入总览。"""
@@ -2665,10 +2690,19 @@ class TestTaskFlowTrace:
 
         r = client.get("/api/runtime/task-flow-list", params={"limit": 10})
         assert r.status_code == 200
-        tasks = r.json()["tasks"]
+        body = r.json()
+        assert body["stall_minutes"] == 30.0  # 默认阈值回显 (iter-40)
+        tasks = body["tasks"]
         assert len(tasks) == 1
         assert tasks[0]["task_id"] == "task-list-a"
         assert tasks[0]["done"] is True
         assert tasks[0]["stage_count"] == 2
+        assert tasks[0]["stalled"] is False
+        assert "idle_ms" in tasks[0]
+
+        # stall_minutes 参数透传与夹取 (上限 1440)
+        r2 = client.get("/api/runtime/task-flow-list",
+                        params={"limit": 5, "stall_minutes": 9999})
+        assert r2.json()["stall_minutes"] == 1440.0
 
 

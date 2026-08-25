@@ -194,7 +194,7 @@ agent_runtime.execute()
 - `trace_task_event(task_id, stage, detail, pm_id)`: 写 `type="task_flow"` JSONL 记录; 钩子均在 `try/except: pass` 内异常静默
 - 钩子点: 任务提交 (station_routes_tasks / station_controller)、PM 生命周期 (pm_agent `report_status()` 单点覆盖全部状态)、子任务结果、交付上报 (`TASK_STAGE_LABELS` 阶段标签映射)
 - `read_task_flow()` / `task_flow_waterfall()`: 按 task_id 聚合 (追溯 5000 行), 计算 gap_ms/total_ms
-- `task_flow_overview()` (iter-39): 多任务聚合总览 (每任务末阶段/阶段数/总耗时/终态标记 `TASK_FLOW_TERMINAL_STAGES`), 末活动倒序, 供总览表一眼识别进行中/已收尾/可能停滞任务
+- `task_flow_overview()` (iter-39): 多任务聚合总览 (每任务末阶段/阶段数/总耗时/终态标记 `TASK_FLOW_TERMINAL_STAGES`), 末活动倒序; iter-40 增停滞检测 (`stall_minutes` 阈值, 未到终态且空闲超阈标 `stalled` + `idle_ms`, ≤0 禁用, 终态永不标)
 - 端点: `/api/runtime/task-flow?task_id=&limit=` → Dashboard 运行时 Tab 瀑布查询
 
 **P2 #7 DB 自动备份**: `__init__` 末尾调用 `backup()` — sqlite3 在线
@@ -208,6 +208,7 @@ agent_runtime.execute()
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
 | 2026-08-26 | iter-39 | P3 任务流总览: task_flow_overview 多任务聚合 (末阶段/终态判断/末活动倒序); /api/runtime/task-flow-list 端点; Dashboard 运行时 Tab 总览表 + 一键查瀑布 (UI-037) |
+| 2026-08-26 | iter-40 | P3 任务停滞检测: task_flow_overview 增 idle_ms/stalled (stall_minutes 阈值, 终态免疫, ≤0 禁用); 端点参数透传与夹取 (0~1440); Dashboard 状态列三态 + 红色告警横幅 (UI-038) |
 | 2026-08-25 | iter-38 | P3 任务流全链路追踪: trace_task_event/read_task_flow/task_flow_waterfall; pm_agent report_status 单点钩子 + 提交/子任务结果/交付阶段点; /api/runtime/task-flow 瀑布端点; Dashboard 瀑布查询 (UI-036) |
 | 2026-08-25 | iter-36 | P0/P1 运行时追踪与性能审计: runtime_trace.py (JSONL 子任务轨迹 + SQLite llm_call_log 审计表); agent_runtime execute() 计时钩子; LLM 三路径 (chat/tools/cli) trace_llm_call; /api/runtime/{metrics,trace,calls,stats} 端点; database v5 迁移 |
 | 2026-08-25 | iter-35 | M5-2 多主机联验: /ws/worker 连接建立/断开记录 client IP (运维观察); 分机升级后双机 WS 直推端到端验证 7/7 全过 |
