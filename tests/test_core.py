@@ -3095,3 +3095,90 @@ class TestErrorTrackerAlerts:
         assert EVENT_PRIORITY["error_burst"] == "high"
 
 
+class TestErrorCapturePoints:
+    """iter-45: 错误追踪埋点 (关键异常路径 → error_tracker.capture)。"""
+
+    def _rec(self, monkeypatch):
+        from lan_mesh import error_tracker as et_mod
+        seen = []
+        monkeypatch.setattr(et_mod.error_tracker, "capture",
+                            lambda *a, **k: seen.append((a, k)))
+        return seen
+
+    def test_pm_task_failure_captured(self, monkeypatch):
+        """任务级失败: _run_task 异常 → capture(pm) 携带 task_id 上下文。"""
+        from unittest.mock import MagicMock
+        from lan_mesh.pm_agent import ProjectManagerAgent
+        seen = self._rec(monkeypatch)
+        pm = ProjectManagerAgent("pm-test1234", MagicMock(),
+                                 "http://127.0.0.1:1", "dev-1")
+        monkeypatch.setattr(pm._monitor, "is_global_timed_out", lambda: False)
+        monkeypatch.setattr(pm._planner, "refine_requirements", lambda t: t)
+        monkeypatch.setattr(pm, "report_status", lambda *a, **k: None)
+        monkeypatch.setattr(pm, "report_progress", lambda *a, **k: None)
+
+        def boom(task):
+            raise RuntimeError("规划炸了")
+        monkeypatch.setattr(pm._planner, "analyze_with_skill", boom)
+        pm._run_task({"task_id": "task-x1", "name": "t"})
+        assert len(seen) == 1
+        (mod, exc), kw = seen[0]
+        assert mod == "pm" and isinstance(exc, RuntimeError)
+        assert kw["context"]["task_id"] == "task-x1"
+
+    def test_bot_send_exhausted_captured(self, monkeypatch):
+        """推送重试耗尽: _do_send_to_channel 最终失败 → capture(bot) 含通道上下文。"""
+        from lan_mesh.bot_gateway import BotChannel, BotGateway
+        seen = self._rec(monkeypatch)
+        bg = BotGateway(aggregate_window=1, max_retry=1, retry_backoff=0.01)
+        ch = BotChannel(channel_type="telegram", enabled=True,
+                        bot_token="t", chat_id="c")
+
+        def boom(*a, **k):
+            raise ConnectionError("网络不可达")
+        monkeypatch.setattr(bg, "_send_telegram", boom)
+        bg._do_send_to_channel(ch, "msg", "task_completed")
+        assert len(seen) == 1
+        (mod, exc), kw = seen[0]
+        assert mod == "bot"
+        assert kw["context"]["point"] == "channel_send"
+        assert kw["context"]["channel"] == "telegram"
+        assert bg._pending_queue  # 仍进入离线队列 (原有行为不变)
+
+    def test_bot_chat_handler_captured(self, monkeypatch):
+        """秘书对话链异常: _handle_natural_language → capture(bot)。"""
+        from lan_mesh.bot_gateway import BotGateway
+        seen = self._rec(monkeypatch)
+        bg = BotGateway(aggregate_window=1, max_retry=1)
+
+        class _BadChat:
+            def chat(self, text):
+                raise ValueError("LLM 超时")
+        bg._chat_handler = _BadChat()
+        reply = bg._handle_natural_language("你好", "chat-1")
+        assert "秘书处理异常" in reply
+        assert len(seen) == 1 and seen[0][0][0] == "bot"
+        assert seen[0][1]["context"]["point"] == "chat_handler"
+
+    def test_llm_fallback_exhausted_captured(self, monkeypatch, tmp_path):
+        """降级链耗尽: _call_llm_with_routing 全模型失败 → capture(llm) 含链路。"""
+        from lan_mesh.agent_runtime import AgentRuntime
+        seen = self._rec(monkeypatch)
+        rt = AgentRuntime("agent-1", str(tmp_path))
+        monkeypatch.setattr(rt, "_resolve_provider",
+                            lambda m: {"base_url": "http://x", "api_key": "k"})
+
+        def boom(*a, **k):
+            raise RuntimeError("模型 500")
+        monkeypatch.setattr(rt, "_call_openai_compatible", boom)
+        result = rt._call_llm_with_routing("p", {
+            "_model_preference": "m1", "_fallback_models": ["m2"],
+            "_system_prompt": "sp"})
+        assert "降级链均不可用" in result["content"]
+        assert len(seen) == 1
+        (mod, exc), kw = seen[0]
+        assert mod == "llm"
+        assert kw["context"]["point"] == "fallback_exhausted"
+        assert kw["context"]["chain"] == ["m1", "m2"]
+
+

@@ -459,6 +459,15 @@ class BotGateway:
                     time.sleep(wait)
                 else:
                     logger.error("发送到 %s 最终失败, 消息进入离线队列: %s", channel.channel_type, e)
+                    # iter-45: 错误追踪埋点 — 推送重试耗尽 (通道故障信号)
+                    try:
+                        from .error_tracker import error_tracker
+                        error_tracker.capture("bot", e, context={
+                            "point": "channel_send",
+                            "channel": channel.channel_type,
+                            "event_type": event_type})
+                    except Exception:
+                        pass
                     self._pending_queue.append({
                         "channel_type": channel.channel_type,
                         "message": message,
@@ -752,6 +761,12 @@ class BotGateway:
                     return reply
             except Exception as e:
                 logger.error("ChatHandler 处理异常: %s", e)
+                # iter-45: 错误追踪埋点 — 秘书对话链异常 (交互中断信号)
+                try:
+                    from .error_tracker import error_tracker
+                    error_tracker.capture("bot", e, context={"point": "chat_handler"})
+                except Exception:
+                    pass
                 return f"⚠️ 秘书处理异常: {e}"
 
         # 策略2: command_handler (简单命令模式)

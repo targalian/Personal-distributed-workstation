@@ -1066,6 +1066,14 @@ class AgentRuntime:
                     "input_tokens": 0,
                     "output_tokens": 0,
                 }
+            # iter-45: 错误追踪埋点 — 降级链耗尽 (所有模型均失败)
+            try:
+                from .error_tracker import error_tracker
+                error_tracker.capture(
+                    "llm", last_error, context={"point": "fallback_exhausted",
+                                                "chain": list(chain)})
+            except Exception:
+                pass
             return {
                 "content": f"[模型调用失败] 降级链均不可用: {last_error}",
                 "model": "none",

@@ -155,6 +155,14 @@ class ProjectManagerAgent:
 
         except Exception as e:
             logger.error("[%s] 任务执行失败: %s", self.pm_id[:8], e)
+            # iter-45: 错误追踪埋点 — 任务级失败 (最高价值信号)
+            try:
+                from .error_tracker import error_tracker
+                error_tracker.capture("pm", e, context={
+                    "task_id": (task or {}).get("task_id", ""),
+                    "pm_id": self.pm_id[:8]})
+            except Exception:
+                pass
             self.report_status("failed")
             self.report_progress(0.0, "failed", str(e))
 
@@ -387,6 +395,13 @@ class ProjectManagerAgent:
                 logger.error("[%s] 交付物上报失败: HTTP %d", self.pm_id[:8], resp.status_code)
         except Exception as e:
             logger.error("[%s] 交付物上报异常: %s", self.pm_id[:8], e)
+            # iter-45: 错误追踪埋点 — 交付链异常 (交付丢失风险)
+            try:
+                from .error_tracker import error_tracker
+                error_tracker.capture("pm", e, context={
+                    "point": "deliver", "pm_id": self.pm_id[:8]})
+            except Exception:
+                pass
 
         self._distribute_artifacts(task_name, aggregated)
         self._record_task_memory(task_name, task_desc, subtask_results)
@@ -444,6 +459,13 @@ class ProjectManagerAgent:
                 logger.error("[%s] 任务记忆记录失败: HTTP %d", self.pm_id[:8], resp.status_code)
         except Exception as e:
             logger.error("[%s] 任务记忆记录异常: %s", self.pm_id[:8], e)
+            # iter-45: 错误追踪埋点 — 记忆沉淀链异常 (经验丢失风险)
+            try:
+                from .error_tracker import error_tracker
+                error_tracker.capture("pm", e, context={
+                    "point": "task_memory", "pm_id": self.pm_id[:8]})
+            except Exception:
+                pass
 
     @staticmethod
     def _infer_task_type(task_name: str, task_desc: str) -> str:

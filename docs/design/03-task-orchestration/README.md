@@ -60,6 +60,11 @@ Worker → 结果聚合（显式状态机 + Checkpoint, 借鉴 LangGraph Supervi
 **pm_state.py**: planner/dispatcher/monitor 共享的 dataclass 状态容器，
 由 PM Agent 统一持有，`state.lock` 保证线程安全。
 
+**错误追踪埋点** (iter-45, F1.4 数据源): pm_agent 三处关键异常路径接入
+`error_tracker.capture` — 任务级失败 (`_run_task` 顶层 except, 携带
+task_id/pm_id)、交付链异常 (`_deliver` 后, 交付丢失风险)、记忆沉淀链异常
+(`_record_task_memory` 后, 经验丢失风险)；全部 try/except 隔离, 埋点异常不影响主流程。
+
 **分层混合交互**:
 - L1 项目对话: 与秘书交互（需求/决策/跨 PM 协调）
 - L2 PM 线程: 项目对话内展开，与单个 PM 深度技术讨论
@@ -87,5 +92,6 @@ Worker → 结果聚合（显式状态机 + Checkpoint, 借鉴 LangGraph Supervi
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-27 | iter-45 | pm_agent 三处错误追踪埋点 (任务级失败/交付链/记忆沉淀链, 异常隔离) |
 | 2026-08-16 | iter-30 补 | orchestrator 收敛裁定: 降级工具库 + stub 兼容, 3 个死端点下线, graph 端点改 DB 重建 |
 | 2026-08-16 | iter-27 后 | 初建 |
