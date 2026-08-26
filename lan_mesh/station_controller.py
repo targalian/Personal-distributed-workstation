@@ -2170,6 +2170,7 @@ class StationController:
 
         # iter-44: 错误追踪闭环接线 (F1.4 后半) — 每条错误事件推送 (WS 实时刷新面板)
         # + 突发告警 (事件总线 + Bot, 冷却去重在 tracker 内); 异常不影响启动
+        # iter-47: + 落盘持久化回调 (error_log 表, 重启不丢诊断历史)
         try:
             from .error_tracker import error_tracker
             from .event_bus import publish_event
@@ -2177,6 +2178,12 @@ class StationController:
             def _on_error_captured(record: dict):
                 try:
                     publish_event("error_captured", record)
+                except Exception:
+                    pass
+
+            def _on_error_persist(record: dict):
+                try:
+                    self.db.save_error_record(record)
                 except Exception:
                     pass
 
@@ -2194,6 +2201,7 @@ class StationController:
 
             error_tracker.set_event_callback(_on_error_captured)
             error_tracker.set_alert_callback(_on_error_burst)
+            error_tracker.set_persist_callback(_on_error_persist)
         except Exception as e:
             logger.warning("错误追踪接线失败 (no-op): %s", e)
 

@@ -3253,3 +3253,92 @@ class TestErrorDiagnosis:
             et.error_tracker.clear()
 
 
+class TestErrorPersistence:
+    """iter-47 (F1.4): 错误记录落盘持久化 — error_log 表与回调/端点。"""
+
+    def test_save_and_query_roundtrip(self, tmp_path):
+        """写入/读取往返: context JSON 落盘, 读出还原为 dict。"""
+        from lan_mesh.database import Database
+        db = Database(str(tmp_path / "e.db"))
+        db.save_error_record({"timestamp": 1755300000.0, "module": "pm",
+                              "error_type": "TimeoutError", "message": "请求超时",
+                              "context": {"task_id": "t-1"}})
+        rows = db.query_error_history(limit=10)
+        assert len(rows) == 1
+        r = rows[0]
+        assert r["module"] == "pm" and r["error_type"] == "TimeoutError"
+        assert r["message"] == "请求超时"
+        assert r["context"] == {"task_id": "t-1"}
+        assert r["timestamp"] == 1755300000.0
+
+    def test_query_filter_module_and_order(self, tmp_path):
+        """模块过滤 + 按写入序倒序 + limit 生效。"""
+        from lan_mesh.database import Database
+        db = Database(str(tmp_path / "e.db"))
+        for i, mod in enumerate(["pm", "bot", "pm"]):
+            db.save_error_record({"timestamp": 1755300000.0 + i, "module": mod,
+                                  "error_type": "E", "message": f"错误{i}"})
+        rows = db.query_error_history(limit=10, module="pm")
+        assert len(rows) == 2 and rows[0]["message"] == "错误2"  # 倒序最新在前
+        rows = db.query_error_history(limit=1)
+        assert len(rows) == 1 and rows[0]["message"] == "错误2"
+
+    def test_persist_callback_on_capture(self, tmp_path):
+        """capture 触发落盘回调; 回调抛异常不影响捕获本身。"""
+        from lan_mesh.database import Database
+        from lan_mesh.error_tracker import ErrorTracker
+        db = Database(str(tmp_path / "e.db"))
+        tr = ErrorTracker()
+        tr.set_persist_callback(lambda rec: db.save_error_record(rec))
+        tr.capture("llm", error_type="Timeout", message="超时落盘")
+        assert len(db.query_error_history()) == 1
+        # 异常隔离: 回调抛错不应中断 capture 链路
+        tr.set_persist_callback(lambda rec: 1 / 0)
+        tr.capture("llm", error_type="Timeout", message="回调失败仍捕获")
+        assert tr.get_stats()["total_errors"] == 2
+        assert len(db.query_error_history()) == 1  # 第二条未落盘
+
+    def test_capacity_prune(self, tmp_path):
+        """容量修剪: 超 2000 行只保留最新 2000 行。"""
+        from lan_mesh.database import Database
+        db = Database(str(tmp_path / "e.db"))
+        conn = db._get_conn()
+        conn.executemany(
+            "INSERT INTO error_log (timestamp, module, error_type, message) "
+            "VALUES (?, ?, ?, ?)",
+            [(float(i), "pm", "E", f"m{i}") for i in range(2010)])
+        conn.commit()
+        db.save_error_record({"module": "pm", "error_type": "E", "message": "new"})
+        total = conn.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
+        assert total == 2000
+        latest = db.query_error_history(limit=1)
+        assert latest[0]["message"] == "new"
+
+    def test_history_endpoint(self, tmp_path):
+        """/api/errors/history 端点: 返回持久化记录列表。"""
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.database import Database
+        from lan_mesh.station_api import create_station_router
+
+        class _Ctl:
+            def __init__(self):
+                self.db = Database(str(tmp_path / "h.db"))
+
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        ctl.db.save_error_record({"timestamp": 1755300000.0, "module": "bot",
+                                  "error_type": "HTTPError", "message": "推送失败"})
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+        r = client.get("/api/errors/history", params={"limit": 10})
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["errors"]) == 1
+        assert body["errors"][0]["module"] == "bot"
+
+

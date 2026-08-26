@@ -21,7 +21,7 @@ logger = get_logger("database")
 # 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
 # 迁移函数签名: (conn: sqlite3.Connection) -> None
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -138,6 +138,31 @@ def _migration_v5(conn: sqlite3.Connection):
         pass
 
 
+def _migration_v6(conn: sqlite3.Connection):
+    """迁移 v6: error_log 持久化表 (iter-47 F1.4 错误记录落盘)。
+
+    新库由 executescript 创建; 旧库走迁移保证幂等。
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS error_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp    REAL NOT NULL DEFAULT 0,
+            module       TEXT NOT NULL DEFAULT '',
+            error_type   TEXT NOT NULL DEFAULT '',
+            message      TEXT NOT NULL DEFAULT '',
+            context_json TEXT NOT NULL DEFAULT '{}',
+            traceback    TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    try:
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_error_log_module_ts
+                ON error_log(module, timestamp)
+        """)
+    except sqlite3.OperationalError:
+        pass
+
+
 # 迁移注册表: version → 迁移函数
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
@@ -145,6 +170,7 @@ _MIGRATIONS: dict[int, callable] = {
     3: _migration_v3,
     4: _migration_v4,
     5: _migration_v5,
+    6: _migration_v6,
 }
 
 
@@ -485,6 +511,20 @@ class Database:
                 ON llm_call_log(model, created_at);
             CREATE INDEX IF NOT EXISTS idx_llm_call_status
                 ON llm_call_log(status, created_at);
+
+            -- iter-47: 错误记录持久化表 (F1.4 落盘, 重启不丢诊断历史)
+            CREATE TABLE IF NOT EXISTS error_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp    REAL NOT NULL DEFAULT 0,
+                module       TEXT NOT NULL DEFAULT '',
+                error_type   TEXT NOT NULL DEFAULT '',
+                message      TEXT NOT NULL DEFAULT '',
+                context_json TEXT NOT NULL DEFAULT '{}',
+                traceback    TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_error_log_module_ts
+                ON error_log(module, timestamp);
         """)
         conn.commit()
 
@@ -1813,3 +1853,60 @@ class Database:
             ORDER BY id DESC LIMIT ?
         """, (int(limit),)).fetchall()
         return [dict(r) for r in rows]
+
+    # ── iter-47: 错误记录持久化 (F1.4) ──────────────────────────
+
+    def save_error_record(self, record: dict) -> None:
+        """iter-47: 持久化一条错误记录到 error_log (error_tracker 回调调用)。
+
+        容量上限 2000 行: 超出删除最旧行, 防止 DB 无限增长。
+        """
+        try:
+            context_json = json.dumps(record.get("context") or {},
+                                      ensure_ascii=False)
+        except Exception:
+            context_json = "{}"
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO error_log
+                (timestamp, module, error_type, message, context_json, traceback)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (float(record.get("timestamp") or time.time()),
+              str(record.get("module", "")),
+              str(record.get("error_type", "")),
+              str(record.get("message", ""))[:500],
+              context_json,
+              str(record.get("traceback", ""))[:2000]))
+        # 容量修剪: 只保留最近 2000 行 (与 INSERT 同事务提交)
+        conn.execute("""
+            DELETE FROM error_log WHERE id NOT IN (
+                SELECT id FROM error_log ORDER BY id DESC LIMIT 2000
+            )
+        """)
+        conn.commit()
+
+    def query_error_history(self, limit: int = 100, module: str = "") -> list[dict]:
+        """iter-47: 查询持久化错误记录 (按写入序倒序, 供 /api/errors/history)。"""
+        limit = max(1, min(int(limit), 500))
+        conn = self._get_conn()
+        if module:
+            rows = conn.execute("""
+                SELECT id, timestamp, module, error_type, message, context_json
+                FROM error_log WHERE module = ?
+                ORDER BY id DESC LIMIT ?
+            """, (module, limit)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT id, timestamp, module, error_type, message, context_json
+                FROM error_log ORDER BY id DESC LIMIT ?
+            """, (limit,)).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            raw = d.pop("context_json", "{}")
+            try:
+                d["context"] = json.loads(raw or "{}")
+            except Exception:
+                d["context"] = {}
+            result.append(d)
+        return result

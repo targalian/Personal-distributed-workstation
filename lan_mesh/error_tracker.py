@@ -5,7 +5,7 @@ F1.4: 本地错误聚合追踪
 1. 捕获并聚合系统运行中的异常 (按模块/类型分组)
 2. 提供错误统计 API (频率、最近出现时间、影响模块)
 3. 支持错误率告警 (阈值触发通知)
-4. 轻量级实现: 内存环形缓冲 + 定期落盘 SQLite
+4. 轻量级实现: 内存环形缓冲 + 落盘回调持久化 SQLite (iter-47)
 
 用法:
     from .error_tracker import error_tracker
@@ -114,6 +114,9 @@ class ErrorTracker:
         # iter-44: 全局事件回调 — 每条错误触发 (WS 实时推送/面板刷新, 异常隔离)
         self._event_callback: Optional[Callable] = None
 
+        # iter-47: 落盘持久化回调 — 每条错误触发 (SQLite error_log 表, 异常隔离)
+        self._persist_callback: Optional[Callable] = None
+
     def set_alert_callback(self, callback: Callable):
         """设置突发告警回调: callback(module, count, window_secs)。"""
         self._alert_callback = callback
@@ -121,6 +124,10 @@ class ErrorTracker:
     def set_event_callback(self, callback: Optional[Callable]):
         """iter-44: 设置全局事件回调: callback(record_dict), 每条 capture 触发。"""
         self._event_callback = callback
+
+    def set_persist_callback(self, callback: Optional[Callable]):
+        """iter-47: 设置落盘持久化回调: callback(record_dict), 每条 capture 触发。"""
+        self._persist_callback = callback
 
     def capture(self, module: str, exc: Exception = None, *,
                 error_type: str = "", message: str = "", context: dict = None):
@@ -170,6 +177,13 @@ class ErrorTracker:
                 self._event_callback(record.to_dict())
             except Exception as e:
                 logger.warning("[ErrorTracker] 事件回调失败: %s", e)
+
+        # iter-47: 落盘持久化回调 (SQLite 存储, 异常隔离不影响捕获)
+        if self._persist_callback:
+            try:
+                self._persist_callback(record.to_dict())
+            except Exception as e:
+                logger.warning("[ErrorTracker] 持久化回调失败: %s", e)
 
         # 告警检查 (冷却期内同模块不重复触发)
         if len(self._window_timestamps) >= self._alert_threshold and self._alert_callback:

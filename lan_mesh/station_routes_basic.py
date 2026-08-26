@@ -130,6 +130,12 @@ def build_basic_routes(controller) -> APIRouter:
         from .error_tracker import error_tracker
         return error_tracker.diagnose(window_records=window)
 
+    @router.get("/api/errors/history")
+    async def error_history(limit: int = 50, module: str = ""):
+        """iter-47: 持久化错误历史 (error_log 表, 跨重启保留)。"""
+        return {"errors": db.query_error_history(limit=min(limit, 200),
+                                                 module=module)}
+
     # ════════════════════════════════════════════════════════════
     #  角色激活端点
     # ════════════════════════════════════════════════════════════

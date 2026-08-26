@@ -2909,14 +2909,15 @@ async function loadErrors(){
   const box=document.getElementById('error-panel');
   if(!box)return;
   try{
-    const [rs,rr,rd]=await Promise.all([apiFetch('/api/errors/stats'),apiFetch('/api/errors/recent?limit=15'),apiFetch('/api/errors/diagnosis?window=200')]);
+    const [rs,rr,rd,rh]=await Promise.all([apiFetch('/api/errors/stats'),apiFetch('/api/errors/recent?limit=15'),apiFetch('/api/errors/diagnosis?window=200'),apiFetch('/api/errors/history?limit=20')]);
     if(!rs.ok||!rr.ok){box.innerHTML='<div class="empty"><p>加载失败: '+(rs.status||rr.status)+'</p></div>';return;}
-    // 诊断建议失败不影响主面板 (降级为无建议)
+    // 诊断建议/持久化历史失败不影响主面板 (降级为无该区块)
     const diag=rd.ok?await rd.json():null;
-    renderErrors(await rs.json(),(await rr.json()).errors||[],diag);
+    const hist=rh.ok?((await rh.json()).errors||[]):null;
+    renderErrors(await rs.json(),(await rr.json()).errors||[],diag,hist);
   }catch(e){box.innerHTML='<div class="empty"><p>加载失败: '+esc(e.message)+'</p></div>';}
 }
-function renderErrors(stats,errors,diag){
+function renderErrors(stats,errors,diag,hist){
   const box=document.getElementById('error-panel');
   const total=stats.total_errors||0;
   // 统计卡片 (总错误数/窗口计数与阈值对比, 超限红色) + 按模块分布行
@@ -2938,11 +2939,19 @@ function renderErrors(stats,errors,diag){
       diagBlock=`<div style="font-size:12px;color:var(--dim);margin:8px 0">🔧 自愈诊断: 扫描 ${diag.scanned} 条, 未命中已知错误模式</div>`;
     }
   }
-  if(!errors.length){box.innerHTML=cards+diagBlock+'<div class="empty"><p>暂无错误记录</p><p class="hint">进程内捕获的异常会实时汇聚于此 (环形保留最近 500 条)</p></div>';return;}
+  // iter-47: 📜 持久化历史 (error_log 表, 跨重启保留), 空/拉取失败时隐藏
+  let histBlock='';
+  if(hist&&hist.length){
+    const hfmt=ts=>{try{return new Date(ts*1000).toLocaleString();}catch(e){return '';}};
+    histBlock=`<div style="font-size:13px;font-weight:600;margin:14px 0 6px">📜 持久化历史 (跨重启保留, 最近 ${hist.length} 条)</div>`
+      +`<table class="fleet-table"><thead><tr><th>时间</th><th>模块</th><th>类型</th><th>消息</th></tr></thead><tbody>`
+      +hist.slice().reverse().map(e=>`<tr><td style="white-space:nowrap">${hfmt(e.timestamp)}</td><td><b>${esc(e.module||'')}</b></td><td style="color:#74c0fc">${esc(e.error_type||'')}</td><td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.message||'')}">${esc(e.message||'')}</td></tr>`).join('')+`</tbody></table>`;
+  }
+  if(!errors.length){box.innerHTML=cards+diagBlock+histBlock+'<div class="empty"><p>暂无错误记录</p><p class="hint">进程内捕获的异常会实时汇聚于此 (环形保留最近 500 条)</p></div>';return;}
   const fmtTs=ts=>{try{return new Date(ts*1000).toLocaleTimeString();}catch(e){return '';}};
   const tbl=`<table class="fleet-table"><thead><tr><th>时间</th><th>模块</th><th>类型</th><th>消息</th></tr></thead><tbody>`+
     errors.slice().reverse().map(e=>`<tr><td style="white-space:nowrap">${fmtTs(e.timestamp)}</td><td><b>${esc(e.module||'')}</b></td><td style="color:#ffa94d">${esc(e.error_type||'')}</td><td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.message||'')}">${esc(e.message||'')}</td></tr>`).join('')+`</tbody></table>`;
-  box.innerHTML=cards+diagBlock+tbl;
+  box.innerHTML=cards+diagBlock+tbl+histBlock;
 }
 function renderRuntimeMetrics(m){
   document.getElementById('runtime-window-info').textContent=`窗口: ${m.window_hours||0}h · ${new Date().toLocaleTimeString()}`;
