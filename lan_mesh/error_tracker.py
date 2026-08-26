@@ -81,12 +81,22 @@ class ErrorTracker:
         self._total_count: int = 0
         self._window_timestamps: list[float] = []  # 用于告警窗口计算
 
-        # 告警回调
+        # 告警回调 (突发: 窗口内超阈值触发)
         self._alert_callback: Optional[Callable] = None
+        # iter-44: 突发告警冷却去重 — module → 上次告警时间 (防错误风暴时刷屏)
+        self._last_alert_at: dict[str, float] = {}
+        self._alert_cooldown: float = alert_window  # 同模块两次告警最小间隔 (秒)
+
+        # iter-44: 全局事件回调 — 每条错误触发 (WS 实时推送/面板刷新, 异常隔离)
+        self._event_callback: Optional[Callable] = None
 
     def set_alert_callback(self, callback: Callable):
-        """设置告警回调: callback(module, count, window_secs)。"""
+        """设置突发告警回调: callback(module, count, window_secs)。"""
         self._alert_callback = callback
+
+    def set_event_callback(self, callback: Optional[Callable]):
+        """iter-44: 设置全局事件回调: callback(record_dict), 每条 capture 触发。"""
+        self._event_callback = callback
 
     def capture(self, module: str, exc: Exception = None, *,
                 error_type: str = "", message: str = "", context: dict = None):
@@ -130,12 +140,26 @@ class ErrorTracker:
         # 日志输出
         logger.error("[%s] %s: %s", module, error_type, message[:200])
 
-        # 告警检查
-        if len(self._window_timestamps) >= self._alert_threshold and self._alert_callback:
+        # iter-44: 全局事件回调 (每条错误实时推送, 异常隔离不影响捕获)
+        if self._event_callback:
             try:
-                self._alert_callback(module, len(self._window_timestamps), self._alert_window)
-            except Exception:
-                pass
+                self._event_callback(record.to_dict())
+            except Exception as e:
+                logger.warning("[ErrorTracker] 事件回调失败: %s", e)
+
+        # 告警检查 (冷却期内同模块不重复触发)
+        if len(self._window_timestamps) >= self._alert_threshold and self._alert_callback:
+            with self._lock:
+                last = self._last_alert_at.get(module, 0.0)
+                due = (now - last) >= self._alert_cooldown
+                if due:
+                    self._last_alert_at[module] = now
+            if due:
+                try:
+                    self._alert_callback(module, len(self._window_timestamps),
+                                         self._alert_window)
+                except Exception:
+                    pass
 
     def track(self, module: str):
         """装饰器: 自动捕获函数异常并记录。
@@ -189,6 +213,7 @@ class ErrorTracker:
             self._stats.clear()
             self._total_count = 0
             self._window_timestamps.clear()
+            self._last_alert_at.clear()
 
 
 # ── 全局单例 ──────────────────────────────────────────────────

@@ -53,6 +53,12 @@ Secretary 激活时由 station_controller 读取驱动 `start_stall_watcher`；
 错误率告警。实现: 内存环形缓冲 + 定期落盘 SQLite。支持装饰器
 `@error_tracker.track("station")`。
 
+**闭环接线** (iter-44): 新增全局事件回调 `set_event_callback` (每条
+capture 触发, 异常隔离) 与突发告警冷却去重 (同模块两次告警最小间隔
+= 告警窗口, `_last_alert_at` 按模块独立, `clear()` 同重置)；
+`station_controller.start()` 装配: 事件回调 → event_bus `error_captured`
+(WS 实时刷面板), 突发告警 → event_bus `error_burst` + Bot 推送。
+
 ## host_rating.py — 主机评级
 
 CPU/内存/磁盘综合得分（0~100）→ S/A/B/C/D 五级 + 可读摘要。
@@ -89,5 +95,6 @@ secretary.py 删除 (P3)，Secretary 端路由由 station_routes_* 承担。
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
 | 2026-08-27 | iter-43 | config.py 新增 ObservabilityConfig 段 (停滞检查周期/阈值配置化, 缺省回退默认) |
+| 2026-08-27 | iter-44 | error_tracker 闭环接线: 全局事件回调 (每条捕获触发) + 突发告警冷却去重 (按模块独立) |
 | 2026-08-16 | iter-31 | api.py 按端点域拆分 (275 行工厂 → 装配层 + worker_routes_basic/pm/p2p 三模块; 路由集合/顺序/行为不变) + 工厂签名类型标注补齐 |
 | 2026-08-16 | iter-27 后 | 初建 |

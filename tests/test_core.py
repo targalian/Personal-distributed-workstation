@@ -3019,3 +3019,79 @@ class TestObservabilityConfig:
             stall_minutes=cfg.observability.stall_minutes) is False
 
 
+class TestErrorTrackerAlerts:
+    """iter-44: 错误追踪闭环 (事件回调 + 突发告警冷却去重 + Bot 模板)。"""
+
+    def _tracker(self, threshold=3, window=60.0):
+        from lan_mesh.error_tracker import ErrorTracker
+        return ErrorTracker(max_records=50, alert_threshold=threshold,
+                            alert_window=window)
+
+    def test_event_callback_per_capture(self):
+        """全局事件回调: 每条 capture 触发一次, 携带记录字段。"""
+        tr = self._tracker()
+        seen = []
+        tr.set_event_callback(seen.append)
+        tr.capture("pm", error_type="Timeout", message="超时了")
+        tr.capture("bot", ValueError("坏值"))
+        assert len(seen) == 2
+        assert seen[0]["module"] == "pm" and seen[0]["error_type"] == "Timeout"
+        assert seen[1]["error_type"] == "ValueError"
+
+    def test_event_callback_exception_isolated(self):
+        """回调抛异常不影响捕获本身 (记录仍入库)。"""
+        tr = self._tracker()
+
+        def bad_cb(rec):
+            raise RuntimeError("推送失败")
+
+        tr.set_event_callback(bad_cb)
+        tr.capture("pm", message="x")
+        assert tr.get_stats()["total_errors"] == 1
+
+    def test_burst_alert_cooldown_dedup(self):
+        """突发告警: 达阈触发一次; 冷却期内重复达阈不重推; 冷却到期恢复。"""
+        tr = self._tracker(threshold=3, window=60.0)
+        fired = []
+        tr.set_alert_callback(lambda mod, cnt, win: fired.append((mod, cnt, win)))
+        for i in range(3):
+            tr.capture("pm", message=f"e{i}")
+        assert len(fired) == 1 and fired[0][0] == "pm" and fired[0][1] == 3
+        # 冷却期内再达阈 — 不重推 (窗口计数仍 ≥ 阈值)
+        tr.capture("pm", message="e3")
+        assert len(fired) == 1
+        # 模拟冷却到期 — 再达阈重推, 且携带窗口秒数
+        tr._last_alert_at["pm"] -= tr._alert_cooldown + 1
+        tr.capture("pm", message="e4")
+        assert len(fired) == 2 and fired[1][2] == 60.0
+
+    def test_burst_alert_modules_independent(self):
+        """冷却按模块独立: pm 告警不影响 bot 模块首次告警。"""
+        tr = self._tracker(threshold=2, window=60.0)
+        fired = []
+        tr.set_alert_callback(lambda mod, cnt, win: fired.append(mod))
+        tr.capture("pm", message="a")
+        tr.capture("pm", message="b")
+        tr.capture("bot", message="c")
+        tr.capture("bot", message="d")
+        assert fired == ["pm", "bot"]
+
+    def test_clear_resets_cooldown(self):
+        """clear 同时重置告警冷却状态。"""
+        tr = self._tracker(threshold=1, window=60.0)
+        fired = []
+        tr.set_alert_callback(lambda mod, cnt, win: fired.append(mod))
+        tr.capture("pm", message="a")
+        tr.clear()
+        tr.capture("pm", message="b")
+        assert fired == ["pm", "pm"]  # 冷却状态已清, 再次达阈即推
+        assert tr.get_stats()["total_errors"] == 1
+
+    def test_bot_error_burst_template(self):
+        """Bot 模板: error_burst 存在/可格式化/高优先级。"""
+        from lan_mesh.bot_gateway import EVENT_PRIORITY, EVENT_TEMPLATES
+        msg = EVENT_TEMPLATES["error_burst"].format(module="pm", count=12, window=60.0)
+        assert "pm" in msg and "12" in msg
+        assert EVENT_PRIORITY["error_burst"] == "high"
+
+

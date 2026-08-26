@@ -44,6 +44,9 @@ StationController
 **优化项**: 消息聚合防刷屏（短时间窗口事件合并）、Telegram Inline
 Keyboard（PM 决策交互）。
 
+**事件模板** (iter-44): 新增 `error_burst` (错误突发, high 优先级) —
+窗口内错误数超阈值且冷却到期时推送, 与错误追踪闭环联动。
+
 ## role_cards.py — 统一角色卡（M6）
 
 **背景**: 角色人设此前散布于 chat_handler（秘书）、pm_planner / agent_prompt
@@ -56,4 +59,5 @@ Keyboard（PM 决策交互）。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-27 | iter-44 | 新增 error_burst 事件模板与优先级 (错误突发告警, 与错误追踪闭环联动) |
 | 2026-08-16 | iter-27 后 | 初建 |

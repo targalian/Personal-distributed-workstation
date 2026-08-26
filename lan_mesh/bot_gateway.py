@@ -71,6 +71,8 @@ EVENT_TEMPLATES = {
     "task_stall_alert_low": "🕐 任务停滞提醒 [{task_id}] {message}",
     "task_stall_alert": "⚠️ 任务停滞告警 [{task_id}] {message}",
     "task_stall_alert_high": "🚨 任务停滞紧急 [{task_id}] {message}",
+    # iter-44: 错误突发告警 (窗口内错误数超阈值, 冷却去重防刷屏)
+    "error_burst": "❗ 错误突发 [{module}] {window:.0f} 秒窗口内 {count} 条错误, 请检查日志",
 }
 
 # 事件严重级别 → 决定是否推送（避免低优先级事件打扰）
@@ -98,6 +100,7 @@ EVENT_PRIORITY = {
     "task_stall_alert_low": "low",
     "task_stall_alert": "normal",
     "task_stall_alert_high": "high",
+    "error_burst": "high",
 }
 
 # 事件图标 (聚合消息时使用)
@@ -116,6 +119,7 @@ EVENT_ICONS = {
     "task_delivered": "📦",
     "task_escalated": "🚨",
     "periodic_report": "📊",
+    "error_burst": "❗",
 }
 
 

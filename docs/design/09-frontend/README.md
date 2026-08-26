@@ -35,6 +35,11 @@
 - 数据源: `/api/task-memory/overview?limit=10` (全局统计 + 按类型分组 + 最近沉淀)
 - `loadTaskMemory()` / `renderTaskMemory()`: 统计卡片 (记忆总数/总体成功率/推荐协作模式/常见错误预警) + 按类型分组表 (成功率绿/橙分级, 耗时自动换算 m/s) + 最近沉淀列表 (关键词截断, 失败记录 hover 显示 error_pattern)；空记忆渲染引导提示；秘书未激活 503 时降级显示「加载失败: 503 (秘书未激活)」不报错
 
+**错误追踪面板** (iter-44, F1.4 可视化):
+- 数据源: `/api/errors/stats` + `/api/errors/recent?limit=15` 并行拉取 (复用既有 F1.4 端点)
+- `loadErrors()` / `renderErrors()`: 统计卡片 (错误总数 绿/橙分级/告警窗口计数 vs 阈值 超限红/按模块分布) + 最近错误表 (倒序, 消息截断 hover 全文)；空记录渲染引导提示
+- 实时联动: `onStationEvent` 收 `error_captured` → 面板刷新；收 `error_burst` → 红色 toast 告警 + 刷新；`refreshRuntime()` 挂载 `loadErrors()`
+
 **关键渲染函数**（改动时注意同步更新本文档）:
 - `renderHosts()`: 主机卡片 + 统计行（含版本分布 `vMap`/`vTxt`，
   多版本告警色；S3 新增 ✅最新/⚠️落后/未知版本 标记）
@@ -60,3 +65,4 @@
 | 2026-08-26 | iter-40 | 总览表增停滞检测 (状态列三态 + 红色告警横幅)，UI-038 实测通过 |
 | 2026-08-26 | iter-41 | 停滞告警实时推送 (WS task_stall_alert → toast + 总览表自动刷新)，UI-039 实测通过 |
 | 2026-08-26 | iter-42 | 运行时 Tab 增任务记忆面板 (统计卡片/按类型分组/最近沉淀，503 优雅降级)，UI-040 实测通过 |
+| 2026-08-27 | iter-44 | 运行时 Tab 增错误追踪面板 (统计卡片/按模块分布/最近错误表，error_captured/error_burst 事件实时联动)，UI-041 实测通过 |

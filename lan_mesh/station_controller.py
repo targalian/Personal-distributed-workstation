@@ -2168,6 +2168,35 @@ class StationController:
         align_thread.start()
         self._threads.append(align_thread)
 
+        # iter-44: 错误追踪闭环接线 (F1.4 后半) — 每条错误事件推送 (WS 实时刷新面板)
+        # + 突发告警 (事件总线 + Bot, 冷却去重在 tracker 内); 异常不影响启动
+        try:
+            from .error_tracker import error_tracker
+            from .event_bus import publish_event
+
+            def _on_error_captured(record: dict):
+                try:
+                    publish_event("error_captured", record)
+                except Exception:
+                    pass
+
+            def _on_error_burst(module: str, count: int, window_secs: float):
+                data = {"module": module, "count": count, "window": window_secs}
+                try:
+                    publish_event("error_burst", data)
+                except Exception:
+                    pass
+                if self.bot_gateway:
+                    try:
+                        self.bot_gateway.notify("error_burst", data)
+                    except Exception as e:
+                        logger.warning("[ErrorTracker] 突发告警推送失败: %s", e)
+
+            error_tracker.set_event_callback(_on_error_captured)
+            error_tracker.set_alert_callback(_on_error_burst)
+        except Exception as e:
+            logger.warning("错误追踪接线失败 (no-op): %s", e)
+
         # F3.1: 启动自动扩缩容监控
         self._start_autoscaler()
 
