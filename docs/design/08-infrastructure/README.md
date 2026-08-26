@@ -71,6 +71,11 @@ capture 触发, 异常隔离) 与突发告警冷却去重 (同模块两次告警
 容量修剪保留最近 2000 行), 补齐 docstring 声称的「落盘 SQLite」能力,
 重启不再丢失诊断历史。
 
+**历史诊断扩展** (iter-48): 规则匹配逻辑抽为模块级纯函数
+`diagnose_records(records)` (无状态, 首命中归属/降序/未命中计数规则不变),
+实例方法 `diagnose()` 复用之; 端点 `source=history` 时对 `error_log`
+落盘记录执行同一诊断, 重启后缓冲空仍可分析历史错误。
+
 ## host_rating.py — 主机评级
 
 CPU/内存/磁盘综合得分（0~100）→ S/A/B/C/D 五级 + 可读摘要。
@@ -110,5 +115,6 @@ secretary.py 删除 (P3)，Secretary 端路由由 station_routes_* 承担。
 | 2026-08-27 | iter-44 | error_tracker 闭环接线: 全局事件回调 (每条捕获触发) + 突发告警冷却去重 (按模块独立) |
 | 2026-08-27 | iter-46 | error_tracker 自愈诊断: DIAGNOSIS_RULES 模式规则表 + diagnose() 分组建议 (F4.2 首层) |
 | 2026-08-27 | iter-47 | error_tracker 落盘持久化: set_persist_callback 第三回调 (异常隔离, 每条捕获触发) → database error_log 表, 重启不丢诊断历史 |
+| 2026-08-27 | iter-48 | 诊断规则抽取模块级纯函数 diagnose_records (实例 diagnose 复用), 支持历史落盘记录诊断双源 |
 | 2026-08-16 | iter-31 | api.py 按端点域拆分 (275 行工厂 → 装配层 + worker_routes_basic/pm/p2p 三模块; 路由集合/顺序/行为不变) + 工厂签名类型标注补齐 |
 | 2026-08-16 | iter-27 后 | 初建 |

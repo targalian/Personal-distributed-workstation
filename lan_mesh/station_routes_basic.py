@@ -125,9 +125,16 @@ def build_basic_routes(controller) -> APIRouter:
         return {"errors": error_tracker.get_recent(limit=min(limit, 100), module=module)}
 
     @router.get("/api/errors/diagnosis")
-    async def error_diagnosis(window: int = 200):
-        """iter-46 (F4.2): 错误自愈诊断建议 (模式规则表分组)。"""
-        from .error_tracker import error_tracker
+    async def error_diagnosis(window: int = 200, source: str = "buffer"):
+        """iter-46 (F4.2): 错误自愈诊断建议 (模式规则表分组)。
+
+        iter-48: source=history 改诊断 error_log 持久化记录 (重启后不断档);
+        默认 buffer 行为不变。
+        """
+        from .error_tracker import error_tracker, diagnose_records
+        if source == "history":
+            records = db.query_error_history(limit=min(window, 500))
+            return diagnose_records(records)
         return error_tracker.diagnose(window_records=window)
 
     @router.get("/api/errors/history")

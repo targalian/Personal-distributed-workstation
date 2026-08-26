@@ -41,6 +41,7 @@
 - 实时联动: `onStationEvent` 收 `error_captured` → 面板刷新；收 `error_burst` → 红色 toast 告警 + 刷新；`refreshRuntime()` 挂载 `loadErrors()`
 - 自愈诊断建议区 (iter-46, F4.2): `loadErrors()` 并行拉取 `/api/errors/diagnosis?window=200` (失败降级为无建议不影响主面板)；`renderErrors()` 渲染 🔧 诊断区 — 按模式分组卡片 (超时/连接/认证/限流/上游5xx 图标徽章 + 命中数 + 影响模块 + 建议文案, hover 显示样例消息), 命中数降序；无命中显示扫描统计提示, 空缓冲整区隐藏
 - 持久化历史区 (iter-47): `loadErrors()` 并行拉取 `/api/errors/history?limit=20` (失败降级隐藏该区块)；`renderErrors()` 在实时错误表后渲染 📜 持久化历史表 (时间/模块/类型蓝紫 #74c0fc/消息, 倒序展示, 跨重启保留)；空缓冲时历史区仍显示 (与进程内缓冲解耦)
+- 历史诊断区 (iter-48): `loadErrors()` 并行拉取 `/api/errors/diagnosis?source=history&window=200` (失败降级隐藏)；诊断卡片渲染抽为 `mkDiag()` 同构渲染器复用于缓冲诊断 (🔧) 与历史诊断 (🗂) 双区块 — 重启后缓冲空时历史诊断仍展示分组建议, 诊断不断档
 
 **关键渲染函数**（改动时注意同步更新本文档）:
 - `renderHosts()`: 主机卡片 + 统计行（含版本分布 `vMap`/`vTxt`，
@@ -70,3 +71,4 @@
 | 2026-08-27 | iter-44 | 运行时 Tab 增错误追踪面板 (统计卡片/按模块分布/最近错误表，error_captured/error_burst 事件实时联动)，UI-041 实测通过 |
 | 2026-08-27 | iter-46 | 错误面板增 🔧 自愈诊断建议区 (模式分组卡片 + 接口失败降级 + 空缓冲隐藏)，UI-042 实测通过 |
 | 2026-08-27 | iter-47 | 错误面板增 📜 持久化历史区 (error_log 表跨重启保留 + 接口失败降级隐藏 + 与进程内缓冲解耦)，UI-043 实测通过 |
+| 2026-08-27 | iter-48 | 错误面板增 🗂 历史诊断区 (mkDiag 同构渲染器双源复用 + 重启后诊断不断档)，UI-044 实测通过 |

@@ -57,6 +57,41 @@ DIAGNOSIS_RULES: list[dict] = [
 ]
 
 
+def diagnose_records(records: list[dict]) -> dict:
+    """iter-48 (F4.2): 对任意记录列表执行模式规则诊断 (纯函数, 无状态)。
+
+    规则按 DIAGNOSIS_RULES 顺序匹配, 每条记录首命中归属 (防重复计数);
+    findings 按命中数降序; 未命中任何规则计入 unmatched。
+    供 diagnose() (进程内缓冲) 与历史诊断 (error_log 落盘记录) 复用。
+    """
+    findings: list[dict] = []
+    matched: set[int] = set()
+    for rule in DIAGNOSIS_RULES:
+        hits: list[tuple[int, dict]] = []
+        for j, r in enumerate(records):
+            if j in matched:
+                continue
+            text = (str(r.get("error_type", "")) + " " +
+                    str(r.get("message", ""))).lower()
+            if any(p in text for p in rule["pattern"]):
+                hits.append((j, r))
+        if not hits:
+            continue
+        matched.update(j for j, _ in hits)
+        findings.append({
+            "category": rule["category"],
+            "count": len(hits),
+            "modules": sorted({str(r.get("module", "")) for _, r in hits}),
+            "last_at": max(float(r.get("timestamp") or 0) for _, r in hits),
+            "sample": str(hits[-1][1].get("message", ""))[:200],
+            "suggestion": rule["suggestion"],
+            "action": rule["action"],
+        })
+    findings.sort(key=lambda f: f["count"], reverse=True)
+    return {"scanned": len(records), "findings": findings,
+            "unmatched": len(records) - len(matched)}
+
+
 class ErrorRecord:
     """单条错误记录。"""
     __slots__ = ("timestamp", "module", "error_type", "message", "context", "traceback")
@@ -256,38 +291,13 @@ class ErrorTracker:
     def diagnose(self, window_records: int = 200) -> dict:
         """iter-46 (F4.2): 按模式规则表诊断缓冲错误, 返回分组自愈建议。
 
-        规则按 DIAGNOSIS_RULES 顺序匹配, 每条记录首命中归属 (防重复计数);
-        findings 按命中数降序; 未命中任何规则计入 unmatched。
+        规则匹配逻辑见模块级 diagnose_records() (iter-48 抽出复用);
+        window 夹取 1~500。
         """
         window_records = max(1, min(window_records, 500))
         with self._lock:
             records = [r.to_dict() for r in self._records[-window_records:]]
-        findings: list[dict] = []
-        matched: set[int] = set()
-        for rule in DIAGNOSIS_RULES:
-            hits: list[tuple[int, dict]] = []
-            for j, r in enumerate(records):
-                if j in matched:
-                    continue
-                text = (str(r.get("error_type", "")) + " " +
-                        str(r.get("message", ""))).lower()
-                if any(p in text for p in rule["pattern"]):
-                    hits.append((j, r))
-            if not hits:
-                continue
-            matched.update(j for j, _ in hits)
-            findings.append({
-                "category": rule["category"],
-                "count": len(hits),
-                "modules": sorted({str(r.get("module", "")) for _, r in hits}),
-                "last_at": max(float(r.get("timestamp") or 0) for _, r in hits),
-                "sample": str(hits[-1][1].get("message", ""))[:200],
-                "suggestion": rule["suggestion"],
-                "action": rule["action"],
-            })
-        findings.sort(key=lambda f: f["count"], reverse=True)
-        return {"scanned": len(records), "findings": findings,
-                "unmatched": len(records) - len(matched)}
+        return diagnose_records(records)
 
 
 # ── 全局单例 ──────────────────────────────────────────────────

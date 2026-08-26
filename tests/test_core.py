@@ -3342,3 +3342,71 @@ class TestErrorPersistence:
         assert body["errors"][0]["module"] == "bot"
 
 
+class TestErrorHistoryDiagnosis:
+    """iter-48 (F4.2): 诊断范围扩展 — 持久化历史诊断 (重启后不断档)。"""
+
+    def test_diagnose_records_pure_function(self):
+        """diagnose_records 纯函数: 与实例方法同规则, 空列表零值。"""
+        from lan_mesh.error_tracker import diagnose_records
+        assert diagnose_records([]) == {"scanned": 0, "findings": [],
+                                        "unmatched": 0}
+        records = [
+            {"timestamp": 1.0, "module": "llm", "error_type": "Timeout",
+             "message": "请求超时"},
+            {"timestamp": 2.0, "module": "bot", "error_type": "HTTPError",
+             "message": "429 rate limit"},
+            {"timestamp": 3.0, "module": "pm", "error_type": "E",
+             "message": "杂项"},
+        ]
+        d = diagnose_records(records)
+        assert d["scanned"] == 3 and d["unmatched"] == 1
+        assert [f["category"] for f in d["findings"]] == ["timeout", "rate_limit"]
+
+    def test_diagnose_method_reuses_pure_function(self):
+        """实例 diagnose() 重构后行为不变 (iter-46 回归)。"""
+        from lan_mesh.error_tracker import ErrorTracker
+        tr = ErrorTracker()
+        tr.capture("llm", error_type="Timeout", message="HTTP timed out")
+        d = tr.diagnose()
+        assert d["scanned"] == 1
+        assert d["findings"][0]["category"] == "timeout"
+
+    def test_diagnosis_endpoint_history_source(self, tmp_path):
+        """/api/errors/diagnosis?source=history: 诊断持久化记录, 缓冲行为不变。"""
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh import error_tracker as et
+        from lan_mesh.database import Database
+        from lan_mesh.station_api import create_station_router
+
+        class _Ctl:
+            def __init__(self):
+                self.db = Database(str(tmp_path / "d.db"))
+
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        ctl.db.save_error_record({"timestamp": 1755300000.0, "module": "llm",
+                                  "error_type": "TimeoutError",
+                                  "message": "历史超时记录"})
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+        et.error_tracker.clear()
+        try:
+            # history 源: 诊断落盘记录
+            r = client.get("/api/errors/diagnosis",
+                           params={"source": "history", "window": 50})
+            assert r.status_code == 200
+            body = r.json()
+            assert body["scanned"] == 1
+            assert body["findings"][0]["category"] == "timeout"
+            # 默认 buffer 源行为不变 (缓冲为空)
+            r = client.get("/api/errors/diagnosis")
+            assert r.json()["scanned"] == 0
+        finally:
+            et.error_tracker.clear()
+
+
