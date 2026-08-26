@@ -40,6 +40,12 @@ cloud_storage:
 # 关闭方式: auto_upgrade: false
 auto_upgrade: true
 
+# 可观测性配置 (iter-43)
+# 任务停滞检测: 未到终态的任务超过阈值无阶段事件即标记停滞并主动告警 (WS + Bot)
+observability:
+  stall_check_interval: 60   # 后台检查周期 (秒, 实际最小 10)
+  stall_minutes: 30          # 停滞判定阈值 (分钟), 0 或负数 = 禁用检测与告警
+
 # 安全配置
 security:
   auth_enabled: true         # 是否启用节点间 Token 认证 (P2 #5 起默认启用)

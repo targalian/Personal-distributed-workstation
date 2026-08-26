@@ -278,11 +278,14 @@ class StationController:
             logger.warning("模型资源管理初始化失败 (no-op): %s", e)
 
         # iter-41: 任务停滞主动告警守护 (基于 task_flow 追踪, 异常不影响激活)
+        # iter-43: 检查周期/阈值改由 config.yaml observability 段驱动 (≤0 禁用)
         try:
             from .runtime_trace import set_stall_bot_notify, start_stall_watcher
             if self.bot_gateway:
                 set_stall_bot_notify(self.bot_gateway.notify)
-            start_stall_watcher(interval=60.0, stall_minutes=30.0)
+            obs = self.cfg.observability
+            start_stall_watcher(interval=obs.stall_check_interval,
+                                stall_minutes=obs.stall_minutes)
         except Exception as e:
             logger.warning("任务停滞检测启动失败 (no-op): %s", e)
 

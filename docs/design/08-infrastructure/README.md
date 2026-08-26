@@ -25,6 +25,12 @@
 Pydantic 强类型校验，读取 config.yaml 与环境变量，提供全局配置访问。
 关键段: 端口、security.auth_enabled、发现参数、同步间隔。
 
+**observability 段** (iter-43): 任务停滞检测参数配置化 —
+`stall_check_interval` (后台检查周期, 秒, 实际最小 10, 默认 60) /
+`stall_minutes` (停滞判定阈值, 分钟, 默认 30, ≤0 禁用检测与告警)；
+Secretary 激活时由 station_controller 读取驱动 `start_stall_watcher`；
+缺省段回退默认值兼容旧配置。
+
 ## logger.py — 结构化日志
 
 统一格式 `[时间] [级别] [模块] 消息`，控制台 + 文件双输出，
@@ -82,5 +88,6 @@ secretary.py 删除 (P3)，Secretary 端路由由 station_routes_* 承担。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-27 | iter-43 | config.py 新增 ObservabilityConfig 段 (停滞检查周期/阈值配置化, 缺省回退默认) |
 | 2026-08-16 | iter-31 | api.py 按端点域拆分 (275 行工厂 → 装配层 + worker_routes_basic/pm/p2p 三模块; 路由集合/顺序/行为不变) + 工厂签名类型标注补齐 |
 | 2026-08-16 | iter-27 后 | 初建 |

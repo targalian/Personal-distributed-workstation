@@ -110,6 +110,12 @@ class BotConfig(BaseModel):
     retry_backoff: float = 2.0        # 重试退避基数 (秒)
 
 
+class ObservabilityConfig(BaseModel):
+    """可观测性配置 (iter-43: 任务停滞检测参数配置化)。"""
+    stall_check_interval: float = 60.0   # 停滞检查周期 (秒, 实际最小 10)
+    stall_minutes: float = 30.0          # 停滞判定阈值 (分钟), ≤0 禁用检测与告警
+
+
 class AppConfig(BaseModel):
     """应用顶层配置。"""
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
@@ -118,6 +124,7 @@ class AppConfig(BaseModel):
     bot: BotConfig = Field(default_factory=BotConfig)
     cloud_storage: CloudStorageConfig = Field(default_factory=CloudStorageConfig)
     security: "SecurityConfig" = Field(default_factory=lambda: SecurityConfig())
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     auto_upgrade: bool = True  # F1: 版本落后时自动 git pull 对齐 (工作区脏则跳过)
 
 

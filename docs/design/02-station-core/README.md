@@ -195,7 +195,7 @@ agent_runtime.execute()
 - 钩子点: 任务提交 (station_routes_tasks / station_controller)、PM 生命周期 (pm_agent `report_status()` 单点覆盖全部状态)、子任务结果、交付上报 (`TASK_STAGE_LABELS` 阶段标签映射)
 - `read_task_flow()` / `task_flow_waterfall()`: 按 task_id 聚合 (追溯 5000 行), 计算 gap_ms/total_ms
 - `task_flow_overview()` (iter-39): 多任务聚合总览 (每任务末阶段/阶段数/总耗时/终态标记 `TASK_FLOW_TERMINAL_STAGES`), 末活动倒序; iter-40 增停滞检测 (`stall_minutes` 阈值, 未到终态且空闲超阈标 `stalled` + `idle_ms`, ≤0 禁用, 终态永不标)
-- 停滞主动告警 (iter-41): `check_stall_alerts()` 单轮检查 — 档位去重防刷屏 (空闲 1/2/4 倍阈值 → Lv1/2/3, 仅新停滞/档位升级重推; 恢复活动清档位可再告警; 终态永不告警); `start_stall_watcher()` daemon 线程 60s 周期 (Secretary 激活时启动, 异常隔离); 推送链: event_bus `task_stall_alert` → WS 实时广播 + Bot 三档模板 (`task_stall_alert_low/task_stall_alert/task_stall_alert_high`); 端点 `/api/runtime/task-stall-alerts` (活跃告警+守护状态) 与 `.../check` (手动触发)
+- 停滞主动告警 (iter-41): `check_stall_alerts()` 单轮检查 — 档位去重防刷屏 (空闲 1/2/4 倍阈值 → Lv1/2/3, 仅新停滞/档位升级重推; 恢复活动清档位可再告警; 终态永不告警); `start_stall_watcher()` daemon 线程 60s 周期 (Secretary 激活时启动, 异常隔离); 推送链: event_bus `task_stall_alert` → WS 实时广播 + Bot 三档模板 (`task_stall_alert_low/task_stall_alert/task_stall_alert_high`); 端点 `/api/runtime/task-stall-alerts` (活跃告警+守护状态) 与 `.../check` (手动触发); iter-43 起检查周期/阈值改由 config.yaml `observability` 段驱动 (缺省 60s/30min, ≤0 禁用)
 - 端点: `/api/runtime/task-flow?task_id=&limit=` → Dashboard 运行时 Tab 瀑布查询
 - 任务记忆总览 (iter-42, F4.1 可视化): `/api/task-memory/overview?limit=` 在 `/stats` 基础上返回按类型分组聚合 `by_type` (次数/成功率/平均耗时/推荐模式, 多者在前) + 最近沉淀 `recent` (关键词≤5 截断, limit 夹取 1~50); 复用 `query_task_memory`/`get_task_memory_stats`, Secretary 未激活 503
 
@@ -213,6 +213,7 @@ agent_runtime.execute()
 | 2026-08-26 | iter-40 | P3 任务停滞检测: task_flow_overview 增 idle_ms/stalled (stall_minutes 阈值, 终态免疫, ≤0 禁用); 端点参数透传与夹取 (0~1440); Dashboard 状态列三态 + 红色告警横幅 (UI-038) |
 | 2026-08-26 | iter-41 | P3 任务停滞主动告警: check_stall_alerts 档位去重 (1/2/4 倍阈值 Lv1/2/3, 仅升级重推, 恢复清档) + 60s 守护线程; event_bus task_stall_alert → WS toast + 总览表自动刷新 + Bot 三档模板; 告警查询/手动检查端点 (UI-039) |
 | 2026-08-26 | iter-42 | F4.1 任务记忆面板: /api/task-memory/overview 端点 (全局统计 + 按类型分组 + 最近沉淀); Dashboard 运行时 Tab 记忆面板 (统计卡片/分组表/最近列表, 503 优雅降级) (UI-040) |
+| 2026-08-27 | iter-43 | 停滞检测参数配置化: config.yaml observability 段 (stall_check_interval/stall_minutes) 驱动守护线程, 缺省回退 60s/30min, ≤0 禁用 |
 | 2026-08-25 | iter-38 | P3 任务流全链路追踪: trace_task_event/read_task_flow/task_flow_waterfall; pm_agent report_status 单点钩子 + 提交/子任务结果/交付阶段点; /api/runtime/task-flow 瀑布端点; Dashboard 瀑布查询 (UI-036) |
 | 2026-08-25 | iter-36 | P0/P1 运行时追踪与性能审计: runtime_trace.py (JSONL 子任务轨迹 + SQLite llm_call_log 审计表); agent_runtime execute() 计时钩子; LLM 三路径 (chat/tools/cli) trace_llm_call; /api/runtime/{metrics,trace,calls,stats} 端点; database v5 迁移 |
 | 2026-08-25 | iter-35 | M5-2 多主机联验: /ws/worker 连接建立/断开记录 client IP (运维观察); 分机升级后双机 WS 直推端到端验证 7/7 全过 |

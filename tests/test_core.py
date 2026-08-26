@@ -2975,3 +2975,47 @@ class TestTaskMemoryOverview:
         assert r.status_code == 503
 
 
+class TestObservabilityConfig:
+    """iter-43: 停滞检测参数配置化 (config.yaml observability 段)。"""
+
+    def test_defaults(self):
+        """缺省段: 默认 60s 检查周期 / 30 分钟阈值。"""
+        from lan_mesh.config import AppConfig
+        cfg = AppConfig()
+        assert cfg.observability.stall_check_interval == 60.0
+        assert cfg.observability.stall_minutes == 30.0
+
+    def test_custom_values_parsed(self, tmp_path):
+        """自定义段: yaml 值生效。"""
+        from lan_mesh.config import load_config
+        p = tmp_path / "config.yaml"
+        p.write_text("observability:\n  stall_check_interval: 20\n"
+                     "  stall_minutes: 10\n", encoding="utf-8")
+        cfg = load_config(str(p))
+        assert cfg.observability.stall_check_interval == 20.0
+        assert cfg.observability.stall_minutes == 10.0
+
+    def test_section_absent_falls_back(self, tmp_path):
+        """无 observability 段的旧配置: 回退默认不报错。"""
+        from lan_mesh.config import load_config
+        p = tmp_path / "config.yaml"
+        p.write_text("auto_upgrade: false\n", encoding="utf-8")
+        cfg = load_config(str(p))
+        assert cfg.observability.stall_minutes == 30.0
+        assert cfg.auto_upgrade is False
+
+    def test_disable_value_rejects_watcher(self, tmp_path, monkeypatch):
+        """stall_minutes: 0 → start_stall_watcher 返回 False 不启动。"""
+        from lan_mesh import runtime_trace
+        from lan_mesh.config import load_config
+        monkeypatch.setattr(runtime_trace, "_stall_state", {})
+        monkeypatch.setattr(runtime_trace, "_stall_active", [])
+        monkeypatch.setattr(runtime_trace, "_stall_bot_notify", None)
+        p = tmp_path / "config.yaml"
+        p.write_text("observability:\n  stall_minutes: 0\n", encoding="utf-8")
+        cfg = load_config(str(p))
+        assert runtime_trace.start_stall_watcher(
+            interval=cfg.observability.stall_check_interval,
+            stall_minutes=cfg.observability.stall_minutes) is False
+
+
