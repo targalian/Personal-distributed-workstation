@@ -735,6 +735,8 @@
   <div id="runtime-trace-list"><div class="empty"><p>暂无数据</p></div></div>
   <div class="stitle">📋 任务流总览 (最近任务)</div>
   <div id="taskflow-list" style="overflow-x:auto"><div class="empty"><p>加载中...</p></div></div>
+  <div class="stitle">🧠 任务记忆 (F4.1 历史经验)</div>
+  <div id="task-memory-panel"><div class="empty"><p>加载中...</p></div></div>
   <div class="stitle">🔍 任务流瀑布 (Task Flow)</div>
   <div class="toolbar" style="padding:0 0 10px">
     <input type="text" id="taskflow-id" placeholder="输入 task_id, 如 task-xxxxxxxxxxxx" style="flex:1;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:13px" onkeydown="if(event.key==='Enter')queryTaskFlow()">
@@ -2825,6 +2827,7 @@ async function refreshRuntime(){
     document.getElementById('runtime-stat-cards').innerHTML='<div class="empty" style="grid-column:1/-1"><p>加载失败: '+esc(e.message)+'</p></div>';
   }
   loadTaskFlowList();
+  loadTaskMemory();
 }
 async function loadTaskFlowList(){
   const box=document.getElementById('taskflow-list');
@@ -2861,6 +2864,32 @@ function renderTaskFlowList(tasks, stallMinutes){
 function jumpTaskFlow(tid){
   document.getElementById('taskflow-id').value=tid;
   queryTaskFlow();
+}
+// iter-42: 任务记忆面板 (F4.1 历史经验可视化)
+async function loadTaskMemory(){
+  const box=document.getElementById('task-memory-panel');
+  if(!box)return;
+  try{
+    const r=await apiFetch('/api/task-memory/overview?limit=10');
+    if(!r.ok){box.innerHTML='<div class="empty"><p>加载失败: '+r.status+(r.status===503?' (秘书未激活)':'')+'</p></div>';return;}
+    renderTaskMemory(await r.json());
+  }catch(e){box.innerHTML='<div class="empty"><p>加载失败: '+esc(e.message)+'</p></div>';}
+}
+function renderTaskMemory(m){
+  const box=document.getElementById('task-memory-panel');
+  if(!m.total){box.innerHTML='<div class="empty"><p>暂无任务记忆</p><p class="hint">任务完成后会自动沉淀经验于此, 供后续同类任务规划参考 (F4.1)</p></div>';return;}
+  const pct=v=>(v*100).toFixed(0)+'%';
+  const errs=(m.common_errors||[]).map(e=>`${esc(String(e[0]||''))} ×${e[1]}`).join(' · ')||'—';
+  const cards=`<div class="stat-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px">`
+    +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">记忆总数</div><div style="font-size:22px;font-weight:700;margin-top:4px">${m.total}</div></div>`
+    +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">总体成功率</div><div style="font-size:22px;font-weight:700;margin-top:4px;color:${m.success_rate>=0.7?'#4ade80':'#ff6b6b'}">${pct(m.success_rate||0)}</div></div>`
+    +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">推荐协作模式</div><div style="font-size:15px;font-weight:700;margin-top:8px">${esc(m.recommended_mode||'—')}</div></div>`
+    +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">常见错误预警</div><div style="font-size:12px;margin-top:6px;line-height:1.5">${errs}</div></div></div>`;
+  const typeTbl=(m.by_type||[]).length?`<table class="fleet-table"><thead><tr><th>任务类型</th><th>次数</th><th>成功率</th><th>平均耗时</th><th>推荐模式</th></tr></thead><tbody>`+
+    m.by_type.map(g=>`<tr><td><b>${esc(g.task_type)}</b></td><td>${g.count}</td><td style="color:${g.success_rate>=0.7?'#4ade80':'#ffa94d'}">${pct(g.success_rate)}</td><td>${(g.avg_duration||0)>=60?((g.avg_duration/60).toFixed(1)+'m'):((g.avg_duration||0).toFixed(0)+'s')}</td><td>${esc(g.recommended_mode||'—')}</td></tr>`).join('')+`</tbody></table>`:'';
+  const recentTbl=(m.recent||[]).length?`<div class="stitle" style="font-size:12px;margin:12px 0 8px">最近沉淀 (${m.recent.length} 条)</div>`+`<table class="fleet-table"><thead><tr><th>任务</th><th>类型</th><th>协作模式</th><th>团队</th><th>耗时</th><th>结果</th><th>关键词</th></tr></thead><tbody>`+
+    m.recent.map(r=>`<tr><td><b>${esc(r.task_name||'—')}</b></td><td>${esc(r.task_type)}</td><td>${esc(r.collaboration_mode||'—')}</td><td>${r.team_size||'—'}</td><td>${(r.duration_secs||0)>=60?((r.duration_secs/60).toFixed(1)+'m'):((r.duration_secs||0).toFixed(0)+'s')}</td><td>${r.success?'<span style="color:#4ade80">✅</span>':('<span style="color:#ff6b6b" title="'+esc(r.error_pattern||'')+'">❌</span>')}</td><td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(r.keywords||[]).map(esc).join(', ')||'—'}</td></tr>`).join('')+`</tbody></table>`:'';
+  box.innerHTML=cards+typeTbl+recentTbl;
 }
 function renderRuntimeMetrics(m){
   document.getElementById('runtime-window-info').textContent=`窗口: ${m.window_hours||0}h · ${new Date().toLocaleTimeString()}`;

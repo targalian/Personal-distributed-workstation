@@ -2838,3 +2838,140 @@ class TestTaskFlowTrace:
         assert "stall_minutes" in body
 
 
+class TestTaskMemoryOverview:
+    """iter-42: 任务记忆面板 (F4.1 可视化) 端点。"""
+
+    _MEM_ROWS = [
+        {"task_name": "开发支付模块", "task_keywords": ["开发", "支付"],
+         "task_type": "development", "collaboration_mode": "orchestrator",
+         "team_size": 3, "duration_secs": 120.0, "success": True,
+         "error_pattern": "", "boss_feedback": "", "created_at": 100.0},
+        {"task_name": "重构调度器", "task_keywords": ["重构"],
+         "task_type": "development", "collaboration_mode": "orchestrator",
+         "team_size": 2, "duration_secs": 60.0, "success": True,
+         "error_pattern": "", "boss_feedback": "", "created_at": 90.0},
+        {"task_name": "调研报告", "task_keywords": ["调研"],
+         "task_type": "research", "collaboration_mode": "single",
+         "team_size": 1, "duration_secs": 30.0, "success": False,
+         "error_pattern": "timeout", "boss_feedback": "", "created_at": 80.0},
+    ]
+
+    def _client(self):
+        import types
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.station_api import create_station_router
+
+        class _Ctl:
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        ctl.db = types.SimpleNamespace(
+            query_task_memory=lambda task_type="", keyword="", limit=10:
+                self._MEM_ROWS[:limit],
+            get_task_memory_stats=lambda task_type="": {
+                "total": len(self._MEM_ROWS), "success_rate": 2 / 3,
+                "avg_duration": 70.0, "recommended_mode": "orchestrator",
+                "common_errors": [("timeout", 1)],
+            },
+        )
+        ctl.state = types.SimpleNamespace(
+            ws_clients=set(), p2p_messages={}, shared_folder=None)
+        ctl.secretary_active = True
+
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        return TestClient(app)
+
+    def test_overview_structure_and_grouping(self):
+        """总览结构: 全局统计 + 按类型分组 (多者在前) + 最近记录。"""
+        client = self._client()
+        r = client.get("/api/task-memory/overview")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 3
+        assert body["recommended_mode"] == "orchestrator"
+        # by_type: development 2 条在前, research 1 条在后
+        by_type = body["by_type"]
+        assert [g["task_type"] for g in by_type] == ["development", "research"]
+        dev = by_type[0]
+        assert dev["count"] == 2 and dev["success_rate"] == 1.0
+        assert dev["avg_duration"] == 90.0
+        assert dev["recommended_mode"] == "orchestrator"
+        # recent: 字段齐全且关键词被截断到 ≤5 个
+        assert len(body["recent"]) == 3
+        first = body["recent"][0]
+        assert first["task_name"] == "开发支付模块"
+        assert first["keywords"] == ["开发", "支付"]
+        assert body["recent"][2]["success"] is False
+
+    def test_overview_limit_clamped(self):
+        """limit 参数夹取: 1~50, recent 按 limit 截断。"""
+        client = self._client()
+        r = client.get("/api/task-memory/overview?limit=1")
+        assert r.status_code == 200
+        assert len(r.json()["recent"]) == 1
+
+    def test_overview_empty_memory(self):
+        """无记忆时: total=0 且 by_type/recent 为空列表 (不报错)。"""
+        import types
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.station_api import create_station_router
+
+        class _Ctl:
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        ctl.db = types.SimpleNamespace(
+            query_task_memory=lambda task_type="", keyword="", limit=10: [],
+            get_task_memory_stats=lambda task_type="": {
+                "total": 0, "success_rate": 0, "avg_duration": 0,
+                "recommended_mode": "", "common_errors": [],
+            },
+        )
+        ctl.state = types.SimpleNamespace(
+            ws_clients=set(), p2p_messages={}, shared_folder=None)
+        ctl.secretary_active = True
+
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+        r = client.get("/api/task-memory/overview")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 0
+        assert body["by_type"] == [] and body["recent"] == []
+
+    def test_overview_requires_secretary(self):
+        """秘书未激活时返回 503 (与其他任务端点一致)。"""
+        import types
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.station_api import create_station_router
+
+        class _Ctl:
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        ctl.db = types.SimpleNamespace(
+            query_task_memory=lambda **kw: [],
+            get_task_memory_stats=lambda task_type="": {"total": 0},
+        )
+        ctl.state = types.SimpleNamespace(
+            ws_clients=set(), p2p_messages={}, shared_folder=None)
+        ctl.secretary_active = False
+
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+        r = client.get("/api/task-memory/overview")
+        assert r.status_code == 503
+
+

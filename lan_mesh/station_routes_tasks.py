@@ -8,6 +8,7 @@ Secretary 激活后可用 (未激活返回 503):
   - 反向沟通 (PM 注入回复) 与交付闭环 (deliver/accept/reject)
   - 任务记忆 (task_memory) 存储与统计
 """
+import json
 import time
 import uuid as _uuid
 
@@ -482,5 +483,65 @@ def build_task_routes(controller) -> APIRouter:
         check_secretary(controller)
         stats = db.get_task_memory_stats(task_type=task_type)
         return stats
+
+    @router.get("/api/task-memory/overview")
+    async def task_memory_overview(limit: int = 20):
+        """iter-42 (F4.1 可视化): 任务记忆总览 — 全局统计 + 按类型分组 + 最近记录。
+
+        Args:
+            limit: 最近记录返回条数 (1~50)
+
+        返回: {total, success_rate, avg_duration, recommended_mode,
+               by_type: [{task_type, count, success_rate, avg_duration,
+                          recommended_mode}], recent: [...]}
+        """
+        check_secretary(controller)
+        limit = max(1, min(limit, 50))
+        rows = db.query_task_memory(limit=500)
+        overall = db.get_task_memory_stats()
+        # 按类型分组聚合 (供面板分类型展示)
+        groups: dict[str, list] = {}
+        for r in rows:
+            groups.setdefault(r.get("task_type") or "general", []).append(r)
+        by_type = []
+        for t, items in groups.items():
+            n = len(items)
+            ok = sum(1 for x in items if x.get("success"))
+            modes: dict[str, int] = {}
+            for x in items:
+                m = x.get("collaboration_mode") or ""
+                if m:
+                    modes[m] = modes.get(m, 0) + 1
+            by_type.append({
+                "task_type": t,
+                "count": n,
+                "success_rate": round(ok / n, 3) if n else 0,
+                "avg_duration": round(
+                    sum(float(x.get("duration_secs") or 0) for x in items) / n, 1
+                ) if n else 0,
+                "recommended_mode": max(modes, key=modes.get) if modes else "",
+            })
+        by_type.sort(key=lambda g: g["count"], reverse=True)
+        recent = []
+        for r in rows[:limit]:
+            kw = r.get("task_keywords") or []
+            if isinstance(kw, str):
+                try:
+                    kw = json.loads(kw)
+                except Exception:
+                    kw = []
+            recent.append({
+                "task_name": r.get("task_name", ""),
+                "task_type": r.get("task_type", "general"),
+                "collaboration_mode": r.get("collaboration_mode", ""),
+                "team_size": r.get("team_size", 0),
+                "duration_secs": r.get("duration_secs", 0),
+                "success": bool(r.get("success")),
+                "error_pattern": r.get("error_pattern", ""),
+                "boss_feedback": r.get("boss_feedback", ""),
+                "keywords": kw[:5],
+                "created_at": r.get("created_at", 0),
+            })
+        return {**overall, "by_type": by_type, "recent": recent}
 
     return router
