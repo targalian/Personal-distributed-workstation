@@ -124,6 +124,12 @@ def build_basic_routes(controller) -> APIRouter:
         from .error_tracker import error_tracker
         return {"errors": error_tracker.get_recent(limit=min(limit, 100), module=module)}
 
+    @router.get("/api/errors/diagnosis")
+    async def error_diagnosis(window: int = 200):
+        """iter-46 (F4.2): 错误自愈诊断建议 (模式规则表分组)。"""
+        from .error_tracker import error_tracker
+        return error_tracker.diagnose(window_records=window)
+
     # ════════════════════════════════════════════════════════════
     #  角色激活端点
     # ════════════════════════════════════════════════════════════

@@ -59,6 +59,12 @@ capture 触发, 异常隔离) 与突发告警冷却去重 (同模块两次告警
 `station_controller.start()` 装配: 事件回调 → event_bus `error_captured`
 (WS 实时刷面板), 突发告警 → event_bus `error_burst` + Bot 推送。
 
+**自愈诊断** (iter-46, F4.2 首层): 模块级 `DIAGNOSIS_RULES` 模式规则表
+(超时/连接/认证/限流/上游5xx 五类, 各带建议文案与动作标识) +
+`diagnose(window_records)` 方法: 缓冲错误小写子串匹配, 首命中归属防重复
+计数, findings 命中数降序 (命中数/影响模块/最近时间/样例/建议),
+未命中计入 `unmatched`; window 夹取 1~500。
+
 ## host_rating.py — 主机评级
 
 CPU/内存/磁盘综合得分（0~100）→ S/A/B/C/D 五级 + 可读摘要。
@@ -96,5 +102,6 @@ secretary.py 删除 (P3)，Secretary 端路由由 station_routes_* 承担。
 |---|---|---|
 | 2026-08-27 | iter-43 | config.py 新增 ObservabilityConfig 段 (停滞检查周期/阈值配置化, 缺省回退默认) |
 | 2026-08-27 | iter-44 | error_tracker 闭环接线: 全局事件回调 (每条捕获触发) + 突发告警冷却去重 (按模块独立) |
+| 2026-08-27 | iter-46 | error_tracker 自愈诊断: DIAGNOSIS_RULES 模式规则表 + diagnose() 分组建议 (F4.2 首层) |
 | 2026-08-16 | iter-31 | api.py 按端点域拆分 (275 行工厂 → 装配层 + worker_routes_basic/pm/p2p 三模块; 路由集合/顺序/行为不变) + 工厂签名类型标注补齐 |
 | 2026-08-16 | iter-27 后 | 初建 |

@@ -39,6 +39,7 @@
 - 数据源: `/api/errors/stats` + `/api/errors/recent?limit=15` 并行拉取 (复用既有 F1.4 端点)
 - `loadErrors()` / `renderErrors()`: 统计卡片 (错误总数 绿/橙分级/告警窗口计数 vs 阈值 超限红/按模块分布) + 最近错误表 (倒序, 消息截断 hover 全文)；空记录渲染引导提示
 - 实时联动: `onStationEvent` 收 `error_captured` → 面板刷新；收 `error_burst` → 红色 toast 告警 + 刷新；`refreshRuntime()` 挂载 `loadErrors()`
+- 自愈诊断建议区 (iter-46, F4.2): `loadErrors()` 并行拉取 `/api/errors/diagnosis?window=200` (失败降级为无建议不影响主面板)；`renderErrors()` 渲染 🔧 诊断区 — 按模式分组卡片 (超时/连接/认证/限流/上游5xx 图标徽章 + 命中数 + 影响模块 + 建议文案, hover 显示样例消息), 命中数降序；无命中显示扫描统计提示, 空缓冲整区隐藏
 
 **关键渲染函数**（改动时注意同步更新本文档）:
 - `renderHosts()`: 主机卡片 + 统计行（含版本分布 `vMap`/`vTxt`，
@@ -66,3 +67,4 @@
 | 2026-08-26 | iter-41 | 停滞告警实时推送 (WS task_stall_alert → toast + 总览表自动刷新)，UI-039 实测通过 |
 | 2026-08-26 | iter-42 | 运行时 Tab 增任务记忆面板 (统计卡片/按类型分组/最近沉淀，503 优雅降级)，UI-040 实测通过 |
 | 2026-08-27 | iter-44 | 运行时 Tab 增错误追踪面板 (统计卡片/按模块分布/最近错误表，error_captured/error_burst 事件实时联动)，UI-041 实测通过 |
+| 2026-08-27 | iter-46 | 错误面板增 🔧 自愈诊断建议区 (模式分组卡片 + 接口失败降级 + 空缓冲隐藏)，UI-042 实测通过 |

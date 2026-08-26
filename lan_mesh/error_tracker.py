@@ -32,6 +32,30 @@ from .logger import get_logger
 
 logger = get_logger("error_tracker")
 
+# iter-46 (F4.2 异常自愈): 错误模式 → 诊断建议规则表 (小写子串匹配, 首命中归属)
+# pattern 为匹配词元 (error_type + message 拼接后小写匹配); action 为建议动作标识
+DIAGNOSIS_RULES: list[dict] = [
+    {"pattern": ("timeout", "超时", "timed out"), "category": "timeout",
+     "suggestion": "网络或下游服务响应超时: 检查对端服务是否存活, 或延长超时/启用重试",
+     "action": "check_peer"},
+    {"pattern": ("refused", "reset", "unreachable", "拒绝连接", "无法连接"),
+     "category": "connection",
+     "suggestion": "连接被拒/重置: 对端端口未监听或网络不可达, 检查对端进程与 IP/端口",
+     "action": "check_peer"},
+    {"pattern": ("401", "unauthorized", "invalid key", "api key", "鉴权失败"),
+     "category": "auth",
+     "suggestion": "认证失败: API Key 无效或已过期, 在资源面板更新密钥并重新同步",
+     "action": "rotate_key"},
+    {"pattern": ("429", "rate limit", "too many requests", "quota"),
+     "category": "rate_limit",
+     "suggestion": "限流/额度耗尽: 切换到其他模型池或等待窗口重置",
+     "action": "switch_pool"},
+    {"pattern": ("500", "502", "503", "504", "bad gateway", "internal server error"),
+     "category": "upstream_5xx",
+     "suggestion": "上游服务 5xx: 多为瞬时故障, 重试仍失败可考虑切换模型",
+     "action": "retry_or_switch"},
+]
+
 
 class ErrorRecord:
     """单条错误记录。"""
@@ -214,6 +238,42 @@ class ErrorTracker:
             self._total_count = 0
             self._window_timestamps.clear()
             self._last_alert_at.clear()
+
+    def diagnose(self, window_records: int = 200) -> dict:
+        """iter-46 (F4.2): 按模式规则表诊断缓冲错误, 返回分组自愈建议。
+
+        规则按 DIAGNOSIS_RULES 顺序匹配, 每条记录首命中归属 (防重复计数);
+        findings 按命中数降序; 未命中任何规则计入 unmatched。
+        """
+        window_records = max(1, min(window_records, 500))
+        with self._lock:
+            records = [r.to_dict() for r in self._records[-window_records:]]
+        findings: list[dict] = []
+        matched: set[int] = set()
+        for rule in DIAGNOSIS_RULES:
+            hits: list[tuple[int, dict]] = []
+            for j, r in enumerate(records):
+                if j in matched:
+                    continue
+                text = (str(r.get("error_type", "")) + " " +
+                        str(r.get("message", ""))).lower()
+                if any(p in text for p in rule["pattern"]):
+                    hits.append((j, r))
+            if not hits:
+                continue
+            matched.update(j for j, _ in hits)
+            findings.append({
+                "category": rule["category"],
+                "count": len(hits),
+                "modules": sorted({str(r.get("module", "")) for _, r in hits}),
+                "last_at": max(float(r.get("timestamp") or 0) for _, r in hits),
+                "sample": str(hits[-1][1].get("message", ""))[:200],
+                "suggestion": rule["suggestion"],
+                "action": rule["action"],
+            })
+        findings.sort(key=lambda f: f["count"], reverse=True)
+        return {"scanned": len(records), "findings": findings,
+                "unmatched": len(records) - len(matched)}
 
 
 # ── 全局单例 ──────────────────────────────────────────────────

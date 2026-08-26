@@ -3182,3 +3182,74 @@ class TestErrorCapturePoints:
         assert kw["context"]["chain"] == ["m1", "m2"]
 
 
+class TestErrorDiagnosis:
+    """iter-46 (F4.2): 错误自愈诊断 — 模式规则表分组与建议。"""
+
+    def _tracker(self):
+        from lan_mesh.error_tracker import ErrorTracker
+        return ErrorTracker(max_records=50)
+
+    def test_diagnose_groups_by_pattern(self):
+        """按模式分组: 同类错误聚合计数/模块/样例。"""
+        tr = self._tracker()
+        tr.capture("llm", error_type="Timeout", message="请求超时")
+        tr.capture("pm", error_type="TimeoutError", message="HTTP timed out")
+        tr.capture("bot", error_type="HTTPError", message="429 rate limit")
+        d = tr.diagnose()
+        assert d["scanned"] == 3 and d["unmatched"] == 0
+        cats = [f["category"] for f in d["findings"]]
+        assert cats == ["timeout", "rate_limit"]  # 命中数降序 (2 > 1)
+        t = d["findings"][0]
+        assert t["count"] == 2 and t["modules"] == ["llm", "pm"]
+        assert t["action"] == "check_peer" and t["sample"]
+
+    def test_diagnose_first_match_wins(self):
+        """首命中归属: 同时含多模式词元的记录只计入靠前规则。"""
+        tr = self._tracker()
+        tr.capture("llm", error_type="HTTPError",
+                   message="504 gateway timeout 超时")  # 同时命中 timeout 与 5xx 规则
+        d = tr.diagnose()
+        assert len(d["findings"]) == 1
+        assert d["findings"][0]["category"] == "timeout"  # 规则表顺序优先
+        assert d["unmatched"] == 0
+
+    def test_diagnose_empty_and_window_clamp(self):
+        """空缓冲与 window 夹取: 不报错且扫描数受限。"""
+        tr = self._tracker()
+        d = tr.diagnose()
+        assert d == {"scanned": 0, "findings": [], "unmatched": 0}
+        for i in range(10):
+            tr.capture("pm", error_type="E", message=f"杂项错误 {i}")
+        d = tr.diagnose(window_records=3)
+        assert d["scanned"] == 3 and d["unmatched"] == 3
+        d = tr.diagnose(window_records=0)  # 夹取至 1 仍可用 (实际最小 1)
+        assert d["scanned"] >= 1
+
+    def test_diagnosis_endpoint(self):
+        """/api/errors/diagnosis 端点: 返回扫描结果结构。"""
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh import error_tracker as et
+        from lan_mesh.station_api import create_station_router
+
+        class _Ctl:
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+        et.error_tracker.clear()
+        try:
+            et.error_tracker.capture("llm", error_type="Timeout", message="超时")
+            r = client.get("/api/errors/diagnosis", params={"window": 50})
+            assert r.status_code == 200
+            body = r.json()
+            assert body["scanned"] == 1
+            assert body["findings"][0]["category"] == "timeout"
+        finally:
+            et.error_tracker.clear()
+
+

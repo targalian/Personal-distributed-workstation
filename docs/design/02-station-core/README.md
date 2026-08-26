@@ -199,6 +199,7 @@ agent_runtime.execute()
 - 端点: `/api/runtime/task-flow?task_id=&limit=` → Dashboard 运行时 Tab 瀑布查询
 - 任务记忆总览 (iter-42, F4.1 可视化): `/api/task-memory/overview?limit=` 在 `/stats` 基础上返回按类型分组聚合 `by_type` (次数/成功率/平均耗时/推荐模式, 多者在前) + 最近沉淀 `recent` (关键词≤5 截断, limit 夹取 1~50); 复用 `query_task_memory`/`get_task_memory_stats`, Secretary 未激活 503
 - 错误追踪闭环接线 (iter-44, F1.4 后半): `start()` 装配 `error_tracker` 双回调 — 全局事件回调 → event_bus `error_captured` (WS 实时刷 Dashboard 错误面板); 突发告警 (窗口内超阈 + 冷却到期) → event_bus `error_burst` + Bot `error_burst` 模板; 接线异常隔离不影响启动
+- 错误自愈诊断 (iter-46, F4.2 首层): `/api/errors/diagnosis?window=` 按 `DIAGNOSIS_RULES` 模式规则表分组缓冲错误 (超时/连接/认证/限流/上游5xx, 首命中归属防重复计数, 命中数降序), 返回命中数/影响模块/建议文案/动作标识 + 未命中计数; window 夹取 1~500
 
 **P2 #7 DB 自动备份**: `__init__` 末尾调用 `backup()` — sqlite3 在线
 备份 API 一致性快照至 `~/.lan_mesh/backups/<stem>-<时间戳>.sqlite3`,
@@ -215,6 +216,7 @@ agent_runtime.execute()
 | 2026-08-26 | iter-41 | P3 任务停滞主动告警: check_stall_alerts 档位去重 (1/2/4 倍阈值 Lv1/2/3, 仅升级重推, 恢复清档) + 60s 守护线程; event_bus task_stall_alert → WS toast + 总览表自动刷新 + Bot 三档模板; 告警查询/手动检查端点 (UI-039) |
 | 2026-08-26 | iter-42 | F4.1 任务记忆面板: /api/task-memory/overview 端点 (全局统计 + 按类型分组 + 最近沉淀); Dashboard 运行时 Tab 记忆面板 (统计卡片/分组表/最近列表, 503 优雅降级) (UI-040) |
 | 2026-08-27 | iter-43 | 停滞检测参数配置化: config.yaml observability 段 (stall_check_interval/stall_minutes) 驱动守护线程, 缺省回退 60s/30min, ≤0 禁用 |
+| 2026-08-27 | iter-46 | F4.2 异常自愈首层: /api/errors/diagnosis 模式规则表诊断端点 (分组建议 + 未命中计数) |
 | 2026-08-27 | iter-44 | F1.4 错误追踪闭环: start() 装配 error_tracker 双回调 (error_captured → WS 实时刷面板; error_burst → 事件总线 + Bot 突发告警, 冷却去重); Dashboard 错误追踪面板 (UI-041) |
 | 2026-08-25 | iter-38 | P3 任务流全链路追踪: trace_task_event/read_task_flow/task_flow_waterfall; pm_agent report_status 单点钩子 + 提交/子任务结果/交付阶段点; /api/runtime/task-flow 瀑布端点; Dashboard 瀑布查询 (UI-036) |
 | 2026-08-25 | iter-36 | P0/P1 运行时追踪与性能审计: runtime_trace.py (JSONL 子任务轨迹 + SQLite llm_call_log 审计表); agent_runtime execute() 计时钩子; LLM 三路径 (chat/tools/cli) trace_llm_call; /api/runtime/{metrics,trace,calls,stats} 端点; database v5 迁移 |
