@@ -3410,3 +3410,107 @@ class TestErrorHistoryDiagnosis:
             et.error_tracker.clear()
 
 
+class TestHealActions:
+    """iter-49 (F4.2 修复环节): 自愈动作执行器 + heal_log 落盘。"""
+
+    def test_heal_save_and_query_roundtrip(self, tmp_path):
+        """heal_log 写入/查询往返: 倒序 + limit 夹取。"""
+        from lan_mesh.database import Database
+        db = Database(str(tmp_path / "d.db"))
+        db.save_heal_record({"timestamp": 1.0, "category": "timeout",
+                             "action": "check_peer", "result": "ok",
+                             "detail": "探测 1/1"})
+        db.save_heal_record({"timestamp": 2.0, "category": "auth",
+                             "action": "probe_balances", "result": "failed",
+                             "detail": "boom"})
+        rows = db.query_heal_history(limit=10)
+        assert len(rows) == 2
+        assert rows[0]["action"] == "probe_balances"  # 倒序最新在前
+        assert rows[1]["result"] == "ok"
+        assert len(db.query_heal_history(limit=1)) == 1
+
+    def test_heal_capacity_prune(self, tmp_path):
+        """容量修剪: 505 行 → 保留最近 500 行。"""
+        from lan_mesh.database import Database
+        db = Database(str(tmp_path / "d.db"))
+        for i in range(505):
+            db.save_heal_record({"timestamp": float(i), "category": "c",
+                                 "action": f"a{i}", "result": "ok", "detail": ""})
+        conn = db._get_conn()
+        total = conn.execute("SELECT COUNT(*) FROM heal_log").fetchone()[0]
+        assert total == 500
+
+    def test_run_heal_action_results(self, tmp_path, monkeypatch):
+        """执行器三分支: manual_required / ok / failed + 落盘。"""
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        ctl = StationController.__new__(StationController)
+        ctl.db = Database(str(tmp_path / "d.db"))
+        ctl.discovery = None
+        # 未注册动作 → manual_required
+        rec = ctl.run_heal_action("retry_or_switch", "upstream_5xx")
+        assert rec["result"] == "manual_required"
+        # check_peer 无发现服务 → ok 跳过
+        rec = ctl.run_heal_action("check_peer", "timeout")
+        assert rec["result"] == "ok" and "跳过" in rec["detail"]
+        # probe_balances 走余额探测钩子 (mock)
+        monkeypatch.setattr("lan_mesh.model_resources.probe_balances_global",
+                            lambda timeout=10.0: {"probed": 1, "supported": 1})
+        rec = ctl.run_heal_action("probe_balances", "auth")
+        assert rec["result"] == "ok" and "1/1" in rec["detail"]
+        # handler 异常 → failed (不抛出)
+        ctl._heal_check_peer = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+        rec = ctl.run_heal_action("check_peer", "connection")
+        assert rec["result"] == "failed" and "boom" in rec["detail"]
+        # 全部落盘 (4 条, 倒序最新在前)
+        rows = ctl.db.query_heal_history(limit=10)
+        assert len(rows) == 4 and rows[0]["result"] == "failed"
+
+    def test_heal_endpoints(self, tmp_path, monkeypatch):
+        """POST /api/errors/heal (含动作映射) + GET heal/history。"""
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.database import Database
+        from lan_mesh.station_api import create_station_router
+        from lan_mesh.station_controller import StationController
+
+        class _Ctl:
+            def __init__(self):
+                self.db = Database(str(tmp_path / "d.db"))
+                self.discovery = None
+
+            def run_heal_action(self, action, category=""):
+                return StationController.run_heal_action(self, action, category)
+
+            def _heal_check_peer(self):
+                return StationController._heal_check_peer(self)
+
+            def _heal_probe_balances(self):
+                return StationController._heal_probe_balances(self)
+
+            def __getattr__(self, name):
+                return MagicMock()
+
+        monkeypatch.setattr("lan_mesh.model_resources.probe_balances_global",
+                            lambda timeout=10.0: {"probed": 0, "supported": 0})
+        app = FastAPI()
+        app.include_router(create_station_router(_Ctl()))
+        client = TestClient(app)
+        # rotate_key 映射为 probe_balances (自动可执行)
+        r = client.post("/api/errors/heal",
+                        params={"action": "rotate_key", "category": "auth"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["action"] == "probe_balances" and body["result"] == "ok"
+        # 未注册动作 → manual_required (仍需人工)
+        r = client.post("/api/errors/heal",
+                        params={"action": "retry_or_switch"})
+        assert r.json()["result"] == "manual_required"
+        # 历史端点: 2 条倒序返回
+        r = client.get("/api/errors/heal/history", params={"limit": 10})
+        assert r.status_code == 200
+        heals = r.json()["heals"]
+        assert len(heals) == 2 and heals[0]["result"] == "manual_required"
+
+

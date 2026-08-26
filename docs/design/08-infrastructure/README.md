@@ -76,6 +76,13 @@ capture 触发, 异常隔离) 与突发告警冷却去重 (同模块两次告警
 实例方法 `diagnose()` 复用之; 端点 `source=history` 时对 `error_log`
 落盘记录执行同一诊断, 重启后缓冲空仍可分析历史错误。
 
+**自愈动作执行** (iter-49, 修复环节): 诊断建议的 action 标识接入执行器 —
+`station_controller.run_heal_action()` 仅注册安全只读动作 (`check_peer`
+UDP 探测已知设备 / `probe_balances` 余额探测), 未注册动作 (如 `retry_or_switch`)
+返回 `manual_required` 不自动执行破坏性操作; 每次执行落盘 `heal_log` 表
+(Database v7 迁移, 容量修剪 500 行) 并广播 `heal_action` 事件,
+完成「检测→诊断→修复」闭环的可审计修复环节。
+
 ## host_rating.py — 主机评级
 
 CPU/内存/磁盘综合得分（0~100）→ S/A/B/C/D 五级 + 可读摘要。
@@ -116,5 +123,6 @@ secretary.py 删除 (P3)，Secretary 端路由由 station_routes_* 承担。
 | 2026-08-27 | iter-46 | error_tracker 自愈诊断: DIAGNOSIS_RULES 模式规则表 + diagnose() 分组建议 (F4.2 首层) |
 | 2026-08-27 | iter-47 | error_tracker 落盘持久化: set_persist_callback 第三回调 (异常隔离, 每条捕获触发) → database error_log 表, 重启不丢诊断历史 |
 | 2026-08-27 | iter-48 | 诊断规则抽取模块级纯函数 diagnose_records (实例 diagnose 复用), 支持历史落盘记录诊断双源 |
+| 2026-08-27 | iter-49 | F4.2 修复环节: run_heal_action 自愈动作执行器 (安全只读动作注册制 + 未注册返回 manual_required), 执行记录落盘 heal_log (v7 迁移) + heal_action 事件广播 |
 | 2026-08-16 | iter-31 | api.py 按端点域拆分 (275 行工厂 → 装配层 + worker_routes_basic/pm/p2p 三模块; 路由集合/顺序/行为不变) + 工厂签名类型标注补齐 |
 | 2026-08-16 | iter-27 后 | 初建 |

@@ -143,6 +143,22 @@ def build_basic_routes(controller) -> APIRouter:
         return {"errors": db.query_error_history(limit=min(limit, 200),
                                                  module=module)}
 
+    @router.post("/api/errors/heal")
+    async def error_heal(action: str, category: str = ""):
+        """iter-49 (F4.2 修复环节): 执行自愈动作并落盘 heal_log。
+
+        诊断规则 action 映射为已注册可执行动作 (rotate_key/switch_pool →
+        probe_balances); 未注册动作返回 manual_required (需人工介入)。
+        """
+        mapped = {"rotate_key": "probe_balances",
+                  "switch_pool": "probe_balances"}.get(action, action)
+        return controller.run_heal_action(mapped, category)
+
+    @router.get("/api/errors/heal/history")
+    async def error_heal_history(limit: int = 50):
+        """iter-49: 自愈动作执行历史 (heal_log 表, 跨重启保留)。"""
+        return {"heals": db.query_heal_history(limit=min(limit, 200))}
+
     # ════════════════════════════════════════════════════════════
     #  角色激活端点
     # ════════════════════════════════════════════════════════════

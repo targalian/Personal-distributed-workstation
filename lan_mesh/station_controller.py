@@ -228,6 +228,77 @@ class StationController:
         t = threading.Thread(target=_delayed_exit, daemon=True, name="restart-worker")
         t.start()
 
+    # ── iter-49: F4.2 自愈动作执行器 (修复环节) ────────────────
+
+    def run_heal_action(self, action: str, category: str = "") -> dict:
+        """iter-49: 执行一个自愈动作并落盘 heal_log + WS 广播。
+
+        仅安全的只读动作注册为可自动执行; 未注册动作统一返回
+        manual_required (需人工介入)。诊断规则 action 标识映射:
+        check_peer ← timeout/connection, probe_balances ← auth/rate_limit。
+        返回: {action, category, result: ok/failed/manual_required, detail}
+        """
+        action = (action or "").strip()
+        category = (category or "").strip()
+        handlers = {
+            "check_peer": self._heal_check_peer,
+            "probe_balances": self._heal_probe_balances,
+        }
+        handler = handlers.get(action)
+        if handler is None:
+            record = {"category": category, "action": action,
+                      "result": "manual_required",
+                      "detail": "动作未注册为可自动执行, 需人工介入"}
+        else:
+            try:
+                detail = handler()
+                record = {"category": category, "action": action,
+                          "result": "ok", "detail": str(detail)[:500]}
+            except Exception as e:
+                record = {"category": category, "action": action,
+                          "result": "failed", "detail": str(e)[:300]}
+        try:
+            self.db.save_heal_record(record)
+        except Exception:
+            pass
+        try:
+            from .event_bus import publish_event
+            publish_event("heal_action", record)
+        except Exception:
+            pass
+        logger.info("[Heal] 自愈动作执行: %s/%s -> %s",
+                    action, category, record["result"])
+        return record
+
+    def _heal_check_peer(self) -> str:
+        """check_peer: 向所有已知设备发送 UDP 发现探测包 (只读)。"""
+        if not self.discovery:
+            return "发现服务未启动, 跳过探测"
+        devices = self.discovery.list_devices() or []
+        probed = 0
+        for d in devices:
+            ip = d.get("ip", "") if isinstance(d, dict) else ""
+            if not ip:
+                continue
+            try:
+                self.discovery.probe_ip(ip)
+                probed += 1
+            except Exception:
+                pass
+        return f"已向 {probed}/{len(devices)} 台已知设备发送探测包"
+
+    def _heal_probe_balances(self) -> str:
+        """probe_balances: 触发资源池余额探测 (R2, 验证密钥/额度状态)。"""
+        from .model_resources import probe_balances_global
+        data = probe_balances_global(timeout=10.0)
+        if data.get("error"):
+            raise RuntimeError(str(data["error"])[:200])
+        probed = int(data.get("probed") or 0)
+        supported = int(data.get("supported") or 0)
+        if supported == 0 and probed == 0:
+            return "无可探测余额的资源池 (未配置 api_key 或不支持余额查询)"
+        return f"余额探测完成: 探测 {probed}/{supported} 个支持余额查询的资源池"
+
     # ── Secretary 激活/停用 ───────────────────────────────────────
 
     def activate_secretary(self) -> dict:

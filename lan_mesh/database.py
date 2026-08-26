@@ -21,7 +21,7 @@ logger = get_logger("database")
 # 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
 # 迁移函数签名: (conn: sqlite3.Connection) -> None
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -163,6 +163,30 @@ def _migration_v6(conn: sqlite3.Connection):
         pass
 
 
+def _migration_v7(conn: sqlite3.Connection):
+    """迁移 v7: heal_log 自愈动作执行日志表 (iter-49 F4.2 修复环节)。
+
+    新库由 executescript 创建; 旧库走迁移保证幂等。
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS heal_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp    REAL NOT NULL DEFAULT 0,
+            category     TEXT NOT NULL DEFAULT '',
+            action       TEXT NOT NULL DEFAULT '',
+            result       TEXT NOT NULL DEFAULT '',
+            detail       TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    try:
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_heal_log_ts
+                ON heal_log(timestamp)
+        """)
+    except sqlite3.OperationalError:
+        pass
+
+
 # 迁移注册表: version → 迁移函数
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
@@ -171,6 +195,7 @@ _MIGRATIONS: dict[int, callable] = {
     4: _migration_v4,
     5: _migration_v5,
     6: _migration_v6,
+    7: _migration_v7,
 }
 
 
@@ -525,6 +550,19 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_error_log_module_ts
                 ON error_log(module, timestamp);
+
+            -- iter-49: 自愈动作执行日志表 (F4.2 修复环节, 跨重启保留)
+            CREATE TABLE IF NOT EXISTS heal_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp    REAL NOT NULL DEFAULT 0,
+                category     TEXT NOT NULL DEFAULT '',
+                action       TEXT NOT NULL DEFAULT '',
+                result       TEXT NOT NULL DEFAULT '',
+                detail       TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_heal_log_ts
+                ON heal_log(timestamp);
         """)
         conn.commit()
 
@@ -1910,3 +1948,39 @@ class Database:
                 d["context"] = {}
             result.append(d)
         return result
+
+    # ── iter-49: 自愈动作执行日志 (F4.2 修复环节) ──────────────
+
+    def save_heal_record(self, record: dict) -> None:
+        """iter-49: 持久化一条自愈动作执行记录到 heal_log。
+
+        result 取值: ok / failed / manual_required; detail 为执行摘要。
+        容量上限 500 行: 超出删除最旧行。
+        """
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO heal_log
+                (timestamp, category, action, result, detail)
+            VALUES (?, ?, ?, ?, ?)
+        """, (float(record.get("timestamp") or time.time()),
+              str(record.get("category", "")),
+              str(record.get("action", "")),
+              str(record.get("result", "")),
+              str(record.get("detail", ""))[:500]))
+        # 容量修剪: 只保留最近 500 行 (与 INSERT 同事务提交)
+        conn.execute("""
+            DELETE FROM heal_log WHERE id NOT IN (
+                SELECT id FROM heal_log ORDER BY id DESC LIMIT 500
+            )
+        """)
+        conn.commit()
+
+    def query_heal_history(self, limit: int = 50) -> list[dict]:
+        """iter-49: 查询自愈执行历史 (按写入序倒序, 供 /api/errors/heal/history)。"""
+        limit = max(1, min(int(limit), 200))
+        conn = self._get_conn()
+        rows = conn.execute("""
+            SELECT id, timestamp, category, action, result, detail
+            FROM heal_log ORDER BY id DESC LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
