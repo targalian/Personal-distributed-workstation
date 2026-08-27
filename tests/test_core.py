@@ -3514,3 +3514,141 @@ class TestHealActions:
         assert len(heals) == 2 and heals[0]["result"] == "manual_required"
 
 
+class TestAutoHeal:
+    """iter-50 (F4.2 自动化环节): 自动自愈守护 (周期扫描 + 冷却去重 + 默认关)。"""
+
+    def test_auto_heal_config_defaults(self, tmp_path):
+        """观测配置默认值: 守护默认关 + 周期/冷却默认; yaml 覆盖生效。"""
+        from lan_mesh.config import ObservabilityConfig, load_config
+        obs = ObservabilityConfig()
+        assert obs.auto_heal_enabled is False
+        assert obs.auto_heal_interval == 300.0
+        assert obs.auto_heal_cooldown == 600.0
+        p = tmp_path / "c.yaml"
+        p.write_text(
+            "observability:\n"
+            "  stall_check_interval: 60\n"
+            "  stall_minutes: 30\n"
+            "  auto_heal_enabled: true\n"
+            "  auto_heal_interval: 120\n"
+            "  auto_heal_cooldown: 240\n",
+            encoding="utf-8",
+        )
+        cfg = load_config(str(p))
+        assert cfg.observability.auto_heal_enabled is True
+        assert cfg.observability.auto_heal_interval == 120.0
+        assert cfg.observability.auto_heal_cooldown == 240.0
+
+    def test_auto_heal_once_disabled(self, tmp_path):
+        """守护关闭: 单轮扫描 no-op (runs 递增但零执行零落盘)。"""
+        from lan_mesh import error_tracker as et
+        from lan_mesh.config import AppConfig
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        ctl = StationController.__new__(StationController)
+        ctl.db = Database(str(tmp_path / "d.db"))
+        ctl.discovery = None
+        ctl.cfg = AppConfig()  # observability 默认关
+        ctl._auto_heal_last = {}
+        ctl._auto_heal_state = {"runs": 0, "last_run": 0.0, "last_actions": []}
+        et.error_tracker.clear()
+        try:
+            et.error_tracker.capture("llm", error_type="Timeout", message="请求超时")
+            s = ctl._auto_heal_once()
+            assert s["enabled"] is False
+            assert s["actions_run"] == [] and s["skipped_manual"] == 0
+            assert ctl._auto_heal_state["runs"] == 1
+            assert ctl._auto_heal_state["last_actions"] == []
+            assert len(ctl.db.query_heal_history()) == 0  # 未落盘
+            st = ctl.get_auto_heal_status()
+            assert st["enabled"] is False and st["runs"] == 1
+            assert st["interval"] == 300.0 and st["cooldown"] == 600.0
+        finally:
+            et.error_tracker.clear()
+
+    def test_auto_heal_once_enabled_flow(self, tmp_path):
+        """守护开启: 安全动作自动执行落盘 + 同类别冷却去重 + 需人工跳过。"""
+        from lan_mesh import error_tracker as et
+        from lan_mesh.config import AppConfig, ObservabilityConfig
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        ctl = StationController.__new__(StationController)
+        ctl.db = Database(str(tmp_path / "d.db"))
+        ctl.discovery = None
+        ctl.cfg = AppConfig(observability=ObservabilityConfig(
+            auto_heal_enabled=True))
+        ctl._auto_heal_last = {}
+        ctl._auto_heal_state = {"runs": 0, "last_run": 0.0, "last_actions": []}
+        et.error_tracker.clear()
+        try:
+            # 第一轮: timeout → check_peer 自动执行并落盘
+            et.error_tracker.capture("llm", error_type="Timeout", message="请求超时")
+            s1 = ctl._auto_heal_once()
+            assert s1["enabled"] is True
+            assert [a["action"] for a in s1["actions_run"]] == ["check_peer"]
+            assert s1["actions_run"][0]["result"] == "ok"
+            assert s1["skipped_cooldown"] == [] and s1["skipped_manual"] == 0
+            assert len(ctl.db.query_heal_history()) == 1
+            # 第二轮: timeout 同类别冷却跳过; 5xx 需人工计入 skipped_manual
+            et.error_tracker.capture("llm", error_type="HTTPError",
+                                     message="502 bad gateway")
+            s2 = ctl._auto_heal_once()
+            assert s2["actions_run"] == []
+            assert s2["skipped_cooldown"] == ["timeout"]
+            assert s2["skipped_manual"] == 1
+            assert ctl._auto_heal_state["runs"] == 2
+            assert ctl._auto_heal_state["last_actions"] == []
+            assert len(ctl.db.query_heal_history()) == 1  # 第二轮未落盘
+            st = ctl.get_auto_heal_status()
+            assert st["runs"] == 2 and st["last_run"] > 0
+        finally:
+            et.error_tracker.clear()
+
+    def test_auto_heal_endpoints(self, tmp_path):
+        """GET /api/errors/heal/status + POST /api/errors/heal/auto-check。"""
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.config import AppConfig
+        from lan_mesh.database import Database
+        from lan_mesh.station_api import create_station_router
+        from lan_mesh.station_controller import StationController
+
+        class _Ctl:
+            def __init__(self):
+                self.db = Database(str(tmp_path / "d.db"))
+                self.discovery = None
+                self.cfg = AppConfig()  # 默认守护关
+                self._auto_heal_last = {}
+                self._auto_heal_state = {"runs": 0, "last_run": 0.0,
+                                         "last_actions": []}
+
+            def get_auto_heal_status(self):
+                return StationController.get_auto_heal_status(self)
+
+            def _auto_heal_once(self):
+                return StationController._auto_heal_once(self)
+
+            def __getattr__(self, name):
+                return MagicMock()
+
+        app = FastAPI()
+        app.include_router(create_station_router(_Ctl()))
+        client = TestClient(app)
+        # 状态端点: 开关/周期/冷却/累计轮次
+        r = client.get("/api/errors/heal/status")
+        assert r.status_code == 200
+        st = r.json()
+        assert st["enabled"] is False
+        assert st["interval"] == 300.0 and st["cooldown"] == 600.0
+        assert st["runs"] == 0 and st["last_actions"] == []
+        # 手动触发扫描: 守护关 → no-op 摘要
+        r = client.post("/api/errors/heal/auto-check")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["enabled"] is False and body["actions_run"] == []
+        # runs 已递增
+        r = client.get("/api/errors/heal/status")
+        assert r.json()["runs"] == 1
+
+

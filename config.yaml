@@ -40,11 +40,15 @@ cloud_storage:
 # 关闭方式: auto_upgrade: false
 auto_upgrade: true
 
-# 可观测性配置 (iter-43)
+# 可观测性配置 (iter-43; iter-50 增自动自愈守护)
 # 任务停滞检测: 未到终态的任务超过阈值无阶段事件即标记停滞并主动告警 (WS + Bot)
 observability:
   stall_check_interval: 60   # 后台检查周期 (秒, 实际最小 10)
   stall_minutes: 30          # 停滞判定阈值 (分钟), 0 或负数 = 禁用检测与告警
+  # 自动自愈守护 (iter-50, 默认关): 周期扫描诊断结果, 对安全动作自动执行 (同类别冷却去重)
+  auto_heal_enabled: false   # 是否启用自动自愈 (打开后由守护线程周期执行)
+  auto_heal_interval: 300    # 自动自愈扫描周期 (秒, 实际最小 30)
+  auto_heal_cooldown: 600    # 同类别动作冷却期 (秒), 防执行风暴
 
 # 安全配置
 security:

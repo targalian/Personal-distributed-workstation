@@ -159,6 +159,16 @@ def build_basic_routes(controller) -> APIRouter:
         """iter-49: 自愈动作执行历史 (heal_log 表, 跨重启保留)。"""
         return {"heals": db.query_heal_history(limit=min(limit, 200))}
 
+    @router.get("/api/errors/heal/status")
+    async def error_heal_status():
+        """iter-50: 自动自愈守护状态 (开关/周期/冷却/累计轮次/最近动作)。"""
+        return controller.get_auto_heal_status()
+
+    @router.post("/api/errors/heal/auto-check")
+    async def error_heal_auto_check():
+        """iter-50: 手动触发一轮自动自愈扫描 (与守护线程同逻辑)。"""
+        return controller._auto_heal_once()
+
     # ════════════════════════════════════════════════════════════
     #  角色激活端点
     # ════════════════════════════════════════════════════════════

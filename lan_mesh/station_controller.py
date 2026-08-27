@@ -116,6 +116,11 @@ class StationController:
         # 发现服务 (延迟创建, start() 中初始化)
         self.discovery: Optional[DiscoveryService] = None
 
+        # iter-50: 自动自愈守护状态 (冷却表按类别 + 执行摘要, 端点/面板可查)
+        self._auto_heal_last: dict[str, float] = {}
+        self._auto_heal_state: dict = {"runs": 0, "last_run": 0.0,
+                                       "last_actions": []}
+
         # 工作站主管
         self.station_director = StationDirector(
             db=self.db,
@@ -298,6 +303,74 @@ class StationController:
         if supported == 0 and probed == 0:
             return "无可探测余额的资源池 (未配置 api_key 或不支持余额查询)"
         return f"余额探测完成: 探测 {probed}/{supported} 个支持余额查询的资源池"
+
+    # ── iter-50: F4.2 自动自愈守护 (修复环节自动化) ──────────
+
+    _AUTO_HEAL_ACTIONS = {"check_peer", "rotate_key", "switch_pool"}  # retry_or_switch 需人工
+
+    def _auto_heal_once(self) -> dict:
+        """iter-50: 单轮自动自愈扫描 — 诊断缓冲错误, 对安全动作自动执行 (冷却去重)。
+
+        仅处理 action 属于 _AUTO_HEAL_ACTIONS 的 findings (retry_or_switch 需人工跳过);
+        同类别冷却期内跳过防风暴。返回本轮执行摘要 (供守护线程与手动端点复用)。
+        """
+        obs = self.cfg.observability
+        state = self._auto_heal_state
+        state["runs"] += 1
+        state["last_run"] = time.time()
+        summary = {"enabled": bool(obs.auto_heal_enabled),
+                   "actions_run": [], "skipped_cooldown": [],
+                   "skipped_manual": 0}
+        if not obs.auto_heal_enabled:
+            state["last_actions"] = []
+            return summary
+        try:
+            from .error_tracker import error_tracker
+            diag = error_tracker.diagnose(window_records=200)
+        except Exception:
+            return summary
+        now = time.time()
+        for f in diag.get("findings") or []:
+            action = str(f.get("action", ""))
+            category = str(f.get("category", ""))
+            if action not in self._AUTO_HEAL_ACTIONS:
+                summary["skipped_manual"] += 1
+                continue
+            last = self._auto_heal_last.get(category, 0.0)
+            if now - last < obs.auto_heal_cooldown:
+                summary["skipped_cooldown"].append(category)
+                continue
+            rec = self.run_heal_action(action, category)
+            self._auto_heal_last[category] = now
+            summary["actions_run"].append(
+                {"category": category, "action": rec.get("action"),
+                 "result": rec.get("result")})
+        state["last_actions"] = summary["actions_run"]
+        return summary
+
+    def _auto_heal_loop(self):
+        """iter-50: 自动自愈守护线程 — 按观测配置周期扫描 (异常隔离)。"""
+        while True:
+            try:
+                obs = self.cfg.observability
+                interval = max(30.0, float(obs.auto_heal_interval or 300.0))
+            except Exception:
+                interval = 300.0
+            time.sleep(interval)
+            try:
+                self._auto_heal_once()
+            except Exception as e:
+                logger.warning("[AutoHeal] 自动自愈扫描异常 (no-op): %s", e)
+
+    def get_auto_heal_status(self) -> dict:
+        """iter-50: 自动自愈守护状态 (端点 /api/errors/heal/status)。"""
+        obs = self.cfg.observability
+        state = self._auto_heal_state
+        return {"enabled": bool(obs.auto_heal_enabled),
+                "interval": float(obs.auto_heal_interval or 300.0),
+                "cooldown": float(obs.auto_heal_cooldown or 600.0),
+                "runs": state["runs"], "last_run": state["last_run"],
+                "last_actions": state["last_actions"]}
 
     # ── Secretary 激活/停用 ───────────────────────────────────────
 
@@ -2275,6 +2348,16 @@ class StationController:
             error_tracker.set_persist_callback(_on_error_persist)
         except Exception as e:
             logger.warning("错误追踪接线失败 (no-op): %s", e)
+
+        # iter-50: F4.2 自动自愈守护线程 (周期扫描诊断 + 安全动作自动执行, 默认关)
+        try:
+            auto_heal_thread = threading.Thread(
+                target=self._auto_heal_loop, name="station-auto-heal", daemon=True
+            )
+            auto_heal_thread.start()
+            self._threads.append(auto_heal_thread)
+        except Exception as e:
+            logger.warning("自动自愈守护启动失败 (no-op): %s", e)
 
         # F3.1: 启动自动扩缩容监控
         self._start_autoscaler()

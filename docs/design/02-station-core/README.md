@@ -203,6 +203,7 @@ agent_runtime.execute()
 - 错误记录落盘持久化 (iter-47, F1.4 补齐): Database v6 迁移新增 `error_log` 表 (新库 executescript + 旧库迁移双补, module+timestamp 索引); `save_error_record()` 写入 (context JSON 化, 容量修剪保留最近 2000 行), `query_error_history()` 倒序查询 (模块过滤, limit 夹取 1~500); `start()` 装配 `error_tracker.set_persist_callback` 落盘 (异常隔离); 端点 `/api/errors/history?limit=&module=` 跨重启可读
 - 历史诊断扩展 (iter-48, F4.2): `/api/errors/diagnosis` 增 `source=history` 参数 — 改诊断 `error_log` 持久化记录 (默认 `buffer` 行为不变), 规则匹配抽为模块级纯函数 `diagnose_records()` 双源复用; 重启后缓冲空仍可诊断落盘历史不断档
 - 自愈动作执行 (iter-49, F4.2 修复环节): `run_heal_action(action, category)` 执行器 — 仅注册安全只读动作 (`check_peer` 向已知设备 UDP 探测 / `probe_balances` 资源池余额探测), 未注册动作返回 `manual_required`; 结果落盘 `heal_log` (Database v7 迁移, 容量修剪 500 行) + event_bus `heal_action` 广播; 端点 `POST /api/errors/heal?action=&category=` (rotate_key/switch_pool 映射为 probe_balances) + `GET /api/errors/heal/history?limit=`
+- 自动自愈守护 (iter-50, F4.2 自动化环节): `_auto_heal_loop()` 守护线程周期扫描诊断缓冲 — 仅 `_AUTO_HEAL_ACTIONS` 安全动作 (check_peer/rotate_key/switch_pool) 自动执行, 同类别冷却去重防风暴 (config.yaml `observability.auto_heal_*` 驱动, 默认关/300s 周期/600s 冷却/周期最小 30s, 异常隔离); 端点 `GET /api/errors/heal/status` (开关/周期/冷却/累计轮次/最近动作) + `POST /api/errors/heal/auto-check` (手动触发一轮与守护同逻辑)
 
 **P2 #7 DB 自动备份**: `__init__` 末尾调用 `backup()` — sqlite3 在线
 备份 API 一致性快照至 `~/.lan_mesh/backups/<stem>-<时间戳>.sqlite3`,
@@ -223,6 +224,7 @@ agent_runtime.execute()
 | 2026-08-27 | iter-47 | F1.4 错误记录落盘持久化: database v6 迁移 error_log 表 + save_error_record/query_error_history (容量修剪 2000 行) + start() 落盘回调接线 + /api/errors/history 端点 (跨重启保留) |
 | 2026-08-27 | iter-48 | F4.2 诊断范围扩展: /api/errors/diagnosis 增 source=history (诊断 error_log 落盘记录) + diagnose_records 纯函数抽取双源复用, 重启后诊断不断档 |
 | 2026-08-27 | iter-49 | F4.2 自愈动作执行 (修复环节): run_heal_action 执行器 (check_peer/probe_balances 安全动作 + 未注册返回 manual_required) + database v7 迁移 heal_log 表 (容量修剪 500 行) + /api/errors/heal 端点 (动作映射) + /api/errors/heal/history 历史端点 |
+| 2026-08-28 | iter-50 | F4.2 自动自愈守护: _auto_heal_loop 周期扫描 + _auto_heal_once 冷却去重 (默认关, config.yaml observability.auto_heal_* 驱动) + /api/errors/heal/status 状态端点 + /api/errors/heal/auto-check 手动触发 (UI-046) |
 | 2026-08-27 | iter-44 | F1.4 错误追踪闭环: start() 装配 error_tracker 双回调 (error_captured → WS 实时刷面板; error_burst → 事件总线 + Bot 突发告警, 冷却去重); Dashboard 错误追踪面板 (UI-041) |
 | 2026-08-25 | iter-38 | P3 任务流全链路追踪: trace_task_event/read_task_flow/task_flow_waterfall; pm_agent report_status 单点钩子 + 提交/子任务结果/交付阶段点; /api/runtime/task-flow 瀑布端点; Dashboard 瀑布查询 (UI-036) |
 | 2026-08-25 | iter-36 | P0/P1 运行时追踪与性能审计: runtime_trace.py (JSONL 子任务轨迹 + SQLite llm_call_log 审计表); agent_runtime execute() 计时钩子; LLM 三路径 (chat/tools/cli) trace_llm_call; /api/runtime/{metrics,trace,calls,stats} 端点; database v5 迁移 |

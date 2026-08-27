@@ -83,6 +83,14 @@ UDP 探测已知设备 / `probe_balances` 余额探测), 未注册动作 (如 `r
 (Database v7 迁移, 容量修剪 500 行) 并广播 `heal_action` 事件,
 完成「检测→诊断→修复」闭环的可审计修复环节。
 
+**自动自愈守护** (iter-50, 自动化环节): `_auto_heal_loop()` 守护线程按
+`observability.auto_heal_interval` (最小 30s) 周期调用 `_auto_heal_once()` —
+诊断缓冲后仅对 `_AUTO_HEAL_ACTIONS` 安全动作 (check_peer/rotate_key/switch_pool)
+自动执行 (复用 run_heal_action), 同类别冷却期 (`auto_heal_cooldown`) 内跳过
+防执行风暴, 需人工动作计入 `skipped_manual`; 默认关 (`auto_heal_enabled=false`),
+守护/扫描/执行全链异常隔离 (no-op + warning); 状态经 `get_auto_heal_status()`
+暴露 (开关/周期/冷却/累计轮次/最近动作)。
+
 ## host_rating.py — 主机评级
 
 CPU/内存/磁盘综合得分（0~100）→ S/A/B/C/D 五级 + 可读摘要。
@@ -124,5 +132,6 @@ secretary.py 删除 (P3)，Secretary 端路由由 station_routes_* 承担。
 | 2026-08-27 | iter-47 | error_tracker 落盘持久化: set_persist_callback 第三回调 (异常隔离, 每条捕获触发) → database error_log 表, 重启不丢诊断历史 |
 | 2026-08-27 | iter-48 | 诊断规则抽取模块级纯函数 diagnose_records (实例 diagnose 复用), 支持历史落盘记录诊断双源 |
 | 2026-08-27 | iter-49 | F4.2 修复环节: run_heal_action 自愈动作执行器 (安全只读动作注册制 + 未注册返回 manual_required), 执行记录落盘 heal_log (v7 迁移) + heal_action 事件广播 |
+| 2026-08-28 | iter-50 | F4.2 自动化环节: _auto_heal_loop 守护线程 + _auto_heal_once 单轮扫描 (安全动作集自动执行 + 同类别冷却去重 + 需人工跳过计数), config.yaml observability.auto_heal_* 驱动 (默认关), get_auto_heal_status 状态暴露 |
 | 2026-08-16 | iter-31 | api.py 按端点域拆分 (275 行工厂 → 装配层 + worker_routes_basic/pm/p2p 三模块; 路由集合/顺序/行为不变) + 工厂签名类型标注补齐 |
 | 2026-08-16 | iter-27 后 | 初建 |

@@ -2909,17 +2909,18 @@ async function loadErrors(){
   const box=document.getElementById('error-panel');
   if(!box)return;
   try{
-    const [rs,rr,rd,rh,rhd,rhl]=await Promise.all([apiFetch('/api/errors/stats'),apiFetch('/api/errors/recent?limit=15'),apiFetch('/api/errors/diagnosis?window=200'),apiFetch('/api/errors/history?limit=20'),apiFetch('/api/errors/diagnosis?source=history&window=200'),apiFetch('/api/errors/heal/history?limit=10')]);
+    const [rs,rr,rd,rh,rhd,rhl,rhs]=await Promise.all([apiFetch('/api/errors/stats'),apiFetch('/api/errors/recent?limit=15'),apiFetch('/api/errors/diagnosis?window=200'),apiFetch('/api/errors/history?limit=20'),apiFetch('/api/errors/diagnosis?source=history&window=200'),apiFetch('/api/errors/heal/history?limit=10'),apiFetch('/api/errors/heal/status')]);
     if(!rs.ok||!rr.ok){box.innerHTML='<div class="empty"><p>加载失败: '+(rs.status||rr.status)+'</p></div>';return;}
-    // 诊断建议/持久化历史/自愈历史失败不影响主面板 (降级为无该区块)
+    // 诊断建议/持久化历史/自愈历史/守护状态失败不影响主面板 (降级为无该区块)
     const diag=rd.ok?await rd.json():null;
     const hist=rh.ok?((await rh.json()).errors||[]):null;
     const hdiag=rhd.ok?await rhd.json():null;
     const heals=rhl.ok?((await rhl.json()).heals||[]):null;
-    renderErrors(await rs.json(),(await rr.json()).errors||[],diag,hist,hdiag,heals);
+    const healStatus=rhs.ok?await rhs.json():null;
+    renderErrors(await rs.json(),(await rr.json()).errors||[],diag,hist,hdiag,heals,healStatus);
   }catch(e){box.innerHTML='<div class="empty"><p>加载失败: '+esc(e.message)+'</p></div>';}
 }
-function renderErrors(stats,errors,diag,hist,hdiag,heals){
+function renderErrors(stats,errors,diag,hist,hdiag,heals,healStatus){
   const box=document.getElementById('error-panel');
   const total=stats.total_errors||0;
   // 统计卡片 (总错误数/窗口计数与阈值对比, 超限红色) + 按模块分布行
@@ -2945,7 +2946,15 @@ function renderErrors(stats,errors,diag,hist,hdiag,heals){
   let diagBlock=mkDiag(diag,'🔧 自愈诊断建议','🔧 自愈诊断');
   let histDiagBlock=mkDiag(hdiag,'🗂 历史诊断 (持久化记录)','🗂 历史诊断');
   // iter-49: 🩹 自愈执行历史 (heal_log 表, 跨重启保留), 空/拉取失败时隐藏
+  // iter-50: 顶部附 🛡 自动自愈守护状态条 (开关/周期/冷却/轮次 + 立即检查)
   const fmtFull=ts=>{try{return new Date(ts*1000).toLocaleString();}catch(e){return '';}};
+  let healStatusBlock='';
+  if(healStatus){
+    healStatusBlock=`<div style="font-size:12px;color:var(--dim);margin:10px 0 4px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">`
+      +`<span>🛡 自动自愈: <b style="color:${healStatus.enabled?'#4ade80':'var(--dim)'}">${healStatus.enabled?'已启用':'已禁用'}</b> (周期 ${Math.round(healStatus.interval||0)}s · 冷却 ${Math.round(healStatus.cooldown||0)}s)</span>`
+      +(healStatus.runs?`<span>已扫描 ${healStatus.runs} 轮</span>`:'')
+      +`<button onclick="runAutoHealCheck()" style="background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.4);color:#4ade80;border-radius:6px;padding:2px 10px;font-size:11px;cursor:pointer">🔍 立即检查</button></div>`;
+  }
   let healBlock='';
   if(heals&&heals.length){
     const RES={ok:'<span style="color:#4ade80">✅ 已执行</span>',failed:'<span style="color:#ff6b6b">❌ 失败</span>',manual_required:'<span style="color:#ffa94d">🙋 需人工</span>'};
@@ -2960,11 +2969,21 @@ function renderErrors(stats,errors,diag,hist,hdiag,heals){
       +`<table class="fleet-table"><thead><tr><th>时间</th><th>模块</th><th>类型</th><th>消息</th></tr></thead><tbody>`
       +hist.slice().reverse().map(e=>`<tr><td style="white-space:nowrap">${fmtFull(e.timestamp)}</td><td><b>${esc(e.module||'')}</b></td><td style="color:#74c0fc">${esc(e.error_type||'')}</td><td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.message||'')}">${esc(e.message||'')}</td></tr>`).join('')+`</tbody></table>`;
   }
-  if(!errors.length){box.innerHTML=cards+diagBlock+histDiagBlock+healBlock+histBlock+'<div class="empty"><p>暂无错误记录</p><p class="hint">进程内捕获的异常会实时汇聚于此 (环形保留最近 500 条)</p></div>';return;}
+  if(!errors.length){box.innerHTML=cards+diagBlock+histDiagBlock+healStatusBlock+healBlock+histBlock+'<div class="empty"><p>暂无错误记录</p><p class="hint">进程内捕获的异常会实时汇聚于此 (环形保留最近 500 条)</p></div>';return;}
   const fmtTs=ts=>{try{return new Date(ts*1000).toLocaleTimeString();}catch(e){return '';}};
   const tbl=`<table class="fleet-table"><thead><tr><th>时间</th><th>模块</th><th>类型</th><th>消息</th></tr></thead><tbody>`+
     errors.slice().reverse().map(e=>`<tr><td style="white-space:nowrap">${fmtTs(e.timestamp)}</td><td><b>${esc(e.module||'')}</b></td><td style="color:#ffa94d">${esc(e.error_type||'')}</td><td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.message||'')}">${esc(e.message||'')}</td></tr>`).join('')+`</tbody></table>`;
-  box.innerHTML=cards+diagBlock+histDiagBlock+healBlock+tbl+histBlock;
+  box.innerHTML=cards+diagBlock+histDiagBlock+healStatusBlock+healBlock+tbl+histBlock;
+}
+// iter-50: 🛡 手动触发一轮自动自愈扫描 (与守护线程同逻辑)
+async function runAutoHealCheck(){
+  try{
+    const r=await apiFetch('/api/errors/heal/auto-check',{method:'POST'});
+    const d=await r.json();
+    const n=(d.actions_run||[]).length;
+    showToast(n?('已自动执行 '+n+' 个自愈动作'):('扫描完成: '+(d.skipped_cooldown&&d.skipped_cooldown.length?'部分冷却中/':'无需执行或需人工')), n?'ok':'info');
+    loadErrors();
+  }catch(e){showToast('检查失败: '+esc(e.message),'err');}
 }
 // iter-49: 🩹 自愈动作执行 (F4.2 修复环节) — POST 后 Toast 结果并刷新错误面板
 async function runHeal(action,category){

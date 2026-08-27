@@ -43,6 +43,7 @@
 - 持久化历史区 (iter-47): `loadErrors()` 并行拉取 `/api/errors/history?limit=20` (失败降级隐藏该区块)；`renderErrors()` 在实时错误表后渲染 📜 持久化历史表 (时间/模块/类型蓝紫 #74c0fc/消息, 倒序展示, 跨重启保留)；空缓冲时历史区仍显示 (与进程内缓冲解耦)
 - 历史诊断区 (iter-48): `loadErrors()` 并行拉取 `/api/errors/diagnosis?source=history&window=200` (失败降级隐藏)；诊断卡片渲染抽为 `mkDiag()` 同构渲染器复用于缓冲诊断 (🔧) 与历史诊断 (🗂) 双区块 — 重启后缓冲空时历史诊断仍展示分组建议, 诊断不断档；iter-49 起每张诊断卡片右侧增绿色 🩹 执行按钮 (`runHeal()` → `POST /api/errors/heal?action=&category=`, Toast 结果后刷新面板)
 - 自愈执行历史区 (iter-49): `loadErrors()` 并行拉取 `/api/errors/heal/history?limit=10` (失败降级隐藏)；`renderErrors()` 渲染 🩹 自愈执行历史表 (时间/动作/类别/结果徽标 ✅已执行·❌失败·🙋需人工/详情, 倒序展示, heal_log 跨重启保留)
+- 自动自愈状态条 (iter-50): `loadErrors()` 并行拉取 `/api/errors/heal/status` (失败降级隐藏)；`renderErrors()` 渲染 🛡 状态条 — 已启用(绿)/已禁用(灰) + 周期/冷却 + 已扫描轮次 + 🔍 立即检查按钮 (`runAutoHealCheck()` → `POST /api/errors/heal/auto-check`, 有执行 Toast ok/无执行 Toast info 后刷新面板)
 
 **关键渲染函数**（改动时注意同步更新本文档）:
 - `renderHosts()`: 主机卡片 + 统计行（含版本分布 `vMap`/`vTxt`，
@@ -74,3 +75,4 @@
 | 2026-08-27 | iter-47 | 错误面板增 📜 持久化历史区 (error_log 表跨重启保留 + 接口失败降级隐藏 + 与进程内缓冲解耦)，UI-043 实测通过 |
 | 2026-08-27 | iter-48 | 错误面板增 🗂 历史诊断区 (mkDiag 同构渲染器双源复用 + 重启后诊断不断档)，UI-044 实测通过 |
 | 2026-08-27 | iter-49 | 错误面板增 🩹 自愈执行能力 (诊断卡片执行按钮 + 自愈执行历史区 + Toast 结果反馈)，UI-045 实测通过 |
+| 2026-08-28 | iter-50 | 错误面板增 🛡 自动自愈守护状态条 (已启用/已禁用 + 周期/冷却/扫描轮次 + 🔍 立即检查按钮)，UI-046 实测通过 |

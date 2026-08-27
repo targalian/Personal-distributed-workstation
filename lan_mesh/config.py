@@ -111,9 +111,12 @@ class BotConfig(BaseModel):
 
 
 class ObservabilityConfig(BaseModel):
-    """可观测性配置 (iter-43: 任务停滞检测参数配置化)。"""
+    """可观测性配置 (iter-43: 任务停滞检测参数配置化; iter-50: 自动自愈守护)。"""
     stall_check_interval: float = 60.0   # 停滞检查周期 (秒, 实际最小 10)
     stall_minutes: float = 30.0          # 停滞判定阈值 (分钟), ≤0 禁用检测与告警
+    auto_heal_enabled: bool = False      # 自动自愈守护开关 (默认关, 需手动开启)
+    auto_heal_interval: float = 300.0    # 自动自愈扫描周期 (秒, 实际最小 30)
+    auto_heal_cooldown: float = 600.0    # 同类别动作冷却期 (秒), 防执行风暴
 
 
 class AppConfig(BaseModel):
