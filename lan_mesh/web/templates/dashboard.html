@@ -2770,7 +2770,7 @@ async function dagAddNode(){
   const name=await showInputDialog('节点名称:','新子任务');
   if(!name)return;
   const skill=await showInputDialog('技能 (code_generation/code_review/shell_exec/...):','code_generation')||'code_generation';
-  const id='node-'+Date.now().toString(36);
+  const id='st-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6);
   dagNodes.push({id,name,status:'pending',skill,description:'',input_data:{},output_data:{},assigned_agent_id:'',condition_expr:'',x:100+Math.random()*200,y:100+Math.random()*200});
   renderDAG();
   document.getElementById('dag-status').textContent=`${dagNodes.length} 节点 / ${dagEdges.length} 边`;
@@ -2788,9 +2788,23 @@ function dagDeleteSelected(){
 }
 
 async function saveDAG(){
-  // Orchestrator 已废弃 (PM 架构): 手工编辑图保存端点已下线,
-  // DAG 由 PM 规划自动生成, 本面板仅供只读查看/演示
-  showToast('手工保存已停用: DAG 由 PM 自动生成维护','info');
+  // iter-51 (F4.3): 手工/自然语言编辑图保存端点已恢复,
+  // 仅 pending 任务可保存 (后端校验环/状态)
+  if(!dagTaskId){showToast('请先选择任务','err');return;}
+  const nodes=dagNodes.map(n=>({
+    id:n.id,name:n.name||'未命名',status:n.status||'pending',
+    skill:n.skill||'',description:n.description||'',x:n.x||0,y:n.y||0,
+  }));
+  const edges=dagEdges.map(e=>({source:e.source,target:e.target,condition:e.condition||'',description:e.description||''}));
+  try{
+    const r=await apiFetch(`/api/tasks/${dagTaskId}/graph`,{
+      method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({nodes,edges}),
+    });
+    const d=await r.json();
+    if(r.ok&&d.ok){showToast('✅ '+(d.message||'已保存'));}
+    else{showToast('保存失败: '+(d.detail||d.message||'未知错误'),'err');}
+  }catch(e){showToast('保存失败: '+e.message,'err');}
 }
 
 async function refreshDagTaskSelect(){

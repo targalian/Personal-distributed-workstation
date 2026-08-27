@@ -38,10 +38,12 @@ Worker → 结果聚合（显式状态机 + Checkpoint, 借鉴 LangGraph Supervi
 - `_classify_task()`: 任务类型分类工具函数 (单测覆盖中)
 - `GraphState` / `PHASE_TRANSITIONS`: 早期状态机数据定义 (考古资产)
 
-**配套下线**: station_api 的 `PUT /api/tasks/{id}/graph`、
-`POST /api/tasks/{id}/resume`、`GET /api/tasks/{id}/graph-state` 三端点
-（原本永远 503）已删除; `GET /api/tasks/{id}/graph` 改为纯 DB 重建
-（checkpoint 优先）; 前端图编辑器保存按钮改为停用提示。
+**配套下线与恢复**: station_api 的 `POST /api/tasks/{id}/resume`、
+`GET /api/tasks/{id}/graph-state` 两端点（原本永远 503）已删除;
+`GET /api/tasks/{id}/graph` 改为纯 DB 重建（checkpoint 优先, 复用
+StationController.get_task_graph_data）; `PUT /api/tasks/{id}/graph` 编辑端点
+已随 iter-51 (F4.3) 恢复 — 重接 DB 路径 (update_task_graph: 仅 pending 可编辑 +
+环检测拒绝 + 落盘子任务列表与 checkpoint dag_json), 前端图编辑器保存按钮同步恢复。
 
 ## pm_agent.py / pm_planner.py / pm_dispatcher.py / pm_monitor.py — PM 四件套
 
@@ -93,5 +95,6 @@ task_id/pm_id)、交付链异常 (`_deliver` 后, 交付丢失风险)、记忆�
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
 | 2026-08-27 | iter-45 | pm_agent 三处错误追踪埋点 (任务级失败/交付链/记忆沉淀链, 异常隔离) |
+| 2026-08-28 | iter-51 | F4.3 自然语言 DAG 编辑: PUT /api/tasks/{id}/graph 编辑端点恢复 (重接 DB 路径, 仅 pending 可编辑 + 环检测) + GET 端点复用 get_task_graph_data + 秘书自然语言编辑意图 |
 | 2026-08-16 | iter-30 补 | orchestrator 收敛裁定: 降级工具库 + stub 兼容, 3 个死端点下线, graph 端点改 DB 重建 |
 | 2026-08-16 | iter-27 后 | 初建 |

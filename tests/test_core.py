@@ -3652,3 +3652,260 @@ class TestAutoHeal:
         assert r.json()["runs"] == 1
 
 
+class TestDagEdit:
+    """iter-51 (F4.3): 自然语言 DAG 编辑 (读写图方法 + PUT 编辑端点 + 秘书意图)。"""
+
+    @staticmethod
+    def _make_task(db, task_id="task-abc123456789", status="pending",
+                   names=("需求分析", "编码实现")):
+        """创建带两个串联子任务的任务并落盘。"""
+        from lan_mesh.protocol import SubTask, Task
+        sts = [
+            SubTask(subtask_id=f"st-{i}", parent_task_id=task_id,
+                    name=n).to_dict() for i, n in enumerate(names)
+        ]
+        sts[1]["depends_on"] = ["st-0"]
+        db.save_task(Task(task_id=task_id, name="测试任务",
+                          status=status, subtasks=sts))
+        return task_id
+
+    def test_get_task_graph_data_sources(self, tmp_path):
+        """读图三来源: 子任务重建 / checkpoint 优先 / 无图 None。"""
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        ctl = StationController.__new__(StationController)
+        ctl.db = Database(str(tmp_path / "d.db"))
+        ctl.discovery = None
+        tid = self._make_task(ctl.db)
+        # 子任务重建
+        g = ctl.get_task_graph_data(tid)
+        assert len(g["nodes"]) == 2 and len(g["edges"]) == 1
+        assert g["edges"][0] == {"source": "st-0", "target": "st-1",
+                                 "condition": "", "description": ""}
+        # checkpoint 优先 (dag_json 带 3 节点)
+        ctl.db.save_checkpoint("ck1", tid, "dispatch",
+                               '{"nodes": [{"id": "a"}, {"id": "b"}, '
+                               '{"id": "c"}], "edges": []}', "{}", "{}")
+        g = ctl.get_task_graph_data(tid)
+        assert len(g["nodes"]) == 3
+        # 无图任务
+        assert ctl.get_task_graph_data("task-missing") is None
+
+    def test_update_task_graph_validations(self, tmp_path):
+        """三拒绝: 任务不存在 / 非 pending / 环检测。"""
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        ctl = StationController.__new__(StationController)
+        ctl.db = Database(str(tmp_path / "d.db"))
+        ctl.discovery = None
+        # 不存在
+        r = ctl.update_task_graph("task-missing", {"nodes": [], "edges": []})
+        assert not r["ok"] and "不存在" in r["message"]
+        # 非 pending (running)
+        tid = self._make_task(ctl.db, status="running")
+        r = ctl.update_task_graph(tid, {"nodes": [], "edges": []})
+        assert not r["ok"] and "不可编辑" in r["message"]
+        # 环 (A→B→A)
+        tid = self._make_task(ctl.db)
+        cyc = {"nodes": [{"id": "a", "name": "A"}, {"id": "b", "name": "B"}],
+               "edges": [{"source": "a", "target": "b"},
+                         {"source": "b", "target": "a"}]}
+        r = ctl.update_task_graph(tid, cyc)
+        assert not r["ok"] and "循环依赖" in r["message"]
+
+    def test_update_task_graph_save_ok(self, tmp_path):
+        """保存成功: 子任务落盘 + checkpoint dag_json 同步 + 读回新图。"""
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        ctl = StationController.__new__(StationController)
+        ctl.db = Database(str(tmp_path / "d.db"))
+        ctl.discovery = None
+        tid = self._make_task(ctl.db)
+        ctl.db.save_checkpoint("ck1", tid, "dispatch",
+                               '{"nodes": [{"id": "old"}], "edges": []}',
+                               "{}", "{}")
+        new_graph = {"nodes": [
+            {"id": "st-0", "name": "需求分析"},
+            {"id": "st-1", "name": "编码实现"},
+            {"id": "st-2", "name": "发布验收"},
+        ], "edges": [
+            {"source": "st-0", "target": "st-1"},
+            {"source": "st-1", "target": "st-2"},
+        ]}
+        r = ctl.update_task_graph(tid, new_graph)
+        assert r["ok"] and "3 节点" in r["message"]
+        # DB 落盘
+        task = ctl.db.get_task(tid)
+        assert len(task.subtasks) == 3
+        names = [st["name"] for st in task.subtasks]
+        assert "发布验收" in names
+        # checkpoint dag_json 已同步 (读图走 checkpoint 优先)
+        g = ctl.get_task_graph_data(tid)
+        assert len(g["nodes"]) == 3
+        assert any(n["name"] == "发布验收" for n in g["nodes"])
+
+    def test_graph_put_endpoint(self, tmp_path):
+        """PUT /api/tasks/{tid}/graph: 成功 / 环 409 / 404 / 缺字段 400。"""
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.database import Database
+        from lan_mesh.station_api import create_station_router
+        from lan_mesh.station_controller import StationController
+
+        class _Ctl:
+            def __init__(self):
+                self.db = Database(str(tmp_path / "d.db"))
+                self.discovery = None
+                self.secretary_active = True
+
+            def get_task_graph_data(self, task_id):
+                return StationController.get_task_graph_data(self, task_id)
+
+            def update_task_graph(self, task_id, graph_data):
+                return StationController.update_task_graph(
+                    self, task_id, graph_data)
+
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        tid = self._make_task(ctl.db)
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+        # GET 读图
+        r = client.get(f"/api/tasks/{tid}/graph")
+        assert r.status_code == 200 and len(r.json()["nodes"]) == 2
+        # PUT 成功
+        new_graph = {"nodes": [
+            {"id": "st-0", "name": "需求分析"},
+            {"id": "st-1", "name": "编码实现"},
+            {"id": "st-2", "name": "测试验收"},
+        ], "edges": [
+            {"source": "st-0", "target": "st-1"},
+            {"source": "st-1", "target": "st-2"},
+        ]}
+        r = client.put(f"/api/tasks/{tid}/graph", json=new_graph)
+        assert r.status_code == 200 and r.json()["ok"]
+        assert len(client.get(f"/api/tasks/{tid}/graph").json()["nodes"]) == 3
+        # 环 → 409
+        cyc = {"nodes": [{"id": "a", "name": "A"}, {"id": "b", "name": "B"}],
+               "edges": [{"source": "a", "target": "b"},
+                         {"source": "b", "target": "a"}]}
+        r = client.put(f"/api/tasks/{tid}/graph", json=cyc)
+        assert r.status_code == 409 and "循环依赖" in r.json()["detail"]
+        # 404
+        r = client.put("/api/tasks/task-missing/graph",
+                       json={"nodes": [], "edges": []})
+        assert r.status_code == 409 and "不存在" in r.json()["detail"]
+        # 缺字段 400
+        r = client.put(f"/api/tasks/{tid}/graph", json={"nodes": []})
+        assert r.status_code == 400
+
+    def test_nl_edit_intent_detect(self):
+        """关键词意图: 图编辑表达命中 edit_task_graph, 旧关键词不误命中。"""
+        from lan_mesh.chat_handler import ChatHandler
+        ch = ChatHandler.__new__(ChatHandler)
+        for msg in ("加一步: 发布验收", "删除步骤 编码实现",
+                    "跳过步骤 测试验收", "给任务加依赖 A→B"):
+            assert ch._detect_action(msg) == "edit_task_graph"
+        assert ch._detect_action("查询状态") == "query_status"
+        assert ch._detect_action("加个好友") == ""  # 不误命中
+
+    def test_nl_edit_action_end_to_end(self, tmp_path):
+        """端到端: 自然语言加一步 → LLM 解析 → 落盘 → 读回新节点。"""
+        from lan_mesh.chat_handler import ChatHandler
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+
+        class _Runtime:
+            def _call_llm_with_routing(self, prompt, opts):
+                return {"content": '{"op": "add_node", '
+                        '"node_name": "发布验收", "description": "交付验收"}'}
+
+        ctl = StationController.__new__(StationController)
+        ctl.db = Database(str(tmp_path / "d.db"))
+        ctl.discovery = None
+        tid = self._make_task(ctl.db, names=("需求分析", "编码实现"))
+        ch = ChatHandler.__new__(ChatHandler)
+        ch.runtime = _Runtime()
+        ch.controller = ctl
+        # 指令带 task id + 加一步
+        out = ch._action_edit_task_graph(f"给任务 {tid} 加一步: 发布验收")
+        assert "图编辑完成" in out and "3 节点" in out
+        g = ctl.get_task_graph_data(tid)
+        names = [n["name"] for n in g["nodes"]]
+        assert "发布验收" in names and len(g["nodes"]) == 3
+        # 未找到任务 → 明确提示
+        out = ch._action_edit_task_graph("加一步: 无中生有")
+        assert "未找到目标任务" in out
+
+    def test_nl_edit_remove_node(self, tmp_path):
+        """自然语言删步骤: 节点与关联边一并移除并落盘。"""
+        from lan_mesh.chat_handler import ChatHandler
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+
+        class _Runtime:
+            def _call_llm_with_routing(self, prompt, opts):
+                return {"content": '{"op": "remove_node", '
+                        '"node_name": "编码实现"}'}
+
+        ctl = StationController.__new__(StationController)
+        ctl.db = Database(str(tmp_path / "d.db"))
+        ctl.discovery = None
+        tid = self._make_task(ctl.db, names=("需求分析", "编码实现", "测试验收"))
+        # 三节点串联: st-0 → st-1 → st-2
+        task = ctl.db.get_task(tid)
+        task.subtasks[1]["depends_on"] = ["st-0"]
+        task.subtasks[2]["depends_on"] = ["st-1"]
+        ctl.db.save_task(task)
+        ch = ChatHandler.__new__(ChatHandler)
+        ch.runtime = _Runtime()
+        ch.controller = ctl
+        out = ch._action_edit_task_graph(f"任务 {tid} 删除步骤 编码实现")
+        assert "图编辑完成" in out
+        g = ctl.get_task_graph_data(tid)
+        names = [n["name"] for n in g["nodes"]]
+        assert names == ["需求分析", "测试验收"]
+        assert len(g["edges"]) == 0  # 关联边一并移除
+
+    def test_nl_edit_add_edge(self, tmp_path):
+        """自然语言加依赖: 两个无依赖节点建立边 (含 LLM 解析失败兜底)。"""
+        from lan_mesh.chat_handler import ChatHandler
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+
+        class _Runtime:
+            def _call_llm_with_routing(self, prompt, opts):
+                return {"content": '{"op": "add_edge", "source": "需求分析", '
+                        '"target": "编码实现"}'}
+
+        ctl = StationController.__new__(StationController)
+        ctl.db = Database(str(tmp_path / "d.db"))
+        ctl.discovery = None
+        tid = self._make_task(ctl.db, names=("需求分析", "编码实现"))
+        task = ctl.db.get_task(tid)
+        task.subtasks[1]["depends_on"] = []  # 去掉默认串联边
+        ctl.db.save_task(task)
+        assert len(ctl.get_task_graph_data(tid)["edges"]) == 0
+        ch = ChatHandler.__new__(ChatHandler)
+        ch.runtime = _Runtime()
+        ch.controller = ctl
+        out = ch._action_edit_task_graph(f"任务 {tid} 加依赖: 需求分析 → 编码实现")
+        assert "图编辑完成" in out
+        g = ctl.get_task_graph_data(tid)
+        assert len(g["edges"]) == 1
+        assert g["edges"][0]["source"] == "st-0"
+        assert g["edges"][0]["target"] == "st-1"
+        # LLM 解析失败 → 明确引导提示 (不虚报)
+        class _BadRuntime:
+            def _call_llm_with_routing(self, prompt, opts):
+                return {"content": "乱七八糟"}
+        ch.runtime = _BadRuntime()
+        out = ch._action_edit_task_graph(f"任务 {tid} 修改图")
+        assert "无法解析图编辑指令" in out
+
+
+

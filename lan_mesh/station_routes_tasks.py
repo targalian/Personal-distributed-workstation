@@ -315,7 +315,7 @@ def build_task_routes(controller) -> APIRouter:
 
     # ── Graph Engine: DAG 图结构 / Checkpoint / 断点恢复 ──
     # 注: Orchestrator 已废弃 (能力由 PM 四件套接管), 图数据一律从
-    # DB checkpoint/子任务重建; 手工编辑图与 resume 随之下线。
+    # DB checkpoint/子任务重建; 手工编辑图已恢复 (iter-51), resume 随之下线。
 
     @router.get("/api/tasks/{task_id}/graph")
     async def get_task_graph(task_id: str):
@@ -324,23 +324,28 @@ def build_task_routes(controller) -> APIRouter:
         返回: {nodes: [{id, name, status, skill, x, y, ...}], edges: [{source, target, condition}]}
         """
         check_secretary(controller)
-        # 从 DB 重建 DAG (checkpoint 优先, 其次子任务列表)
-        import json as _json
-        from .task import SubTask, TaskDAG
-        ckpt = db.get_latest_checkpoint(task_id)
-        if ckpt:
-            try:
-                dag_data = _json.loads(ckpt.get("dag_json", "{}"))
-                if dag_data.get("nodes"):
-                    return dag_data
-            except (ValueError, TypeError):
-                pass
-        task = db.get_task(task_id)
-        if task and task.subtasks:
-            subtasks = [SubTask.from_dict(st) for st in task.subtasks]
-            dag = TaskDAG(subtasks)
-            return dag.to_graph_json()
+        graph = controller.get_task_graph_data(task_id)
+        if graph:
+            return graph
         raise HTTPException(status_code=404, detail="任务无 DAG 图数据")
+
+    @router.put("/api/tasks/{task_id}/graph")
+    async def update_task_graph(task_id: str, payload: dict):
+        """iter-51 (F4.3): 保存编辑后的 DAG 图结构 (前端图编辑器/自然语言编辑回写)。
+
+        接收: {nodes: [...], edges: [...]}
+        验证: 任务存在 + 仅 pending 可编辑 + 环检测, 失败则拒绝保存。
+        """
+        check_secretary(controller)
+        if not isinstance(payload, dict) or "nodes" not in payload or "edges" not in payload:
+            raise HTTPException(status_code=400, detail="图数据需包含 nodes 与 edges")
+        result = controller.update_task_graph(task_id, payload)
+        if result.get("ok"):
+            await _broadcast(state, "task_graph_updated", {
+                "task_id": task_id, "message": result.get("message", ""),
+            })
+            return result
+        raise HTTPException(status_code=409, detail=result.get("message", "保存失败"))
 
     @router.get("/api/tasks/{task_id}/checkpoints")
     async def list_checkpoints(task_id: str):

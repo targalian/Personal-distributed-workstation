@@ -22,6 +22,18 @@ logger = get_logger("chat_handler")
 # ── 操作意图关键词映射 ──────────────────────────────────────────
 
 _ACTION_KEYWORDS = {
+    # 自然语言 DAG 编辑 (F4.3, iter-51): Boss 口述修改图结构 — 优先级最高
+    "编辑图": "edit_task_graph",
+    "修改图": "edit_task_graph",
+    "调整图": "edit_task_graph",
+    "加一步": "edit_task_graph",
+    "加个步骤": "edit_task_graph",
+    "新增步骤": "edit_task_graph",
+    "删一步": "edit_task_graph",
+    "删除步骤": "edit_task_graph",
+    "跳过步骤": "edit_task_graph",
+    "加依赖": "edit_task_graph",
+    "删依赖": "edit_task_graph",
     "提交任务": "submit_task",
     "提交一个": "submit_task",
     "创建任务": "submit_task",
@@ -79,6 +91,19 @@ _ACTION_KEYWORDS = {
     "新建项目": "create_project",
     "建立项目": "create_project",
 }
+
+
+def _find_node_by_name(dag, name: str) -> str:
+    """按节点名匹配子任务 ID (精确优先, 模糊包含兜底)。"""
+    if not name:
+        return ""
+    for sid, st in dag.subtasks.items():
+        if st.name == name:
+            return sid
+    for sid, st in dag.subtasks.items():
+        if name in (st.name or ""):
+            return sid
+    return ""
 
 
 class ChatHandler:
@@ -925,6 +950,8 @@ class ChatHandler:
                 return self._action_reject_delivery(message)
             elif action == "create_project":
                 return self._action_create_project(message)
+            elif action == "edit_task_graph":
+                return self._action_edit_task_graph(message)
             return ""
         except Exception as e:
             return f"操作执行失败: {e}"
@@ -1042,6 +1069,122 @@ class ChatHandler:
             )
         except Exception as e:
             return f"项目创建失败: {e}"
+
+    def _action_edit_task_graph(self, message: str) -> str:
+        """自然语言 DAG 编辑 (F4.3, iter-51): Boss 口述修改任务图结构。
+
+        支持指令: 加一步/新增步骤 X / 删除(跳过)步骤 X / 加依赖 X→Y /
+        删依赖 X→Y; 任务用 task-xxx ID 或名称定位。
+        流程: 定位任务 → 读图 → LLM 解析编辑指令 → 应用 (环检测回滚) → 落盘。
+        防幻觉: 真实执行编辑并返回落盘结果, 失败时明确报错不虚报。
+        """
+        import json as _json
+        import re as _re
+        import uuid as _uuid
+        from .protocol import SubTask
+        from .task import TaskDAG
+
+        # 1. 定位任务 (task-xxx ID 优先, 其次任务名匹配)
+        task = None
+        m = _re.search(r"task-[0-9a-fA-F]{6,}", message)
+        if m:
+            task = self.controller.db.get_task(m.group(0))
+        if not task:
+            for t in self.controller.db.list_tasks(limit=50):
+                if t.name and t.name in message:
+                    task = t
+                    break
+        if not task:
+            return "未找到目标任务, 请在指令中带上任务 ID (task-xxx) 或任务名称"
+
+        # 2. 读取当前图
+        graph = self.controller.get_task_graph_data(task.task_id)
+        if not graph:
+            return f"任务 '{task.name}' 暂无 DAG 图数据, 无法编辑"
+
+        # 3. LLM 解析编辑指令
+        edit = self._parse_graph_edit(message, graph)
+        if not edit or not edit.get("op"):
+            return ("无法解析图编辑指令, 请使用:\n"
+                    "- 加一步: 步骤名\n- 删除步骤 步骤名\n"
+                    "- 加依赖: 步骤A → 步骤B")
+
+        # 4. 应用编辑 (TaskDAG 自带环检测回滚)
+        try:
+            dag = TaskDAG.from_graph_json(graph)
+            op = edit.get("op", "")
+            if op == "add_node":
+                name = (edit.get("node_name") or "").strip()
+                if not name:
+                    return "新增步骤需要名称, 例如: 加一步: 发布验收"
+                st = SubTask(
+                    subtask_id=f"st-{_uuid.uuid4().hex[:10]}",
+                    parent_task_id=task.task_id,
+                    name=name,
+                    description=edit.get("description") or name,
+                )
+                if not dag.add_node(st):
+                    return f"新增步骤 '{name}' 失败 (节点冲突或产生环)"
+            elif op == "remove_node":
+                sid = _find_node_by_name(dag, edit.get("node_name", ""))
+                if not sid:
+                    return f"未找到步骤 '{edit.get('node_name', '')}'"
+                dag.remove_node(sid)
+            elif op == "add_edge":
+                src = _find_node_by_name(dag, edit.get("source", ""))
+                tgt = _find_node_by_name(dag, edit.get("target", ""))
+                if not src or not tgt:
+                    return "加依赖需要存在的前置/后置步骤名, 例如: 加依赖: A → B"
+                if not dag.add_edge(src, tgt):
+                    return f"加依赖 '{src} → {tgt}' 失败 (重复边或产生环)"
+            elif op == "remove_edge":
+                src = _find_node_by_name(dag, edit.get("source", ""))
+                tgt = _find_node_by_name(dag, edit.get("target", ""))
+                if not src or not tgt:
+                    return "删依赖需要存在的前置/后置步骤名"
+                if not dag.remove_edge(src, tgt):
+                    return f"未找到依赖边 '{src} → {tgt}'"
+            else:
+                return f"不支持的编辑操作: {op}"
+        except Exception as e:
+            return f"图编辑应用失败: {e}"
+
+        # 5. 落盘并返回真实结果
+        result = self.controller.update_task_graph(
+            task.task_id, dag.to_graph_json())
+        if result.get("ok"):
+            return (f"✅ 图编辑完成: {result.get('message')}\n"
+                    f"任务 '{task.name}' ({task.task_id}) 已更新")
+        return f"图编辑保存失败: {result.get('message', '未知错误')}"
+
+    def _parse_graph_edit(self, message: str, graph: dict) -> dict:
+        """LLM 解析自然语言图编辑指令为结构化操作 (失败返回空 dict)。"""
+        import json as _json
+        node_names = [n.get("name", "") for n in graph.get("nodes", [])]
+        prompt = (
+            "解析用户的 DAG 图编辑指令, 返回严格 JSON: "
+            "{\"op\": \"add_node|remove_node|add_edge|remove_edge\", "
+            "\"node_name\": \"步骤名\", \"source\": \"前置步骤名\", "
+            "\"target\": \"后置步骤名\", \"description\": \"步骤描述\"}。\n"
+            "op 判定: 加/新增/增加步骤 → add_node; 删除/跳过/去掉步骤 → remove_node; "
+            "加依赖/先做A再做B → add_edge; 删依赖/解除依赖 → remove_edge。\n"
+            f"现有步骤: {node_names}\n"
+            "无法解析返回 {\"op\": \"\"}。\n\n"
+            f"用户指令: {message}"
+        )
+        resp = self.runtime._call_llm_with_routing(
+            prompt,
+            {"_model_preference": "", "_fallback_models": []},
+        )
+        content = resp.get("content", "")
+        try:
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            if start >= 0 and end > start:
+                return _json.loads(content[start:end])
+        except Exception:
+            pass
+        return {}
 
     def _action_query_status(self) -> str:
         """查询综合状态。"""

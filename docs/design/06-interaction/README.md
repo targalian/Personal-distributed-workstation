@@ -28,6 +28,14 @@
 - 支持多对话架构（L1 项目对话 / L2 PM 线程），分层混合交互的载体
 - 历史曾出现「前端双渲染重复回复」缺陷（已修复，前后端各渲染一次的问题）
 
+**自然语言 DAG 编辑意图** (iter-51, F4.3): `_ACTION_KEYWORDS` 新增
+graph 编辑关键词组（编辑图/修改图/加一步/删除步骤/跳过步骤/加依赖等,
+置映射首位保证优先级）→ `_action_edit_task_graph()` 执行 —
+定位任务 (task-xxx 正则优先 + 名称匹配) → 读图 → `_parse_graph_edit()`
+LLM 解析结构化编辑指令 (add_node/remove_node/add_edge/remove_edge) →
+TaskDAG 应用 (自带环检测回滚) → `update_task_graph` 落盘；
+防幻觉: 真实执行并返回落盘结果, 解析失败/未找到任务均明确报错不虚报。
+
 ## bot_gateway.py — Bot 网关（手机通道）
 
 **架构**:
@@ -64,4 +72,5 @@ Keyboard（PM 决策交互）。
 |---|---|---|
 | 2026-08-27 | iter-44 | 新增 error_burst 事件模板与优先级 (错误突发告警, 与错误追踪闭环联动) |
 | 2026-08-27 | iter-45 | bot_gateway 两处错误追踪埋点 (推送重试耗尽/秘书对话链异常, 异常隔离) |
+| 2026-08-28 | iter-51 | chat_handler 自然语言 DAG 编辑意图 (F4.3): 图编辑关键词组 + _action_edit_task_graph (任务定位/LLM 指令解析/TaskDAG 应用/落盘, 防幻觉真实执行) |
 | 2026-08-16 | iter-27 后 | 初建 |

@@ -45,6 +45,10 @@
 - 自愈执行历史区 (iter-49): `loadErrors()` 并行拉取 `/api/errors/heal/history?limit=10` (失败降级隐藏)；`renderErrors()` 渲染 🩹 自愈执行历史表 (时间/动作/类别/结果徽标 ✅已执行·❌失败·🙋需人工/详情, 倒序展示, heal_log 跨重启保留)
 - 自动自愈状态条 (iter-50): `loadErrors()` 并行拉取 `/api/errors/heal/status` (失败降级隐藏)；`renderErrors()` 渲染 🛡 状态条 — 已启用(绿)/已禁用(灰) + 周期/冷却 + 已扫描轮次 + 🔍 立即检查按钮 (`runAutoHealCheck()` → `POST /api/errors/heal/auto-check`, 有执行 Toast ok/无执行 Toast info 后刷新面板)
 
+**DAG 图编辑面板** (iter-51, F4.3, 项目工作台 📈 DAG 子视图):
+- 数据源: `GET /api/tasks/{tid}/graph` 加载 (dagNodes/dagEdges, SVG 渲染 + 连线模式 dagConnectMode + 节点拖拽)
+- `saveDAG()` 保存已恢复: 收集当前节点/边 → `PUT /api/tasks/{tid}/graph` 回写 → 成功 Toast ✅/失败 Toast (环或非 pending 提示); 新节点 ID 改 st- 前缀 (`dagAddNode()`); 需浏览器强刷清除旧版缓存 (旧版仍提示「手工保存已停用」)
+
 **关键渲染函数**（改动时注意同步更新本文档）:
 - `renderHosts()`: 主机卡片 + 统计行（含版本分布 `vMap`/`vTxt`，
   多版本告警色；S3 新增 ✅最新/⚠️落后/未知版本 标记）
@@ -76,3 +80,4 @@
 | 2026-08-27 | iter-48 | 错误面板增 🗂 历史诊断区 (mkDiag 同构渲染器双源复用 + 重启后诊断不断档)，UI-044 实测通过 |
 | 2026-08-27 | iter-49 | 错误面板增 🩹 自愈执行能力 (诊断卡片执行按钮 + 自愈执行历史区 + Toast 结果反馈)，UI-045 实测通过 |
 | 2026-08-28 | iter-50 | 错误面板增 🛡 自动自愈守护状态条 (已启用/已禁用 + 周期/冷却/扫描轮次 + 🔍 立即检查按钮)，UI-046 实测通过 |
+| 2026-08-28 | iter-51 | DAG 图编辑面板保存恢复 (saveDAG 接 PUT /api/tasks/{tid}/graph 回写 + 新节点 st- 前缀)，UI-047 实测通过 |
