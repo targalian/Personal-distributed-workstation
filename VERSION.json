@@ -1,6 +1,6 @@
 {
   "version": "0.31.0",
-  "commit": "7d603c4",
+  "commit": "e1e4194",
   "released_at": "2026-08-28",
   "note": "P3 任务流全链路追踪 (task_flow 阶段事件钩子 + /api/runtime/task-flow 瀑布端点 + Dashboard 运行时 Tab 瀑布查询) + 单测 198",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
