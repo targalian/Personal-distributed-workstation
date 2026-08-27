@@ -3908,4 +3908,200 @@ class TestDagEdit:
         assert "无法解析图编辑指令" in out
 
 
+class TestBudgetAdvisor:
+    """iter-52 (F4.4): 成本感知调度 (任务 Token 预算预估 + 预算适配检查)。"""
+
+    @staticmethod
+    def _make_mgr(pools):
+        """构造 mock 资源管理器: pools = [(id, is_payg, status, remaining)]。"""
+        from types import SimpleNamespace
+
+        class _Mgr:
+            def __init__(self, ps):
+                self._ps = ps
+
+            def list_resources(self):
+                return [SimpleNamespace(id=p[0], is_payg=p[1],
+                                        status=p[2]) for p in self._ps]
+
+            def get_usage(self, pool_id):
+                for p in self._ps:
+                    if p[0] == pool_id:
+                        return {"remaining": p[3]}
+                return {}
+
+        return _Mgr(pools)
+
+    def test_estimate_text_tokens(self):
+        from lan_mesh.budget_advisor import estimate_text_tokens
+        assert estimate_text_tokens("") == 0
+        # 中文每字≈1, 英文每 4 字符≈1
+        assert 4 <= estimate_text_tokens("你好世界") <= 6
+        en = estimate_text_tokens("hello world, this is a test")
+        assert 6 <= en <= 10
+
+    def test_estimate_baseline_heuristic(self):
+        """无历史数据 → 纯启发式基线 (文本 token × 编排放大系数)。"""
+        from lan_mesh.budget_advisor import (PM_MULTIPLIER,
+                                             estimate_task_tokens,
+                                             estimate_text_tokens)
+        est = estimate_task_tokens("写周报", "汇总本周开发进度", db=None)
+        base = estimate_text_tokens("写周报\n汇总本周开发进度") * PM_MULTIPLIER
+        assert est["estimated_tokens"] == base
+        assert est["basis"] == "heuristic"
+        assert est["confidence"] == "low"
+
+    def test_estimate_history_mixed(self):
+        """历史样本充足 → 0.4×基线 + 0.6×历史均值 (mixed)。"""
+        from lan_mesh.budget_advisor import estimate_task_tokens
+
+        class _Db:
+            def avg_tokens_per_task(self, days=30):
+                return {"avg": 10000.0, "samples": 5}
+
+        est = estimate_task_tokens("写周报", "汇总进度", db=_Db())
+        assert est["basis"] == "mixed"
+        assert est["confidence"] == "high"
+        expected = int(est["baseline_tokens"] * 0.4 + 10000.0 * 0.6)
+        assert est["estimated_tokens"] == expected
+        assert est["history_avg_tokens"] == 10000
+
+    def test_estimate_history_fallback(self):
+        """历史样本不足 (<=3) → 回退纯基线。"""
+        from lan_mesh.budget_advisor import estimate_task_tokens
+
+        class _Db:
+            def avg_tokens_per_task(self, days=30):
+                return {"avg": 99999.0, "samples": 2}
+
+        est = estimate_task_tokens("写周报", "汇总进度", db=_Db())
+        assert est["basis"] == "heuristic"
+        assert est["estimated_tokens"] == est["baseline_tokens"]
+
+    def test_avg_tokens_per_task(self, tmp_path):
+        """DB 聚合: 每任务 token 均值; 无归因记录返回全零。"""
+        from lan_mesh.database import Database
+        db = Database(str(tmp_path / "d.db"))
+        assert db.avg_tokens_per_task() == {"avg": 0.0, "samples": 0}
+        db.insert_resource_usage("p1", "m1", "token_plan", 100, 50, 0.0,
+                                 usage_id="u1", task_id="task-a")
+        db.insert_resource_usage("p1", "m1", "token_plan", 200, 100, 0.0,
+                                 usage_id="u2", task_id="task-b")
+        db.insert_resource_usage("p1", "m1", "token_plan", 999, 999, 0.0,
+                                 usage_id="u3", task_id="")
+        res = db.avg_tokens_per_task()
+        assert res["samples"] == 2
+        assert res["avg"] == 225.0  # (150 + 300) / 2
+
+    def test_check_budget_fit_pool_states(self):
+        """池层三态: ok / tight / insufficient (payg 与 paused 池跳过)。"""
+        from lan_mesh.budget_advisor import check_budget_fit
+        # 剩余 10000, 预估 1000 → ok
+        fit = check_budget_fit(1000, mgr=self._make_mgr(
+            [("tok", False, "active", 10000),
+             ("payg", True, "active", 5.0),      # payg 金额口径跳过
+             ("paused", False, "paused", 99999)]))  # 非 active 跳过
+        assert fit["status"] == "ok" and fit["pool_id"] == "tok"
+        # 剩余 1100, 预估 1000 → tight (够用但不足 1.2×)
+        fit = check_budget_fit(1000, mgr=self._make_mgr(
+            [("tok", False, "active", 1100)]))
+        assert fit["status"] == "tight"
+        # 剩余 900, 预估 1000 → insufficient
+        fit = check_budget_fit(1000, mgr=self._make_mgr(
+            [("tok", False, "active", 900)]))
+        assert fit["status"] == "insufficient"
+        assert "补充额度" in fit["advice"] or "经济模型" in fit["advice"]
+
+    def test_check_budget_fit_project_layer(self):
+        """项目层: 预算剩余金额按经济模型单价换算 token 预算。"""
+        from unittest.mock import MagicMock
+        from lan_mesh.budget_advisor import check_budget_fit
+        from lan_mesh.project import ECONOMY_MODEL, calculate_cost
+        pm = MagicMock()
+        pm.get_project.return_value = MagicMock(
+            budget_limit_usd=1.0, budget_used_usd=0.5)
+        per_token = calculate_cost(ECONOMY_MODEL, 1, 1) / 2.0
+        fit = check_budget_fit(1000, project_id="proj-x", project_manager=pm)
+        assert fit["project_token_budget"] > 0
+        assert fit["project_token_budget"] == round(0.5 / per_token, 1)
+
+    def test_check_budget_fit_unknown(self):
+        """两层均无数据 → unknown (不阻断提交)。"""
+        from lan_mesh.budget_advisor import check_budget_fit
+        fit = check_budget_fit(1000)
+        assert fit["status"] == "unknown"
+
+    def test_build_estimate_isolated(self):
+        """组合入口全默认参数不抛异常, 返回结构完整 (异常隔离)。"""
+        from lan_mesh.budget_advisor import build_task_cost_estimate
+        est = build_task_cost_estimate("写周报", "汇总进度")
+        assert est["estimated_tokens"] > 0
+        assert est["budget_fit"]["status"] in ("ok", "tight",
+                                               "insufficient", "unknown")
+
+    def test_submit_task_attaches_estimate(self, tmp_path):
+        """接入点: POST /api/tasks 提交后 input_data 落盘 _cost_estimate。"""
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.database import Database
+        from lan_mesh.station_api import create_station_router
+
+        class _Ctl:
+            def __init__(self):
+                self.db = Database(str(tmp_path / "d.db"))
+                self.discovery = None
+                self.secretary_active = True
+
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+        r = client.post("/api/tasks", json={
+            "name": "写周报", "description": "汇总本周开发进度"})
+        assert r.status_code == 200
+        tid = r.json()["task_id"]
+        task = ctl.db.get_task(tid)
+        ce = (task.input_data or {}).get("_cost_estimate")
+        assert ce and ce["estimated_tokens"] > 0
+        assert "budget_fit" in ce and "status" in ce["budget_fit"]
+
+    def test_cost_estimate_endpoint(self, tmp_path):
+        """端点: GET /api/tasks/{tid}/cost-estimate 200 (含 saved_estimate) / 404。"""
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.database import Database
+        from lan_mesh.protocol import Task
+        from lan_mesh.station_api import create_station_router
+
+        class _Ctl:
+            def __init__(self):
+                self.db = Database(str(tmp_path / "d.db"))
+                self.discovery = None
+                self.secretary_active = True
+
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        tid = "task-cost123"
+        ctl.db.save_task(Task(task_id=tid, name="写周报",
+                              description="汇总本周开发进度", status="pending"))
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+        r = client.get(f"/api/tasks/{tid}/cost-estimate")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["task_id"] == tid
+        assert d["estimated_tokens"] > 0
+        assert "budget_fit" in d and "status" in d["budget_fit"]
+        r = client.get("/api/tasks/task-missing/cost-estimate")
+        assert r.status_code == 404
+
+
 

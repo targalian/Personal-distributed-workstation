@@ -82,6 +82,7 @@ MAPPING = {
     # 05-resources-secrets — 模型资源/密钥/版本同步
     "lan_mesh/model_resources.py": "05-resources-secrets",
     "lan_mesh/model_router.py": "05-resources-secrets",
+    "lan_mesh/budget_advisor.py": "05-resources-secrets",
     "lan_mesh/balance_probe.py": "05-resources-secrets",
     "lan_mesh/secret_sync.py": "05-resources-secrets",
     "lan_mesh/version_sync.py": "05-resources-secrets",

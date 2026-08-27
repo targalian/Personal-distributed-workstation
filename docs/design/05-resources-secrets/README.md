@@ -9,6 +9,7 @@ API Key 加密分发与版本同步（S1/S2/S3 迭代成果集中于此）。
 | 文件/目录 | 职责一句话 |
 |---|---|
 | balance_probe.py | 资源余额探测 (R2) — 从服务商 API 自动获取资源池余额 |
+| budget_advisor.py | 预算顾问 — F4.4 成本感知调度 (iter-52) |
 | collect_config.py | LAN Mesh 主机配置独立采集脚本 |
 | model_resources.py | 模型资源管理 — 多主机 / 多 API Key 预算池管理 (R1) |
 | model_router.py | 模型路由器 — Phase 2 核心模块 |
@@ -71,6 +72,29 @@ API Key 加密分发与版本同步（S1/S2/S3 迭代成果集中于此）。
 `Score = 能力匹配度×W_cap + 成本反向×W_cost + 响应速度×W_speed − 负载率×W_load`
 
 **策略适配**: cost_first / quality_first / balanced（对接 project.py 预算护栏）。
+
+## budget_advisor.py — 预算顾问（F4.4 成本感知调度）
+
+**职责**: 任务级 Token 预估 + 预算适配检查的组合入口。
+
+**三层结构**:
+1. **预估层** `estimate_task_tokens(name, description, db)`: 文本启发式
+   基线 = `estimate_text_tokens` × PM_MULTIPLIER(6.0, 编排放大系数);
+   历史样本 ≥3 (resource_usage_log 按 task_id 聚合, 30 天窗口) 时混合
+   修正 `0.4×基线 + 0.6×历史均值` (confidence=high), 否则纯启发式 (low)
+2. **约束层** `check_budget_fit(est, mgr, project_id, project_manager)`:
+   池层取 active 且非 is_payg 池剩余最大者; 项目层按剩余预算美元 ÷
+   ECONOMY_MODEL 单价换算 token; 两层取最紧判定 ok / tight
+   (≥est 但 <est×1.2) / insufficient / unknown; **不阻断执行**
+   (启发式仅告警, 硬护栏仍是项目 check_budget 402)
+3. **组合入口** `build_task_cost_estimate(...)`: 预估 + 适配打包, 全链
+   try/except 异常隔离, 失败返回保守结构
+
+**接入点**: 双提交入口 (HTTP `POST /api/tasks` 与秘书聊天
+`submit_task_from_chat`) 提交时落盘 `input_data._cost_estimate`;
+`GET /api/tasks/{id}/cost-estimate` 实时查询 (保存值 + 刷新适配);
+tight/insufficient 时触发 event_bus `cost_budget_warning` →
+WS 广播 + Bot 推送 + Dashboard toast。
 
 ## balance_probe.py — 余额探测（R2）
 
@@ -140,6 +164,7 @@ mesh_token 后重试解密一次：
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-28 | iter-52 | F4.4 成本感知调度: budget_advisor 预算顾问 (任务 token 预估 文本启发式+历史均值混合修正 / 预算适配检查 池+项目双层最紧判定 / 组合入口异常隔离) |
 | 2026-08-18 | iter-34 | 轮换配置落地: ark 池 billing_period=monthly 窗口紧迫度生效 (自然月口径); qwen3.8-max-preview 下线 ID 全量替换 (CLI 模板/示例配置) |
 | 2026-08-17 | iter-33 | R5-2: 轮换量化价值公式 (沉没成本压力 × 窗口紧迫度 + 时段折扣窗口; 供应商能力信息落档 docs/reference/vendor-capability; batch 合规红线开关) |
 | 2026-08-17 | iter-32 | M5-2: Worker 用量 WS 直推通道 (websockets.sync 推送线程 + 断线重连; HTTP 批量降为兜底, 双通道 usage_id 幂等) |

@@ -49,6 +49,13 @@
 - 数据源: `GET /api/tasks/{tid}/graph` 加载 (dagNodes/dagEdges, SVG 渲染 + 连线模式 dagConnectMode + 节点拖拽)
 - `saveDAG()` 保存已恢复: 收集当前节点/边 → `PUT /api/tasks/{tid}/graph` 回写 → 成功 Toast ✅/失败 Toast (环或非 pending 提示); 新节点 ID 改 st- 前缀 (`dagAddNode()`); 需浏览器强刷清除旧版缓存 (旧版仍提示「手工保存已停用」)
 
+**任务卡片成本预估徽章** (iter-52, F4.4, 项目工作台任务卡片):
+- `renderTasks()` 卡片 meta 行读取 `input_data._cost_estimate` →
+  💰 ~token 徽章 (`fmtTokens()`: 千分位 K/百万 M 缩写) + 预算适配状态小徽章
+  (✅ 充足 / ⚠️ 紧张 / ❌ 不足, hover 显示建议文案; unknown 时不显示小徽章)
+- `onStationEvent` 收 `cost_budget_warning` → info toast (任务名/预估
+  tokens/状态) + 自动 `refreshTasks()` 刷新卡片
+
 **关键渲染函数**（改动时注意同步更新本文档）:
 - `renderHosts()`: 主机卡片 + 统计行（含版本分布 `vMap`/`vTxt`，
   多版本告警色；S3 新增 ✅最新/⚠️落后/未知版本 标记）
@@ -81,3 +88,4 @@
 | 2026-08-27 | iter-49 | 错误面板增 🩹 自愈执行能力 (诊断卡片执行按钮 + 自愈执行历史区 + Toast 结果反馈)，UI-045 实测通过 |
 | 2026-08-28 | iter-50 | 错误面板增 🛡 自动自愈守护状态条 (已启用/已禁用 + 周期/冷却/扫描轮次 + 🔍 立即检查按钮)，UI-046 实测通过 |
 | 2026-08-28 | iter-51 | DAG 图编辑面板保存恢复 (saveDAG 接 PUT /api/tasks/{tid}/graph 回写 + 新节点 st- 前缀)，UI-047 实测通过 |
+| 2026-08-28 | iter-52 | 任务卡片成本预估徽章 (💰 token 徽章 + 预算适配状态小徽章) + cost_budget_warning toast 实时告警，UI-048 实测通过 |

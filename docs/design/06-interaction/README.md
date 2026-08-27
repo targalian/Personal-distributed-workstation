@@ -54,6 +54,9 @@ Keyboard（PM 决策交互）。
 
 **事件模板** (iter-44): 新增 `error_burst` (错误突发, high 优先级) —
 窗口内错误数超阈值且冷却到期时推送, 与错误追踪闭环联动。
+**事件模板** (iter-52): 新增 `cost_budget_warning` (预算适配告警,
+normal 优先级, 💰 图标) — 任务提交时预估超预算 (tight/insufficient)
+推送任务名/预估 tokens/状态/建议文案, 与预算顾问联动。
 **错误追踪埋点** (iter-45, F1.4 数据源): bot_gateway 两处接入 `error_tracker.capture`
 — 推送重试耗尽进离线队列前 (module=bot, 携带通道/事件类型)、秘书对话链异常兜底前；
 异常隔离不影响原降级行为。
@@ -73,4 +76,5 @@ Keyboard（PM 决策交互）。
 | 2026-08-27 | iter-44 | 新增 error_burst 事件模板与优先级 (错误突发告警, 与错误追踪闭环联动) |
 | 2026-08-27 | iter-45 | bot_gateway 两处错误追踪埋点 (推送重试耗尽/秘书对话链异常, 异常隔离) |
 | 2026-08-28 | iter-51 | chat_handler 自然语言 DAG 编辑意图 (F4.3): 图编辑关键词组 + _action_edit_task_graph (任务定位/LLM 指令解析/TaskDAG 应用/落盘, 防幻觉真实执行) |
+| 2026-08-28 | iter-52 | bot_gateway 新增 cost_budget_warning 事件模板 (预算适配告警, normal 优先级, 任务提交预估超预算时推送) |
 | 2026-08-16 | iter-27 后 | 初建 |

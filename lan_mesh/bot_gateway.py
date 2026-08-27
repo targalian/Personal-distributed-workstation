@@ -73,6 +73,8 @@ EVENT_TEMPLATES = {
     "task_stall_alert_high": "🚨 任务停滞紧急 [{task_id}] {message}",
     # iter-44: 错误突发告警 (窗口内错误数超阈值, 冷却去重防刷屏)
     "error_burst": "❗ 错误突发 [{module}] {window:.0f} 秒窗口内 {count} 条错误, 请检查日志",
+    # iter-52: 成本感知调度预算适配告警 (任务提交时预估超预算)
+    "cost_budget_warning": "💰 预算适配告警: 任务 {name} 预估 {estimated} tokens ({status}) {advice}",
 }
 
 # 事件严重级别 → 决定是否推送（避免低优先级事件打扰）
@@ -101,6 +103,7 @@ EVENT_PRIORITY = {
     "task_stall_alert": "normal",
     "task_stall_alert_high": "high",
     "error_burst": "high",
+    "cost_budget_warning": "normal",
 }
 
 # 事件图标 (聚合消息时使用)
@@ -120,6 +123,7 @@ EVENT_ICONS = {
     "task_escalated": "🚨",
     "periodic_report": "📊",
     "error_burst": "❗",
+    "cost_budget_warning": "💰",
 }
 
 

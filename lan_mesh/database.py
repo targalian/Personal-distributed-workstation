@@ -1728,6 +1728,25 @@ class Database:
         """, (int(limit),)).fetchall()
         return [dict(r) for r in rows]
 
+    def avg_tokens_per_task(self, days: int = 30) -> dict:
+        """F4.4: 近 N 天有任务归因的资源用量, 每任务 token 均值 (供预算预估)。
+
+        Returns:
+            {"avg": float, "samples": int}; 无归因记录返回全零。
+        """
+        conn = self._get_conn()
+        cutoff = time.time() - int(days) * 86400
+        rows = conn.execute("""
+            SELECT task_id, SUM(input_tokens + output_tokens) AS tokens
+            FROM resource_usage_log
+            WHERE created_at >= ? AND task_id != ''
+            GROUP BY task_id
+        """, (cutoff,)).fetchall()
+        if not rows:
+            return {"avg": 0.0, "samples": 0}
+        total = sum(r["tokens"] for r in rows)
+        return {"avg": round(total / len(rows), 1), "samples": len(rows)}
+
     # ── Graph Checkpoint CRUD ───────────────────────────────────
 
     def save_checkpoint(self, checkpoint_id: str, task_id: str, phase: str,

@@ -205,6 +205,7 @@ agent_runtime.execute()
 - 自愈动作执行 (iter-49, F4.2 修复环节): `run_heal_action(action, category)` 执行器 — 仅注册安全只读动作 (`check_peer` 向已知设备 UDP 探测 / `probe_balances` 资源池余额探测), 未注册动作返回 `manual_required`; 结果落盘 `heal_log` (Database v7 迁移, 容量修剪 500 行) + event_bus `heal_action` 广播; 端点 `POST /api/errors/heal?action=&category=` (rotate_key/switch_pool 映射为 probe_balances) + `GET /api/errors/heal/history?limit=`
 - 自动自愈守护 (iter-50, F4.2 自动化环节): `_auto_heal_loop()` 守护线程周期扫描诊断缓冲 — 仅 `_AUTO_HEAL_ACTIONS` 安全动作 (check_peer/rotate_key/switch_pool) 自动执行, 同类别冷却去重防风暴 (config.yaml `observability.auto_heal_*` 驱动, 默认关/300s 周期/600s 冷却/周期最小 30s, 异常隔离); 端点 `GET /api/errors/heal/status` (开关/周期/冷却/累计轮次/最近动作) + `POST /api/errors/heal/auto-check` (手动触发一轮与守护同逻辑)
 - DAG 图结构读写恢复 (iter-51, F4.3): `get_task_graph_data()` 读图 (checkpoint dag_json 优先 + 子任务列表 TaskDAG 重建, GET 端点复用) + `update_task_graph()` 写图 (任务存在 + 仅 pending 可编辑 + TaskDAG.from_graph_json 环检测拒绝, 落盘子任务列表 + checkpoint dag_json 同步); `PUT /api/tasks/{task_id}/graph` 编辑端点恢复 (Orchestrator 废弃后重接 DB 路径, 缺字段 400/环与状态 409, 成功 event_bus `task_graph_updated` 广播)
+- 成本感知调度接入 (iter-52, F4.4): 双提交入口 (`POST /api/tasks` 与 `submit_task_from_chat`) 提交时调用 budget_advisor 预估落盘 `input_data._cost_estimate`, tight/insufficient 时 Bot 推送 + event_bus `cost_budget_warning` WS 广播 (异常静默不阻断); 新端点 `GET /api/tasks/{task_id}/cost-estimate` (秘书激活 503 护栏, 404 任务不存在, 返回实时预估+适配+落盘快照)
 
 **P2 #7 DB 自动备份**: `__init__` 末尾调用 `backup()` — sqlite3 在线
 备份 API 一致性快照至 `~/.lan_mesh/backups/<stem>-<时间戳>.sqlite3`,
@@ -227,6 +228,7 @@ agent_runtime.execute()
 | 2026-08-27 | iter-49 | F4.2 自愈动作执行 (修复环节): run_heal_action 执行器 (check_peer/probe_balances 安全动作 + 未注册返回 manual_required) + database v7 迁移 heal_log 表 (容量修剪 500 行) + /api/errors/heal 端点 (动作映射) + /api/errors/heal/history 历史端点 |
 | 2026-08-28 | iter-50 | F4.2 自动自愈守护: _auto_heal_loop 周期扫描 + _auto_heal_once 冷却去重 (默认关, config.yaml observability.auto_heal_* 驱动) + /api/errors/heal/status 状态端点 + /api/errors/heal/auto-check 手动触发 (UI-046) |
 | 2026-08-28 | iter-51 | F4.3 自然语言 DAG 编辑: get_task_graph_data/update_task_graph 读写图方法 (仅 pending 可编辑 + 环检测) + PUT /api/tasks/{id}/graph 编辑端点恢复 (Orchestrator 废弃后重接 DB) + 秘书自然语言编辑意图 (UI-047) |
+| 2026-08-28 | iter-52 | F4.4 成本感知调度: 双提交入口预算预估落盘 (_cost_estimate) + cost_budget_warning 广播 + GET /api/tasks/{id}/cost-estimate 预估端点 |
 | 2026-08-27 | iter-44 | F1.4 错误追踪闭环: start() 装配 error_tracker 双回调 (error_captured → WS 实时刷面板; error_burst → 事件总线 + Bot 突发告警, 冷却去重); Dashboard 错误追踪面板 (UI-041) |
 | 2026-08-25 | iter-38 | P3 任务流全链路追踪: trace_task_event/read_task_flow/task_flow_waterfall; pm_agent report_status 单点钩子 + 提交/子任务结果/交付阶段点; /api/runtime/task-flow 瀑布端点; Dashboard 瀑布查询 (UI-036) |
 | 2026-08-25 | iter-36 | P0/P1 运行时追踪与性能审计: runtime_trace.py (JSONL 子任务轨迹 + SQLite llm_call_log 审计表); agent_runtime execute() 计时钩子; LLM 三路径 (chat/tools/cli) trace_llm_call; /api/runtime/{metrics,trace,calls,stats} 端点; database v5 迁移 |

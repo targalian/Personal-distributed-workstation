@@ -101,6 +101,32 @@ def build_task_routes(controller) -> APIRouter:
         controller.bot_gateway.notify("task_submitted", {
             "name": task.name, "task_id": task.task_id[:8],
         })
+        # F4.4 (iter-52): 成本感知调度 — 预算预估 + 适配检查 (异常静默, 不阻断)
+        try:
+            from .budget_advisor import build_task_cost_estimate
+            cost_est = build_task_cost_estimate(
+                task.name, task.description, db,
+                project_id=project_id,
+                project_manager=project_manager)
+            task.input_data = task.input_data or {}
+            task.input_data["_cost_estimate"] = cost_est
+            db.save_task(task)
+            fit = cost_est.get("budget_fit", {})
+            if fit.get("status") in ("tight", "insufficient"):
+                controller.bot_gateway.notify("cost_budget_warning", {
+                    "name": task.name, "task_id": task.task_id[:8],
+                    "estimated": cost_est["estimated_tokens"],
+                    "status": fit.get("label", fit.get("status", "")),
+                    "advice": fit.get("advice", ""),
+                })
+                await _broadcast(state, "cost_budget_warning", {
+                    "task_id": task.task_id, "name": task.name,
+                    "estimated_tokens": cost_est["estimated_tokens"],
+                    "status": fit.get("status", "unknown"),
+                    "advice": fit.get("advice", ""),
+                })
+        except Exception:
+            pass  # 预估失败不影响任务提交
         # P3: 任务流追踪 — 提交阶段点 (异常静默)
         try:
             from . import runtime_trace
@@ -316,6 +342,22 @@ def build_task_routes(controller) -> APIRouter:
     # ── Graph Engine: DAG 图结构 / Checkpoint / 断点恢复 ──
     # 注: Orchestrator 已废弃 (能力由 PM 四件套接管), 图数据一律从
     # DB checkpoint/子任务重建; 手工编辑图已恢复 (iter-51), resume 随之下线。
+
+    @router.get("/api/tasks/{task_id}/cost-estimate")
+    async def get_task_cost_estimate(task_id: str):
+        """F4.4 (iter-52): 任务 Token 预算预估详情 (提交时落盘 + 实时适配刷新)。"""
+        check_secretary(controller)
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        from .budget_advisor import build_task_cost_estimate
+        est = build_task_cost_estimate(
+            task.name, task.description, db,
+            project_id=task.project_id or "",
+            project_manager=controller.project_manager)
+        est["task_id"] = task_id
+        est["saved_estimate"] = (task.input_data or {}).get("_cost_estimate")
+        return est
 
     @router.get("/api/tasks/{task_id}/graph")
     async def get_task_graph(task_id: str):

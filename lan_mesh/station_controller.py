@@ -718,6 +718,29 @@ class StationController:
         # 优化13: 记录优先级到 input_data
         task.input_data = task.input_data or {}
         task.input_data["_priority"] = priority
+        # F4.4 (iter-52): 成本感知调度 — 预算预估 + 适配检查 (异常静默, 不阻断)
+        try:
+            from .budget_advisor import build_task_cost_estimate
+            cost_est = build_task_cost_estimate(
+                name, description, self.db, project_id="",
+                project_manager=self.project_manager)
+            task.input_data["_cost_estimate"] = cost_est
+            fit = cost_est.get("budget_fit", {})
+            if fit.get("status") in ("tight", "insufficient"):
+                self.bot_gateway.notify("cost_budget_warning", {
+                    "name": name, "task_id": task.task_id[:8],
+                    "estimated": cost_est["estimated_tokens"],
+                    "status": fit.get("label", fit.get("status", "")),
+                    "advice": fit.get("advice", ""),
+                })
+                self._queue_ws_broadcast("cost_budget_warning", {
+                    "task_id": task.task_id, "name": name,
+                    "estimated_tokens": cost_est["estimated_tokens"],
+                    "status": fit.get("status", "unknown"),
+                    "advice": fit.get("advice", ""),
+                })
+        except Exception:
+            pass  # 预估失败不影响任务提交
         self.db.save_task(task)
         logger.info("对话提交任务: %s (%s) 优先级=%s", task.task_id, name, priority)
         # WS 广播: 通知前端任务面板刷新

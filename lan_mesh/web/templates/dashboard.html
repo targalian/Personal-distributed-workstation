@@ -974,6 +974,12 @@ function onStationEvent(evt){
     showToast(`❗ 错误突发 [${d.module||'?'}] ${d.count||0} 条/窗口, 请检查日志`,'err');
     if(typeof loadErrors==='function'){loadErrors();}
   }
+  if(t==='cost_budget_warning'){
+    // iter-52: 成本感知调度预算适配告警 — toast + 任务面板刷新
+    const cd=evt.data||{};
+    showToast(`💰 预算适配告警: 「${cd.name||'?'}」预估 ${fmtTokens(cd.estimated_tokens||0)} tokens (${cd.status||''})`,'info');
+    if(typeof refreshTasks==='function'){refreshTasks();}
+  }
 }
 // S2: 版本升级提醒横幅 + 顶栏版本徽章
 async function loadVersionBadge(){
@@ -1053,6 +1059,12 @@ async function showNetworkInfo(){try{const r=await apiFetch('/api/network');cons
 async function refreshTasks(){
   try{const r=await apiFetch('/api/tasks');const d=await r.json();allTasks=d.tasks||[];renderTasks();}catch(e){console.error(e);}
 }
+function fmtTokens(n){
+  // iter-52: token 数缩写 (K/M)
+  if(!n||n<1000)return String(n||0);
+  if(n<1e6)return (n/1e3).toFixed(1)+'K';
+  return (n/1e6).toFixed(1)+'M';
+}
 let wsSelectedProject='';  // 工作台当前选中的项目 ('' = 全部)
 function toggleTaskExpand(el){el.classList.toggle('open');}
 function getFilteredTasks(){
@@ -1068,6 +1080,11 @@ function renderTasks(){
     const pct=sc?Math.round(done/sc*100):(t.status==='completed'?100:0);
     const c=t.status==='completed'?'idle':t.status==='failed'?'archived':t.status==='interrupted'?'archived':'busy';
     const pmInfo=t.pm_agent_id?` | 🧑‍💼 PM: ${esc(t.pm_agent_id.slice(0,12))}`:'';
+    // iter-52: 成本感知调度 — 预估 token + 预算适配徽章
+    const ce=(t.input_data&&t.input_data._cost_estimate)||null;
+    const fit=ce&&ce.budget_fit;
+    const fitColor=fit?(fit.status==='ok'?'var(--green)':fit.status==='tight'?'var(--yellow)':'#e5533c'):'';
+    const costBadge=ce?` | 💰 ~${fmtTokens(ce.estimated_tokens)} tokens${fit&&fit.status!=='unknown'?` <span class="badge" style="background:${fitColor};color:#fff;font-size:10px;padding:1px 5px;border-radius:3px" title="${esc(fit.advice||fit.label||'')}">${fit.status==='ok'?'✅':fit.status==='tight'?'⚠️':'❌'} ${esc(fit.label||fit.status||'')}</span>`:''}`:'';
     const projName=t.project_id?projNameById(t.project_id):'';
     const subRows=subs.map(s=>`<div class="subtask-row"><span class="step-dot ${s.status}"></span><span style="flex:1">${esc(s.name||s.description||'子任务')}</span><span style="color:var(--dim)">[${s.status}]</span>${s.assigned_agent_id?'<span style="color:var(--dim)"> → '+esc(s.assigned_agent_id.slice(0,8))+'</span>':''}</div>`).join('');
     const canCancel=['running','monitoring','planning','executing'].includes(t.status);
@@ -1077,7 +1094,7 @@ function renderTasks(){
     const deliveryBadge=hasDelivery?`<span class="badge" style="background:${t.output_data._delivery.accepted===true?'var(--green)':t.output_data._delivery.accepted===false?'#e5533c':'var(--yellow)'};color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">${t.output_data._delivery.accepted===true?'✅ 已验收':t.output_data._delivery.accepted===false?'❌ 已退回':'📦 待验收'}</span>`:'';
     return `<div class="card task-card" onclick="toggleTaskExpand(this)">
       <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span>${deliveryBadge}</div></div>
-      <div class="card-meta">${esc(t.description||'-')}<br>📊 ${done}/${sc} 子任务 (${pct}%) ${projName?'| 📁 '+esc(projName):''}${pmInfo}</div>
+      <div class="card-meta">${esc(t.description||'-')}<br>📊 ${done}/${sc} 子任务 (${pct}%) ${projName?'| 📁 '+esc(projName):''}${pmInfo}${costBadge}</div>
       <div class="pbar"><div class="pfill ${pct>=100?'low':'mid'}" style="width:${pct}%"></div></div>
       <div class="task-expand">${subRows||'<div class="subtask-row" style="color:var(--dim)">无子任务</div>'}
         <div class="subtask-row" style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" onclick="event.stopPropagation();showTaskDetail('${t.task_id}')">🔍 查看详情</button>${hasDelivery?`<button class="btn sm primary" onclick="event.stopPropagation();showDelivery('${t.task_id}')">📦 查看交付物</button>`:''}${t.task_id?`<button class="btn sm" onclick="event.stopPropagation();openDagForTask('${t.task_id}')">📈 DAG</button>`:''}${actionBtns}</div>
