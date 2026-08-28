@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import StationPage from "./pages/StationPage";
 import TasksPage from "./pages/TasksPage";
 import DagEditorPage from "./pages/DagEditorPage";
+import { ensureMeshToken, getRole, loginUser, logoutUser } from "./api";
 
 // iter-56: hash 路由 (服务端 /spa 静态托管无 SSR 路由, hash 免服务端配置)
 type Route = "station" | "tasks" | "dag";
@@ -57,12 +58,39 @@ function WsStatus() {
 
 export default function App() {
   const [route, setRoute] = useState(parseHash());
+  // iter-58 (F5.2): 顶栏角色徽章 (boss/operator/viewer/未登录) + 身份切换面板
+  const [role, setRole] = useState(getRole());
+  const [authOpen, setAuthOpen] = useState(false);
+  const [tokenInput, setTokenInput] = useState("");
+
+  const refreshRole = useCallback(() => {
+    ensureMeshToken().then(() => setRole(getRole()));
+  }, []);
 
   useEffect(() => {
     const onHash = () => setRoute(parseHash());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  useEffect(() => {
+    refreshRole();
+  }, [refreshRole]);
+
+  // 切换身份: 存用户 token 后重新拉取角色 (服务端回显)
+  const applyToken = () => {
+    loginUser(tokenInput);
+    setTokenInput("");
+    setAuthOpen(false);
+    refreshRole();
+  };
+
+  // 退出登录: 回到未登录态 (多用户模式下仅剩引导端点可用)
+  const logout = () => {
+    logoutUser();
+    setAuthOpen(false);
+    refreshRole();
+  };
 
   return (
     <div className="app">
@@ -81,12 +109,40 @@ export default function App() {
           ))}
         </nav>
         <WsStatus />
+        <div className="auth-chip">
+          <button
+            className={`role-badge role-${role || "anon"}`}
+            title={role ? `当前角色: ${role}` : "点击登录 (输入个人 token)"}
+            onClick={() => setAuthOpen((o) => !o)}
+          >
+            {role || "未登录"}
+          </button>
+          {authOpen && (
+            <div className="auth-pop">
+              <input
+                className="input"
+                type="password"
+                placeholder="个人 token"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && applyToken()}
+              />
+              <button className="btn" onClick={applyToken}>
+                切换
+              </button>
+              <button className="btn" onClick={logout}>
+                退出
+              </button>
+            </div>
+          )}
+        </div>
       </header>
       <main className="content">
         {route.route === "station" && <StationPage />}
         {route.route === "tasks" && <TasksPage />}
         {route.route === "dag" && (
-          <DagEditorPage taskId={route.taskId ?? ""} />
+          // key=role: 身份切换后重挂载, 刷新 viewer 只读状态
+          <DagEditorPage key={role} taskId={route.taskId ?? ""} />
         )}
       </main>
     </div>

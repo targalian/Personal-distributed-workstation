@@ -164,6 +164,16 @@ WebSocket 通道。
   `queued: true`; PM 上报 completed/failed/cancelled 时触发
   `_dispatch_queued_task` 接力派发最早 pending 任务 (PM 仍收尾时
   后台线程等待其空闲, 最多 120s)
+- 多用户权限 (iter-58, 补强#6 F5.2): `security.users` 配置驱动用户表
+  (name/role/token, 非法 role 归 viewer, 空 token 跳过, 空表 = 关闭
+  多用户向后兼容); 中间件 `resolve_role` 判定 (mesh token → boss,
+  用户 token 恒定时间比较 → 角色) 后按 `_check_role_access` 分级:
+  boss 全权 / operator 写放行 (管理员前缀 `/api/station/ /api/runtime/`
+  `/api/secrets/ /api/version/ /api/resources/ /api/network/ /api/agents/`
+  写仅 boss) / viewer 与未登录仅 GET/HEAD/OPTIONS; `configure_users`
+  由 station_controller 启动注入; `/api/station/auth-token` 收紧 —
+  多用户模式下仅 boss 身份可获得 mesh_token (防低角色提权),
+  未登录回显空角色
 - mesh 认证态与 token 访问器 `get_mesh_auth_token()` 位于 common
   (原闭包全局迁移, 避免跨模块引用失效)
 - station_api.py 兼容再导出 common 的中间件/工具，station_controller /
@@ -268,6 +278,7 @@ agent_runtime.execute()
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
 | 2026-08-29 | iter-57 | 并发压力验证 (补强#5): DB 加固 busy_timeout 30s + WAL (每线程独立连接); 限流双桶 (信任桶 token 高阈值/严格桶防滥用, 阈值配置化 observability.api_rate_limit[_trusted], ≤0 禁用); 本机 PM 忙时任务排队 pending 而非瞬时 failed, PM 结束接力派发 (_dispatch_queued_task); /api/health 补登白名单; 真机压测 1800 req 0 错误 + 20 并发提交全 200 (1 running + 19 排队) |
+| 2026-08-29 | iter-58 | 多用户权限 (补强#6 F5.2): security.users 配置驱动用户表 + 中间件角色分层 (boss/operator/viewer) + auth-token 收紧 (仅 boss 获 mesh_token); SPA 角色徽章/登录面板/viewer 只读; 真机 API 13 项 + Browser 5 步实测通过 (UI-050), 发现并修复未登录误显 boss 竞态与退出后 DAG 可编辑两缺陷 |
 | 2026-08-29 | iter-56 | F5.1 React SPA (补强#4): /spa 挂载 StaticFiles(html=True) + 认证白名单放行 /spa 前缀 + preflight _check_spa_bundle; 三页面 (Station 总览/任务列表/DAG 编辑器) 数据链路 Browser 实测通过 (UI-049) |
 | 2026-08-29 | iter-55 | 多机实测加固 (补强#3): _load_model_resources 启动预加载模型池 (让位主机 Key 就绪); _local_start_pm/_local_resume_pm 惰性初始化 Worker AgentRuntime; 双实例隔离跨机链路实测通过 |
 | 2026-08-28 | iter-54 | 日志容量修剪 (补强#2): Database.prune_logs (llm_call_log/chat_history/resource_usage_log 仅删已上报/progress_reports/heartbeat_log 固定 24h) + vacuum; _prune_logs_if_due 节流接入 _prune_loop; POST /api/runtime/logs/prune 手动端点 |

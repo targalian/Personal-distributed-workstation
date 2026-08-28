@@ -44,6 +44,13 @@ resource_usage_log 仅删已上报/progress_reports/heartbeat_log 固定 24h)。
 mesh token 的并发负载 — 20 并发任务 + UI 轮询不误伤)；≤0 禁用
 对应桶；由 station_controller 启动时注入 `configure_rate_limit`。
 
+**security.users 多用户表** (iter-58, 补强#6 F5.2): `users` 列表
+(每项 name/role/token, role ∈ boss|operator|viewer, 缺省 viewer)；
+空列表 = 关闭多用户权限 (所有人持 mesh token 即 boss, 向后兼容)。
+由 station_controller 启动时注入 `configure_users`; 中间件按角色
+分级授权 (见 02-station-core), auth-token 端点多用户模式下仅 boss
+身份下发 mesh_token。
+
 ## logger.py — 结构化日志
 
 统一格式 `[时间] [级别] [模块] 消息`，控制台 + 文件双输出，
@@ -143,6 +150,7 @@ secretary.py 删除 (P3)，Secretary 端路由由 station_routes_* 承担。
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
 | 2026-08-29 | iter-57 | 并发压力验证 (补强#5): ObservabilityConfig 增 api_rate_limit/api_rate_limit_trusted 限流双桶字段 (120/1000, ≤0 禁用); station_routes_common 限流器双桶 + 阈值变化清桶 + /api/health 补登白名单 |
+| 2026-08-29 | iter-58 | 多用户权限 (补强#6 F5.2): SecurityConfig 增 users 字段 (UserAccount: name/role/token, 空表 = 关闭多用户); station_routes_common 增 configure_users/resolve_role/users_configured/list_users_public + 中间件角色分层 + auth-token 收紧 (仅 boss 获 mesh_token) |
 | 2026-08-28 | iter-54 | 日志容量修剪 (补强#2): ObservabilityConfig 增 log_retention_days/log_prune_interval_hours/log_vacuum 三字段 (默认 30 天/24h/开, ≤0 禁用) |
 | 2026-08-27 | iter-43 | config.py 新增 ObservabilityConfig 段 (停滞检查周期/阈值配置化, 缺省回退默认) |
 | 2026-08-27 | iter-44 | error_tracker 闭环接线: 全局事件回调 (每条捕获触发) + 突发告警冷却去重 (按模块独立) |

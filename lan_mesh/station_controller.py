@@ -2455,6 +2455,10 @@ class StationController:
         configure_rate_limit(
             self.cfg.observability.api_rate_limit,
             self.cfg.observability.api_rate_limit_trusted)
+        # iter-58 (补强#6 F5.2): 多用户权限 — 用户表注入 (空 = 关闭,
+        # 所有人持 mesh token 即 boss 向后兼容)
+        from .station_routes_common import configure_users
+        configure_users([u.model_dump() for u in self.cfg.security.users])
         app.middleware("http")(api_guard_middleware)
 
         # Station 路由 (含全部 API, Secretary 路由会检查 active 状态)

@@ -242,14 +242,42 @@ def build_basic_routes(controller) -> APIRouter:
         return result
 
     @router.get("/api/station/auth-token")
-    async def get_auth_token():
+    async def get_auth_token(request: Request):
         """Phase 0: Web UI 引导获取 mesh token (认证启用时)。
 
         信任根: 能访问 Web UI 的局域网成员视为内网成员, 凭此 token 操作 API。
         认证关闭时返回空字符串 (前端不附加认证头)。
+
+        iter-58 (F5.2): 请求带用户个人 token 时回显该用户角色/名称
+        (SPA 登录后展示角色并禁用越权按钮); 否则回显默认 boss
+        (mesh token 持有人 = boss, 向后兼容)。
+        多用户模式安全收紧: 配置了用户表时, 仅 boss 身份可获得
+        mesh_token (防止低角色从引导端点提权); 未登录回显空角色。
         """
+        from .station_routes_common import (
+            resolve_role, list_users_public, users_configured,
+        )
         token = get_mesh_auth_token()
-        return {"auth_enabled": mesh_auth_enabled(), "mesh_token": token if mesh_auth_enabled() else ""}
+        auth_header = request.headers.get("Authorization", "")
+        identity = None
+        if auth_header.startswith("Bearer "):
+            identity = resolve_role(auth_header[7:])
+        if users_configured():
+            # 多用户模式: 已登录 → 回显自身角色; 未登录 → 空角色
+            # (SPA 展示「未登录」); mesh token 仅 boss 可获。
+            role_info = identity or {"name": "", "role": ""}
+            grant_mesh = bool(identity and identity["role"] == "boss")
+        else:
+            # 单人模式 (向后兼容): 默认 boss + 下发 mesh token
+            role_info = identity or {"name": "Boss", "role": "boss"}
+            grant_mesh = True
+        return {
+            "auth_enabled": mesh_auth_enabled(),
+            "mesh_token": token if mesh_auth_enabled() and grant_mesh else "",
+            "role": role_info["role"],
+            "name": role_info["name"],
+            "users": list_users_public(),
+        }
 
     @router.get("/api/station/bootstrap-token")
     async def bootstrap_token():

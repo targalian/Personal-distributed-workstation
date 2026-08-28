@@ -32,6 +32,8 @@
     auth 开启时免认证放行 (iter-56)
 20. iter57-concurrency — 并发压力验证 (补强#5): DB 并发混合负载/
     busy_timeout+WAL 加固生效/API 并发提交 10 任务 pm_id 唯一 (iter-57)
+21. iter58-permissions — 多用户权限 (补强#6 F5.2): token 角色归属判定/
+    角色访问矩阵/中间件角色分层/用户表解析/未配置向后兼容 (iter-58)
 
 运行: pytest tests/ -v
 """
@@ -5237,6 +5239,199 @@ class TestIter57Concurrency:
         fake._local_pm_agent = SimpleNamespace(_running=True)
         ok2 = StationController._dispatch_queued_task(fake)
         assert ok2 is False, "PM 忙时不应立即派发"
+
+
+class TestIter58Permissions:
+    """iter-58 补强#6 F5.2: 多用户权限 — 配置驱动用户表 + 角色分级。"""
+
+    def test_resolve_role_判定(self, monkeypatch):
+        """token 归属: mesh token→boss, 用户 token→角色, 未知→None。"""
+        from lan_mesh import station_routes_common as common
+
+        monkeypatch.setattr(common, "_mesh_auth_enabled", True)
+        monkeypatch.setattr(common, "_mesh_auth_token", "mesh-secret")
+        common.configure_users([
+            {"name": "小张", "role": "operator", "token": "op-token-1"},
+            {"name": "小王", "role": "viewer", "token": "vw-token-1"},
+        ])
+        boss = common.resolve_role("mesh-secret")
+        assert boss == {"name": "节点", "role": "boss"}
+        op = common.resolve_role("op-token-1")
+        assert op["role"] == "operator" and op["name"] == "小张"
+        assert common.resolve_role("vw-token-1")["role"] == "viewer"
+        assert common.resolve_role("unknown-token") is None
+
+    def test_configure_users_非法角色归一(self):
+        """非法 role 归一到 viewer; 空 token 跳过; 脱敏列表不含 token。"""
+        from lan_mesh import station_routes_common as common
+
+        common.configure_users([
+            {"name": "管理员", "role": "admin", "token": "tk-admin"},  # 非法 → viewer
+            {"name": "无token者", "role": "boss", "token": ""},        # 跳过
+        ])
+        assert common.users_configured() is True
+        assert common.resolve_role("tk-admin")["role"] == "viewer"
+        public = common.list_users_public()
+        assert public == [{"name": "管理员", "role": "viewer"}]
+        assert all("token" not in u for u in public)
+        # 清空用户表 = 关闭多用户
+        common.configure_users([])
+        assert common.users_configured() is False
+
+    def test_check_role_access_分层(self):
+        """访问矩阵: boss 全权/operator 写放行(管理员路径除外)/viewer 仅读。"""
+        from lan_mesh import station_routes_common as common
+
+        # boss 全权
+        assert common._check_role_access("/api/secrets/fetch", "POST", "boss")
+        assert common._check_role_access("/api/tasks", "POST", "boss")
+        # operator: 业务写放行
+        assert common._check_role_access("/api/tasks", "POST", "operator")
+        assert common._check_role_access("/api/tasks/t1/cancel",
+                                         "POST", "operator")
+        # operator: 管理员路径写拒绝
+        assert not common._check_role_access("/api/station/secretary/start",
+                                             "POST", "operator")
+        assert not common._check_role_access("/api/runtime/x",
+                                             "DELETE", "operator")
+        # viewer: 读放行/写拒绝
+        assert common._check_role_access("/api/tasks", "GET", "viewer")
+        assert common._check_role_access("/api/secrets/fetch", "GET", "viewer")
+        assert not common._check_role_access("/api/tasks", "POST", "viewer")
+        assert not common._check_role_access("/api/tasks/t1",
+                                             "DELETE", "viewer")
+
+    def test_middleware_role_tier(self, monkeypatch):
+        """中间件端到端: 未认证 401/未知 403/角色分层放行与拒绝。"""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh import station_routes_common as common
+
+        monkeypatch.setattr(common, "_mesh_auth_enabled", True)
+        monkeypatch.setattr(common, "_mesh_auth_token", "mesh-secret")
+        common.configure_users([
+            {"name": "操作员", "role": "operator", "token": "op-tk"},
+            {"name": "观察者", "role": "viewer", "token": "vw-tk"},
+        ])
+        common.configure_rate_limit(strict_max=1000, trusted_max=1000)
+        app = FastAPI()
+        app.middleware("http")(common.api_guard_middleware)
+
+        @app.get("/api/tasks")
+        def _tasks():
+            return {"tasks": []}
+
+        @app.post("/api/tasks")
+        def _create():
+            return {"ok": True}
+
+        @app.post("/api/station/secretary/start")
+        def _admin():
+            return {"ok": True}
+
+        client = TestClient(app)
+        # 未认证 401
+        assert client.post("/api/tasks", json={}).status_code == 401
+        # 未知 token 403
+        assert client.post("/api/tasks", json={},
+                           headers={"Authorization": "Bearer bad"})\
+            .status_code == 403
+        # viewer: 读放行 / 写 403
+        vw = {"Authorization": "Bearer vw-tk"}
+        assert client.get("/api/tasks", headers=vw).status_code == 200
+        assert client.post("/api/tasks", json={}, headers=vw).status_code == 403
+        # operator: 业务写放行 / 管理员路径写 403
+        op = {"Authorization": "Bearer op-tk"}
+        assert client.post("/api/tasks", json={}, headers=op).status_code == 200
+        assert client.post("/api/station/secretary/start",
+                           json={}, headers=op).status_code == 403
+        # mesh token = boss 全权
+        boss = {"Authorization": "Bearer mesh-secret"}
+        assert client.post("/api/station/secretary/start",
+                           json={}, headers=boss).status_code == 200
+
+    def test_backward_compat_no_users(self, monkeypatch):
+        """未配置用户表: 多用户关闭, mesh token 认证全权 (向后兼容)。"""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh import station_routes_common as common
+
+        monkeypatch.setattr(common, "_mesh_auth_enabled", True)
+        monkeypatch.setattr(common, "_mesh_auth_token", "mesh-secret")
+        common.configure_users([])
+        common.configure_rate_limit(strict_max=1000, trusted_max=1000)
+        app = FastAPI()
+        app.middleware("http")(common.api_guard_middleware)
+
+        @app.post("/api/tasks")
+        def _create():
+            return {"ok": True}
+
+        client = TestClient(app)
+        r = client.post("/api/tasks", json={},
+                        headers={"Authorization": "Bearer mesh-secret"})
+        assert r.status_code == 200
+
+    def test_config_users_解析(self, tmp_path):
+        """config.yaml security.users 解析为 UserAccount (缺省 role→viewer)。"""
+        from lan_mesh.config import load_config, UserAccount
+
+        cfg_path = tmp_path / "cfg.yaml"
+        cfg_path.write_text("""
+security:
+  auth_enabled: true
+  mesh_token: "mesh-tk-cfg"
+  users:
+    - name: "老板"
+      role: "boss"
+      token: "boss-tk"
+    - name: "访客"
+      role: "viewer"
+""", encoding="utf-8")
+        cfg = load_config(str(cfg_path))
+        users = cfg.security.users
+        assert len(users) == 2
+        assert isinstance(users[0], UserAccount)
+        assert users[0].name == "老板" and users[0].role == "boss"
+        assert users[0].token == "boss-tk"
+        # 缺省 role → viewer, 缺省 token → 空
+        assert users[1].role == "viewer" and users[1].token == ""
+
+    def test_auth_token_mesh_grant_tier(self, monkeypatch):
+        """auth-token 收紧: 多用户模式仅 boss 获 mesh_token (防低角色提权)。"""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh import station_routes_basic as basic
+        from lan_mesh import station_routes_common as common
+
+        monkeypatch.setattr(common, "_mesh_auth_enabled", True)
+        monkeypatch.setattr(common, "_mesh_auth_token", "mesh-secret")
+        common.configure_users([
+            {"name": "老板", "role": "boss", "token": "boss-tk"},
+            {"name": "观察者", "role": "viewer", "token": "vw-tk"},
+        ])
+        controller = MagicMock()
+        controller.state = SimpleNamespace(shared_folder="", device_id="t")
+        app = FastAPI()
+        app.include_router(basic.build_basic_routes(controller))
+        client = TestClient(app)
+        # 未登录: 空角色, 不下发 mesh token
+        d = client.get("/api/station/auth-token").json()
+        assert d["role"] == "" and d["mesh_token"] == ""
+        # viewer: 回显 viewer, 不下发 mesh token (防提权)
+        d = client.get("/api/station/auth-token",
+                       headers={"Authorization": "Bearer vw-tk"}).json()
+        assert d["role"] == "viewer" and d["mesh_token"] == ""
+        # boss 用户: 回显 boss 并下发 mesh token
+        d = client.get("/api/station/auth-token",
+                       headers={"Authorization": "Bearer boss-tk"}).json()
+        assert d["role"] == "boss" and d["mesh_token"] == "mesh-secret"
+        # 单人模式 (无用户表): 未登录照旧 boss + 下发 (向后兼容)
+        common.configure_users([])
+        d = client.get("/api/station/auth-token").json()
+        assert d["role"] == "boss" and d["mesh_token"] == "mesh-secret"
 
 
 

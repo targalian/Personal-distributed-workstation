@@ -101,6 +101,71 @@ body {
   box-shadow: none;
 }
 
+/* iter-58 (F5.2): 顶栏角色徽章 (boss/operator/viewer) */
+.role-badge {
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.role-badge.role-boss {
+  color: var(--err);
+  border: 1px solid rgba(244, 67, 54, 0.45);
+  background: rgba(244, 67, 54, 0.12);
+}
+
+.role-badge.role-operator {
+  color: var(--ok);
+  border: 1px solid rgba(76, 175, 80, 0.45);
+  background: rgba(76, 175, 80, 0.12);
+}
+
+.role-badge.role-viewer {
+  color: var(--dim);
+  border: 1px solid rgba(136, 147, 176, 0.45);
+  background: rgba(136, 147, 176, 0.12);
+}
+
+.role-badge.role-anon {
+  color: var(--dim);
+  border: 1px dashed var(--border);
+  background: rgba(136, 147, 176, 0.06);
+}
+
+/* iter-58 (F5.2): 顶栏身份切换面板 */
+.auth-chip {
+  position: relative;
+}
+
+.auth-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  z-index: 30;
+}
+
+.auth-pop .input {
+  width: 180px;
+}
+
+/* iter-58 (F5.2): DAG 编辑器只读角色提示 */
+.readonly-tip {
+  color: var(--warn);
+}
+
 .content {
   flex: 1;
   overflow: auto;

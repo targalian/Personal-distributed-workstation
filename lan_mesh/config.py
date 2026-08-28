@@ -136,11 +136,24 @@ class AppConfig(BaseModel):
     auto_upgrade: bool = True  # F1: 版本落后时自动 git pull 对齐 (工作区脏则跳过)
 
 
+class UserAccount(BaseModel):
+    """F5.2 (iter-58): 用户账号 — 多用户权限的最小配置单元。
+
+    token 为用户个人凭证 (与节点级 mesh_token 独立), 持 token 的
+    请求按 role 分级授权; 非法 role 值由 load 时归一到 viewer。
+    """
+    name: str = ""
+    role: str = "viewer"   # boss | operator | viewer
+    token: str = ""
+
+
 class SecurityConfig(BaseModel):
     """安全配置。"""
     auth_enabled: bool = True    # 是否启用节点间 Token 认证 (P2 #5: 默认启用)
     mesh_token: str = ""        # 显式指定全网共享 token (留空则自动生成/持久化)
     # token 来源优先级: security.mesh_token > 环境变量 LAN_MESH_TOKEN > ~/.lan_mesh/mesh_token
+    users: list[UserAccount] = []  # F5.2 (iter-58): 空列表 = 关闭多用户权限
+    # (所有人持 mesh token 即 boss, 向后兼容); 非空时按 role 分级授权
 
 
 def _expand(path_str: str) -> str:

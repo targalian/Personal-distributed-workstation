@@ -16,7 +16,7 @@ import {
   Position,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { apiFetch, TaskGraph } from "../api";
+import { apiFetch, ensureMeshToken, getRole, TaskGraph } from "../api";
 
 // iter-56 补强#4 F5.1: DAG 可视化编辑器 (GET/PUT /api/tasks/{id}/graph)
 // - 节点按状态着色, 拖拽改布局, 增删节点/依赖连线, 条件边标注
@@ -92,6 +92,20 @@ export default function DagEditorPage({ taskId }: { taskId: string }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // iter-58 (F5.2): viewer 与未登录 (空角色) 只读 — 禁用保存/加节点
+  // (服务端角色校验兜底); 仅 boss/operator 可编辑
+  const [role, setRole] = useState(getRole());
+  useEffect(() => {
+    let alive = true;
+    ensureMeshToken().then(() => {
+      if (alive) setRole(getRole());
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const readonly = role !== "boss" && role !== "operator";
 
   const load = useCallback(async (id: string) => {
     if (!id) return;
@@ -202,10 +216,15 @@ export default function DagEditorPage({ taskId }: { taskId: string }) {
           <button className="btn" onClick={() => load(tid)}>
             加载
           </button>
-          <button className="btn" onClick={addNode}>
+          <button className="btn" onClick={addNode} disabled={readonly}>
             + 节点
           </button>
-          <button className="btn primary" onClick={save} disabled={saving}>
+          <button
+            className="btn primary"
+            onClick={save}
+            disabled={saving || readonly}
+            title={readonly ? "只读角色 (viewer) 不可保存" : ""}
+          >
             {saving ? "保存中..." : "保存图"}
           </button>
         </div>
@@ -214,6 +233,11 @@ export default function DagEditorPage({ taskId }: { taskId: string }) {
         <div className="hint">
           任务: {taskName} <span className={`v st-${taskStatus}`}>{taskStatus}</span>
           (服务端校验: 仅 pending 任务可保存图结构)
+        </div>
+      )}
+      {readonly && (
+        <div className="hint readonly-tip">
+          当前角色 {role || "未登录"} 为只读: 不可修改图结构 (保存/加节点已禁用)
         </div>
       )}
       {error && <div className="error-banner">{error}</div>}

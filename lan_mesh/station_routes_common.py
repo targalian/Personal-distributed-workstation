@@ -9,6 +9,7 @@ station_api.py 按路由分层拆分后, 各 station_routes_*.py 模块共用:
   - check_secretary: Secretary 未激活 503 守卫
 """
 import json
+import secrets
 import threading
 import time
 
@@ -123,6 +124,88 @@ def get_mesh_auth_token() -> str:
     return _mesh_auth_token
 
 
+# F5.2 (iter-58): 多用户权限 — 用户表内存态 (name → role/token),
+# 由 StationController 启动时从 security.users 注入; 空表 = 关闭
+# 多用户权限 (所有人持 mesh token 即 boss, 向后兼容)
+_users: dict[str, dict] = {}
+_user_tokens: dict[str, dict] = {}
+_VALID_ROLES = {"boss", "operator", "viewer"}
+
+
+def configure_users(users: list):
+    """注入用户表 (由 StationController 启动时调用)。
+
+    users: [{"name": str, "role": str, "token": str}, ...]
+    非法 role 归一到 viewer; 空 token 的用户跳过。
+    """
+    global _users, _user_tokens
+    _users = {}
+    _user_tokens = {}
+    for u in (users or []):
+        name = str(u.get("name", "")).strip()
+        token = str(u.get("token", "")).strip()
+        if not token:
+            continue  # 无 token 的用户不可认证, 跳过
+        role = str(u.get("role", "viewer")).strip().lower()
+        if role not in _VALID_ROLES:
+            role = "viewer"
+        entry = {"name": name, "role": role}
+        _users[name or token[:8]] = entry
+        _user_tokens[token] = entry
+
+
+def resolve_role(provided_token: str) -> dict:
+    """判定请求 token 归属: 节点 mesh token → boss; 用户 token → 角色。
+
+    返回 {"name", "role"}; 未知 token 返回 None。调用方应只在认证
+    已通过后调用 (mesh token 优先, 用户 token 其次)。
+    """
+    if _mesh_auth_enabled and _mesh_auth_token:
+        from .auth import verify_token
+        if verify_token(provided_token, _mesh_auth_token):
+            return {"name": "节点", "role": "boss"}
+    # 用户 token 恒定时间比较 (防时序侧信道)
+    for token, entry in _user_tokens.items():
+        if secrets.compare_digest(token, provided_token):
+            return dict(entry)
+    return None
+
+
+def users_configured() -> bool:
+    """是否配置了多用户 (非空则启用角色分级)。"""
+    return bool(_user_tokens)
+
+
+def list_users_public() -> list:
+    """列出用户 (脱敏 token, 供管理员页面展示)。"""
+    return [{"name": e["name"], "role": e["role"]}
+            for e in _users.values()]
+
+
+# 管理员路径前缀: 仅 boss 可写 (读仍对全部角色开放)
+_ADMIN_PREFIXES = ("/api/station/", "/api/runtime/", "/api/secrets/",
+                    "/api/version/", "/api/resources/", "/api/network/",
+                    "/api/agents/")
+
+
+def _check_role_access(path: str, method: str, role: str) -> bool:
+    """F5.2: 角色访问判定 (读操作全角色放行)。
+
+    规则:
+    - boss: 全部放行
+    - operator: 写操作放行 (管理员路径除外)
+    - viewer: 仅 GET/HEAD/OPTIONS 放行
+    """
+    if role == "boss":
+        return True
+    if method in ("GET", "HEAD", "OPTIONS"):
+        return True  # 读操作全角色放行
+    # 写操作: 管理员路径仅 boss; 其余 boss/operator
+    if role == "operator" and not path.startswith(_ADMIN_PREFIXES):
+        return True
+    return False
+
+
 def _heal_mesh_token_from(controller, ip: str, port: int) -> str:
     """S1 自愈: 从推送方 (Secretary) 收敛加密信任根并同步内存态。
 
@@ -165,15 +248,26 @@ async def api_guard_middleware(request: Request, call_next):
     # Phase 0: mesh token 节点认证 (auth_enabled 时启用)
     # iter-56: /spa 静态资源放行 (SPA 页面加载后才能 auth-token 自举,
     # 与 / 同一信任假设)
+    # iter-58 (F5.2): 用户个人 token 与 mesh token 等效认证, 认证后
+    # 按角色分级授权 (见下方角色检查段)
     if _mesh_auth_enabled and path not in _AUTH_WHITELIST and not path.startswith("/static") \
             and not path.startswith("/spa"):
-        from .auth import verify_token
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             return JSONResponse(status_code=401, content={"detail": "缺少认证 token"})
         provided = auth_header[7:]
-        if not verify_token(provided, _mesh_auth_token):
+        identity = resolve_role(provided)
+        if not identity:
             return JSONResponse(status_code=403, content={"detail": "token 无效"})
+
+        # F5.2 (iter-58): 角色分级授权 (配置了用户表才启用; mesh token
+        # 为 boss 不受限, 向后兼容)
+        if users_configured():
+            if not _check_role_access(path, request.method, identity["role"]):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": f"权限不足: 角色 {identity['role']} "
+                                      f"不可执行此操作 (需 boss/operator)"})
 
     return await call_next(request)
 

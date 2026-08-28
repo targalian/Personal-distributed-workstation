@@ -84,6 +84,15 @@ iter-56 (F5.1) 起新增 React SPA 新版（webui/），与旧版仪表盘并存
 **认证**: `GET /api/station/auth-token` → `localStorage('lan_mesh_token')` →
 `apiFetch` 自动注入 Bearer（与旧版 dashboard 同模式）。
 
+**多用户权限** (iter-58, F5.2): 用户个人 token
+(`lan_mesh_user_token`) 优先于 mesh token; auth-token 回显角色
+(`lan_mesh_role`) — 顶栏角色徽章 (boss/operator/viewer/未登录) +
+点击弹出身份切换面板 (token 输入/切换/退出); `ensureMeshToken`
+共享 in-flight Promise 防竞态 (并发调用方 await 同一请求, 修复
+未登录误显 boss); DAG 编辑器 viewer 与未登录只读 (保存/加节点
+禁用 + 黄色提示, key=role 重挂载联动), 服务端角色校验兜底。
+多用户模式下未登录不获 mesh_token (auth-token 收紧), 需先登录。
+
 **三页面**:
 - Station 总览（`StationPage`）: `/api/health` 轮询 + 健康徽章
 - 任务列表（`TasksPage`）: `/api/tasks` + WS `task_updated` 300ms 防抖刷新，
@@ -118,3 +127,4 @@ preflight `_check_spa_bundle` 检查构建产物（缺失仅提示不阻断）�
 | 2026-08-28 | iter-51 | DAG 图编辑面板保存恢复 (saveDAG 接 PUT /api/tasks/{tid}/graph 回写 + 新节点 st- 前缀)，UI-047 实测通过 |
 | 2026-08-28 | iter-52 | 任务卡片成本预估徽章 (💰 token 徽章 + 预算适配状态小徽章) + cost_budget_warning toast 实时告警，UI-048 实测通过 |
 | 2026-08-29 | iter-56 | React SPA 新版 (webui/: Vite+React+TS+xyflow, /spa 挂载 + hash 路由 + 认证白名单; 三页面: Station 总览/任务列表/DAG 编辑器; 旧版顶栏 SPA 入口)，UI-049 实测通过 |
+| 2026-08-29 | iter-58 | SPA 多用户权限 (F5.2): 顶栏角色徽章 + 身份切换面板 (用户 token 优先/登录/退出); DAG 编辑器 viewer 与未登录只读; ensureMeshToken 共享 Promise 防竞态，UI-050 实测通过 |
