@@ -64,6 +64,13 @@ API Key 加密分发与版本同步（S1/S2/S3 迭代成果集中于此）。
   agent_runtime CLI 模板 / model_pool.example.yaml 已全量替换为
   `qwen3.8-max` (旧 ID 仍可调但自动路由, 不再使用)
 
+**池状态自愈写入口 (iter-60, F4.2 全自动闭环)**:
+`ModelResourceManager.set_pool_status(rid, status)` (active | paused |
+exhausted, 非法状态/未知池 no-op) + 模块级 `set_pool_status_global`
+异常隔离钩子 — 供 station_controller 自愈写动作使用: rotate_key 将
+密钥失效池置 paused / switch_pool 依赖 probe 自动置 exhausted, 均经
+`is_available` 路由剔除生效; 状态变更仅内存态 (重启后由探测重新评估)。
+
 ## model_router.py — 模型路由器
 
 **职责**: 任务难度分级（L1-L4）→ 加权评分选模型 → 降级链重试。
@@ -164,6 +171,7 @@ mesh_token 后重试解密一次：
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-60 | F4.2 全自动闭环: set_pool_status 运行时池状态标记 (自愈写动作入口, active/paused/exhausted, 内存态) + set_pool_status_global 异常隔离钩子 |
 | 2026-08-29 | iter-55 | 多机实测加固 (补强#3): resources.yaml 实测配置修复 (ark 池 models 名与 model_pool.yaml id 对齐 GLM5.2/kimi2.7 → 真实 ark 三模型; 两池 api_key_env 空时直填 key 注入); 跨机用量 WS 直推/HTTP 兜底双通道实测通过 |
 | 2026-08-28 | iter-52 | F4.4 成本感知调度: budget_advisor 预算顾问 (任务 token 预估 文本启发式+历史均值混合修正 / 预算适配检查 池+项目双层最紧判定 / 组合入口异常隔离) |
 | 2026-08-18 | iter-34 | 轮换配置落地: ark 池 billing_period=monthly 窗口紧迫度生效 (自然月口径); qwen3.8-max-preview 下线 ID 全量替换 (CLI 模板/示例配置) |

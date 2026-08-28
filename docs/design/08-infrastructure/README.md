@@ -44,6 +44,11 @@ resource_usage_log 仅删已上报/progress_reports/heartbeat_log 固定 24h)。
 mesh token 的并发负载 — 20 并发任务 + UI 轮询不误伤)；≤0 禁用
 对应桶；由 station_controller 启动时注入 `configure_rate_limit`。
 
+**observability 自愈写动作配额字段** (iter-60, F4.2 全自动闭环):
+`auto_heal_daily_limit` (写动作 rotate_key/switch_pool 每类别每日
+自动执行上限, 默认 3, 0=禁止写动作自动执行)；由守护扫描读取驱动
+配额护栏 (见下「自动自愈守护」段)。
+
 **security.users 多用户表** (iter-58, 补强#6 F5.2): `users` 列表
 (每项 name/role/token, role ∈ boss|operator|viewer, 缺省 viewer)；
 空列表 = 关闭多用户权限 (所有人持 mesh token 即 boss, 向后兼容)。
@@ -97,11 +102,19 @@ capture 触发, 异常隔离) 与突发告警冷却去重 (同模块两次告警
 落盘记录执行同一诊断, 重启后缓冲空仍可分析历史错误。
 
 **自愈动作执行** (iter-49, 修复环节): 诊断建议的 action 标识接入执行器 —
-`station_controller.run_heal_action()` 仅注册安全只读动作 (`check_peer`
-UDP 探测已知设备 / `probe_balances` 余额探测), 未注册动作 (如 `retry_or_switch`)
+`station_controller.run_heal_action()` 注册安全动作; 未注册动作 (如 `retry_or_switch`)
 返回 `manual_required` 不自动执行破坏性操作; 每次执行落盘 `heal_log` 表
 (Database v7 迁移, 容量修剪 500 行) 并广播 `heal_action` 事件,
 完成「检测→诊断→修复」闭环的可审计修复环节。
+
+**自愈写动作升级** (iter-60, F4.2 全自动闭环): 只读动作
+(`check_peer` UDP 探测 / `probe_balances` 余额探测) 之外新增两个真实
+修复写动作 — `rotate_key` (auth 类错误: 探测各池密钥, 命中
+401/403/unauthorized/invalid 的池经 `set_pool_status_global` 置
+`paused` 路由剔除) / `switch_pool` (rate_limit 类错误: 探测余额,
+balance≤0 池由 probe 自动置 `exhausted`, 核对可用池数, 全耗尽
+升级 `failed` 提示人工充值)；heal 端点不再映射为 probe_balances
+直接透传执行。
 
 **自动自愈守护** (iter-50, 自动化环节): `_auto_heal_loop()` 守护线程按
 `observability.auto_heal_interval` (最小 30s) 周期调用 `_auto_heal_once()` —
@@ -110,6 +123,14 @@ UDP 探测已知设备 / `probe_balances` 余额探测), 未注册动作 (如 `r
 防执行风暴, 需人工动作计入 `skipped_manual`; 默认关 (`auto_heal_enabled=false`),
 守护/扫描/执行全链异常隔离 (no-op + warning); 状态经 `get_auto_heal_status()`
 暴露 (开关/周期/冷却/累计轮次/最近动作)。
+
+**写动作护栏** (iter-60, F4.2 全自动闭环): `_AUTO_HEAL_WRITE_ACTIONS`
+(rotate_key/switch_pool) 附加双重护栏 — 每日配额
+(`auto_heal_daily_limit`, 超限计入 `skipped_quota`) 与连续失败熔断
+(同类别连续 2 次执行失败 → 计入 `skipped_fused` 停止自动执行, 待
+人工介入)；熔断在错误消失 (该类别不再出现在本轮 findings) 后自动
+复位; 护栏状态经 `get_auto_heal_status()` 扩展暴露 (daily_limit/
+daily_counts/fused, 内存态跨重启重置)。
 
 ## host_rating.py — 主机评级
 
@@ -149,6 +170,7 @@ secretary.py 删除 (P3)，Secretary 端路由由 station_routes_* 承担。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-60 | F4.2 全自动闭环: rotate_key/switch_pool 升级真实修复写动作 (失效池 paused/耗尽池 exhausted 经 set_pool_status_global 路由剔除, heal 端点透传) + 写动作每日配额 (auto_heal_daily_limit 默认 3) / 连续失败熔断 (错误消失自动复位) + get_auto_heal_status 扩展 |
 | 2026-08-29 | iter-57 | 并发压力验证 (补强#5): ObservabilityConfig 增 api_rate_limit/api_rate_limit_trusted 限流双桶字段 (120/1000, ≤0 禁用); station_routes_common 限流器双桶 + 阈值变化清桶 + /api/health 补登白名单 |
 | 2026-08-29 | iter-58 | 多用户权限 (补强#6 F5.2): SecurityConfig 增 users 字段 (UserAccount: name/role/token, 空表 = 关闭多用户); station_routes_common 增 configure_users/resolve_role/users_configured/list_users_public + 中间件角色分层 + auth-token 收紧 (仅 boss 获 mesh_token) |
 | 2026-08-28 | iter-54 | 日志容量修剪 (补强#2): ObservabilityConfig 增 log_retention_days/log_prune_interval_hours/log_vacuum 三字段 (默认 30 天/24h/开, ≤0 禁用) |

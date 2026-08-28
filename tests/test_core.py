@@ -34,6 +34,9 @@
     busy_timeout+WAL 加固生效/API 并发提交 10 任务 pm_id 唯一 (iter-57)
 21. iter58-permissions — 多用户权限 (补强#6 F5.2): token 角色归属判定/
     角色访问矩阵/中间件角色分层/用户表解析/未配置向后兼容 (iter-58)
+22. iter60-auto-heal-loop — F4.2 自愈全自动闭环: rotate_key/switch_pool
+    真实修复写动作 (失效池暂停/耗尽池剔除)、写动作每日配额、
+    连续失败熔断与错误消失自动复位 (iter-60)
 
 运行: pytest tests/ -v
 """
@@ -3503,6 +3506,12 @@ class TestHealActions:
             def _heal_probe_balances(self):
                 return StationController._heal_probe_balances(self)
 
+            def _heal_rotate_key(self):
+                return StationController._heal_rotate_key(self)
+
+            def _heal_switch_pool(self):
+                return StationController._heal_switch_pool(self)
+
             def __getattr__(self, name):
                 return MagicMock()
 
@@ -3511,21 +3520,26 @@ class TestHealActions:
         app = FastAPI()
         app.include_router(create_station_router(_Ctl()))
         client = TestClient(app)
-        # rotate_key 映射为 probe_balances (自动可执行)
+        # iter-60: rotate_key 透传为真实修复写动作 (不再映射 probe_balances)
         r = client.post("/api/errors/heal",
                         params={"action": "rotate_key", "category": "auth"})
         assert r.status_code == 200
         body = r.json()
-        assert body["action"] == "probe_balances" and body["result"] == "ok"
+        assert body["action"] == "rotate_key" and body["result"] == "ok"
+        # switch_pool 透传: 空探测 → 全耗尽判定 → failed (升级人工语义)
+        r = client.post("/api/errors/heal",
+                        params={"action": "switch_pool", "category": "rate_limit"})
+        assert r.json()["action"] == "switch_pool"
+        assert r.json()["result"] == "failed"
         # 未注册动作 → manual_required (仍需人工)
         r = client.post("/api/errors/heal",
                         params={"action": "retry_or_switch"})
         assert r.json()["result"] == "manual_required"
-        # 历史端点: 2 条倒序返回
+        # 历史端点: 3 条倒序返回
         r = client.get("/api/errors/heal/history", params={"limit": 10})
         assert r.status_code == 200
         heals = r.json()["heals"]
-        assert len(heals) == 2 and heals[0]["result"] == "manual_required"
+        assert len(heals) == 3 and heals[0]["result"] == "manual_required"
 
 
 class TestAutoHeal:
@@ -3664,6 +3678,149 @@ class TestAutoHeal:
         # runs 已递增
         r = client.get("/api/errors/heal/status")
         assert r.json()["runs"] == 1
+
+
+class TestIter60AutoHealClosedLoop:
+    """iter-60 (F4.2 全自动闭环): 真实修复写动作 + 每日配额/连续失败熔断护栏。"""
+
+    @staticmethod
+    def _make_ctl(tmp_path, **obs_kw):
+        """构造轻量 controller (__new__ + 手工属性, 与 TestAutoHeal 同模式)。"""
+        from lan_mesh.config import AppConfig, ObservabilityConfig
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        ctl = StationController.__new__(StationController)
+        ctl.db = Database(str(tmp_path / "d.db"))
+        ctl.discovery = None
+        ctl.cfg = AppConfig(observability=ObservabilityConfig(
+            auto_heal_enabled=True, **obs_kw))
+        ctl._auto_heal_last = {}
+        ctl._auto_heal_state = {"runs": 0, "last_run": 0.0, "last_actions": []}
+        return ctl
+
+    def test_config_daily_limit(self, tmp_path):
+        """auto_heal_daily_limit 默认 3 + yaml 覆盖生效。"""
+        from lan_mesh.config import ObservabilityConfig, load_config
+        assert ObservabilityConfig().auto_heal_daily_limit == 3
+        p = tmp_path / "c.yaml"
+        p.write_text("observability:\n  auto_heal_daily_limit: 5\n",
+                     encoding="utf-8")
+        cfg = load_config(str(p))
+        assert cfg.observability.auto_heal_daily_limit == 5
+
+    def test_heal_rotate_key_pauses_invalid_pool(self, tmp_path, monkeypatch):
+        """auth 错误 → rotate_key: 探测 401 的池被置 paused (路由剔除)。"""
+        ctl = self._make_ctl(tmp_path)
+        calls = []
+        monkeypatch.setattr(
+            "lan_mesh.model_resources.probe_balances_global",
+            lambda timeout=10.0: {
+                "probed": 2, "supported": 1, "results": {
+                    "pool_bad": {"error": "401 Client Error: unauthorized",
+                                 "balance": None},
+                    "pool_ok": {"error": "", "balance": 12.5},
+                }})
+        monkeypatch.setattr(
+            "lan_mesh.model_resources.set_pool_status_global",
+            lambda rid, status: calls.append((rid, status)) or True)
+        rec = ctl.run_heal_action("rotate_key", "auth")
+        assert rec["result"] == "ok"
+        assert "pool_bad" in rec["detail"]
+        assert calls == [("pool_bad", "paused")]
+
+    def test_heal_switch_pool_all_exhausted(self, tmp_path, monkeypatch):
+        """rate_limit 错误 → switch_pool: 全耗尽时升级 failed (人工介入)。"""
+        ctl = self._make_ctl(tmp_path)
+        monkeypatch.setattr(
+            "lan_mesh.model_resources.probe_balances_global",
+            lambda timeout=10.0: {
+                "probed": 2, "supported": 2, "results": {
+                    "pool_a": {"error": "", "balance": 0.0},
+                    "pool_b": {"error": "", "balance": 0.0},
+                }})
+        rec = ctl.run_heal_action("switch_pool", "rate_limit")
+        assert rec["result"] == "failed"
+        assert "人工" in rec["detail"]
+
+    def test_heal_switch_pool_ok(self, tmp_path, monkeypatch):
+        """rate_limit 错误 → switch_pool: 存在可用池 → ok 报告。"""
+        ctl = self._make_ctl(tmp_path)
+        monkeypatch.setattr(
+            "lan_mesh.model_resources.probe_balances_global",
+            lambda timeout=10.0: {
+                "probed": 3, "supported": 3, "results": {
+                    "pool_a": {"error": "", "balance": 0.0},
+                    "pool_b": {"error": "", "balance": 8.0},
+                    "pool_c": {"error": "", "balance": 3.2},
+                }})
+        rec = ctl.run_heal_action("switch_pool", "rate_limit")
+        assert rec["result"] == "ok" and "2 个可用池" in rec["detail"]
+
+    def test_auto_heal_write_quota(self, tmp_path, monkeypatch):
+        """写动作每日配额: 超限后 skipped_quota + status 暴露消耗。"""
+        from lan_mesh import error_tracker as et
+        ctl = self._make_ctl(tmp_path, auto_heal_daily_limit=1)
+        monkeypatch.setattr(
+            "lan_mesh.model_resources.probe_balances_global",
+            lambda timeout=10.0: {"probed": 0, "supported": 0, "results": {}})
+        et.error_tracker.clear()
+        try:
+            et.error_tracker.capture("llm", error_type="AuthError",
+                                     message="401 unauthorized")
+            s1 = ctl._auto_heal_once()
+            assert [a["action"] for a in s1["actions_run"]] == ["rotate_key"]
+            # 清冷却后第二轮: 命中每日配额 → skipped_quota
+            ctl._auto_heal_last.clear()
+            s2 = ctl._auto_heal_once()
+            assert s2["actions_run"] == []
+            assert s2["skipped_quota"] == ["auth"]
+            st = ctl.get_auto_heal_status()
+            assert st["daily_counts"] == {"auth": 1}
+            assert st["daily_limit"] == 1
+        finally:
+            et.error_tracker.clear()
+
+    def test_auto_heal_fuse_on_consecutive_failures(self, tmp_path, monkeypatch):
+        """连续 2 次写动作失败 → 熔断 skipped_fused; 错误消失 → 自动复位。"""
+        from lan_mesh import error_tracker as et
+        ctl = self._make_ctl(tmp_path, auto_heal_daily_limit=10)
+        monkeypatch.setattr(
+            "lan_mesh.model_resources.probe_balances_global",
+            lambda timeout=10.0: {"probed": 0, "supported": 0,
+                                  "results": {}, "error": "probe down"})
+        et.error_tracker.clear()
+        try:
+            et.error_tracker.capture("llm", error_type="AuthError",
+                                     message="401 unauthorized")
+            s1 = ctl._auto_heal_once()
+            assert s1["actions_run"][0]["result"] == "failed"
+            assert ctl._auto_heal_fused == {}
+            ctl._auto_heal_last.clear()
+            s2 = ctl._auto_heal_once()
+            assert s2["actions_run"][0]["result"] == "failed"
+            assert "auth" in ctl._auto_heal_fused  # 连续 2 次失败熔断
+            st = ctl.get_auto_heal_status()
+            assert "auth" in st["fused"]
+            ctl._auto_heal_last.clear()
+            s3 = ctl._auto_heal_once()
+            assert s3["actions_run"] == []
+            assert s3["skipped_fused"][0]["category"] == "auth"
+            # 错误消失 (无 findings) → 熔断/失败计数复位
+            et.error_tracker.clear()
+            ctl._auto_heal_last.clear()
+            s4 = ctl._auto_heal_once()
+            assert ctl._auto_heal_fused == {}
+            assert ctl._auto_heal_fail_streak == {}
+            assert s4["actions_run"] == []
+        finally:
+            et.error_tracker.clear()
+
+    def test_heal_status_guard_fields(self, tmp_path):
+        """status 端点扩展字段: daily_limit/daily_counts/fused 默认。"""
+        ctl = self._make_ctl(tmp_path)
+        st = ctl.get_auto_heal_status()
+        assert st["daily_limit"] == 3
+        assert st["daily_counts"] == {} and st["fused"] == {}
 
 
 class TestDagEdit:

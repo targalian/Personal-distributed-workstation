@@ -654,6 +654,23 @@ class ModelResourceManager:
         self._balances = results
         return {"probed": probed, "supported": supported, "results": results}
 
+    def set_pool_status(self, rid: str, status: str) -> bool:
+        """iter-60: 运行时标记资源池状态 (自愈写动作入口)。
+
+        status 取值: active | paused | exhausted; 未知池或非法状态返回
+        False (no-op)。paused/exhausted 池会被路由剔除 (is_available 过滤)。
+        """
+        pool = self._resources.get(rid)
+        if pool is None or status not in ("active", "paused", "exhausted"):
+            return False
+        if pool.status == status:
+            return True
+        old = pool.status
+        pool.status = status
+        logger.warning("资源池 %s 状态变更: %s → %s (自愈动作)",
+                       rid, old, status)
+        return True
+
     # ── R3: 跨主机用量上报 (Worker → Secretary) ──────────────────
 
     def set_report_target(self, url: str, interval: float = 60.0,
@@ -1210,6 +1227,14 @@ def probe_balances_global(timeout: float = 10.0) -> dict:
         return _mgr.probe_balances(timeout=timeout)
     except Exception as e:
         return {"probed": 0, "supported": 0, "results": {}, "error": str(e)}
+
+
+def set_pool_status_global(rid: str, status: str) -> bool:
+    """iter-60: 池状态标记钩子 — 自愈写动作用, 异常不影响主流程。"""
+    try:
+        return _mgr.set_pool_status(rid, status)
+    except Exception:
+        return False
 
 
 def set_bot_notify_global(callback: Optional[Callable]) -> None:
