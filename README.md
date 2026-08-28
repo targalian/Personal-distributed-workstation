@@ -274,6 +274,11 @@ Boss 提交任务 (Web UI)
 | Phase 7 生产级优化 | ✅ | 依赖感知分发、动态 prompt、选择性注入、结果聚合、失败接管、自检 |
 | Phase 8 增强 | 🔄 | 子 Agent 间直接通信、语义缓存、技能市场 |
 
+## 文档
+
+- [设计文档索引](docs/design/) — 11 个功能域设计说明 (scripts/sync_docs.py 保持与代码同步)
+- [承载中大型项目能力评估 · 补强后复审](docs/reference/project-capability-assessment.md) — iter-59 复审: 6 项补强全部闭环, 结论「具备承载中大型项目能力」
+
 ## License
 
 MIT

@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "last_run": "2026-08-29T04:30:00Z",
-  "current_phase": "iter-58-permissions",
+  "last_run": "2026-08-29T05:00:00Z",
+  "current_phase": "iter-59-assessment",
   "phase_status": "completed",
   "completed": [
     "F1.1",
@@ -67,17 +67,20 @@
     "iter-55-multihost",
     "iter-56-react-spa",
     "iter-57",
-    "iter-58-permissions"
+    "iter-58-permissions",
+    "iter-59-assessment"
   ],
   "failed": [],
   "blocked": [],
   "next_tasks": [
-    "补强#6 (P2): F5.2 多用户权限 (iter-58) 已闭环",
-    "每次发布/推送后同步更新 VERSION.json (version/commit/released_at/note) 保持版本记录与实际代码一致",
+    "Phase 5 收尾 (P3): F5.3 插件系统 (第三方 Skill 市场) / F5.4 移动端 App",
+    "主线深化候选 (P2): F4.2 异常自愈诊断→修复全自动闭环",
+    "团队场景深化 (若进入): 用户管理 UI、token 轮换端点",
+    "每次发布/推送后同步更新 VERSION.json 保持版本记录与实际代码一致",
     "代码设计变更时同步 docs/design 对应功能域文档 (docs-sync skill + sync_docs.py 机制, pre-push 第 8/9 项强制)"
   ],
-  "iteration_count": 58,
-  "total_files_modified": 241,
+  "iteration_count": 59,
+  "total_files_modified": 243,
   "last_error": "",
-  "notes": "iter-58 补强#6 F5.2 多用户权限闭环: security.users 配置驱动用户表 + 中间件角色分层 (boss 全权/operator 写放行管理员路径除外/viewer 仅读) + auth-token 收紧 (多用户模式仅 boss 获 mesh_token 防提权) + SPA 角色徽章/登录面板/viewer 只读; 真机 API 13 项 + Browser 5 步实测通过 (UI-050); 实测发现并修复未登录误显 boss 竞态 (ensureMeshToken 共享 in-flight Promise) 与退出后 DAG 可编辑两缺陷; 全量回归 313/313。6 项补强全部闭环"
+  "notes": "iter-59 补强收官复审: 6 项补强 (iter-53~58) 全部闭环, 初评 6 缺口全闭合; 复审报告落盘 docs/reference/project-capability-assessment.md + README 文档索引; 结论升级为「具备承载中大型项目的能力 — 六大支柱完整 + 边界约束已消除」(形态: 1 Boss + 多机算力网格 + 团队角色协作可配); 剩余边界: 团队规模 (静态 token 适合小型团队)/集群规模效应未实测/多 Secretary 联邦 P3; 回归基线 313 全绿 + sync_docs 84 条目无漂移"
 }
