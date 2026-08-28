@@ -375,6 +375,10 @@ class PMMonitor:
         # 交付闭环
         self._agent.deliver_result(task_name, task_desc, aggregated, subtask_results)
 
+        # iter-53: 交付完成 — 清理快照并结束 PM 生命周期 (progress_loop 随之退出)
+        self._agent._clear_snapshot()
+        self._agent.running = False
+
     # ── 优化10: 升级上报 ──────────────────────────────────────────
 
     def _report_escalation(self, task_name: str, error_msg: str, sub: dict):

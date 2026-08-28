@@ -341,7 +341,43 @@ def build_task_routes(controller) -> APIRouter:
 
     # ── Graph Engine: DAG 图结构 / Checkpoint / 断点恢复 ──
     # 注: Orchestrator 已废弃 (能力由 PM 四件套接管), 图数据一律从
-    # DB checkpoint/子任务重建; 手工编辑图已恢复 (iter-51), resume 随之下线。
+    # DB checkpoint/子任务重建; 手工编辑图已恢复 (iter-51)。
+    # iter-53: 断点恢复重新上线 — 基于 PM 执行态快照 (pm_snapshots) 续跑。
+
+    @router.post("/api/tasks/{task_id}/resume")
+    async def resume_task(task_id: str):
+        """iter-53: 断点恢复 — 从 PM 执行态快照续跑中断的任务。
+
+        流程:
+        1. 查找任务与最新快照 (无快照则 404)
+        2. 任务状态重置为 running
+        3. 本机重建 PM Agent 并从快照恢复 (保留已完成子任务输出,
+           重新分发未完成部分)
+        """
+        check_secretary(controller)
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
+        snapshot = db.get_pm_snapshot_by_task(task_id)
+        if not snapshot:
+            raise HTTPException(status_code=404, detail="无执行态快照, 无法恢复")
+
+        result = controller._local_resume_pm(task_id)
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result.get("message", "恢复失败"))
+
+        task = db.get_task(task_id)
+        await _broadcast(state, "task_updated", task.to_dict())
+        await _broadcast(state, "pm_resumed", {
+            "pm_id": result.get("pm_id", ""), "task_id": task_id,
+            "phase": snapshot.get("phase", ""),
+        })
+        return {
+            "ok": True, "task_id": task_id,
+            "pm_id": result.get("pm_id", ""),
+            "message": f"任务已从快照恢复 (阶段: {snapshot.get('phase', '')})",
+        }
 
     @router.get("/api/tasks/{task_id}/cost-estimate")
     async def get_task_cost_estimate(task_id: str):

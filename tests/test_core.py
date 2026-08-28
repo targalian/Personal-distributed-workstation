@@ -21,6 +21,8 @@
     时段折扣/规则回退/batch 合规红线/方案透明化 (R5-2)
 15. single-instance — 主机级单实例守护: 无锁/僵尸锁接管、同版本
     取消启动、新版杀旧接管、更旧退出、dev-reload 同版接管 (E6)
+16. pm-snapshot-resume — PM 执行态快照持久化 + 断点恢复: 快照往返/
+    就地恢复/DB CRUD/恢复四场景/快照与 resume 端点/multi 生命周期 (iter-53)
 
 运行: pytest tests/ -v
 """
@@ -45,6 +47,7 @@ from lan_mesh.role_cards import (
     render_secretary_prompt,
 )
 from lan_mesh import balance_probe
+from lan_mesh.pm_state import PMState
 import requests
 
 
@@ -4102,6 +4105,375 @@ class TestBudgetAdvisor:
         assert "budget_fit" in d and "status" in d["budget_fit"]
         r = client.get("/api/tasks/task-missing/cost-estimate")
         assert r.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════════
+# PM 执行态快照 + 断点恢复测试 (iter-53)
+# ═══════════════════════════════════════════════════════════════════
+
+def make_snapshot_state() -> PMState:
+    """构造含典型中间执行态的 PMState (2 子任务, A 完成 / B 依赖 A)。"""
+    import time as _time
+    st = PMState()
+    st.plan = {
+        "pattern": "orchestrator",
+        "decomposition": [
+            {"name": "A", "skill": "code", "depends_on": [], "description": "dA"},
+            {"name": "B", "skill": "review", "depends_on": ["A"], "description": "dB"},
+        ],
+    }
+    st.task = {"task_id": "task-x", "name": "测试任务", "input_data": {"k": "v"}}
+    st.subtask_outputs["A"] = {"summary": "done"}
+    st.pending_subtasks["B"] = {"sub": {}, "station": {"ip": "1.2.3.4"}, "agent_info": {}}
+    st.dispatched.add("A")
+    st.task_station["A"] = {"ip": "1.2.3.4", "api_port": 80}
+    st.task_agent["A"] = {"agent_id": "sub-1"}
+    st.task_station["B"] = {"ip": "1.2.3.4", "api_port": 80}
+    st.task_agent["B"] = {"agent_id": "sub-2"}
+    st.teams["t1"] = {"team_id": "t1", "members": []}
+    st.subagents["m1"] = {"member_id": "m1", "status": "completed", "current_task": "A"}
+    st.retry_counts["A"] = 1
+    st.start_time = _time.time() - 100
+    st.subtask_start_times["A"] = _time.time() - 90
+    st.clarification_question = "确认方案?"
+    return st
+
+
+class FakePMDispatcher:
+    """极简 PMDispatcher 替身: 记录分发/本地执行调用。"""
+    def __init__(self):
+        self.dispatched = []
+        self.locally = []
+        self.pending = 0
+
+    def dispatch_subtask(self, station, agent_info, task, sub, plan=None):
+        self.dispatched.append((sub.get("name"), station))
+
+    def execute_subtask_locally(self, task, sub):
+        self.locally.append(sub.get("name"))
+
+    def try_dispatch_pending(self):
+        self.pending += 1
+
+    def _record_subtask_start(self, name):
+        pass
+
+
+class FakePMMonitor:
+    def __init__(self):
+        self.aggregated = 0
+
+    def aggregate_results(self):
+        self.aggregated += 1
+
+    def progress_loop(self):
+        pass
+
+
+class FakePMAgent:
+    """极简 ProjectManagerAgent 替身, 只测 _run_resumed 分发逻辑。"""
+    def __init__(self, state):
+        self._state = state
+        self._dispatcher = FakePMDispatcher()
+        self._monitor = FakePMMonitor()
+        self._planner = object()
+        self.pm_id = "pm-test"
+        self.running = True
+        self._task_id = ""
+        self.reported = []
+        self.snap_phase = ""
+        self.cleared = False
+
+    def report_status(self, status, **kw):
+        self.reported.append(("status", status))
+
+    def report_progress(self, p, status, msg, **kw):
+        self.reported.append(("progress", status))
+
+    def sync_subtasks(self):
+        pass
+
+    def request_clarification(self, question):
+        return {}
+
+    def _persist_snapshot(self, phase):
+        self.snap_phase = phase
+
+    def _clear_snapshot(self):
+        self.cleared = True
+
+
+class TestPMSnapshotState:
+    """PMState 快照序列化: 往返一致 + 就地恢复。"""
+
+    def test_snapshot_roundtrip(self):
+        """16 字段全量往返, JSON 安全。"""
+        import json as _json
+        st = make_snapshot_state()
+        data = st.to_snapshot()
+        assert isinstance(data, dict)
+        st2 = PMState.from_snapshot(data)
+        assert st2.plan == st.plan
+        assert st2.task == st.task
+        assert st2.subtask_outputs == st.subtask_outputs
+        assert st2.pending_subtasks == st.pending_subtasks
+        assert st2.dispatched == st.dispatched
+        assert st2.task_station == st.task_station
+        assert st2.task_agent == st.task_agent
+        assert st2.teams == st.teams
+        assert st2.subagents == st.subagents
+        assert st2.retry_counts == st.retry_counts
+        assert abs(st2.start_time - st.start_time) < 1e-6
+        assert st2.subtask_start_times == st.subtask_start_times
+        assert st2.clarification_question == "确认方案?"
+        assert st2.max_retries == 2 and st2.global_timeout == 3600.0
+        _json.dumps(data)
+
+    def test_restore_in_place(self):
+        """restore_from 只重写字段不替换对象 (子组件共享引用仍有效)。"""
+        st = make_snapshot_state()
+        ref = st  # 模拟子组件共享引用
+        st2 = PMState()
+        st2.restore_from(st.to_snapshot())
+        assert st2.plan == st.plan
+        assert st2 is not st
+        assert ref is st
+
+
+class TestPMSnapshotDB:
+    """pm_snapshots 表 CRUD (UPSERT 一 PM 一快照)。"""
+
+    def test_snapshot_crud(self, tmp_path):
+        from lan_mesh.database import Database
+        db = Database(str(tmp_path / "snap.db"))
+        try:
+            # UPSERT 新增
+            db.save_pm_snapshot("pm-1", "task-1", "monitoring", '{"a": 1}')
+            snap = db.get_pm_snapshot("pm-1")
+            assert snap and snap["phase"] == "monitoring"
+            assert snap["state_json"] == '{"a": 1}'
+            # UPSERT 更新 (同 pm_id 只保留最新)
+            db.save_pm_snapshot("pm-1", "task-1", "executing", '{"a": 2}')
+            snap = db.get_pm_snapshot("pm-1")
+            assert snap["phase"] == "executing"
+            # 按任务查找
+            db.save_pm_snapshot("pm-2", "task-2", "planning_done", "{}")
+            by_task = db.get_pm_snapshot_by_task("task-2")
+            assert by_task and by_task["pm_id"] == "pm-2"
+            assert db.get_pm_snapshot_by_task("task-none") is None
+            # 删除
+            db.delete_pm_snapshot("pm-1")
+            assert db.get_pm_snapshot("pm-1") is None
+            # 任务级清理 (delete_task 级联)
+            db.delete_task("task-2")
+            assert db.get_pm_snapshot("pm-2") is None
+        finally:
+            # Windows 下释放 sqlite 文件锁, 保证 tmp_path 可清理
+            conn = getattr(getattr(db, "_local", None), "conn", None)
+            if conn:
+                conn.close()
+
+
+class TestPMResumeScenarios:
+    """_run_resumed 断点续跑四场景。"""
+
+    def test_scenario4_redispatch(self):
+        """部分完成 → 保留已完成输出, 仅重分发未完成子任务。"""
+        from lan_mesh.pm_agent import ProjectManagerAgent
+        st = make_snapshot_state()
+        agent = FakePMAgent(st)
+        ProjectManagerAgent._run_resumed(agent)
+        names = [n for n, _ in agent._dispatcher.dispatched]
+        assert names == ["B"], f"期望只重分发 B, 实际 {names}"
+        assert agent._dispatcher.locally == []
+        assert agent.snap_phase == "monitoring"
+
+    def test_scenario3_aggregate(self):
+        """全部完成 → 直接聚合交付, 不再分发。"""
+        from lan_mesh.pm_agent import ProjectManagerAgent
+        st = make_snapshot_state()
+        st.subtask_outputs["B"] = {"summary": "done B"}
+        st.pending_subtasks = {}
+        agent = FakePMAgent(st)
+        ProjectManagerAgent._run_resumed(agent)
+        assert agent._monitor.aggregated == 1
+        assert agent._dispatcher.dispatched == []
+
+    def test_scenario2_no_plan(self):
+        """无任务分解 (快照残缺) → 标记失败。"""
+        from lan_mesh.pm_agent import ProjectManagerAgent
+        st = make_snapshot_state()
+        st.plan = {}
+        agent = FakePMAgent(st)
+        ProjectManagerAgent._run_resumed(agent)
+        assert agent._running is False
+        assert any(s == "failed" for _, s in agent.reported)
+
+    def test_dependency_pending(self):
+        """依赖未满足的子任务挂回 pending, 不分发。"""
+        from lan_mesh.pm_agent import ProjectManagerAgent
+        st = make_snapshot_state()
+        st.subtask_outputs = {}  # A 也未完成
+        st.pending_subtasks = {}
+        agent = FakePMAgent(st)
+        ProjectManagerAgent._run_resumed(agent)
+        names = [n for n, _ in agent._dispatcher.dispatched]
+        assert names == ["A"], f"期望只分发 A, 实际 {names}"
+        assert "B" in st.pending_subtasks
+
+    def test_bad_snapshot_json(self):
+        """损坏快照 → resume_from_snapshot 返回 False 拒绝恢复。"""
+        from lan_mesh.pm_agent import ProjectManagerAgent
+        pm = ProjectManagerAgent("pm-x", None, "http://127.0.0.1:1", "dev-1")
+        ok = pm.resume_from_snapshot({"state_json": "{invalid json", "phase": "x"})
+        assert ok is False
+
+
+class TestPMSnapshotEndpoints:
+    """快照端点 (POST/GET/404/DELETE) + resume 端点 + 落库字段完整性。"""
+
+    def _make_ctl(self, tmp_path):
+        from lan_mesh.database import Database
+
+        class _Ctl:
+            """最小控制器替身: 只暴露路由所需属性。"""
+            def __init__(self):
+                self.db = Database(str(tmp_path / "ctl.db"))
+                self.secretary_active = True
+                self._local_pm_agent = None
+                self.chat_runtime = None
+                self.resume_called = []
+                self.state = type("S", (), {
+                    "device_id": "dev-ctl",
+                    "device_name": "ctl",
+                    "api_port": 45470,
+                    "ws_clients": set(),
+                    "shared_folder": type("SF", (), {"path": str(tmp_path)})(),
+                })()
+                self.bot_gateway = type("BG", (), {"notify": lambda *a, **k: None})()
+                self.project_manager = None
+                self._pm_worker_map = {}
+                self.chat_handler = None
+                self.discovery = type("D", (), {"find_device": lambda *a, **k: None})()
+                self._ws_queue = []
+
+            def _local_resume_pm(self, task_id):
+                self.resume_called.append(task_id)
+                return {"ok": True, "pm_id": "pm-ctl"}
+
+            def _queue_ws_broadcast(self, *a, **k):
+                pass
+
+        return _Ctl()
+
+    def test_snapshot_endpoints(self, tmp_path):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.station_routes_pm import build_pm_routes
+        from lan_mesh.station_routes_tasks import build_task_routes
+
+        ctl = self._make_ctl(tmp_path)
+        app = FastAPI()
+        app.include_router(build_pm_routes(ctl))
+        app.include_router(build_task_routes(ctl))
+        client = TestClient(app)
+
+        r = client.post("/api/pm/pm-1/snapshot", json={
+            "pm_id": "pm-1", "task_id": "task-1", "phase": "monitoring",
+            "state": {"plan": {"decomposition": []}, "task": {"task_id": "task-1"}},
+        })
+        assert r.status_code == 200, r.text
+        r = client.get("/api/pm/pm-1/snapshot")
+        assert r.status_code == 200 and r.json()["phase"] == "monitoring"
+        r = client.get("/api/pm/pm-none/snapshot")
+        assert r.status_code == 404
+        r = client.delete("/api/pm/pm-1/snapshot")
+        assert r.status_code == 200
+        assert ctl.db.get_pm_snapshot("pm-1") is None
+
+    def test_resume_endpoint(self, tmp_path):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.station_routes_pm import build_pm_routes
+        from lan_mesh.station_routes_tasks import build_task_routes
+        from lan_mesh.protocol import Task
+
+        ctl = self._make_ctl(tmp_path)
+        app = FastAPI()
+        app.include_router(build_pm_routes(ctl))
+        app.include_router(build_task_routes(ctl))
+        client = TestClient(app)
+
+        # 无快照 → 404
+        ctl.db.save_task(Task(task_id="task-no-snap", name="t", status="running"))
+        r = client.post("/api/tasks/task-no-snap/resume")
+        assert r.status_code == 404
+        # 有快照 → 恢复
+        ctl.db.save_task(Task(task_id="task-r", name="t2", status="interrupted"))
+        ctl.db.save_pm_snapshot("pm-r", "task-r", "monitoring",
+                                '{"plan": {}, "task": {}}')
+        r = client.post("/api/tasks/task-r/resume")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] and body["pm_id"] == "pm-ctl"
+        assert ctl.resume_called == ["task-r"]
+        # 任务不存在 → 404
+        r = client.post("/api/tasks/task-missing/resume")
+        assert r.status_code == 404
+
+    def test_snapshot_route_field_integrity(self, tmp_path):
+        """快照 POST 落库字段完整 (state 深拷贝 JSON 化)。"""
+        import json as _json
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.station_routes_pm import build_pm_routes
+
+        ctl = self._make_ctl(tmp_path)
+        app = FastAPI()
+        app.include_router(build_pm_routes(ctl))
+        client = TestClient(app)
+        state_data = {"plan": {"decomposition": [{"name": "A"}]},
+                      "subtask_outputs": {"A": "x"}}
+        r = client.post("/api/pm/pm-s/snapshot", json={
+            "pm_id": "pm-s", "task_id": "task-s", "phase": "executing",
+            "state": state_data})
+        assert r.status_code == 200
+        snap = ctl.db.get_pm_snapshot("pm-s")
+        assert snap["task_id"] == "task-s" and snap["phase"] == "executing"
+        parsed = _json.loads(snap["state_json"])
+        assert parsed["plan"]["decomposition"][0]["name"] == "A"
+        assert parsed["subtask_outputs"]["A"] == "x"
+
+
+class TestPMMultiLifecycle:
+    """multi 模式 running 生命周期回归 (iter-53 修复)。"""
+
+    def test_multi_running_lifecycle(self):
+        """恢复分发后 running 保持 True; 聚合收尾后停止。"""
+        from lan_mesh.pm_agent import ProjectManagerAgent
+        from lan_mesh.pm_monitor import PMMonitor
+
+        pm = ProjectManagerAgent("pm-lc", None, "http://127.0.0.1:1", "dev-1")
+        st = pm._state
+        st.plan = {"pattern": "multi", "decomposition": [
+            {"name": "A", "depends_on": []}, {"name": "B", "depends_on": []}]}
+        st.task = {"task_id": "task-lc", "name": "lc"}
+        st.task_station["A"] = {"ip": "1.2.3.4", "api_port": 80}
+        st.task_agent["A"] = {"agent_id": "sub-a"}
+        st.task_station["B"] = {"ip": "1.2.3.4", "api_port": 80}
+        st.task_agent["B"] = {"agent_id": "sub-b"}
+        pm._running = True
+        try:
+            pm._dispatcher = FakePMDispatcher()
+            pm._run_resumed()
+            assert pm.running is True, "恢复分发后 running 应保持 True 等待聚合"
+            # 真实 PMMonitor 聚合收尾 (LLM 失败亦走收尾): running → False
+            monitor = PMMonitor("pm-lc", None, "http://127.0.0.1:1", st, pm,
+                                pm._dispatcher)
+            monitor.aggregate_results()
+            assert pm.running is False, "聚合收尾后 running 应停止"
+        finally:
+            pm.running = False
 
 
 

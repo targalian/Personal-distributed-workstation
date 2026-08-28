@@ -66,6 +66,16 @@ Secretary 超时离线且网络无其他在线 Secretary 时，由 `device_id`
 
 **关键接口**: `start()` / `activate_secretary()` / `deactivate_secretary()`
 
+**PM 断点恢复 (iter-53)**:
+- `_local_resume_pm(task_id)`: 重建 PM Agent 并从快照续跑 — 校验本机
+  PM 未运行/chat_runtime 就绪/快照存在后重建, `resume_from_snapshot`
+  失败回滚; 任务状态回到 running
+- `_recover_stale_tasks()`: activate_secretary 末尾恢复扫描 — stale
+  状态 (running/monitoring/planning/executing/awaiting_input/paused)
+  有快照自动续跑, 无快照标记 interrupted
+- 端点: `POST /api/tasks/{task_id}/resume` (手动恢复, 无快照 404/
+  冲突 409); `POST|GET|DELETE /api/pm/{pm_id}/snapshot` (快照落库通道)
+
 **依赖**: discovery, station_director, database, secret_sync, version_sync,
 http_retry, config, event_bus
 
@@ -148,7 +158,8 @@ WebSocket 通道。
 **职责**: Secretary 端全部持久化（类名 `Database`）。
 
 **表结构**: hosts（主机 + 版本列）、tasks/subtasks、chat_history、skills、
-skill_assignments、resource_usage_log、events 等。
+skill_assignments、resource_usage_log、events、pm_snapshots（iter-53
+PM 执行态快照, 断点恢复数据源）等。
 
 **迁移机制**: `SCHEMA_VERSION` + `_MIGRATIONS` 字典（当前 **v5**）：
 - v5: llm_call_log 审计表 (运行时 LLM 调用性能追踪)
@@ -157,7 +168,8 @@ skill_assignments、resource_usage_log、events 等。
 
 **关键接口**: `upsert_host()` / `list_hosts()` / `on_heartbeat` 相关 /
 `record_usage()` / `insert_llm_call()` / `query_llm_metrics()` /
-`backup()` (P2 #7) 等
+`backup()` (P2 #7) / `save_pm_snapshot()` 系列 (iter-53 快照 UPSERT/
+按任务查找/删除, delete_task 级联清理) 等
 
 ## runtime_trace.py — 运行时追踪与性能审计
 
@@ -217,6 +229,7 @@ agent_runtime.execute()
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-28 | iter-53 | PM 断点恢复: pm_snapshots 表 + save_pm_snapshot CRUD; _local_resume_pm + _recover_stale_tasks 快照自动续跑; /api/pm/{id}/snapshot 三端点 + POST /api/tasks/{id}/resume 恢复端点 |
 | 2026-08-26 | iter-39 | P3 任务流总览: task_flow_overview 多任务聚合 (末阶段/终态判断/末活动倒序); /api/runtime/task-flow-list 端点; Dashboard 运行时 Tab 总览表 + 一键查瀑布 (UI-037) |
 | 2026-08-26 | iter-40 | P3 任务停滞检测: task_flow_overview 增 idle_ms/stalled (stall_minutes 阈值, 终态免疫, ≤0 禁用); 端点参数透传与夹取 (0~1440); Dashboard 状态列三态 + 红色告警横幅 (UI-038) |
 | 2026-08-26 | iter-41 | P3 任务停滞主动告警: check_stall_alerts 档位去重 (1/2/4 倍阈值 Lv1/2/3, 仅升级重推, 恢复清档) + 60s 守护线程; event_bus task_stall_alert → WS toast + 总览表自动刷新 + Bot 三档模板; 告警查询/手动检查端点 (UI-039) |

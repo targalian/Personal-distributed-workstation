@@ -52,6 +52,37 @@ def build_pm_routes(controller) -> APIRouter:
         result["teams"] = [t.to_dict() if hasattr(t, 'to_dict') else t for t in teams]
         return result
 
+    @router.post("/api/pm/{pm_id}/snapshot")
+    async def save_pm_snapshot(pm_id: str, payload: dict):
+        """iter-53: PM 上报执行态快照 (断点恢复数据源, Worker 调用)。"""
+        check_secretary(controller)
+        import json as _json
+        task_id = payload.get("task_id", "")
+        phase = payload.get("phase", "")
+        state = payload.get("state", {})
+        state_json = state if isinstance(state, str) else _json.dumps(state, ensure_ascii=False)
+        db.save_pm_snapshot(pm_id, task_id, phase, state_json)
+        return {"ok": True, "pm_id": pm_id, "phase": phase}
+
+    @router.get("/api/pm/{pm_id}/snapshot")
+    async def get_pm_snapshot(pm_id: str):
+        """iter-53: 查询 PM 执行态快照 (诊断/恢复前探视)。"""
+        check_secretary(controller)
+        snap = db.get_pm_snapshot(pm_id)
+        if not snap:
+            raise HTTPException(status_code=404, detail="快照不存在")
+        return {
+            "pm_id": snap["pm_id"], "task_id": snap["task_id"],
+            "phase": snap["phase"], "updated_at": snap["updated_at"],
+        }
+
+    @router.delete("/api/pm/{pm_id}/snapshot")
+    async def delete_pm_snapshot(pm_id: str):
+        """iter-53: 删除 PM 执行态快照 (任务终结时 PM 调用清理)。"""
+        check_secretary(controller)
+        db.delete_pm_snapshot(pm_id)
+        return {"ok": True, "pm_id": pm_id}
+
     @router.get("/api/pm/{pm_id}/teams")
     async def get_pm_teams(pm_id: str):
         """PM 下属团队列表。"""

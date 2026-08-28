@@ -517,6 +517,18 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_checkpoint_task
                 ON graph_checkpoints(task_id, created_at);
 
+            -- iter-53: PM 执行态快照表 (断点恢复 — 重启后从快照续跑)
+            CREATE TABLE IF NOT EXISTS pm_snapshots (
+                pm_id      TEXT PRIMARY KEY,
+                task_id    TEXT NOT NULL,
+                phase      TEXT NOT NULL DEFAULT '',
+                state_json TEXT NOT NULL DEFAULT '{}',
+                updated_at REAL NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_pm_snapshot_task
+                ON pm_snapshots(task_id, updated_at);
+
             -- P0/P1: LLM 调用审计表 (运行时性能追踪)
             CREATE TABLE IF NOT EXISTS llm_call_log (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1002,6 +1014,7 @@ class Database:
         conn = self._get_conn()
         conn.execute("DELETE FROM pm_agents WHERE task_id = ?", (task_id,))
         conn.execute("DELETE FROM graph_checkpoints WHERE task_id = ?", (task_id,))
+        conn.execute("DELETE FROM pm_snapshots WHERE task_id = ?", (task_id,))
         cursor = conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
         conn.commit()
         return cursor.rowcount > 0
@@ -1787,6 +1800,46 @@ class Database:
         """删除指定任务的所有检查点。"""
         conn = self._get_conn()
         conn.execute("DELETE FROM graph_checkpoints WHERE task_id = ?", (task_id,))
+        conn.commit()
+
+    # ── PM 执行态快照 CRUD (iter-53 断点恢复) ────────────────────
+
+    def save_pm_snapshot(self, pm_id: str, task_id: str, phase: str,
+                         state_json: str) -> None:
+        """iter-53: 保存 PM 执行态快照 (UPSERT, 一个 PM 只保留最新快照)。"""
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO pm_snapshots (pm_id, task_id, phase, state_json, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(pm_id) DO UPDATE SET
+                task_id = excluded.task_id,
+                phase = excluded.phase,
+                state_json = excluded.state_json,
+                updated_at = excluded.updated_at
+        """, (pm_id, task_id, phase, state_json, time.time()))
+        conn.commit()
+
+    def get_pm_snapshot(self, pm_id: str) -> Optional[dict]:
+        """iter-53: 获取指定 PM 的最新执行态快照。"""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM pm_snapshots WHERE pm_id = ?", (pm_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_pm_snapshot_by_task(self, task_id: str) -> Optional[dict]:
+        """iter-53: 按任务 ID 查找最新快照 (resume 端点入口)。"""
+        conn = self._get_conn()
+        row = conn.execute("""
+            SELECT * FROM pm_snapshots WHERE task_id = ?
+            ORDER BY updated_at DESC LIMIT 1
+        """, (task_id,)).fetchone()
+        return dict(row) if row else None
+
+    def delete_pm_snapshot(self, pm_id: str) -> None:
+        """iter-53: 删除指定 PM 的执行态快照 (任务终结时清理)。"""
+        conn = self._get_conn()
+        conn.execute("DELETE FROM pm_snapshots WHERE pm_id = ?", (pm_id,))
         conn.commit()
 
     # ── P0/P1: LLM 调用审计 ─────────────────────────────────────

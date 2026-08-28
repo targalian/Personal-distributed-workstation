@@ -86,9 +86,42 @@ subprocess 隔离执行 Agent 生成代码（非 eval）：超时保护（默认
 **技能文件结构**: `skills/{skill_id}/SKILL.md`（含 YAML front matter）+
 可选 reference.md。
 
+## PM 执行态快照与断点恢复 (iter-53)
+
+**背景**: 修复 multi 模式下聚合永不触发的真实缺陷 — 原先 `_run_task`
+finally 无条件停 `running`, 而 `aggregate_results` 只在 progress_loop
+中触发, 多子任务任务分发后 progress_loop 10s 内退出、聚合/交付
+永不执行; 同时补齐 PM 重启断点恢复 (补强评估缺口 1)。
+
+**快照序列化 (pm_state.py)**:
+- `PMState.to_snapshot()`: 16 字段序列化 (plan/task/subtask_outputs/
+pending/dispatched/task_station/task_agent/teams/subagents/retry/
+超时/启动时间/clarification_question, 线程安全)
+- `restore_from()`: 就地恢复 — 只重写字段不替换对象, 保持
+planner/dispatcher/monitor 的共享引用有效 (resume 关键约束)
+
+**快照写点 (pm_agent.py)**:
+| 阶段 | 写点 |
+|---|---|
+| planning_done | 规划完成 |
+| monitoring | 分发完成 (multi 模式保持 running 等聚合) |
+| executing | 子任务结果注入 |
+| awaiting_input | 澄清等待 (携带 clarification_question) |
+| paused | 暂停 |
+
+快照经 HTTP POST 到 Secretary `/api/pm/{pm_id}/snapshot` 落库
+(pm_snapshots 表 UPSERT 一 PM 一快照, 异常静默降级); 完成/失败/取消
+时清除; 聚合收尾 (pm_monitor.aggregate_results 末尾) 清快照 + 停 running。
+
+**断点续跑 (resume_from_snapshot → _run_resumed)**: 解析快照就地恢复后按四
+场景执行 — 澄清等待重发问题; 无分解标记失败; 全部完成直接聚合; 部分完成
+保留已完成输出、重分发未完成 (依赖未满足挂回 pending, 远端子 Agent 随进程
+消失不能等回报)。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-28 | iter-53 | PM 执行态快照持久化 + 断点恢复: PMState 序列化/就地恢复 + 六阶段快照写点 + resume_from_snapshot/_run_resumed 四场景续跑 + multi 模式聚合修复 (_multi_monitoring) |
 | 2026-08-27 | iter-45 | agent_runtime 降级链耗尽错误埋点 (module=llm, 携带失败链) |
 | 2026-08-16 | iter-27 后 | 初建 |

@@ -514,18 +514,30 @@ class StationController:
         return {"ok": True, "message": "Secretary 已停用"}
 
     def _recover_stale_tasks(self):
-        """任务断点恢复: 将上次运行中断的任务标记为 interrupted。
+        """iter-53: 启动时恢复中断任务 — 有快照自动续跑, 无快照标 interrupted。
 
         系统重启后, 之前处于 running/monitoring/planning/executing 的任务
-        其 PM Agent 进程已不存在, 无法继续执行。
-        将这些任务标记为 interrupted, 用户可在 UI 中看到并决定重新提交或删除。
+        其 PM Agent 进程已不存在:
+        - 存在执行态快照 (pm_snapshots) → 自动重建 PM 从断点续跑
+          (保留已完成子任务输出, 重新分发未完成部分)
+        - 无快照 → 标记 interrupted, 用户可在 UI 中看到并决定重新提交或删除
         """
-        stale_statuses = ("running", "monitoring", "planning", "executing")
+        stale_statuses = ("running", "monitoring", "planning", "executing", "awaiting_input", "paused")
         recovered = 0
         for status in stale_statuses:
             try:
                 tasks = self.db.list_tasks(status=status, limit=100)
                 for task in tasks:
+                    # iter-53: 有快照 → 自动续跑
+                    if self.db.get_pm_snapshot_by_task(task.task_id):
+                        result = self._local_resume_pm(task.task_id)
+                        if result.get("ok"):
+                            logger.info("任务断点恢复: %s 已从快照续跑 (pm=%s)",
+                                        task.task_id[:16], result["pm_id"][:12])
+                            recovered += 1
+                            continue
+                        logger.warning("任务断点恢复失败: %s → %s",
+                                       task.task_id[:16], result.get("message"))
                     task.status = "interrupted"
                     if not task.output_data:
                         task.output_data = {}
@@ -539,7 +551,7 @@ class StationController:
             except Exception as e:
                 logger.warning("恢复中断任务失败 (status=%s): %s", status, e)
         if recovered:
-            logger.info("任务断点恢复: %d 个中断任务已标记为 interrupted", recovered)
+            logger.info("任务断点恢复: %d 个中断任务已处理 (快照续跑或标记 interrupted)", recovered)
 
     # ── Secretary 自动选举 ─────────────────────────────────────
 
@@ -929,6 +941,47 @@ class StationController:
         self._local_pm_agent = None
         self._local_sub_agents.clear()
         logger.info("本机 PM Agent 已停止: %s", pm_id)
+        return {"ok": True, "pm_id": pm_id}
+
+    def _local_resume_pm(self, task_id: str) -> dict:
+        """iter-53: 从执行态快照恢复中断的 PM Agent (断点续跑)。
+
+        重建 PM Agent 实例并注入快照状态, 保留已完成子任务输出,
+        重新分发未完成部分; 任务状态重置为 running。
+        """
+        if self._local_pm_agent and getattr(self._local_pm_agent, '_running', False):
+            return {"ok": False, "message": "本机 PM Agent 正在运行, 无法恢复其他任务"}
+        if not self.chat_runtime:
+            return {"ok": False, "message": "AgentRuntime 未初始化 (Secretary 未激活)"}
+
+        snapshot = self.db.get_pm_snapshot_by_task(task_id)
+        if not snapshot:
+            return {"ok": False, "message": "无执行态快照, 无法恢复"}
+
+        task = self.db.get_task(task_id)
+        if not task:
+            return {"ok": False, "message": "任务不存在"}
+
+        from .pm_agent import ProjectManagerAgent
+        pm_id = snapshot["pm_id"]
+        secretary_url = f"http://127.0.0.1:{self.state.api_port}"
+
+        self._local_pm_agent = ProjectManagerAgent(
+            pm_id=pm_id,
+            agent_runtime=self.chat_runtime,
+            secretary_url=secretary_url,
+            device_id=self.state.device_id,
+            device_name=self.state.device_name,
+        )
+        if not self._local_pm_agent.resume_from_snapshot(snapshot):
+            self._local_pm_agent = None
+            return {"ok": False, "message": "快照解析失败, 无法恢复"}
+
+        # 任务状态重置为 running (恢复线程内会继续上报进度)
+        task.status = "running"
+        task.pm_agent_id = pm_id
+        self.db.save_task(task)
+        logger.info("本机 PM Agent 已从快照恢复: %s, 任务: %s", pm_id, task_id)
         return {"ok": True, "pm_id": pm_id}
 
     def _local_cancel_pm(self) -> dict:

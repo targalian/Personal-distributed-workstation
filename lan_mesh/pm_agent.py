@@ -6,7 +6,9 @@ import threading
 import time
 from typing import Optional
 
-from .http_retry import http_post, http_get
+import requests as _requests
+
+from .http_retry import http_post, http_get, auth_headers
 from .logger import get_logger
 from .pm_state import PMState
 from .pm_planner import PMPlanner
@@ -84,10 +86,162 @@ class ProjectManagerAgent:
             "subagents": len(st.subagents),
         }
 
+    # ── iter-53: 执行态快照持久化与断点恢复 ─────────────────────
+
+    def _persist_snapshot(self, phase: str):
+        """iter-53: 序列化当前状态并上报 Secretary 落库 (异常静默)。
+
+        快照通过 Secretary HTTP API 持久化, PM 无论在哪个节点运行都有效;
+        落库失败仅降级为「少一个恢复点」, 不影响任务执行。
+        """
+        try:
+            snapshot = self._state.to_snapshot()
+            http_post(
+                f"{self.secretary_url}/api/pm/{self.pm_id}/snapshot",
+                json={
+                    "pm_id": self.pm_id,
+                    "task_id": (self._state.task or {}).get("task_id", self._task_id),
+                    "phase": phase,
+                    "state": snapshot,
+                },
+                timeout=5, retries=1,
+            )
+        except Exception as e:
+            logger.debug("[%s] 快照持久化失败 (non-critical): %s", self.pm_id[:8], e)
+            try:
+                from .error_tracker import error_tracker
+                error_tracker.capture("pm", e, context={
+                    "point": "snapshot", "pm_id": self.pm_id[:8], "phase": phase})
+            except Exception:
+                pass
+
+    def _clear_snapshot(self):
+        """iter-53: 任务终结 (完成/失败/取消) 时清除执行态快照。"""
+        try:
+            _requests.delete(
+                f"{self.secretary_url}/api/pm/{self.pm_id}/snapshot",
+                headers=auth_headers(), timeout=5)
+        except Exception:
+            pass
+
+    def resume_from_snapshot(self, snapshot: dict) -> bool:
+        """iter-53: 从快照恢复执行 — 保留已完成子任务输出, 重跑未完成部分。
+
+        Args:
+            snapshot: db.get_pm_snapshot* 返回的行 (含 state_json/phase 字段)。
+
+        Returns:
+            是否成功启动恢复线程。
+        """
+        import json as _json
+        try:
+            raw = snapshot.get("state_json", "")
+            state_data = _json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+            if isinstance(state_data, str):
+                state_data = _json.loads(state_data)
+        except Exception as e:
+            logger.error("[%s] 快照解析失败, 无法恢复: %s", self.pm_id[:8], e)
+            return False
+
+        # 就地恢复: planner/dispatcher/monitor 共享同一 state 引用, 只重写字段
+        self._state.restore_from(state_data)
+        self._resume_phase = snapshot.get("phase", "monitoring")
+        self._running = True
+        self._task_id = (self._state.task or {}).get("task_id", "")
+
+        self._thread = threading.Thread(
+            target=self._run_resumed, daemon=True, name=f"pm-resume-{self.pm_id[:8]}")
+        self._thread.start()
+        self._progress_thread = threading.Thread(
+            target=self._monitor.progress_loop, daemon=True,
+            name=f"pm-progress-{self.pm_id[:8]}")
+        self._progress_thread.start()
+        return True
+
+    def _run_resumed(self):
+        """iter-53: 断点续跑 — 按快照阶段恢复执行流。"""
+        st = self._state
+        try:
+            self.report_status("resumed")
+            self.report_progress(0.0, "resumed", "任务从断点恢复, 重新分发未完成子任务")
+            self.sync_subtasks()
+
+            # 场景1: 上次在等待 Boss 澄清 → 重新发起, 回复后继续走重分发
+            if st.clarification_question:
+                question = st.clarification_question
+                st.clarification_question = ""
+                resp = self.request_clarification(question)
+                if resp.get("cancelled") or resp.get("paused"):
+                    return
+
+            # 场景2: 无任务分解 (快照残缺) → 标记失败
+            decomposition = (st.plan or {}).get("decomposition", [])
+            if not decomposition:
+                self.report_status("failed")
+                self.report_progress(0.0, "failed", "断点恢复失败: 快照无任务分解")
+                self._running = False
+                self._clear_snapshot()
+                return
+
+            # 场景3: 全部子任务已有输出 → 直接聚合交付
+            todo = [s for s in decomposition if s.get("name", "") not in st.subtask_outputs]
+            if not todo:
+                logger.info("[%s] 断点恢复: 全部子任务已完成, 直接聚合", self.pm_id[:8])
+                self._monitor.aggregate_results()
+                return
+
+            # 场景4: 重新分发未完成子任务 (已完成输出保留不重跑)
+            logger.info("[%s] 断点恢复: %d/%d 子任务未完成, 重新分发",
+                        self.pm_id[:8], len(todo), len(decomposition))
+            for sub in todo:
+                sub_name = sub.get("name", "")
+                deps = sub.get("depends_on", [])
+                if not all(d in st.subtask_outputs for d in deps):
+                    # 依赖仍未满足 → 挂回 pending, 由依赖完成时触发分发
+                    station = st.task_station.get(sub_name)
+                    agent_info = st.task_agent.get(sub_name)
+                    if station and agent_info:
+                        with st.lock:
+                            st.pending_subtasks[sub_name] = {
+                                "sub": sub, "station": station, "agent_info": agent_info}
+                    continue
+                station = st.task_station.get(sub_name)
+                agent_info = st.task_agent.get(sub_name)
+                if station and agent_info:
+                    self._dispatcher._record_subtask_start(sub_name)
+                    try:
+                        self._dispatcher.dispatch_subtask(
+                            station, agent_info, dict(st.task), sub, plan=st.plan)
+                    except Exception as e:
+                        logger.warning("[%s] 恢复分发 '%s' 异常, 回退本地: %s",
+                                       self.pm_id[:8], sub_name, e)
+                        self._dispatcher.execute_subtask_locally(dict(st.task), sub)
+                else:
+                    self._dispatcher.execute_subtask_locally(dict(st.task), sub)
+
+            self._dispatcher.try_dispatch_pending()
+            # 保持 running, 由 progress_loop 在全部完成后触发聚合
+            self._persist_snapshot("monitoring")
+        except Exception as e:
+            logger.error("[%s] 断点恢复执行失败: %s", self.pm_id[:8], e)
+            try:
+                from .error_tracker import error_tracker
+                error_tracker.capture("pm", e, context={
+                    "point": "resume", "pm_id": self.pm_id[:8]})
+            except Exception:
+                pass
+            self.report_status("failed")
+            self.report_progress(0.0, "failed", f"断点恢复失败: {e}")
+            self._running = False
+            self._clear_snapshot()
+
     def _run_task(self, task: dict):
         st = self._state
         st.start_time = time.time()
         self._task_id = (task or {}).get("task_id", "")
+        # iter-53: multi 模式下 _run_task 结束后由 progress_loop 聚合收尾
+        # (修复: 原先 finally 无条件停 running, 多子任务模式聚合永不触发)
+        _multi_monitoring = False
         try:
             if self._monitor.is_global_timed_out():
                 raise TimeoutError(f"全局任务超时 ({st.global_timeout}s)")
@@ -104,6 +258,8 @@ class ProjectManagerAgent:
 
             st.plan = plan
             st.task = task
+            # iter-53: 规划完成快照 (断点1)
+            self._persist_snapshot("planning_done")
 
             # 阶段 2: 执行
             pattern = plan.get("pattern", "single")
@@ -152,6 +308,9 @@ class ProjectManagerAgent:
                 self.sync_subtasks()
                 self._dispatcher.create_team_and_dispatch(task, plan)
                 self.report_status("monitoring")
+                # iter-53: 分发完成进入监测, 快照 (断点2)
+                _multi_monitoring = True
+                self._persist_snapshot("monitoring")
 
         except Exception as e:
             logger.error("[%s] 任务执行失败: %s", self.pm_id[:8], e)
@@ -167,7 +326,10 @@ class ProjectManagerAgent:
             self.report_progress(0.0, "failed", str(e))
 
         finally:
-            self._running = False
+            # iter-53: multi 正常路径保持 running 等待聚合收尾; 其余路径停止并清快照
+            if not _multi_monitoring:
+                self._running = False
+                self._clear_snapshot()
 
     def receive_progress_report(self, report: dict):
         self._monitor.receive_progress_report(report)
@@ -196,6 +358,8 @@ class ProjectManagerAgent:
         except Exception:
             pass
         self._monitor.receive_progress_report(report)
+        # iter-53: 子任务结果注入后快照 (断点3, 高频但轻量)
+        self._persist_snapshot("executing")
 
     def receive_input(self, input_data: dict):
         st = self._state
@@ -209,10 +373,13 @@ class ProjectManagerAgent:
         st = self._state
         st.clarification_event.clear()
         st.clarification_response = {}
+        st.clarification_question = question
         self.report_status("awaiting_input",
                            task_list=[{"name": "请求决策", "status": "awaiting_input", "description": question}])
         self.report_progress(-1.0, "awaiting_input", question,
                              reporter_type="pm_clarification", task_name=question[:100])
+        # iter-53: 澄清等待快照 (断点4, 重启后重新发起澄清)
+        self._persist_snapshot("awaiting_input")
         if options:
             try:
                 http_post(f"{self.secretary_url}/api/pm/{self.pm_id}/status",
@@ -235,6 +402,8 @@ class ProjectManagerAgent:
         st.clarification_response = {"response": "", "choice": "", "cancelled": True}
         self.report_status("cancelled")
         self.report_progress(0.0, "cancelled", "任务已被 Boss 取消")
+        # iter-53: 取消即终结, 清理快照
+        self._clear_snapshot()
         logger.info("[%s] 任务已取消", self.pm_id[:8])
 
     def pause(self):
@@ -244,6 +413,8 @@ class ProjectManagerAgent:
         st.clarification_response = {"response": "", "choice": "", "paused": True}
         self.report_status("paused")
         self.report_progress(0.0, "paused", "任务已被 Boss 暂停")
+        # iter-53: 暂停保留快照 (resume 可继续)
+        self._persist_snapshot("paused")
         logger.info("[%s] 任务已暂停", self.pm_id[:8])
 
     def report_status(self, status: str, team_structure: dict = None,
