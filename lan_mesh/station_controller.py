@@ -154,6 +154,7 @@ class StationController:
         self.project_manager = None
         self.model_router = None
         self._default_model = ""  # 全局默认模型 (model_pool.yaml)
+        self._model_pool = None  # iter-55: 启动时预加载的模型池配置 (任何模式)
         self.mcp_gateway = None
         self.chat_handler = None    # 秘书聊天处理器
         self.chat_runtime = None    # 聊天专用 AgentRuntime
@@ -377,6 +378,34 @@ class StationController:
 
     # ── Secretary 激活/停用 ───────────────────────────────────────
 
+    def _load_model_resources(self) -> None:
+        """iter-55: 任何 station 模式都预加载模型资源池 (LLM Key 注入)。
+
+        让位主机 (网络中已有 Secretary, 本机未激活) 作为远程派发
+        Worker 执行 PM 任务时同样需要模型 Key 就绪 — 与激活解耦:
+        - 加载 model_pool.yaml → self._model_pool (activate_secretary 复用)
+        - 加载 resources.yaml → 注入直填 API Key 环境变量
+        幂等, 重复调用无害; 异常 no-op 不影响启动。
+        """
+        try:
+            from .config import load_model_pool
+            from .model_resources import (init_resource_manager,
+                                          set_bot_notify_global)
+            if self._model_pool is None:
+                self._model_pool = load_model_pool()
+            pool = self._model_pool
+            resources_path = self._find_resources_path()
+            if resources_path:
+                init_resource_manager(
+                    resources_path,
+                    pool.models if pool.models else None,
+                    self.db,
+                )
+                if self.bot_gateway:
+                    set_bot_notify_global(self.bot_gateway.notify)
+        except Exception as e:
+            logger.warning("模型资源预加载失败 (no-op): %s", e)
+
     def activate_secretary(self) -> dict:
         """同进程激活 Secretary 模式。
 
@@ -399,7 +428,7 @@ class StationController:
         self.project_manager = ProjectManager(self.db)
 
         # 模型路由器
-        model_pool = load_model_pool()
+        model_pool = self._model_pool or load_model_pool()
         self.model_router = ModelRouter(model_pool.models, self.project_manager) if model_pool.models else None
         self._default_model = model_pool.default_model  # 全局默认模型
         if self.model_router:
@@ -911,8 +940,16 @@ class StationController:
         """在本机 Station 进程内直接启动 PM Agent (无需 Worker)。"""
         if self._local_pm_agent and getattr(self._local_pm_agent, '_running', False):
             return {"ok": False, "message": "本机 PM Agent 已在运行"}
+        # iter-55: 让位主机 (网络中已有 Secretary, 本机未激活) 也可执行
+        # 远程派发的 PM 任务 — 惰性初始化专用 AgentRuntime, 与激活解耦
         if not self.chat_runtime:
-            return {"ok": False, "message": "AgentRuntime 未初始化 (Secretary 未激活)"}
+            from .agent_runtime import AgentRuntime
+            self.chat_runtime = AgentRuntime(
+                agent_id=f"worker-{self.state.device_id[:8]}",
+                shared_folder_path=str(self.state.shared_folder.path),
+            )
+            logger.info("让位主机惰性初始化 Worker AgentRuntime (%s)",
+                        self.state.device_name)
 
         import uuid as _uuid
         from .pm_agent import ProjectManagerAgent
@@ -954,8 +991,13 @@ class StationController:
         """
         if self._local_pm_agent and getattr(self._local_pm_agent, '_running', False):
             return {"ok": False, "message": "本机 PM Agent 正在运行, 无法恢复其他任务"}
+        # iter-55: 与 _local_start_pm 一致 — 让位主机惰性初始化 runtime
         if not self.chat_runtime:
-            return {"ok": False, "message": "AgentRuntime 未初始化 (Secretary 未激活)"}
+            from .agent_runtime import AgentRuntime
+            self.chat_runtime = AgentRuntime(
+                agent_id=f"worker-{self.state.device_id[:8]}",
+                shared_folder_path=str(self.state.shared_folder.path),
+            )
 
         snapshot = self.db.get_pm_snapshot_by_task(task_id)
         if not snapshot:
@@ -2411,6 +2453,10 @@ class StationController:
             sys.exit(1)
 
         self.state.api_port = self._find_available_port(self.cfg.secretary.api_port)
+
+        # iter-55: 预加载模型资源 (任何模式) — 让位主机远程派发执行 LLM 任务
+        # 需要 Key 就绪; Secretary 当选后 activate_secretary 复用已加载配置
+        self._load_model_resources()
 
         logger.info("设备 ID: %s", self.state.device_id)
         logger.info("设备名称: %s", self.state.device_name)

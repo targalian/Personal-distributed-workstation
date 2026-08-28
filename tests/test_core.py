@@ -25,6 +25,9 @@
     就地恢复/DB CRUD/恢复四场景/快照与 resume 端点/multi 生命周期 (iter-53)
 17. log-pruning — 日志容量修剪: prune_logs 保留期/未上报保留/心跳 24h/
     VACUUM/手动修剪端点/配置驱动与节流 (iter-54)
+18. iter55-multihost — 多机实测缺陷回归: PROVIDER_CONFIG ark 首位/
+    _get_default_model 定义/_ensure_env_loaded 补齐/模型资源预加载/
+    让位主机惰性 Worker runtime (iter-55)
 
 运行: pytest tests/ -v
 """
@@ -4689,6 +4692,216 @@ class TestLogPruning:
         finally:
             if ctl.db is not None and hasattr(ctl.db._local, "conn"):
                 ctl.db._local.conn.close()
+
+
+class TestIter55MultiHostHardening:
+    """iter-55 补强#3 多机实测发现的生产缺陷修复回归。
+
+    1. PROVIDER_CONFIG 缺 volcengine-ark → default_model 旧路径永远不可用
+    2. _ensure_env_loaded 部分 key 有值提前 return → .env 不全量加载
+    3. 让位主机不加载模型资源 → 远程派发 PM 无 LLM Key
+    4. 让位主机 chat_runtime 为 None → 远程派发被拒 (惰性初始化解耦)
+    """
+
+    def test_provider_config_ark_first(self):
+        """PROVIDER_CONFIG 含 volcengine-ark 且置首位 (coding/v3 端点)。"""
+        from lan_mesh.agent_runtime import PROVIDER_CONFIG
+        assert "volcengine-ark" in PROVIDER_CONFIG
+        assert next(iter(PROVIDER_CONFIG)) == "volcengine-ark", (
+            "ark 置首位: 订阅制 Coding Plan 优先消耗")
+        assert PROVIDER_CONFIG["volcengine-ark"]["api_key_env"] == "ARK_API_KEY"
+        assert "coding/v3" in PROVIDER_CONFIG["volcengine-ark"]["base_url"]
+
+    def test_get_default_model_defined(self, monkeypatch):
+        """_get_default_model 已定义: 兜底 defaults + 未知 provider 空串。"""
+        from lan_mesh import agent_runtime
+        rt = agent_runtime.AgentRuntime.__new__(agent_runtime.AgentRuntime)
+        # 无 model_pool 条目时走硬编码 defaults 兜底
+        monkeypatch.setattr(agent_runtime, "_load_model_pool_entries",
+                            lambda: {})
+        assert rt._get_default_model("volcengine-ark") == "ark-code-latest"
+        assert rt._get_default_model("deepseek") == "deepseek-chat"
+        assert rt._get_default_model("no-such-provider") == ""
+
+    def test_ensure_env_loaded_fills_when_partial_keys_exist(
+            self, monkeypatch, tmp_path):
+        """部分 key 已有值时仍继续加载 .env 补齐缺失 key (不提前 return)。"""
+        import os
+        from lan_mesh import agent_runtime
+        (tmp_path / ".env").write_text(
+            "X55_PARTIAL_KEY=partial-ok\n", encoding="utf-8")
+        monkeypatch.setattr(agent_runtime, "_env_loaded", False)
+        monkeypatch.delenv("X55_PARTIAL_KEY", raising=False)
+        monkeypatch.setenv("ALIYUN_TOKENPLAN_API_KEY", "ali-exists")
+        monkeypatch.chdir(tmp_path)
+        agent_runtime._ensure_env_loaded()
+        # 旧逻辑: ALIYUN 已有值 → 提前 return → X55_PARTIAL_KEY 缺失
+        assert os.environ.get("X55_PARTIAL_KEY") == "partial-ok", \
+            "部分 key 有值时仍应补齐 .env 中缺失 key"
+        assert os.environ["ALIYUN_TOKENPLAN_API_KEY"] == "ali-exists", \
+            "已有 key 不被覆盖 (override=False 幂等)"
+
+    def test_ensure_env_loaded_manual_parse_fallback(self, monkeypatch, tmp_path):
+        """dotenv 缺失时手动解析 .env 兜底 (基础解释器无依赖场景)。"""
+        import os
+        from lan_mesh import agent_runtime
+        (tmp_path / ".env").write_text(
+            "X55_MANUAL_KEY=manual-ok\n# comment\n", encoding="utf-8")
+        real_import = __builtins__["__import__"] if isinstance(
+            __builtins__, dict) else __builtins__.__import__
+
+        def _fake_import(name, *a, **k):
+            if name == "dotenv" or name.startswith("dotenv."):
+                raise ImportError("no dotenv")
+            return real_import(name, *a, **k)
+
+        monkeypatch.delenv("X55_MANUAL_KEY", raising=False)
+        monkeypatch.setattr(agent_runtime, "_env_loaded", False)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("builtins.__import__", _fake_import)
+        agent_runtime._ensure_env_loaded()
+        assert os.environ.get("X55_MANUAL_KEY") == "manual-ok"
+
+    def test_load_model_resources_preloads_pool(self, tmp_path, monkeypatch):
+        """_load_model_resources: 任何 station 模式预加载模型池, 幂等。"""
+        import time
+        from lan_mesh.config import AppConfig
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+
+        calls = {"n": 0}
+
+        class _FakeCtl:
+            def __init__(self):
+                self.cfg = AppConfig.model_validate({})
+                self.db = Database(str(tmp_path / "mr.db"))
+                self._model_pool = None
+                self.bot_gateway = None
+
+            def _find_resources_path(self):
+                return None  # 不加载 resources.yaml, 仅验证模型池预加载
+
+        ctl = _FakeCtl()
+        try:
+            real_load = StationController._load_model_resources
+            from lan_mesh import config as _cfg_mod
+            real_pool = _cfg_mod.load_model_pool
+
+            def _counting_pool():
+                calls["n"] += 1
+                return real_pool()
+
+            monkeypatch.setattr(_cfg_mod, "load_model_pool", _counting_pool)
+            StationController._load_model_resources(ctl)
+            assert ctl._model_pool is not None, "模型池已预加载"
+            assert calls["n"] == 1
+            # 幂等: 二次调用复用已加载池, 不重复 load_model_pool
+            StationController._load_model_resources(ctl)
+            assert calls["n"] == 1
+        finally:
+            ctl.db._local.conn.close()
+
+    def test_load_model_resources_exception_noop(self, tmp_path):
+        """_load_model_resources 内部异常隔离 (no-op 不抛出)。"""
+        from lan_mesh.station_controller import StationController
+
+        class _BrokenCtl:
+            _model_pool = None
+            bot_gateway = None
+
+            def _find_resources_path(self):
+                raise RuntimeError("boom")
+
+        StationController._load_model_resources(_BrokenCtl())  # 不抛异常
+
+    def test_local_start_pm_lazy_runtime_init(self, monkeypatch):
+        """让位主机 chat_runtime=None 时惰性初始化 Worker AgentRuntime。"""
+        from lan_mesh import agent_runtime as ar_mod
+        from lan_mesh import pm_agent as pm_mod
+        from lan_mesh.station_controller import StationController
+
+        created = []
+
+        class _FakeRuntime:
+            def __init__(self, **kwargs):
+                created.append(kwargs)
+
+        class _FakePM:
+            instances = []
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                _FakePM.instances.append(self)
+
+            def start_task(self, task_data):
+                self.started = task_data
+
+        monkeypatch.setattr(ar_mod, "AgentRuntime", _FakeRuntime)
+        monkeypatch.setattr(pm_mod, "ProjectManagerAgent", _FakePM)
+
+        class _Ctl:
+            _local_pm_agent = None
+            chat_runtime = None
+
+            def __init__(self):
+                self.state = type("S", (), {
+                    "device_id": "testdev0123456789",
+                    "device_name": "分机",
+                    "shared_folder": type("SF", (), {"path": "fake"})(),
+                })()
+
+            def _auto_attach_pm_thread(self, *a, **k):
+                pass
+
+        ctl = _Ctl()
+        res = StationController._local_start_pm(
+            ctl, "task-x", "http://secretary", {"name": "跨机任务"})
+        assert res["ok"] is True
+        assert ctl.chat_runtime is not None, "chat_runtime 惰性初始化"
+        assert created[0]["agent_id"].startswith("worker-")
+        assert created[0]["agent_id"] == "worker-testdev0"
+        assert _FakePM.instances[0].kwargs["agent_runtime"] is ctl.chat_runtime
+        assert _FakePM.instances[0].started["name"] == "跨机任务"
+
+    def test_local_start_pm_runtime_reuse(self, monkeypatch):
+        """chat_runtime 已就绪时不重复创建 (Secretary 已激活场景)。"""
+        from lan_mesh import agent_runtime as ar_mod
+        from lan_mesh import pm_agent as pm_mod
+        from lan_mesh.station_controller import StationController
+
+        created = []
+
+        class _FakeRuntime:
+            def __init__(self, **kwargs):
+                created.append(kwargs)
+
+        class _FakePM:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def start_task(self, task_data):
+                pass
+
+        monkeypatch.setattr(ar_mod, "AgentRuntime", _FakeRuntime)
+        monkeypatch.setattr(pm_mod, "ProjectManagerAgent", _FakePM)
+
+        class _Ctl:
+            _local_pm_agent = None
+
+            def __init__(self):
+                self.chat_runtime = object()  # 已有 runtime
+                self.state = type("S", (), {
+                    "device_id": "dev1", "device_name": "d",
+                    "shared_folder": type("SF", (), {"path": "fake"})(),
+                })()
+
+            def _auto_attach_pm_thread(self, *a, **k):
+                pass
+
+        StationController._local_start_pm(
+            _Ctl(), "task-y", "http://s", {"name": "t"})
+        assert created == [], "已有 runtime 不重复创建"
+
 
 
 

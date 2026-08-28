@@ -164,6 +164,7 @@ mesh_token 后重试解密一次：
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-55 | 多机实测加固 (补强#3): resources.yaml 实测配置修复 (ark 池 models 名与 model_pool.yaml id 对齐 GLM5.2/kimi2.7 → 真实 ark 三模型; 两池 api_key_env 空时直填 key 注入); 跨机用量 WS 直推/HTTP 兜底双通道实测通过 |
 | 2026-08-28 | iter-52 | F4.4 成本感知调度: budget_advisor 预算顾问 (任务 token 预估 文本启发式+历史均值混合修正 / 预算适配检查 池+项目双层最紧判定 / 组合入口异常隔离) |
 | 2026-08-18 | iter-34 | 轮换配置落地: ark 池 billing_period=monthly 窗口紧迫度生效 (自然月口径); qwen3.8-max-preview 下线 ID 全量替换 (CLI 模板/示例配置) |
 | 2026-08-17 | iter-33 | R5-2: 轮换量化价值公式 (沉没成本压力 × 窗口紧迫度 + 时段折扣窗口; 供应商能力信息落档 docs/reference/vendor-capability; batch 合规红线开关) |

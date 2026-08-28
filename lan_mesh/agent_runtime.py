@@ -40,16 +40,17 @@ _env_loaded = False
 def _ensure_env_loaded():
     """确保 API Key 环境变量已加载。
 
-    如果检测到没有任何 API Key 环境变量, 尝试从常见路径加载 .env 文件。
+    尝试从常见路径加载 .env 文件补齐缺失的 Key (override=False 幂等);
     解决: 进程从非项目根目录启动时 load_dotenv() 找不到 .env 的问题。
     线程安全: 使用 Lock + 标志位防止多线程重复加载。
     """
     global _env_loaded
-    key_envs = ["ALIYUN_TOKENPLAN_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
-                "ANTHROPIC_API_KEY", "QWEN_API_KEY"]
-    if any(os.environ.get(k) for k in key_envs):
-        _env_loaded = True
-        return  # 已有 key, 无需加载
+    if _env_loaded:
+        return
+    # iter-55: 加入 ARK_API_KEY; 不再因「部分 key 已有值」提前 return —
+    # 否则仅有 aliyun key 的环境会跳过 .env 加载导致 ark key 缺失
+    key_envs = ["ARK_API_KEY", "ALIYUN_TOKENPLAN_API_KEY", "DEEPSEEK_API_KEY",
+                "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "QWEN_API_KEY"]
     with _env_lock:
         if _env_loaded:
             return  # 另一线程已完成加载
@@ -64,12 +65,9 @@ def _ensure_env_loaded():
                 try:
                     from dotenv import load_dotenv
                     load_dotenv(p, override=False)
-                    if any(os.environ.get(k) for k in key_envs):
-                        logger.info("已从 %s 加载 API Key 环境变量", p)
-                        _env_loaded = True
-                        return
+                    logger.debug("已从 %s 加载 .env 环境变量", p)
                 except ImportError:
-                    # 手动解析 .env
+                    # 手动解析 .env (dotenv 依赖缺失时兜底)
                     for line in p.read_text(encoding="utf-8").splitlines():
                         line = line.strip()
                         if not line or line.startswith("#"):
@@ -79,13 +77,12 @@ def _ensure_env_loaded():
                             k, v = k.strip(), v.strip()
                             if k and v and not os.environ.get(k):
                                 os.environ[k] = v
-                    if any(os.environ.get(k) for k in key_envs):
-                        logger.info("已从 %s 手动解析 API Key", p)
-                        _env_loaded = True
-                        return
                 except Exception as e:
                     logger.debug("加载 %s 失败: %s", p, e)
         _env_loaded = True  # 标记已尝试, 避免反复扫描文件系统
+        missing = [k for k in key_envs if not os.environ.get(k)]
+        if missing:
+            logger.debug("API Key 环境变量缺失: %s", ", ".join(missing))
 
 
 # 模块加载时立即检查
@@ -117,6 +114,8 @@ MAX_OUTPUT_LENGTH = 100 * 1024
 # ── Provider 默认配置 (provider → base_url) ──────────────────────
 
 PROVIDER_CONFIG = {
+    # iter-55: 火山方舟放首位 — 订阅制 Coding Plan 优先消耗, 且是 default_model 所在 provider
+    "volcengine-ark":    {"base_url": "https://ark.cn-beijing.volces.com/api/coding/v3", "api_key_env": "ARK_API_KEY"},
     "deepseek":          {"base_url": "https://api.deepseek.com/v1", "api_key_env": "DEEPSEEK_API_KEY"},
     "openai":            {"base_url": "https://api.openai.com/v1", "api_key_env": "OPENAI_API_KEY"},
     "anthropic":         {"base_url": "https://api.anthropic.com/v1", "api_key_env": "ANTHROPIC_API_KEY"},
@@ -1322,6 +1321,7 @@ class AgentRuntime:
             return [e.id for e in candidates]
         # 回退到硬编码默认值
         defaults = {
+            "volcengine-ark": ["ark-code-latest"],
             "deepseek": ["deepseek-chat"],
             "openai": ["gpt-4o-mini"],
             "anthropic": ["claude-3-haiku"],
@@ -1329,6 +1329,15 @@ class AgentRuntime:
             "aliyun-tokenplan": [],
         }
         return defaults.get(provider, [])
+
+    def _get_default_model(self, provider: str) -> str:
+        """获取 provider 下默认模型 (quality 最高), 无可用时返回空串。
+
+        iter-55: _call_llm_messages_with_tools 无偏好路径曾调用本方法
+        但全库未定义 (AttributeError 隐患), 此处补齐。
+        """
+        models = self._get_provider_models(provider)
+        return models[0] if models else ""
 
     def _call_llm(self, prompt: str) -> str:
         """调用外部 LLM API 生成回复 (仅返回文本内容)。"""

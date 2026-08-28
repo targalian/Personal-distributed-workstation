@@ -26,7 +26,23 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass
+    # iter-55: dotenv 依赖缺失时手动解析 .env 兜底
+    # (如基础解释器无 python-dotenv 时, 否则 Key 全部缺失)
+    import os
+    from pathlib import Path
+    for _p in [Path(__file__).parent / ".env", Path.cwd() / ".env"]:
+        try:
+            if _p.is_file():
+                for _line in _p.read_text(encoding="utf-8").splitlines():
+                    _line = _line.strip()
+                    if not _line or _line.startswith("#") or "=" not in _line:
+                        continue
+                    _k, _v = _line.split("=", 1)
+                    _k, _v = _k.strip(), _v.strip()
+                    if _k and _v and not os.environ.get(_k):
+                        os.environ[_k] = _v
+        except Exception:
+            pass
 
 from lan_mesh import __version__
 

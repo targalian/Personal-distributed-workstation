@@ -83,6 +83,17 @@ Secretary 超时离线且网络无其他在线 Secretary 时，由 `device_id`
 - 修剪后按 `log_vacuum` 开关执行 VACUUM 回收磁盘空间
 - 手动端点: `POST /api/runtime/logs/prune?days=` (运维/排查, 1~365 夹取)
 
+**多机实测加固 (iter-55, 补强#3)**:
+- `_load_model_resources()`: 任何 station 模式启动即预加载模型池 +
+  resources.yaml 注入 — 让位主机 (网络中已有 Secretary, 本机未激活)
+  作为远程派发 Worker 执行 PM 任务时 LLM Key 就绪, 与激活解耦;
+  `activate_secretary` 复用 `self._model_pool` 避免重复加载
+- `_local_start_pm`/`_local_resume_pm`: `chat_runtime` 为 None 时惰性
+  初始化 Worker AgentRuntime (agent_id=`worker-{device_id[:8]}`),
+  修复让位主机远程派发被拒「AgentRuntime 未初始化」
+- 实测结论: 双实例隔离模拟跨机链路全通 (S 提交 → W 让位主机执行 →
+  WS 直推用量 → S 落库 ark 池), WS 直推/HTTP 兜底/幂等去重均验证通过
+
 **依赖**: discovery, station_director, database, secret_sync, version_sync,
 http_retry, config, event_bus
 
@@ -237,6 +248,7 @@ agent_runtime.execute()
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-55 | 多机实测加固 (补强#3): _load_model_resources 启动预加载模型池 (让位主机 Key 就绪); _local_start_pm/_local_resume_pm 惰性初始化 Worker AgentRuntime; 双实例隔离跨机链路实测通过 |
 | 2026-08-28 | iter-54 | 日志容量修剪 (补强#2): Database.prune_logs (llm_call_log/chat_history/resource_usage_log 仅删已上报/progress_reports/heartbeat_log 固定 24h) + vacuum; _prune_logs_if_due 节流接入 _prune_loop; POST /api/runtime/logs/prune 手动端点 |
 | 2026-08-28 | iter-53 | PM 断点恢复: pm_snapshots 表 + save_pm_snapshot CRUD; _local_resume_pm + _recover_stale_tasks 快照自动续跑; /api/pm/{id}/snapshot 三端点 + POST /api/tasks/{id}/resume 恢复端点 |
 | 2026-08-26 | iter-39 | P3 任务流总览: task_flow_overview 多任务聚合 (末阶段/终态判断/末活动倒序); /api/runtime/task-flow-list 端点; Dashboard 运行时 Tab 总览表 + 一键查瀑布 (UI-037) |

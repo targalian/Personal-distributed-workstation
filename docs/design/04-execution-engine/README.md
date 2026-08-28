@@ -39,6 +39,18 @@ shell_exec、file_ops、monitoring、rag_search（预留）。
 **错误追踪埋点** (iter-45, F1.4 数据源): `_call_llm_with_routing` 降级链耗尽时
 capture 到 module=`llm` (context 携带失败链), 异常隔离不影响降级返回。
 
+**多机实测加固** (iter-55, 补强#3):
+- `PROVIDER_CONFIG` 补 `volcengine-ark` 置首位 (coding/v3 端点 +
+  ARK_API_KEY) — 无路由信息路径 (`_call_llm_full`, pm_planner 规划走
+  此路径) 不再跳过 default_model 所在 provider
+- 补 `_get_default_model(provider)` 定义 (全库缺失的 AttributeError
+  隐患, defaults 含 ark-code-latest 兜底)
+- `_ensure_env_loaded` 重写: key_envs 补 ARK_API_KEY; 不再因「部分 key
+  已有值」提前 return (否则仅 aliyun key 环境跳过 .env 加载致 ark
+  key 缺失); dotenv 缺失时手动解析 .env 兜底
+- `main.py` 启动 dotenv ImportError 时同样手动解析兜底 (基础解释器
+  无 python-dotenv 场景, 否则 Key 全部缺失)
+
 ## agent_card.py — Agent Card（借鉴 A2A 协议）
 
 每个 Worker 启动时生成能力卡片（技能声明、可用工具、模型偏好），
@@ -122,6 +134,7 @@ planner/dispatcher/monitor 的共享引用有效 (resume 关键约束)
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-55 | 多机实测加固 (补强#3): PROVIDER_CONFIG 补 volcengine-ark 置首位; _get_default_model 补齐定义; _ensure_env_loaded 重写 (ARK key + 部分 key 不再提前 return + dotenv 缺失手动解析); main.py dotenv 兜底 |
 | 2026-08-28 | iter-53 | PM 执行态快照持久化 + 断点恢复: PMState 序列化/就地恢复 + 六阶段快照写点 + resume_from_snapshot/_run_resumed 四场景续跑 + multi 模式聚合修复 (_multi_monitoring) |
 | 2026-08-27 | iter-45 | agent_runtime 降级链耗尽错误埋点 (module=llm, 携带失败链) |
 | 2026-08-16 | iter-27 后 | 初建 |
