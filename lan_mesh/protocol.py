@@ -445,6 +445,7 @@ class SkillRecord:
     tags: list = field(default_factory=list)  # 能力标签
     default_access: list = field(default_factory=lambda: ["all"])  # 默认可访问的角色列表
     content_path: str = ""           # 相对于 skills_dir 的路径
+    origin: str = "builtin"          # iter-61: 来源标记 builtin(内置) | market(第三方市场安装)
     version: str = "1.0"
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)

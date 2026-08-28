@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "last_run": "2026-08-28T21:11:15Z",
-  "current_phase": "iter-60-auto-heal-loop",
+  "last_run": "2026-08-28T21:34:32Z",
+  "current_phase": "iter-61-plugin-market",
   "phase_status": "completed",
   "completed": [
     "F1.1",
@@ -69,19 +69,19 @@
     "iter-57",
     "iter-58-permissions",
     "iter-59-assessment",
-    "iter-60-auto-heal-loop"
+    "iter-60-auto-heal-loop",
+    "iter-61-plugin-market"
   ],
   "failed": [],
   "blocked": [],
   "next_tasks": [
-    "Phase 5 收尾 (P3): F5.3 插件系统 (第三方 Skill 市场) / F5.4 移动端 App",
     "团队场景深化 (若进入): 用户管理 UI、token 轮换端点",
     "F3.4 跨网段多 Secretary 联邦 (P3)",
     "每次发布/推送后同步更新 VERSION.json 保持版本记录与实际代码一致",
     "代码设计变更时同步 docs/design 对应功能域文档 (docs-sync skill + sync_docs.py 机制, pre-push 第 8/9 项强制)"
   ],
-  "iteration_count": 60,
-  "total_files_modified": 251,
+  "iteration_count": 61,
+  "total_files_modified": 261,
   "last_error": "",
-  "notes": "iter-60 F4.2 异常自愈全自动闭环: rotate_key/switch_pool 从探测映射升级为真实修复写动作 (失效池 paused/耗尽池 exhausted 经 set_pool_status_global 路由剔除, heal 端点透传); 写动作双护栏 (每日配额 auto_heal_daily_limit 默认 3 + 连续 2 次失败熔断 skipped_fused, 错误消失自动复位); get_auto_heal_status 扩展 daily_limit/daily_counts/fused; 四层验证 320 全绿 + 真机 12 项 PASS (rotate_key 真实探测 2 池); 文档 08/05 域同步 sync_docs PASS"
+  "notes": "iter-61 F5.3 插件系统 (第三方 Skill 市场): skill_market 模块 (list_market/install 白名单复制/uninstall 内置保护) + skills 表 origin 列 (迁移 v8) + 安全护栏 (体积上限/ID 白名单/内置冲突拒绝/安全默认仅 station/scan 保持 DB 现值) + 三端点 (market 列表/安装/卸载) + dashboard 技能库 Tab 市场 UI (第三方徽标/卸载按钮/市场弹窗); 四层验证 328 全绿 + 真机 API 13 项 PASS + Browser UI 19 项全过 (修复 Toast 重复缺陷) + 文档 04 域同步 sync_docs PASS"
 }

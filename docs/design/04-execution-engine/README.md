@@ -14,6 +14,7 @@ Worker 侧的任务执行能力：守护进程、Agent 运行时、能力卡片�
 | mcp_client.py | MCP 客户端 — 轻量级 JSON-RPC 2.0 客户端 |
 | mcp_gateway.py | MCP 网关 — 中央工具调度枢纽 |
 | sandbox.py | F2.2: 代码执行沙箱 — 安全隔离执行 Agent 生成的代码。 |
+| skill_market.py | 技能市场 — 第三方 Skill 插件浏览/安装/卸载 (F5.3 插件系统, iter-61) |
 | skill_registry.py | 技能库注册表 — 中央技能管理与分发系统 |
 | tool_registry.py | 工具注册表 — 插件化工具管理系统 |
 | worker.py | Worker Agent - 部署在各主机上的守护进程 |
@@ -98,6 +99,26 @@ subprocess 隔离执行 Agent 生成代码（非 eval）：超时保护（默认
 **技能文件结构**: `skills/{skill_id}/SKILL.md`（含 YAML front matter）+
 可选 reference.md。
 
+## skill_market.py — 技能市场 (iter-61, F5.3 插件系统)
+
+**第三方 Skill 插件全链路**: 市场源 `skills_market/` 目录（可配置
+`skill_market_dir`, 每子目录一个插件包, 可经任意第三方渠道放入）→
+`list_market()` 浏览（含 installed 标记/体积/有效性）→ `install()`
+校验后白名单复制（仅 SKILL.md/reference.md）到 `skills/` 并注册 DB
+（skills 表 origin=market 列, 迁移 v8）→ 纳入 SkillRegistry 统一的
+权限分配与 Worker 分发; `uninstall()` 仅 market 来源可卸载（内置
+builtin 拒绝, 403）。
+
+**安全护栏** (第三方内容最终注入 Agent system prompt):
+- 包体积上限 `skill_max_size_kb` (默认 200KB), skill_id 白名单字符
+  (防路径穿越), front matter 必填 name, 与内置技能同名拒绝覆盖
+- 安全默认: 市场包未声明 default_access 时仅 `["station"]` 可用,
+  需显式 assign 后才分发 Worker/Agent; 扫描注册 (scan_and_register)
+  对未声明 default_access 的技能保持 DB 现值, 防止重扫覆盖安全默认
+- 端点 (market 路由定义在 /{skill_id} 前防路径参数捕获):
+  GET /api/station/skills/market · POST /api/station/skills/market/
+  install · DELETE /api/station/skills/{skill_id} (卸载)
+
 ## PM 执行态快照与断点恢复 (iter-53)
 
 **背景**: 修复 multi 模式下聚合永不触发的真实缺陷 — 原先 `_run_task`
@@ -134,6 +155,7 @@ planner/dispatcher/monitor 的共享引用有效 (resume 关键约束)
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-61 | F5.3 插件系统: skill_market 第三方技能市场 (浏览/白名单安装/卸载) + skills 表 origin 列 (迁移 v8) + 安全护栏 (体积/ID/内置冲突/安全默认仅 station) + dashboard 技能库 Tab 市场 UI |
 | 2026-08-29 | iter-55 | 多机实测加固 (补强#3): PROVIDER_CONFIG 补 volcengine-ark 置首位; _get_default_model 补齐定义; _ensure_env_loaded 重写 (ARK key + 部分 key 不再提前 return + dotenv 缺失手动解析); main.py dotenv 兜底 |
 | 2026-08-28 | iter-53 | PM 执行态快照持久化 + 断点恢复: PMState 序列化/就地恢复 + 六阶段快照写点 + resume_from_snapshot/_run_resumed 四场景续跑 + multi 模式聚合修复 (_multi_monitoring) |
 | 2026-08-27 | iter-45 | agent_runtime 降级链耗尽错误埋点 (module=llm, 携带失败链) |

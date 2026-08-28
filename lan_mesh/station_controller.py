@@ -137,6 +137,18 @@ class StationController:
         self.skill_registry = SkillRegistry(self.db, skills_dir)
         self.skill_registry.scan_and_register()
 
+        # 技能市场 (iter-61 F5.3 插件系统): 第三方 Skill 浏览/安装/卸载
+        from .skill_market import SkillMarket
+        market_dir = Path(self.cfg.skill_market_dir or "skills_market")
+        if not market_dir.is_absolute():
+            market_dir = Path(__file__).parent.parent / market_dir
+        self.skill_market = SkillMarket(
+            db=self.db,
+            skills_dir=Path(skills_dir),
+            market_dir=market_dir,
+            max_size_kb=self.cfg.skill_max_size_kb,
+        )
+
         # Bot 通道 (手机消息推送) — 传入聚合/重试/免打扰配置
         bot_cfg = self.cfg.bot
         qh = bot_cfg.quiet_hours

@@ -644,6 +644,7 @@
   <div class="toolbar">
     <button class="btn primary" onclick="withFeedback(this,refreshSkills)">🔄 刷新</button>
     <button class="btn" onclick="scanSkills()">🔍 扫描新技能</button>
+    <button class="btn" onclick="showSkillMarket()">🛒 插件市场</button>
     <select id="skill-role-filter" onchange="refreshSkills()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px">
       <option value="">全部技能</option>
       <option value="architecture">架构</option>
@@ -916,6 +917,8 @@ function connectWS(){
     if(msg.type==='secretary_deactivated'){secretaryActive=false;updateSecretaryUI();document.getElementById('role-badge').textContent='Station';document.getElementById('role-badge').style.color='';document.getElementById('role-badge').style.borderColor='';}
     if(msg.type==='secretary_assigned'||msg.type==='secretary_revoked')refreshStation();
     if(msg.type==='skill_assigned'||msg.type==='skill_revoked'||msg.type==='skills_scanned')refreshSkills();
+    // iter-61: 安装/卸载 Toast 由本地操作函数弹出, WS 事件仅静默刷新 (防双重 Toast)
+    if(msg.type==='skill_installed'||msg.type==='skill_uninstalled')refreshSkills();
     // PM Agent 架构: 新消息类型
     if(msg.type==='chat_reply'){appendChatMessage('assistant',msg.data.reply,msg.data.timestamp);}
     if(msg.type==='pm_registered'){refreshPMAgents();refreshTasks();loadPMThreads();}
@@ -2376,15 +2379,18 @@ async function refreshSkills(){
     body.innerHTML=skills.map(s=>{
       const assignCount=(s.assignments||0);
       totalAssign+=assignCount;
+      const isMarket=(s.origin||'builtin')==='market';
+      const originBadge=isMarket?'<span style="display:inline-block;background:rgba(255,165,0,.15);color:#ffa500;border:1px solid rgba(255,165,0,.4);border-radius:10px;padding:1px 8px;font-size:11px;margin-left:6px">第三方</span>':'<span style="display:inline-block;background:var(--surface2);color:var(--dim);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-size:11px;margin-left:6px">内置</span>';
       const tagsHtml=(s.tags||[]).map(t=>`<span style="display:inline-block;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-size:11px;margin:1px">${esc(t)}</span>`).join('');
       const accessHtml=(s.default_access||[]).map(a=>`<span style="color:${a==='all'?'var(--green)':'var(--accent)'};font-size:12px">${esc(a)}</span>`).join(', ');
+      const uninstallBtn=isMarket?`<button class="btn sm danger" onclick="event.stopPropagation();uninstallSkill('${s.skill_id}')">卸载</button>`:'';
       return `<tr style="cursor:pointer" onclick="viewSkill('${s.skill_id}')">
-        <td><b>${esc(s.name||s.skill_id)}</b><br><span style="font-size:11px;color:var(--dim)">${esc(s.description||'').substring(0,60)}${s.description&&s.description.length>60?'...':''}</span></td>
+        <td><b>${esc(s.name||s.skill_id)}</b>${originBadge}<br><span style="font-size:11px;color:var(--dim)">${esc(s.description||'').substring(0,60)}${s.description&&s.description.length>60?'...':''}</span></td>
         <td><span style="color:var(--accent);font-size:12px">${esc(s.category||'general')}</span></td>
         <td>${tagsHtml||'<span style="color:var(--dim)">-</span>'}</td>
         <td>${accessHtml}</td>
         <td><span style="color:var(--dim);font-size:12px">v${esc(s.version||'1.0')}</span></td>
-        <td><button class="btn sm" onclick="event.stopPropagation();assignSkill('${s.skill_id}')">分配</button></td>
+        <td><button class="btn sm" onclick="event.stopPropagation();assignSkill('${s.skill_id}')">分配</button> ${uninstallBtn}</td>
       </tr>`;
     }).join('');
     document.getElementById('skill-assign-count').textContent=totalAssign;
@@ -2430,6 +2436,39 @@ async function scanSkills(){
     const r=await apiFetch('/api/station/skills/scan');const d=await r.json();
     refreshSkills();
     alert(`扫描完成: ${d.scanned||0} 个技能已注册/更新`);
+  }catch(e){alert('失败:'+e.message);}
+}
+async function showSkillMarket(){
+  try{
+    const r=await apiFetch('/api/station/skills/market');const items=await r.json();
+    const modal=document.getElementById('modal');
+    if(!items.length){modal.innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🛒 插件市场</h2><div class="empty"><div class="icon">🛒</div><p>市场暂无可用插件</p><p class="hint">将第三方 SKILL.md 插件包放入项目根 skills_market/ 目录即可在此浏览安装</p></div>`;}
+    else{
+      modal.innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🛒 插件市场</h2><p style="color:var(--dim);font-size:13px">第三方插件安装后默认仅 station 可用, 需在技能库中显式分配角色才会分发到 Worker/Agent</p>${items.map(m=>{
+        const inst=m.installed?(m.installed==='market'?'<span class="badge active">已安装</span>':'<span class="badge suspended">内置同名</span>'):'<span class="badge">未安装</span>';
+        const invalid=m.valid?'':`<span style="color:var(--red);font-size:12px">⚠ ${esc(m.error||'')}</span>`;
+        const btn=m.valid?`<button class="btn sm primary" onclick="installMarketSkill('${esc(m.skill_id)}')">${m.installed?'🔄 更新':'⬇ 安装'}</button>`:'';
+        return `<div class="card" style="cursor:default"><div class="card-head"><div class="card-title">📦 ${esc(m.name||m.skill_id)} ${inst}</div></div><div class="card-meta">${esc(m.description||'')}<br>分类: <span style="color:var(--accent)">${esc(m.category||'general')}</span> · v${esc(m.version||'1.0')} · ${m.size_kb}KB ${invalid}</div><div style="display:flex;gap:8px;margin-top:8px">${btn}</div></div>`;
+      }).join('')}`;
+    }
+    document.getElementById('overlay').classList.add('show');
+  }catch(e){alert('失败:'+e.message);}
+}
+async function installMarketSkill(skillId){
+  try{
+    const r=await apiFetch('/api/station/skills/market/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({skill_id:skillId})});
+    const d=await r.json();
+    if(d.ok){showToast(`🛒 插件「${skillId}」已安装`,'ok');closeOverlayForce();refreshSkills();}
+    else{alert('安装失败: '+(d.detail||d.message||'未知错误'));}
+  }catch(e){alert('失败:'+e.message);}
+}
+async function uninstallSkill(skillId){
+  if(!confirm(`确定要卸载第三方插件「${skillId}」吗？将删除其文件与全部权限分配。`))return;
+  try{
+    const r=await apiFetch(`/api/station/skills/${skillId}`,{method:'DELETE'});
+    const d=await r.json();
+    if(d.ok){showToast(`🗑️ 插件「${skillId}」已卸载`,'info');refreshSkills();}
+    else{alert('卸载失败: '+(d.detail||d.message||'未知错误'));}
   }catch(e){alert('失败:'+e.message);}
 }
 

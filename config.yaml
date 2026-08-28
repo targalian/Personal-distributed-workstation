@@ -86,3 +86,7 @@ bot:
   #   enabled: true
   #   webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx"
   #   min_priority: high
+
+# 技能市场 (iter-61 F5.3 插件系统): 第三方 Skill 插件浏览/安装/卸载
+skill_market_dir: "skills_market"  # 市场目录 (相对项目根; 每个子目录为一个插件包, 含 SKILL.md)
+skill_max_size_kb: 200             # 单个插件包最大体积 (KB), 安装时校验, 防第三方内容注入超大文本

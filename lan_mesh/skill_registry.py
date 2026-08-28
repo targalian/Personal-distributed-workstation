@@ -85,13 +85,20 @@ class SkillRegistry:
             existing = self.db.get_skill(skill_id)
             action = "updated" if existing else "created"
 
+            # iter-61: front matter 未声明 default_access 时保持 DB 现值,
+            # 防止重扫内置目录把 market 安装的安全默认 ["station"] 覆盖回 all
+            if "default_access" in meta:
+                default_access = meta["default_access"]
+            else:
+                default_access = (existing or {}).get("default_access", ["all"])
+
             self.db.upsert_skill(
                 skill_id=skill_id,
                 name=meta.get("name", skill_id),
                 description=meta.get("description", ""),
                 category=meta.get("category", "general"),
                 tags=meta.get("tags", []),
-                default_access=meta.get("default_access", ["all"]),
+                default_access=default_access,
                 content_path=entry.name,
                 version=meta.get("version", "1.0"),
             )

@@ -37,6 +37,9 @@
 22. iter60-auto-heal-loop — F4.2 自愈全自动闭环: rotate_key/switch_pool
     真实修复写动作 (失效池暂停/耗尽池剔除)、写动作每日配额、
     连续失败熔断与错误消失自动复位 (iter-60)
+23. iter61-plugin-market — F5.3 插件系统 (第三方 Skill 市场): 市场浏览/
+    安装白名单复制/安全默认仅 station/体积与 ID 校验/内置冲突拒绝/
+    卸载保护与来源追踪 origin 列 (iter-61)
 
 运行: pytest tests/ -v
 """
@@ -3821,6 +3824,145 @@ class TestIter60AutoHealClosedLoop:
         st = ctl.get_auto_heal_status()
         assert st["daily_limit"] == 3
         assert st["daily_counts"] == {} and st["fused"] == {}
+
+
+class TestIter61PluginMarket:
+    """iter-61 (F5.3 插件系统): 第三方 Skill 市场浏览/安装/卸载与安全护栏。"""
+
+    @staticmethod
+    def _make_market(tmp_path, max_size_kb=200):
+        """构造 SkillMarket: 独立 skills_dir + market_dir + 内存 DB。"""
+        from lan_mesh.database import Database
+        from lan_mesh.skill_market import SkillMarket
+        db = Database(str(tmp_path / "d.db"))
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir(exist_ok=True)
+        market_dir = tmp_path / "skills_market"
+        market_dir.mkdir(exist_ok=True)
+        return (SkillMarket(db, skills_dir, market_dir, max_size_kb=max_size_kb),
+                db, skills_dir, market_dir)
+
+    @staticmethod
+    def _make_pkg(market_dir, skill_id, name="测试插件",
+                  extra="", default_access=None):
+        """在市场中造一个插件包, 返回包目录。"""
+        pkg = market_dir / skill_id
+        pkg.mkdir(exist_ok=True)
+        fm = f"""---
+name: {skill_id}
+description: {name} 描述
+category: coding
+tags: [plugin, demo]
+version: "1.0"
+"""
+        if default_access is not None:
+            fm += f"default_access: {default_access}\n"
+        (pkg / "SKILL.md").write_text(fm + "---\n\n# {name}\n\n正文内容\n" + extra,
+                                      encoding="utf-8")
+        return pkg
+
+    def test_config_market_fields(self, tmp_path):
+        """AppConfig 市场字段默认值 + yaml 覆盖生效。"""
+        from lan_mesh.config import AppConfig, load_config
+        cfg = AppConfig()
+        assert cfg.skill_market_dir == "skills_market"
+        assert cfg.skill_max_size_kb == 200
+        p = tmp_path / "c.yaml"
+        p.write_text("skill_market_dir: market_custom\nskill_max_size_kb: 50\n",
+                     encoding="utf-8")
+        cfg2 = load_config(str(p))
+        assert cfg2.skill_market_dir == "market_custom"
+        assert cfg2.skill_max_size_kb == 50
+
+    def test_market_list_packages(self, tmp_path):
+        """市场浏览: 列出包 + installed 空标记 + 无 SKILL.md 目录被忽略。"""
+        mkt, db, skills_dir, market_dir = self._make_market(tmp_path)
+        self._make_pkg(market_dir, "demo-plugin")
+        (market_dir / "no-skill-md").mkdir()
+        (market_dir / "no-skill-md" / "other.txt").write_text("x")
+        items = mkt.list_market()
+        assert [i["skill_id"] for i in items] == ["demo-plugin"]
+        assert items[0]["installed"] == "" and items[0]["valid"] is True
+
+    def test_install_creates_files_and_db(self, tmp_path):
+        """安装: 白名单复制到 skills/ + DB origin=market + 安全默认仅 station。"""
+        mkt, db, skills_dir, market_dir = self._make_market(tmp_path)
+        pkg = self._make_pkg(market_dir, "demo-plugin")
+        (pkg / "evil.sh").write_text("rm -rf /")  # 白名单外文件不应被复制
+        r = mkt.install("demo-plugin")
+        assert r["ok"] and r["action"] == "installed"
+        assert (skills_dir / "demo-plugin" / "SKILL.md").is_file()
+        assert not (skills_dir / "demo-plugin" / "evil.sh").exists()
+        row = db.get_skill("demo-plugin")
+        assert row["origin"] == "market"
+        assert row["default_access"] == ["station"]  # 未声明 → 安全默认
+
+    def test_install_invalid_package_rejected(self, tmp_path):
+        """校验护栏: 缺 name / 超体积 / 非法 ID / 包不存在 → 拒绝。"""
+        mkt, db, skills_dir, market_dir = self._make_market(tmp_path)
+        # 缺 front matter name
+        bad = market_dir / "no-meta"
+        bad.mkdir()
+        (bad / "SKILL.md").write_text("# 无元数据\n正文", encoding="utf-8")
+        assert not mkt.install("no-meta")["ok"]
+        # 超体积 (上限 1KB)
+        mkt2, *_ = self._make_market(tmp_path, max_size_kb=1)
+        self._make_pkg(market_dir, "too-big", extra="x" * 5000)
+        assert not mkt2.install("too-big")["ok"]
+        # 非法 ID (大写/斜杠/点)
+        for bad_id in ("Bad-Id", "../escape", "a" * 65):
+            self._make_pkg(market_dir, "ok-pkg")
+            assert not mkt.install(bad_id)["ok"]
+        # 包不存在
+        assert not mkt.install("ghost-pkg")["ok"]
+
+    def test_install_builtin_conflict_rejected(self, tmp_path):
+        """与内置技能同名 → 拒绝安装 (内置不可覆盖)。"""
+        mkt, db, skills_dir, market_dir = self._make_market(tmp_path)
+        db.upsert_skill(skill_id="builtin-skill", name="内置", description="d",
+                        category="general", tags=[], default_access=["all"],
+                        content_path="builtin-skill", origin="builtin")
+        self._make_pkg(market_dir, "builtin-skill")
+        r = mkt.install("builtin-skill")
+        assert not r["ok"] and "内置" in r["message"]
+        assert db.get_skill("builtin-skill")["origin"] == "builtin"
+
+    def test_uninstall_market_skill(self, tmp_path):
+        """卸载 market 技能: 文件删除 + DB 记录删除 + 分配记录级联。"""
+        mkt, db, skills_dir, market_dir = self._make_market(tmp_path)
+        self._make_pkg(market_dir, "demo-plugin")
+        assert mkt.install("demo-plugin")["ok"]
+        db.assign_skill("demo-plugin", "role", "worker")
+        r = mkt.uninstall("demo-plugin")
+        assert r["ok"] and r["action"] == "uninstalled"
+        assert not (skills_dir / "demo-plugin").exists()
+        assert db.get_skill("demo-plugin") is None
+        assert db.get_skills_for_assignee("role", "worker") == []
+
+    def test_uninstall_builtin_rejected(self, tmp_path):
+        """卸载内置技能 → 拒绝且文件保留。"""
+        mkt, db, skills_dir, market_dir = self._make_market(tmp_path)
+        builtin_dir = skills_dir / "builtin-skill"
+        builtin_dir.mkdir()
+        (builtin_dir / "SKILL.md").write_text("---\nname: builtin-skill\n---\n正文",
+                                              encoding="utf-8")
+        db.upsert_skill(skill_id="builtin-skill", name="内置", description="d",
+                        category="general", tags=[], default_access=["all"],
+                        content_path="builtin-skill", origin="builtin")
+        assert not mkt.uninstall("builtin-skill")["ok"]
+        assert builtin_dir.exists() and db.get_skill("builtin-skill") is not None
+
+    def test_scan_preserves_origin(self, tmp_path):
+        """重扫内置目录不覆盖 origin 与安全默认: market 技能重扫后仍为 market + ["station"]。"""
+        from lan_mesh.skill_registry import SkillRegistry
+        mkt, db, skills_dir, market_dir = self._make_market(tmp_path)
+        self._make_pkg(market_dir, "demo-plugin")
+        assert mkt.install("demo-plugin")["ok"]
+        reg = SkillRegistry(db, str(skills_dir))
+        reg.scan_and_register()
+        row = db.get_skill("demo-plugin")
+        assert row["origin"] == "market"
+        assert row["default_access"] == ["station"]  # 扫描不覆盖安全默认
 
 
 class TestDagEdit:

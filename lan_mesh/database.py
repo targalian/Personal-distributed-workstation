@@ -21,7 +21,7 @@ logger = get_logger("database")
 # 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
 # 迁移函数签名: (conn: sqlite3.Connection) -> None
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -187,6 +187,20 @@ def _migration_v7(conn: sqlite3.Connection):
         pass
 
 
+def _migration_v8(conn: sqlite3.Connection):
+    """迁移 v8: skills 表增加 origin 来源列 (iter-61 F5.3 插件系统)。
+
+    区分内置技能 (builtin) 与第三方市场安装技能 (market),
+    卸载保护与来源追踪依赖该列; 旧库补列默认 builtin。
+    """
+    try:
+        conn.execute(
+            "ALTER TABLE skills ADD COLUMN origin TEXT NOT NULL DEFAULT 'builtin'"
+        )
+    except sqlite3.OperationalError:
+        pass
+
+
 # 迁移注册表: version → 迁移函数
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
@@ -196,6 +210,7 @@ _MIGRATIONS: dict[int, callable] = {
     5: _migration_v5,
     6: _migration_v6,
     7: _migration_v7,
+    8: _migration_v8,
 }
 
 
@@ -390,6 +405,7 @@ class Database:
                 tags           TEXT NOT NULL DEFAULT '[]',
                 default_access TEXT NOT NULL DEFAULT '["all"]',
                 content_path   TEXT NOT NULL DEFAULT '',
+                origin         TEXT NOT NULL DEFAULT 'builtin',
                 version        TEXT NOT NULL DEFAULT '1.0',
                 created_at     REAL NOT NULL DEFAULT 0,
                 updated_at     REAL NOT NULL DEFAULT 0
@@ -1200,15 +1216,20 @@ class Database:
 
     def upsert_skill(self, skill_id: str, name: str, description: str,
                       category: str, tags: list, default_access: list,
-                      content_path: str, version: str = "1.0"):
-        """插入或更新技能记录。"""
+                      content_path: str, version: str = "1.0",
+                      origin: str = "builtin"):
+        """插入或更新技能记录。
+
+        origin 仅首次插入时写入 (iter-61): 更新不覆盖来源标记,
+        防止重扫内置目录把市场安装技能误标回 builtin。
+        """
         conn = self._get_conn()
         now = time.time()
         conn.execute("""
             INSERT INTO skills (
                 skill_id, name, description, category, tags,
-                default_access, content_path, version, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                default_access, content_path, origin, version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(skill_id) DO UPDATE SET
                 name=excluded.name,
                 description=excluded.description,
@@ -1222,7 +1243,7 @@ class Database:
             skill_id, name, description, category,
             json.dumps(tags, ensure_ascii=False),
             json.dumps(default_access, ensure_ascii=False),
-            content_path, version, now, now,
+            content_path, origin, version, now, now,
         ))
         conn.commit()
 
@@ -1268,6 +1289,7 @@ class Database:
             "tags": json.loads(row["tags"]) if row["tags"] else [],
             "default_access": json.loads(row["default_access"]) if row["default_access"] else ["all"],
             "content_path": row["content_path"],
+            "origin": row["origin"] if "origin" in row.keys() else "builtin",
             "version": row["version"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],

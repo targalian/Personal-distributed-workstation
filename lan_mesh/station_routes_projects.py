@@ -180,6 +180,35 @@ def build_project_routes(controller) -> APIRouter:
         await _broadcast(state, "skills_scanned", {"scanned": len(result), "details": result})
         return {"ok": True, "scanned": len(result), "details": result}
 
+    # ── 技能市场 (iter-61 F5.3 插件系统: 第三方 Skill 浏览/安装/卸载) ──
+    # 注意: market 路由必须定义在 /{skill_id} 之前, 防 "market" 被路径参数捕获
+
+    @router.get("/api/station/skills/market")
+    async def list_skill_market():
+        """浏览第三方技能市场 (可安装插件列表, 含 installed 标记)。"""
+        return controller.skill_market.list_market()
+
+    @router.post("/api/station/skills/market/install")
+    async def install_skill_from_market(payload: dict):
+        """从市场安装第三方插件 (校验→复制→注册, origin=market)。"""
+        skill_id = (payload.get("skill_id") or "").strip()
+        if not skill_id:
+            raise HTTPException(status_code=400, detail="skill_id 不能为空")
+        result = controller.skill_market.install(skill_id)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("message", "安装失败"))
+        await _broadcast(state, "skill_installed", {"skill_id": skill_id})
+        return result
+
+    @router.delete("/api/station/skills/{skill_id}")
+    async def uninstall_skill(skill_id: str):
+        """卸载第三方插件 (仅 origin=market; 内置技能受保护 403)。"""
+        result = controller.skill_market.uninstall(skill_id)
+        if not result.get("ok"):
+            raise HTTPException(status_code=403, detail=result.get("message", "卸载失败"))
+        await _broadcast(state, "skill_uninstalled", {"skill_id": skill_id})
+        return result
+
     @router.get("/api/station/skills/download")
     async def download_skill_package(role: str, agent_id: str = None):
         """Worker 拉取已授权的技能包。"""

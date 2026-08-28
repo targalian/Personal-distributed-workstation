@@ -79,6 +79,7 @@ MAPPING = {
     "lan_mesh/mcp_gateway.py": "04-execution-engine",
     "lan_mesh/sandbox.py": "04-execution-engine",
     "lan_mesh/skill_registry.py": "04-execution-engine",
+    "lan_mesh/skill_market.py": "04-execution-engine",
     # 05-resources-secrets — 模型资源/密钥/版本同步
     "lan_mesh/model_resources.py": "05-resources-secrets",
     "lan_mesh/model_router.py": "05-resources-secrets",

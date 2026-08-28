@@ -126,7 +126,7 @@ class ObservabilityConfig(BaseModel):
 
 
 class AppConfig(BaseModel):
-    """应用顶层配置。"""
+    """应用顶层配置 (iter-61: 技能市场目录与包大小限制)。"""
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     secretary: SecretaryConfig = Field(default_factory=SecretaryConfig)
@@ -135,6 +135,8 @@ class AppConfig(BaseModel):
     security: "SecurityConfig" = Field(default_factory=lambda: SecurityConfig())
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     auto_upgrade: bool = True  # F1: 版本落后时自动 git pull 对齐 (工作区脏则跳过)
+    skill_market_dir: str = "skills_market"  # iter-61: 第三方技能市场目录 (相对项目根, 每个子目录为一个可安装包)
+    skill_max_size_kb: int = 200  # iter-61: 单个技能包最大体积 (KB), 防止第三方内容注入超大文本
 
 
 class UserAccount(BaseModel):
