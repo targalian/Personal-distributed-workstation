@@ -167,6 +167,13 @@ def build_pm_routes(controller) -> APIRouter:
                 "failed_subtask": escalation.get("failed_subtask", ""),
                 "error": escalation.get("error", "")[:200],
             })
+
+        # iter-57 (补强#5): PM 结束后接力派发排队任务 (并发提交时
+        # 本机 PM 忙 → 任务排队; 此处完成一个就补上一个)
+        if status in ("completed", "failed", "cancelled") and \
+                hasattr(controller, "_dispatch_queued_task"):
+            controller._dispatch_queued_task()
+
         return {"ok": True, "pm_id": pm_id, "status": status}
 
     @router.post("/api/pm/{pm_id}/progress")

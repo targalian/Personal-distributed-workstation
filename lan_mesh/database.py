@@ -240,10 +240,20 @@ class Database:
             return ""
 
     def _get_conn(self) -> sqlite3.Connection:
-        """每个线程获取独立的连接 (SQLite 线程安全要求)。"""
+        """每个线程获取独立的连接 (SQLite 线程安全要求)。
+
+        iter-57 (补强#5): 并发加固 — busy_timeout 锁等待 30s (避免
+        并发写触发 database is locked), WAL 模式读写不互斥 (文件系统
+        不支持时降级默认 journal, 不阻断启动)。
+        """
         if not hasattr(self._local, "conn"):
             conn = sqlite3.connect(str(self.path), check_same_thread=False)
             conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=30000")
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.Error:
+                pass  # 文件系统不支持 WAL 时降级默认 journal 模式
             self._local.conn = conn
         return self._local.conn
 

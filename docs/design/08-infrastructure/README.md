@@ -38,6 +38,12 @@ Secretary 激活时由 station_controller 读取驱动 `start_stall_watcher`；
 节流驱动 `Database.prune_logs()` (llm_call_log/chat_history/
 resource_usage_log 仅删已上报/progress_reports/heartbeat_log 固定 24h)。
 
+**observability API 限流字段** (iter-57, 补强#5): `api_rate_limit`
+(严格桶, req/min, 默认 120, 未认证流量防滥用) /
+`api_rate_limit_trusted` (信任桶, req/min, 默认 1000, 携带合法
+mesh token 的并发负载 — 20 并发任务 + UI 轮询不误伤)；≤0 禁用
+对应桶；由 station_controller 启动时注入 `configure_rate_limit`。
+
 ## logger.py — 结构化日志
 
 统一格式 `[时间] [级别] [模块] 消息`，控制台 + 文件双输出，
@@ -136,6 +142,7 @@ secretary.py 删除 (P3)，Secretary 端路由由 station_routes_* 承担。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-57 | 并发压力验证 (补强#5): ObservabilityConfig 增 api_rate_limit/api_rate_limit_trusted 限流双桶字段 (120/1000, ≤0 禁用); station_routes_common 限流器双桶 + 阈值变化清桶 + /api/health 补登白名单 |
 | 2026-08-28 | iter-54 | 日志容量修剪 (补强#2): ObservabilityConfig 增 log_retention_days/log_prune_interval_hours/log_vacuum 三字段 (默认 30 天/24h/开, ≤0 禁用) |
 | 2026-08-27 | iter-43 | config.py 新增 ObservabilityConfig 段 (停滞检查周期/阈值配置化, 缺省回退默认) |
 | 2026-08-27 | iter-44 | error_tracker 闭环接线: 全局事件回调 (每条捕获触发) + 突发告警冷却去重 (按模块独立) |

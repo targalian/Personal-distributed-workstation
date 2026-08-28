@@ -152,6 +152,18 @@ WebSocket 通道。
   auth 开启时页面必须先加载才能执行 auth-token 自举; 注册引导/版本查询/secrets 拉取;
   iter-56 起含 `/spa` React SPA 静态资源 — 与 `/` 同一信任假设, 页面自举后
   apiFetch 再取 auth-token）
+- 限流双桶 (iter-57, 补强#5): `_RateLimiter` per-IP 滑动窗口分
+  信任/严格双桶 — 携带合法 mesh token (verify_token 恒定时间比较)
+  走信任桶高阈值 (`observability.api_rate_limit_trusted`, 默认 1000/min,
+  覆盖 20 并发任务 + UI 轮询), 未认证流量走严格桶
+  (`api_rate_limit`, 默认 120/min) 防滥用; 阈值 ≤0 禁用对应桶,
+  set_limits 变化时清空窗口历史命中; auth 未启用时全部视为信任
+- 任务排队接力 (iter-57, 补强#5): 本机 PM 单实例忙且无远程 worker
+  时, POST /api/tasks 不再自调用远程派发 (压测发现 20 并发提交
+  阻塞超时 + 19 任务瞬时 failed) — 任务保持 pending + 响应带
+  `queued: true`; PM 上报 completed/failed/cancelled 时触发
+  `_dispatch_queued_task` 接力派发最早 pending 任务 (PM 仍收尾时
+  后台线程等待其空闲, 最多 120s)
 - mesh 认证态与 token 访问器 `get_mesh_auth_token()` 位于 common
   (原闭包全局迁移, 避免跨模块引用失效)
 - station_api.py 兼容再导出 common 的中间件/工具，station_controller /
@@ -191,6 +203,11 @@ PM 执行态快照, 断点恢复数据源）等。
 `backup()` (P2 #7) / `save_pm_snapshot()` 系列 (iter-53 快照 UPSERT/
 按任务查找/删除, delete_task 级联清理) / `prune_logs()` + `vacuum()`
 (iter-54 日志容量修剪, 按保留期清理日志表并回收磁盘空间) 等
+
+**并发加固** (iter-57, 补强#5): `_get_conn` 每线程独立连接 +
+`PRAGMA busy_timeout=30000` (并发写锁等待 30s, 避免 database is
+locked) + `PRAGMA journal_mode=WAL` (读写不互斥, 文件系统不支持时
+降级默认 journal 不阻断启动)；真机压测 20 线程 × 1800 请求零异常。
 
 ## runtime_trace.py — 运行时追踪与性能审计
 
@@ -250,6 +267,7 @@ agent_runtime.execute()
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-57 | 并发压力验证 (补强#5): DB 加固 busy_timeout 30s + WAL (每线程独立连接); 限流双桶 (信任桶 token 高阈值/严格桶防滥用, 阈值配置化 observability.api_rate_limit[_trusted], ≤0 禁用); 本机 PM 忙时任务排队 pending 而非瞬时 failed, PM 结束接力派发 (_dispatch_queued_task); /api/health 补登白名单; 真机压测 1800 req 0 错误 + 20 并发提交全 200 (1 running + 19 排队) |
 | 2026-08-29 | iter-56 | F5.1 React SPA (补强#4): /spa 挂载 StaticFiles(html=True) + 认证白名单放行 /spa 前缀 + preflight _check_spa_bundle; 三页面 (Station 总览/任务列表/DAG 编辑器) 数据链路 Browser 实测通过 (UI-049) |
 | 2026-08-29 | iter-55 | 多机实测加固 (补强#3): _load_model_resources 启动预加载模型池 (让位主机 Key 就绪); _local_start_pm/_local_resume_pm 惰性初始化 Worker AgentRuntime; 双实例隔离跨机链路实测通过 |
 | 2026-08-28 | iter-54 | 日志容量修剪 (补强#2): Database.prune_logs (llm_call_log/chat_history/resource_usage_log 仅删已上报/progress_reports/heartbeat_log 固定 24h) + vacuum; _prune_logs_if_due 节流接入 _prune_loop; POST /api/runtime/logs/prune 手动端点 |

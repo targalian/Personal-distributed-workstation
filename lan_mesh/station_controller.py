@@ -972,6 +972,77 @@ class StationController:
         self._auto_attach_pm_thread(pm_id, task_name, f"PM-{pm_id[:8]}")
         return {"ok": True, "pm_id": pm_id, "device_id": self.state.device_id}
 
+    def _dispatch_queued_task(self) -> bool:
+        """iter-57 (补强#5): PM 空闲后接力派发队列中最早 pending 任务。
+
+        并发提交时本机 PM 忙 → 任务排队 (pending); 本机 PM 完成后调用
+        本方法接力派发。若 PM 仍在收尾 (completed 上报时线程尚未退出),
+        后台线程等待其结束后再派发, 避免请求线程内自调用阻塞
+        (压测发现 20 并发提交时 19 个任务瞬时 failed + ReadTimeout)。
+        """
+        pm = self._local_pm_agent
+        if pm and getattr(pm, '_running', False):
+            # PM 仍在收尾: 后台等待空闲后接力 (最多 120s), 防重入
+            if not getattr(self, '_queued_dispatch_waiting', False):
+                self._queued_dispatch_waiting = True
+
+                def _wait_then_dispatch():
+                    deadline = time.time() + 120
+                    while time.time() < deadline:
+                        time.sleep(2)
+                        cur = self._local_pm_agent
+                        if not cur or not getattr(cur, '_running', False):
+                            break
+                    self._queued_dispatch_waiting = False
+                    self._dispatch_queued_task()
+
+                threading.Thread(target=_wait_then_dispatch,
+                                 daemon=True, name="queued-dispatch").start()
+            return False
+
+        tasks = self.db.list_tasks()
+        pending = [t for t in tasks if getattr(t, 'status', '') == 'pending']
+        if not pending:
+            return False
+        task = pending[0]
+        secretary_url = f"http://127.0.0.1:{self.state.api_port}"
+        result = self._local_start_pm(task.task_id, secretary_url, task.to_dict())
+        if not result.get("ok"):
+            logger.warning("排队任务接力派发失败: %s", result.get("message"))
+            return False
+
+        from .protocol import PMAgent
+        pm_id = result["pm_id"]
+        task.pm_agent_id = pm_id
+        task.status = "running"
+        self.db.save_task(task)
+        self.db.upsert_pm_agent(PMAgent(
+            pm_id=pm_id,
+            agent_name=f"PM-{pm_id[:8]}",
+            task_id=task.task_id,
+            project_id=getattr(task, 'project_id', '') or '',
+            device_id=self.state.device_id,
+            hostname=self.state.device_name,
+            ip="127.0.0.1",
+            api_port=self.state.api_port,
+            status="starting",
+        ))
+        self._pm_worker_map[pm_id] = {
+            "ip": "127.0.0.1",
+            "api_port": self.state.api_port,
+            "device_id": self.state.device_id,
+            "local": True,
+        }
+        self._queue_ws_broadcast("pm_registered", {
+            "pm_id": pm_id, "task_id": task.task_id,
+            "device_id": self.state.device_id,
+            "device_name": self.state.device_name,
+        })
+        self._queue_ws_broadcast("task_updated", task.to_dict())
+        logger.info("排队任务已接力派发: %s (%s) → PM %s",
+                    task.task_id[:8], task.name, pm_id[:8])
+        return True
+
     def _local_stop_pm(self) -> dict:
         """停止本机 PM Agent。"""
         if not self._local_pm_agent:
@@ -2379,6 +2450,11 @@ class StationController:
         from .station_api import api_guard_middleware, configure_mesh_auth
         # Phase 0: 将节点认证配置同步给中间件 (auth_enabled 时才校验)
         configure_mesh_auth(self._mesh_auth_enabled, self._mesh_token)
+        # iter-57 (补强#5): 限流双桶阈值配置化 (严格桶防滥用/信任桶保并发)
+        from .station_routes_common import configure_rate_limit
+        configure_rate_limit(
+            self.cfg.observability.api_rate_limit,
+            self.cfg.observability.api_rate_limit_trusted)
         app.middleware("http")(api_guard_middleware)
 
         # Station 路由 (含全部 API, Secretary 路由会检查 active 状态)

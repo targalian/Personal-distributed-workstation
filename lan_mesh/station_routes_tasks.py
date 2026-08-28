@@ -198,6 +198,16 @@ def build_task_routes(controller) -> APIRouter:
                 return task.to_dict()
             else:
                 logger.warning("本机 PM 启动失败: %s, 尝试远程派发", result.get('message'))
+                # iter-57 (补强#5): 本机 PM 忙且无远程 worker 时, 自调用
+                # 派发无效 (会再次撞「已在运行」并阻塞请求线程, 压测发现
+                # 20 并发提交时 19 个任务瞬时 failed + ReadTimeout); 任务
+                # 保持 pending 排队, PM 空闲后由 _dispatch_queued_task 接力
+                remote_hosts = [h for h in online_hosts
+                                if h.device_id != state.device_id]
+                if not remote_hosts:
+                    await _broadcast(state, "task_updated", task.to_dict())
+                    return {**task.to_dict(), "queued": True,
+                            "message": "本机 PM 忙, 任务已排队等待派发"}
 
         # 5. 回退: POST 到远程 Worker 启动 PM Agent
         target_ip = target_host.ip

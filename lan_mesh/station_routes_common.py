@@ -25,29 +25,62 @@ logger = get_logger("station_api")
 # ── F1.5: API 限流器 ─────────────────────────────────────────────
 
 class _RateLimiter:
-    """F1.5: 简单滑动窗口限流器 (per-IP)。"""
+    """F1.5: 简单滑动窗口限流器 (per-IP, 信任/非信任双桶)。
+
+    iter-57 (补强#5): 压测发现全局 120/min 会误伤合法并发负载
+    (20 并发任务 + UI 轮询即撞墙); 改为双桶 — 携带合法 mesh token
+    的请求走信任桶 (高阈值), 未认证请求保持严格桶防滥用。
+    """
 
     def __init__(self, max_requests: int = 120, window_secs: float = 60.0):
         self._max = max_requests
+        self._trusted_max = max_requests
         self._window = window_secs
-        self._hits: dict[str, list[float]] = {}  # ip → [timestamps]
+        self._hits: dict[str, list[float]] = {}          # ip → [时间戳] 严格桶
+        self._trusted_hits: dict[str, list[float]] = {}  # ip → [时间戳] 信任桶
         self._lock = threading.Lock()
 
-    def is_allowed(self, client_ip: str) -> bool:
+    def set_limits(self, strict_max: int, trusted_max: int):
+        """运行时调整阈值 (0/负数 = 禁用对应桶, 由 configure_rate_limit 调用)。
+
+        iter-57: 阈值变化时清空窗口内历史命中 — 旧速率记录与新阈值
+        语义不一致 (测试/热更新时避免历史残留误伤)。
+        """
+        with self._lock:
+            self._max = int(strict_max)
+            self._trusted_max = int(trusted_max)
+            self._hits.clear()
+            self._trusted_hits.clear()
+
+    def is_allowed(self, client_ip: str, trusted: bool = False) -> bool:
         now = time.time()
         cutoff = now - self._window
         with self._lock:
-            hits = self._hits.get(client_ip, [])
+            limit = self._trusted_max if trusted else self._max
+            if limit <= 0:
+                return True  # 对应桶禁用限流
+            bucket = self._trusted_hits if trusted else self._hits
+            hits = bucket.get(client_ip, [])
             hits = [t for t in hits if t > cutoff]
-            if len(hits) >= self._max:
-                self._hits[client_ip] = hits
+            if len(hits) >= limit:
+                bucket[client_ip] = hits
                 return False
             hits.append(now)
-            self._hits[client_ip] = hits
+            bucket[client_ip] = hits
             return True
 
 
 _rate_limiter = _RateLimiter(max_requests=120, window_secs=60.0)
+
+
+def configure_rate_limit(strict_max: int, trusted_max: int):
+    """配置限流阈值 (由 StationController 启动时调用)。
+
+    iter-57 (补强#5): 严格桶 (未认证请求) 防滥用, 信任桶 (合法
+    mesh token) 覆盖 10-20 并发任务 + UI 轮询的合法负载。
+    0/负数 = 禁用对应桶。
+    """
+    _rate_limiter.set_limits(strict_max, trusted_max)
 
 # F1.5: API Key 认证 (可选, 通过环境变量 LAN_MESH_API_KEY 启用)
 import os as _os
@@ -61,7 +94,8 @@ _API_KEY = _os.environ.get("LAN_MESH_API_KEY", "")  # 空 = 不启用认证
 #   /ws: WebSocket 实时推送 (会话建立后由 UI 持有 token)
 #   /ws/worker: M5-2 Worker 事件直推通道 (握手后在端点内自验 mesh_token)
 #   /api/station/auth-token: Web UI 引导获取 token (信任根: 能访问 UI 者视为内网成员)
-_AUTH_WHITELIST = {"/", "/health", "/api/register", "/api/heartbeat",
+_AUTH_WHITELIST = {"/", "/health", "/api/health",
+                   "/api/register", "/api/heartbeat",
                    "/ws", "/ws/worker",
                    "/api/station/auth-token", "/api/station/bootstrap-token",
                    "/api/version/upgrade-notice", "/api/secrets/fetch"}
@@ -108,9 +142,17 @@ async def api_guard_middleware(request: Request, call_next):
     """F1.5: 全局限流 + API Key 认证 + Phase 0 mesh token 节点认证中间件。"""
     path = request.url.path
 
-    # 限流
+    # 限流 (iter-57: 合法 mesh token 走信任桶, 未认证走严格桶防滥用)
     client_ip = request.client.host if request.client else "unknown"
-    if not _rate_limiter.is_allowed(client_ip):
+    trusted = False
+    if _mesh_auth_enabled and _mesh_auth_token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            from .auth import verify_token
+            trusted = verify_token(auth_header[7:], _mesh_auth_token)
+    else:
+        trusted = True  # auth 未启用 (内网自由模式) 不限制合法流量
+    if not _rate_limiter.is_allowed(client_ip, trusted=trusted):
         return JSONResponse(status_code=429, content={"detail": "请求过于频繁, 请稍后重试"})
 
     # API Key 认证 (仅当配置了 key 时启用)

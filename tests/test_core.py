@@ -28,6 +28,10 @@
 18. iter55-multihost — 多机实测缺陷回归: PROVIDER_CONFIG ark 首位/
     _get_default_model 定义/_ensure_env_loaded 补齐/模型资源预加载/
     让位主机惰性 Worker runtime (iter-55)
+19. iter56-spa — React SPA 挂载与认证白名单: /spa 静态托管产物/
+    auth 开启时免认证放行 (iter-56)
+20. iter57-concurrency — 并发压力验证 (补强#5): DB 并发混合负载/
+    busy_timeout+WAL 加固生效/API 并发提交 10 任务 pm_id 唯一 (iter-57)
 
 运行: pytest tests/ -v
 """
@@ -4957,6 +4961,282 @@ class TestIter56Spa:
         assert client.get("/spa/assets/app.js").status_code == 200
         # 其余 API 路径仍要求 token
         assert client.get("/api/tasks").status_code == 401
+
+
+class TestIter57Concurrency:
+    """iter-57 补强#5: 并发压力验证 — DB 线程安全与队列表现。"""
+
+    @staticmethod
+    def _fresh_db(tmp_path) -> "Database":
+        from lan_mesh.database import Database
+        return Database(str(tmp_path / "conc.db"))
+
+    def test_wal_and_busy_timeout_configured(self, tmp_path):
+        """加固生效: 连接启用 WAL + busy_timeout=30s (并发写不因锁失败)。"""
+        db = self._fresh_db(tmp_path)
+        conn = db._get_conn()
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+    def test_db_concurrent_mixed_load(self, tmp_path):
+        """20 线程混合读写负载 (save_task/get_task/upsert_host) 无锁异常。"""
+        import threading
+        from lan_mesh.database import Database
+        from lan_mesh.protocol import HostRecord
+
+        db = Database(str(tmp_path / "mix.db"))
+        db.upsert_host(HostRecord(device_id="host-seed", device_name="seed",
+                                  online=True))
+        errors: list = []
+        lock = threading.Lock()
+
+        def worker(tid: int):
+            try:
+                for i in range(20):
+                    t = Task(
+                        task_id=f"task-{tid}-{i}",
+                        name=f"并发任务 {tid}-{i}",
+                        description="压测",
+                        status="pending",
+                    )
+                    db.save_task(t)
+                    db.get_task(t.task_id)
+                    db.list_tasks(limit=10)
+                    db.list_hosts()
+            except Exception as e:  # noqa: BLE001 — 并发异常收集断言
+                with lock:
+                    errors.append(f"thread-{tid}: {type(e).__name__}: {e}")
+
+        threads = [threading.Thread(target=worker, args=(t,)) for t in range(20)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join(timeout=60)
+        assert not errors, f"并发 DB 操作出现异常: {errors[:5]}"
+        tasks = db.list_tasks(limit=1000)
+        assert len(tasks) == 20 * 20, f"写入丢失: {len(tasks)}/400"
+
+    def test_api_concurrent_task_submit(self, tmp_path):
+        """10 并发 POST /api/tasks: 全部成功 + pm_id 唯一 + 状态 running。"""
+        import itertools
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.database import Database
+        from lan_mesh.protocol import HostRecord
+        from lan_mesh.station_api import create_station_router
+
+        db = Database(str(tmp_path / "api.db"))
+        # 预置在线主机, 走本机派发分支 (_local_start_pm)
+        db.upsert_host(HostRecord(device_id="host-1", device_name="主机1",
+                                  role="worker", online=True))
+        pm_counter = itertools.count(1)
+        pm_lock = threading.Lock()
+
+        class _Ctl:
+            def __init__(self):
+                self.db = db
+                self.discovery = None
+                self.secretary_active = True
+                self.chat_runtime = True
+                self.project_manager = None
+                self.bot_gateway = MagicMock()
+                self.state = SimpleNamespace(
+                    ws_clients=set(), device_id="dev-ctl",
+                    api_port=45500, device_name="ctl",
+                    shared_folder="")
+
+            def _local_start_pm(self, task_id, secretary_url, task_dict):
+                with pm_lock:
+                    pid = f"pm-{next(pm_counter):03d}"
+                return {"ok": True, "pm_id": pid}
+
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+
+        def submit(i: int):
+            r = client.post("/api/tasks", json={
+                "name": f"并发任务-{i}", "description": "压测提交",
+            })
+            return r.status_code, r.json()
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            results = list(pool.map(submit, range(10)))
+
+        codes = [c for c, _ in results]
+        assert all(c == 200 for c in codes), f"存在非 200 响应: {codes}"
+        tasks = db.list_tasks(limit=100)
+        assert len(tasks) == 10, f"任务数不符: {len(tasks)}/10"
+        pm_ids = [t.pm_agent_id for t in tasks]
+        assert len(set(pm_ids)) == 10, f"pm_id 冲突: {pm_ids}"
+        assert all(t.status == "running" for t in tasks)
+
+    def test_rate_limiter_dual_bucket(self):
+        """双桶隔离: 严格桶拒绝超限, 信任桶高阈值放行合法负载。"""
+        from lan_mesh import station_routes_common as common
+
+        common.configure_rate_limit(strict_max=5, trusted_max=1000)
+        # 严格桶: 同 IP 第 6 次拒绝 (防滥用)
+        for _ in range(5):
+            assert common._rate_limiter.is_allowed("ip-strict", trusted=False)
+        assert not common._rate_limiter.is_allowed("ip-strict", trusted=False)
+        # 信任桶: 高阈值放行 (20 并发任务 + UI 轮询不误伤)
+        for _ in range(50):
+            assert common._rate_limiter.is_allowed("ip-trusted", trusted=True)
+
+    def test_rate_limiter_disable(self):
+        """阈值 ≤0 禁用对应桶: 压测时全部放行。"""
+        from lan_mesh import station_routes_common as common
+
+        common.configure_rate_limit(strict_max=0, trusted_max=0)
+        for _ in range(200):
+            assert common._rate_limiter.is_allowed("ip-any", trusted=False)
+            assert common._rate_limiter.is_allowed("ip-any", trusted=True)
+
+    def test_middleware_trusted_token_high_bucket(self, monkeypatch):
+        """中间件: 带 mesh token 走信任桶, 白名单未认证流量受严格桶约束。"""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh import station_routes_common as common
+
+        monkeypatch.setattr(common, "_mesh_auth_enabled", True)
+        monkeypatch.setattr(common, "_mesh_auth_token", "secret-tk")
+        common.configure_rate_limit(strict_max=4, trusted_max=1000)
+        app = FastAPI()
+        app.middleware("http")(common.api_guard_middleware)
+
+        @app.get("/api/tasks")
+        def _tasks():
+            return {"tasks": []}
+
+        @app.get("/api/register")  # 白名单路径: 免 token 认证但限流仍生效
+        def _reg():
+            return {"ok": True}
+
+        @app.get("/api/health")  # 健康探活须免认证 (压测发现曾漏登记白名单)
+        def _health():
+            return {"ok": True}
+
+        client = TestClient(app)
+        # 白名单健康探活免 token (iter-57 压测发现 /api/health 曾 401)
+        assert client.get("/api/health").status_code == 200
+        # 信任流量: 超严格阈值 (4) 仍全部放行
+        for _ in range(10):
+            r = client.get("/api/tasks",
+                           headers={"Authorization": "Bearer secret-tk"})
+            assert r.status_code == 200
+        # 未认证流量 (白名单): 严格桶 health 已占 1 次, 第 5 次起 429
+        codes = [client.get("/api/register").status_code for _ in range(5)]
+        assert codes[:3] == [200, 200, 200], f"前 3 次应放行: {codes}"
+        assert codes[3:] == [429, 429], f"超限后应 429: {codes}"
+
+    def test_submit_queue_when_local_pm_busy(self, tmp_path):
+        """本机 PM 忙且无远程 worker: 任务排队 pending 而非瞬时 failed。"""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.database import Database
+        from lan_mesh.protocol import HostRecord
+        from lan_mesh.station_api import create_station_router
+
+        db = Database(str(tmp_path / "queue.db"))
+        # 仅本机在线 (无远程 worker 可派发)
+        db.upsert_host(HostRecord(device_id="dev-ctl", device_name="本机",
+                                  role="worker", online=True))
+
+        class _Ctl:
+            def __init__(self):
+                self.db = db
+                self.discovery = None
+                self.secretary_active = True
+                self.chat_runtime = True
+                self.project_manager = None
+                self.bot_gateway = MagicMock()
+                self.state = SimpleNamespace(
+                    ws_clients=set(), device_id="dev-ctl",
+                    api_port=45500, device_name="ctl",
+                    shared_folder="")
+
+            def _local_start_pm(self, task_id, secretary_url, task_dict):
+                return {"ok": False, "message": "本机 PM Agent 已在运行"}
+
+            def __getattr__(self, name):
+                return MagicMock()
+
+        ctl = _Ctl()
+        app = FastAPI()
+        app.include_router(create_station_router(ctl))
+        client = TestClient(app)
+
+        r = client.post("/api/tasks", json={
+            "name": "排队任务", "description": "PM 忙时排队",
+        })
+        assert r.status_code == 200, r.text[:200]
+        body = r.json()
+        assert body.get("queued") is True, f"应返回 queued 标记: {body}"
+        tasks = db.list_tasks(limit=10)
+        assert len(tasks) == 1
+        assert tasks[0].status == "pending", \
+            f"PM 忙时任务应保持 pending: {tasks[0].status}"
+        assert not tasks[0].pm_agent_id, "排队任务不应绑定 PM"
+
+    def test_dispatch_queued_task_relay(self, tmp_path):
+        """接力派发: PM 空闲后 _dispatch_queued_task 派发最早 pending 任务。"""
+        from types import SimpleNamespace
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        from lan_mesh.protocol import Task
+
+        db = Database(str(tmp_path / "relay.db"))
+        db.save_task(Task(task_id="task-relay-1", name="排队任务1",
+                          description="待接力", status="pending"))
+
+        class _Fake:
+            _local_pm_agent = None
+            _queued_dispatch_waiting = False
+
+            def __init__(self):
+                self.db = db
+                self.state = SimpleNamespace(
+                    device_id="dev-ctl", api_port=45500, device_name="ctl")
+                self._pm_worker_map: dict = {}
+                self._ws_events: list = []
+                self._started: list = []
+
+            def _local_start_pm(self, task_id, secretary_url, task_data):
+                self._started.append(task_id)
+                return {"ok": True, "pm_id": "pm-relay-001"}
+
+            def _queue_ws_broadcast(self, event_type, data):
+                self._ws_events.append((event_type, data))
+
+        fake = _Fake()
+        ok = StationController._dispatch_queued_task(fake)
+        assert ok is True, "接力派发应成功"
+        assert fake._started == ["task-relay-1"], "应派发最早的 pending 任务"
+        task = db.get_task("task-relay-1")
+        assert task.status == "running", f"接力后应 running: {task.status}"
+        assert task.pm_agent_id == "pm-relay-001"
+        pm = db.get_pm_agent("pm-relay-001")
+        assert pm is not None, "PM Agent 应落库"
+        assert "pm_relay_001" not in [k for k in fake._pm_worker_map] \
+            or fake._pm_worker_map.get("pm-relay-001", {}).get("local") is True
+        types = [e[0] for e in fake._ws_events]
+        assert "pm_registered" in types and "task_updated" in types
+
+        # PM 忙时: 返回 False (后台等待线程接力, 不阻塞请求线程)
+        fake._local_pm_agent = SimpleNamespace(_running=True)
+        ok2 = StationController._dispatch_queued_task(fake)
+        assert ok2 is False, "PM 忙时不应立即派发"
 
 
 
