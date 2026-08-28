@@ -1,0 +1,24 @@
+{
+  "name": "lan-mesh-webui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "LAN Mesh 分布式AI工作站 Web UI (React SPA + DAG 可视化, iter-56 补强#4 F5.1)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.3.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "~5.6.2",
+    "vite": "^5.4.11"
+  }
+}

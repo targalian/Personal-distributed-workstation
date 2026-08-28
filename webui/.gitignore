@@ -1,0 +1,4 @@
+# webui — React SPA 源码目录 (构建产物输出到 ../lan_mesh/web/static/spa/, 需入库)
+node_modules/
+dist/
+*.tsbuildinfo

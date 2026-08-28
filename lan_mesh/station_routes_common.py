@@ -114,13 +114,17 @@ async def api_guard_middleware(request: Request, call_next):
         return JSONResponse(status_code=429, content={"detail": "请求过于频繁, 请稍后重试"})
 
     # API Key 认证 (仅当配置了 key 时启用)
-    if _API_KEY and path not in _AUTH_WHITELIST and not path.startswith("/static"):
+    if _API_KEY and path not in _AUTH_WHITELIST and not path.startswith("/static") \
+            and not path.startswith("/spa"):
         provided = request.headers.get("X-API-Key", "") or request.query_params.get("api_key", "")
         if provided != _API_KEY:
             return JSONResponse(status_code=401, content={"detail": "未授权: 缺少有效的 API Key"})
 
     # Phase 0: mesh token 节点认证 (auth_enabled 时启用)
-    if _mesh_auth_enabled and path not in _AUTH_WHITELIST and not path.startswith("/static"):
+    # iter-56: /spa 静态资源放行 (SPA 页面加载后才能 auth-token 自举,
+    # 与 / 同一信任假设)
+    if _mesh_auth_enabled and path not in _AUTH_WHITELIST and not path.startswith("/static") \
+            and not path.startswith("/spa"):
         from .auth import verify_token
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):

@@ -4903,5 +4903,61 @@ class TestIter55MultiHostHardening:
         assert created == [], "已有 runtime 不重复创建"
 
 
+class TestIter56Spa:
+    """iter-56 补强#4 F5.1: React SPA 挂载与认证白名单。"""
+
+    @staticmethod
+    def _spa_dir() -> Path:
+        return Path(__file__).parent.parent / "lan_mesh" / "web" / "static" / "spa"
+
+    def test_spa_index_and_assets_served(self):
+        """SPA 构建产物可经 /spa 静态托管 (index.html + assets)。"""
+        from fastapi import FastAPI
+        from fastapi.staticfiles import StaticFiles
+        from fastapi.testclient import TestClient
+        spa_dir = self._spa_dir()
+        assert (spa_dir / "index.html").is_file(), "SPA 构建产物存在"
+        app = FastAPI()
+        app.mount("/spa", StaticFiles(directory=str(spa_dir), html=True),
+                  name="spa")
+        client = TestClient(app)
+        r = client.get("/spa/")
+        assert r.status_code == 200
+        assert '<div id="root">' in r.text, "SPA 入口 HTML"
+        js_files = [p.name for p in spa_dir.glob("assets/*.js")]
+        assert js_files, "存在 JS 产物"
+        r2 = client.get(f"/spa/assets/{js_files[0]}")
+        assert r2.status_code == 200
+        assert "javascript" in r2.headers["content-type"]
+
+    def test_spa_whitelisted_under_auth(self, monkeypatch):
+        """auth 开启时 /spa 免认证 (SPA 页面加载后才能 auth-token 自举)。"""
+        import lan_mesh.station_routes_common as common
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        monkeypatch.setattr(common, "_mesh_auth_enabled", True)
+        monkeypatch.setattr(common, "_mesh_auth_token", "secret-tk")
+        app = FastAPI()
+        app.middleware("http")(common.api_guard_middleware)
+
+        @app.get("/spa/")
+        def _spa():
+            return {"html": "ok"}
+
+        @app.get("/spa/assets/app.js")
+        def _asset():
+            return {"js": "ok"}
+
+        @app.get("/api/tasks")
+        def _tasks():
+            return {"tasks": []}
+
+        client = TestClient(app)
+        assert client.get("/spa/").status_code == 200
+        assert client.get("/spa/assets/app.js").status_code == 200
+        # 其余 API 路径仍要求 token
+        assert client.get("/api/tasks").status_code == 401
+
+
 
 

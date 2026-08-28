@@ -2396,6 +2396,12 @@ class StationController:
         if STATIC_DIR.is_dir():
             app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+        # iter-56 (补强#4 F5.1): React SPA 挂载 (/spa, hash 路由无需 fallback)
+        spa_dir = STATIC_DIR / "spa"
+        if (spa_dir / "index.html").is_file():
+            app.mount("/spa", StaticFiles(directory=str(spa_dir), html=True),
+                      name="spa")
+
         # Web UI 仪表盘
         @app.get("/", response_class=HTMLResponse)
         async def dashboard():

@@ -233,7 +233,19 @@ def _check_web_template() -> Optional[CheckResult]:
     if template.is_file():
         size = template.stat().st_size
         return CheckResult("Web UI 模板", True, f"{template} ({size} bytes)")
-    return CheckResult("Web UI 模板", False, f"未找到: {template}", critical=False)
+    return CheckResult("Web UI 模板", False, "dashboard.html 缺失",
+                       "git 拉取后应包含 lan_mesh/web/templates/dashboard.html")
+
+
+def _check_spa_bundle() -> Optional[CheckResult]:
+    """iter-56: 检查 React SPA 构建产物 (/spa, 缺产物时仅提示不阻断)。"""
+    spa_index = (Path(__file__).parent / "web" / "static" / "spa" / "index.html")
+    if spa_index.is_file():
+        return CheckResult("Web UI SPA", True,
+                           f"{spa_index.parent.name} ({spa_index.stat().st_size} bytes)")
+    return CheckResult("Web UI SPA", False,
+                       "构建产物缺失 (webui/ 目录 npm run build 生成)",
+                       "旧版仪表盘不受影响; SPA 需在 webui/ 下执行 npm run build")
 
 
 def _check_cli_agents() -> CheckResult:
@@ -299,6 +311,8 @@ def run_preflight(
     if role == "secretary":
         checks.append(_check_db_path(cfg))
         checks.append(_check_web_template())
+        # iter-56: SPA 构建产物检查 (缺产物仅提示, 不阻断)
+        checks.append(_check_spa_bundle())
 
     # CLI Agent 检测 (所有角色通用, 非致命)
     checks.append(_check_cli_agents())

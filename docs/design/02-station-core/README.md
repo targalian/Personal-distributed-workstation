@@ -149,7 +149,9 @@ WebSocket 通道。
 **设计要点**:
 - 所有组件经 `controller` 可变引用访问，支持免重启激活/停用 Secretary
 - `_AUTH_WHITELIST`: 免认证端点白名单（含 `/` 仪表盘 HTML 入口 —
-  auth 开启时页面必须先加载才能执行 auth-token 自举; 注册引导/版本查询/secrets 拉取）
+  auth 开启时页面必须先加载才能执行 auth-token 自举; 注册引导/版本查询/secrets 拉取;
+  iter-56 起含 `/spa` React SPA 静态资源 — 与 `/` 同一信任假设, 页面自举后
+  apiFetch 再取 auth-token）
 - mesh 认证态与 token 访问器 `get_mesh_auth_token()` 位于 common
   (原闭包全局迁移, 避免跨模块引用失效)
 - station_api.py 兼容再导出 common 的中间件/工具，station_controller /
@@ -248,6 +250,7 @@ agent_runtime.execute()
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-56 | F5.1 React SPA (补强#4): /spa 挂载 StaticFiles(html=True) + 认证白名单放行 /spa 前缀 + preflight _check_spa_bundle; 三页面 (Station 总览/任务列表/DAG 编辑器) 数据链路 Browser 实测通过 (UI-049) |
 | 2026-08-29 | iter-55 | 多机实测加固 (补强#3): _load_model_resources 启动预加载模型池 (让位主机 Key 就绪); _local_start_pm/_local_resume_pm 惰性初始化 Worker AgentRuntime; 双实例隔离跨机链路实测通过 |
 | 2026-08-28 | iter-54 | 日志容量修剪 (补强#2): Database.prune_logs (llm_call_log/chat_history/resource_usage_log 仅删已上报/progress_reports/heartbeat_log 固定 24h) + vacuum; _prune_logs_if_due 节流接入 _prune_loop; POST /api/runtime/logs/prune 手动端点 |
 | 2026-08-28 | iter-53 | PM 断点恢复: pm_snapshots 表 + save_pm_snapshot CRUD; _local_resume_pm + _recover_stale_tasks 快照自动续跑; /api/pm/{id}/snapshot 三端点 + POST /api/tasks/{id}/resume 恢复端点 |

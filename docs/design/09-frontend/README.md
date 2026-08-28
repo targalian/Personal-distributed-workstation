@@ -1,14 +1,16 @@
 # 09 Web 前端
 
 单文件深色仪表盘，多 Tab 布局，与 station_api 的 REST/WebSocket 对接。
+iter-56 (F5.1) 起新增 React SPA 新版（webui/），与旧版仪表盘并存演进。
 
 ## 模块清单
 
 <!-- AUTO:module-list -->
 | 文件/目录 | 职责一句话 |
 |---|---|
-| lan_mesh/web/static/ | CSS/JS 静态资源 |
+| lan_mesh/web/static/ | CSS/JS 静态资源 (含 spa/ React 构建产物) |
 | lan_mesh/web/templates/dashboard.html | Station Web 控制台 (10 Tab, 含运行时性能) |
+| webui/ | React SPA 源码 (Vite+TS+xyflow, 构建产物 → web/static/spa/) |
 <!-- /AUTO:module-list -->
 ---
 
@@ -70,6 +72,32 @@
 
 **前端已知坑**: 秘书回复双渲染问题（历史修复）、删除任务后需主动刷新列表。
 
+## React SPA 新版 — webui/ (iter-56, F5.1)
+
+**技术栈**: Vite 5 + React 18 + TypeScript 5.6 + @xyflow/react 12（DAG 画布）。
+
+**挂载**: 构建产物输出到 `lan_mesh/web/static/spa/`，服务端
+`app.mount("/spa", StaticFiles(html=True))` 静态托管；hash 路由
+（`#/station` `#/tasks` `#/dag[/:taskId]`）免服务端 fallback 配置；
+`/spa` 路径加入 `station_routes_common` 认证白名单放行。
+
+**认证**: `GET /api/station/auth-token` → `localStorage('lan_mesh_token')` →
+`apiFetch` 自动注入 Bearer（与旧版 dashboard 同模式）。
+
+**三页面**:
+- Station 总览（`StationPage`）: `/api/health` 轮询 + 健康徽章
+- 任务列表（`TasksPage`）: `/api/tasks` + WS `task_updated` 300ms 防抖刷新，
+  7 项状态筛选 + 状态色徽章 + 行内「DAG」跳转 `#/dag/{taskId}`
+- DAG 编辑器（`DagEditorPage`）: `GET /api/tasks/{id}/graph` 加载渲染
+  （自定义节点: 状态色边框 + 圆点 + skill 标签），加节点/连线后
+  `PUT /api/tasks/{id}/graph` 保存（仅 pending 可编辑 + 环检测拒绝）
+
+**入口**: 旧版 dashboard 顶栏「⚛️ SPA 新版」按钮新窗口打开 `/spa/`；
+preflight `_check_spa_bundle` 检查构建产物（缺失仅提示不阻断）。
+
+**开发**: `cd webui && npm run dev`（vite proxy `/api` `/ws` → 127.0.0.1:45500），
+改动后 `npm run build` 重新生成产物（产物入库）。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
@@ -89,3 +117,4 @@
 | 2026-08-28 | iter-50 | 错误面板增 🛡 自动自愈守护状态条 (已启用/已禁用 + 周期/冷却/扫描轮次 + 🔍 立即检查按钮)，UI-046 实测通过 |
 | 2026-08-28 | iter-51 | DAG 图编辑面板保存恢复 (saveDAG 接 PUT /api/tasks/{tid}/graph 回写 + 新节点 st- 前缀)，UI-047 实测通过 |
 | 2026-08-28 | iter-52 | 任务卡片成本预估徽章 (💰 token 徽章 + 预算适配状态小徽章) + cost_budget_warning toast 实时告警，UI-048 实测通过 |
+| 2026-08-29 | iter-56 | React SPA 新版 (webui/: Vite+React+TS+xyflow, /spa 挂载 + hash 路由 + 认证白名单; 三页面: Station 总览/任务列表/DAG 编辑器; 旧版顶栏 SPA 入口)，UI-049 实测通过 |

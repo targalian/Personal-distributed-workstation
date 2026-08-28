@@ -105,8 +105,11 @@ CPU/内存/磁盘综合得分（0~100）→ S/A/B/C/D 五级 + 可读摘要。
 
 ## preflight.py — 启动自检
 
-11 项前置检查（Python 版本/依赖/配置/目录/端口/网络/DB/Web UI 模板/
-CLI Agent 后端），打印检查报告，失败即终止启动（CLI Agent 检测非致命）。
+12 项前置检查（Python 版本/依赖/配置/目录/端口/网络/DB/Web UI 模板/
+Web UI SPA/CLI Agent 后端），打印检查报告，失败即终止启动（CLI Agent
+检测非致命）。iter-56 起新增 `_check_spa_bundle`（仅 secretary 角色）:
+检查 `web/static/spa/index.html` 构建产物，缺失仅提示不阻断
+（旧版仪表盘不受影响）。
 
 ## api.py — Worker 路由装配层 (iter-31 拆分后)
 

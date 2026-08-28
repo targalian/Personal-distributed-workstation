@@ -1,4 +1,4 @@
-# start_workstation.ps1 - 一键启动工作站
+﻿# start_workstation.ps1 - 一键启动工作站
 # 用法: .\scripts\start_workstation.ps1 [-Port 45470] [-Name "控制中心"] [-WithWorker]
 # 功能: 检查环境 → 安装依赖 → 复制配置 → 启动 Station Director (+可选 Worker)
 
