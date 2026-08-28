@@ -99,7 +99,8 @@ _AUTH_WHITELIST = {"/", "/health", "/api/health",
                    "/api/register", "/api/heartbeat",
                    "/ws", "/ws/worker",
                    "/api/station/auth-token", "/api/station/bootstrap-token",
-                   "/api/version/upgrade-notice", "/api/secrets/fetch"}
+                   "/api/version/upgrade-notice", "/api/secrets/fetch",
+                   "/sw.js"}  # iter-62: SW 注册请求由浏览器发起不带 Authorization 头
 
 
 # Phase 0: 节点间 mesh token 认证 (P2 #5 起默认启用, config.yaml security.auth_enabled 可关)

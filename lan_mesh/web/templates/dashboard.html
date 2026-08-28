@@ -191,8 +191,8 @@
   }
   /* 桌面端隐藏底部导航 */
   @media(min-width:641px){.mobile-nav{display:none}}
-  /* 底部导航默认隐藏（仅移动端显示） */
-  .mobile-nav{display:none}
+  /* iter-62 缺陷修复: 删除下方冗余的 .mobile-nav{display:none} 普通规则,
+     它与 640px 断点内的 display:flex 同特异性且位于其后, 会错误覆盖移动端显示 */
   /* 表格包装器 */
   .table-wrap{width:100%}
   /* ── 聊天面板 ── */
@@ -3170,6 +3170,14 @@ document.addEventListener('DOMContentLoaded',()=>{
   // 安全网: 选举窗口(5s)结束后复查 Secretary 状态, 防止 WS 事件丢失
   setTimeout(checkSecretaryState, 6000);
 });
+
+// ── PWA Service Worker 注册 (iter-62 F5.4 移动端) ──
+// SW 仅在 https 或 localhost 可用; 注册失败静默降级 (不影响功能)
+if('serviceWorker' in navigator && (location.protocol==='https:'||location.hostname==='localhost'||location.hostname==='127.0.0.1')){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('/sw.js').catch(()=>{/* 静默: 非安全上下文 */});
+  });
+}
 </script>
 </body>
 </html>

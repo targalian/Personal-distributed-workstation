@@ -40,6 +40,9 @@
 23. iter61-plugin-market — F5.3 插件系统 (第三方 Skill 市场): 市场浏览/
     安装白名单复制/安全默认仅 station/体积与 ID 校验/内置冲突拒绝/
     卸载保护与来源追踪 origin 列 (iter-61)
+24. iter62-pwa-mobile — F5.4 移动端 PWA: Service Worker 应用壳缓存
+    (network-first 导航/API 不缓存/静态 SWR) + /sw.js 根挂载 + 认证
+    白名单放行 + dashboard SW 注册 (iter-62)
 
 运行: pytest tests/ -v
 """
@@ -3963,6 +3966,65 @@ version: "1.0"
         row = db.get_skill("demo-plugin")
         assert row["origin"] == "market"
         assert row["default_access"] == ["station"]  # 扫描不覆盖安全默认
+
+
+class TestIter62PwaMobile:
+    """iter-62 (F5.4 移动端 PWA): Service Worker 离线壳/缓存策略/挂载与白名单。"""
+
+    def test_sw_file_valid(self):
+        """sw.js 存在且含核心生命周期与缓存策略逻辑。"""
+        from lan_mesh.station_controller import STATIC_DIR
+        sw = STATIC_DIR / "sw.js"
+        assert sw.is_file()
+        content = sw.read_text(encoding="utf-8")
+        assert "CACHE_NAME" in content
+        assert "install" in content and "activate" in content and "fetch" in content
+        assert "skipWaiting" in content and "clients.claim" in content
+        # API 不缓存: /api/ 路径直接透传 (无 respondWith)
+        assert "startsWith('/api/')" in content
+        # 导航 network-first 回退缓存壳
+        assert "mode === 'navigate'" in content
+        assert "caches.match('/')" in content
+        # 静态资源 stale-while-revalidate
+        assert "caches.match(event.request)" in content
+
+    def test_manifest_valid(self):
+        """manifest.json PWA 声明完整 (名称/入口/独立窗口/主题色)。"""
+        import json
+        from lan_mesh.station_controller import STATIC_DIR
+        m = json.loads((STATIC_DIR / "manifest.json").read_text(encoding="utf-8"))
+        assert m["name"] and m["short_name"]
+        assert m["start_url"] == "/" and m["display"] == "standalone"
+        assert m["background_color"] and m["theme_color"]
+        assert m["icons"]  # 安装图标
+
+    def test_dashboard_pwa_refs(self):
+        """dashboard 引用 manifest + 注册 SW (仅 https/localhost 安全上下文)。"""
+        from lan_mesh.station_controller import TEMPLATES_DIR
+        html = (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
+        assert 'rel="manifest" href="/static/manifest.json"' in html
+        assert "navigator.serviceWorker.register('/sw.js')" in html
+        assert "location.hostname==='127.0.0.1'" in html  # 安全上下文判定
+
+    def test_sw_auth_whitelisted(self):
+        """/sw.js 在认证白名单 (SW 注册请求不带 Authorization 头)。"""
+        from lan_mesh.station_routes_common import _AUTH_WHITELIST
+        assert "/sw.js" in _AUTH_WHITELIST
+
+    def test_mobile_nav_css_layering(self):
+        """iter-62 缺陷回归: .mobile-nav 的 display:none 仅出现在 min-width:641px
+        规则内; 若存在同特异性的普通 display:none 规则会覆盖 640px 断点内的
+        display:flex, 导致移动端底部导航不显示 (CDP 真实视口实测发现)。"""
+        from lan_mesh.station_controller import TEMPLATES_DIR
+        html = (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
+        # 640px 断点内必须有 display:flex 显示规则
+        mq640 = html.split("@media(max-width:640px){", 1)[1].split("@media(min-width", 1)[0]
+        assert ".mobile-nav{display:flex" in mq640
+        # display:none 只允许在 min-width:641px 规则中出现一次 (剔除注释文字)
+        import re
+        no_comments = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+        assert no_comments.count(".mobile-nav{display:none}") == 1
+        assert "@media(min-width:641px){.mobile-nav{display:none}}" in html
 
 
 class TestDagEdit:

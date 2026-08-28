@@ -31,7 +31,7 @@ from typing import Optional, Set
 
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import AppConfig, get_db_path, load_model_pool
@@ -2614,6 +2614,17 @@ class StationController:
                     content=html_path.read_text(encoding="utf-8"),
                     headers={"Cache-Control": "no-cache, must-revalidate"})
             return HTMLResponse(content="<h1>LAN Mesh Station Director</h1><p>dashboard.html 未找到</p>")
+
+        # iter-62 (F5.4 移动端 PWA): Service Worker 根路径挂载
+        # (scope 默认 /; SW 注册请求不带 Authorization 头, 认证白名单放行)
+        @app.get("/sw.js")
+        async def service_worker():
+            sw_path = STATIC_DIR / "sw.js"
+            if sw_path.is_file():
+                return FileResponse(
+                    sw_path, media_type="application/javascript",
+                    headers={"Cache-Control": "no-cache, must-revalidate"})
+            return JSONResponse(status_code=404, content={"detail": "sw.js 未找到"})
 
         return app
 

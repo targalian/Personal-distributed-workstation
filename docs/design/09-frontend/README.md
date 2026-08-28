@@ -107,6 +107,34 @@ preflight `_check_spa_bundle` 检查构建产物（缺失仅提示不阻断）�
 **开发**: `cd webui && npm run dev`（vite proxy `/api` `/ws` → 127.0.0.1:45500），
 改动后 `npm run build` 重新生成产物（产物入库）。
 
+## 移动端 PWA — Service Worker (iter-62, F5.4)
+
+**定位**: 免 SDK 的移动端方案（保留 RN/Flutter 选项为后续扩展）：
+manifest.json PWA 声明 + Service Worker 离线壳。
+
+**sw.js** (`lan_mesh/web/static/sw.js`, 缓存名 `lan-mesh-shell-v1`):
+- `install`: `cache.addAll(['/', '/static/manifest.json'])` + skipWaiting
+- `activate`: 清旧缓存 + clients.claim（首装后立即接管）
+- `fetch` 三策略: `/api/` 一律 network-only 不缓存;
+  导航请求 network-first 回退 `caches.match('/')` 离线壳;
+  静态资源 stale-while-revalidate
+
+**挂载与认证**: `/sw.js` 经根路径路由挂载（FileResponse + no-cache 头,
+scope 默认 `/`）; SW 注册请求由浏览器发起不带 Authorization 头,
+故 `/sw.js` 加入 `_AUTH_WHITELIST`。dashboard 在安全上下文
+(https/localhost/127.0.0.1) 才 `navigator.serviceWorker.register('/sw.js')`,
+失败静默降级。
+
+**移动端导航**: 640px 断点隐藏 `.tabs`、显示 `.mobile-nav` 底部导航
+(桌面由 `@media(min-width:641px)` 隐藏)。iter-62 缺陷修复: 曾存在
+普通规则 `.mobile-nav{display:none}` 与断点内 `display:flex` 同特异性且
+靠后 → 覆盖移动端显示; 已删除冗余规则 + 回归测试 `test_mobile_nav_css_layering`。
+
+**验证**: CDP 直连真实验证 7/7 (Edge headless +
+`Network.emulateNetworkConditions` 真实断网离线壳渲染 +
+`Emulation.setDeviceMetricsOverride` 390x844 移动视口底部导航可见),
+截图 temp_resault/x62_offline_real.png + x62_mobile_real.png。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
@@ -128,3 +156,5 @@ preflight `_check_spa_bundle` 检查构建产物（缺失仅提示不阻断）�
 | 2026-08-28 | iter-52 | 任务卡片成本预估徽章 (💰 token 徽章 + 预算适配状态小徽章) + cost_budget_warning toast 实时告警，UI-048 实测通过 |
 | 2026-08-29 | iter-56 | React SPA 新版 (webui/: Vite+React+TS+xyflow, /spa 挂载 + hash 路由 + 认证白名单; 三页面: Station 总览/任务列表/DAG 编辑器; 旧版顶栏 SPA 入口)，UI-049 实测通过 |
 | 2026-08-29 | iter-58 | SPA 多用户权限 (F5.2): 顶栏角色徽章 + 身份切换面板 (用户 token 优先/登录/退出); DAG 编辑器 viewer 与未登录只读; ensureMeshToken 共享 Promise 防竞态，UI-050 实测通过 |
+| 2026-08-29 | iter-61 | 技能库 Tab 插件市场 (F5.3): 🛒 市场按钮 + 弹窗列表 (名称/版本/大小/已装标记); 安装/卸载按钮 + 内置/第三方来源徽标 + 空市场引导，UI-051 实测通过 (含 Toast 重复弹出缺陷修复) |
+| 2026-08-29 | iter-62 | 移动端 PWA (F5.4): sw.js 离线壳三策略 + /sw.js 根路由挂载 + 认证白名单 + SW 注册脚本; 640px 断点底部导航缺陷修复 (CSS 层叠覆盖)，UI-052 CDP 真实断网+移动视口 7/7 实测通过 |
