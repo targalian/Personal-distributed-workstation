@@ -31,6 +31,13 @@ Pydantic 强类型校验，读取 config.yaml 与环境变量，提供全局配�
 Secretary 激活时由 station_controller 读取驱动 `start_stall_watcher`；
 缺省段回退默认值兼容旧配置。
 
+**observability 日志修剪字段** (iter-54, 补强#2): `log_retention_days`
+(日志保留天数, 默认 30, ≤0 禁用修剪) / `log_prune_interval_hours`
+(修剪周期, 小时, 实际最小 1, 默认 24, ≤0 禁用) / `log_vacuum`
+(修剪后执行 VACUUM, 默认 true)；由 station_controller `_prune_loop`
+节流驱动 `Database.prune_logs()` (llm_call_log/chat_history/
+resource_usage_log 仅删已上报/progress_reports/heartbeat_log 固定 24h)。
+
 ## logger.py — 结构化日志
 
 统一格式 `[时间] [级别] [模块] 消息`，控制台 + 文件双输出，
@@ -126,6 +133,7 @@ secretary.py 删除 (P3)，Secretary 端路由由 station_routes_* 承担。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-28 | iter-54 | 日志容量修剪 (补强#2): ObservabilityConfig 增 log_retention_days/log_prune_interval_hours/log_vacuum 三字段 (默认 30 天/24h/开, ≤0 禁用) |
 | 2026-08-27 | iter-43 | config.py 新增 ObservabilityConfig 段 (停滞检查周期/阈值配置化, 缺省回退默认) |
 | 2026-08-27 | iter-44 | error_tracker 闭环接线: 全局事件回调 (每条捕获触发) + 突发告警冷却去重 (按模块独立) |
 | 2026-08-27 | iter-46 | error_tracker 自愈诊断: DIAGNOSIS_RULES 模式规则表 + diagnose() 分组建议 (F4.2 首层) |

@@ -76,6 +76,13 @@ Secretary 超时离线且网络无其他在线 Secretary 时，由 `device_id`
 - 端点: `POST /api/tasks/{task_id}/resume` (手动恢复, 无快照 404/
   冲突 409); `POST|GET|DELETE /api/pm/{pm_id}/snapshot` (快照落库通道)
 
+**日志容量修剪 (iter-54, 补强#2)**:
+- `_prune_logs_if_due()`: `_prune_loop` 每轮节流调用 — 保留期/周期
+  由 `observability.log_retention_days/log_prune_interval_hours` 驱动
+  (默认 30 天/24h, ≤0 禁用), 无论成败推进时间戳防风暴
+- 修剪后按 `log_vacuum` 开关执行 VACUUM 回收磁盘空间
+- 手动端点: `POST /api/runtime/logs/prune?days=` (运维/排查, 1~365 夹取)
+
 **依赖**: discovery, station_director, database, secret_sync, version_sync,
 http_retry, config, event_bus
 
@@ -169,7 +176,8 @@ PM 执行态快照, 断点恢复数据源）等。
 **关键接口**: `upsert_host()` / `list_hosts()` / `on_heartbeat` 相关 /
 `record_usage()` / `insert_llm_call()` / `query_llm_metrics()` /
 `backup()` (P2 #7) / `save_pm_snapshot()` 系列 (iter-53 快照 UPSERT/
-按任务查找/删除, delete_task 级联清理) 等
+按任务查找/删除, delete_task 级联清理) / `prune_logs()` + `vacuum()`
+(iter-54 日志容量修剪, 按保留期清理日志表并回收磁盘空间) 等
 
 ## runtime_trace.py — 运行时追踪与性能审计
 
@@ -229,6 +237,7 @@ agent_runtime.execute()
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-28 | iter-54 | 日志容量修剪 (补强#2): Database.prune_logs (llm_call_log/chat_history/resource_usage_log 仅删已上报/progress_reports/heartbeat_log 固定 24h) + vacuum; _prune_logs_if_due 节流接入 _prune_loop; POST /api/runtime/logs/prune 手动端点 |
 | 2026-08-28 | iter-53 | PM 断点恢复: pm_snapshots 表 + save_pm_snapshot CRUD; _local_resume_pm + _recover_stale_tasks 快照自动续跑; /api/pm/{id}/snapshot 三端点 + POST /api/tasks/{id}/resume 恢复端点 |
 | 2026-08-26 | iter-39 | P3 任务流总览: task_flow_overview 多任务聚合 (末阶段/终态判断/末活动倒序); /api/runtime/task-flow-list 端点; Dashboard 运行时 Tab 总览表 + 一键查瀑布 (UI-037) |
 | 2026-08-26 | iter-40 | P3 任务停滞检测: task_flow_overview 增 idle_ms/stalled (stall_minutes 阈值, 终态免疫, ≤0 禁用); 端点参数透传与夹取 (0~1440); Dashboard 状态列三态 + 红色告警横幅 (UI-038) |

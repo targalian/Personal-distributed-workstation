@@ -23,6 +23,8 @@
     取消启动、新版杀旧接管、更旧退出、dev-reload 同版接管 (E6)
 16. pm-snapshot-resume — PM 执行态快照持久化 + 断点恢复: 快照往返/
     就地恢复/DB CRUD/恢复四场景/快照与 resume 端点/multi 生命周期 (iter-53)
+17. log-pruning — 日志容量修剪: prune_logs 保留期/未上报保留/心跳 24h/
+    VACUUM/手动修剪端点/配置驱动与节流 (iter-54)
 
 运行: pytest tests/ -v
 """
@@ -4474,6 +4476,219 @@ class TestPMMultiLifecycle:
             assert pm.running is False, "聚合收尾后 running 应停止"
         finally:
             pm.running = False
+
+
+class TestLogPruning:
+    """iter-54 补强#2: 日志容量修剪 (保留期/VACUUM/端点/配置节流)。"""
+
+    @staticmethod
+    def _seed_logs(db):
+        """灌入新旧混合数据 (旧 40 天 / 新 1 小时)。"""
+        import time as _time
+        conn = db._get_conn()
+        now = _time.time()
+        old = now - 40 * 86400
+        fresh = now - 3600
+        conn.execute(
+            "INSERT INTO llm_call_log (call_type, model, input_tokens,"
+            " output_tokens, ttft_ms, total_ms, status, task_id, error,"
+            " created_at) VALUES ('chat','m1',10,20,1,2,'ok','t1','',?)", (old,))
+        conn.execute(
+            "INSERT INTO llm_call_log (call_type, model, input_tokens,"
+            " output_tokens, ttft_ms, total_ms, status, task_id, error,"
+            " created_at) VALUES ('chat','m1',10,20,1,2,'ok','t1','',?)", (fresh,))
+        conn.execute(
+            "INSERT INTO chat_history (role, content, action_taken, timestamp)"
+            " VALUES ('user','old','',?)", (old,))
+        conn.execute(
+            "INSERT INTO chat_history (role, content, action_taken, timestamp)"
+            " VALUES ('user','new','',?)", (fresh,))
+        conn.execute(
+            "INSERT INTO resource_usage_log (resource_id, model_id, plan_type,"
+            " input_tokens, output_tokens, cost, created_at, usage_id, reported,"
+            " task_id, project_id) VALUES ('r1','m1','plan',10,20,0,?,'u1',1,'t1','p1')",
+            (old,))
+        conn.execute(
+            "INSERT INTO resource_usage_log (resource_id, model_id, plan_type,"
+            " input_tokens, output_tokens, cost, created_at, usage_id, reported,"
+            " task_id, project_id) VALUES ('r1','m1','plan',10,20,0,?,'u2',0,'t1','p1')",
+            (old,))
+        conn.execute(
+            "INSERT INTO resource_usage_log (resource_id, model_id, plan_type,"
+            " input_tokens, output_tokens, cost, created_at, usage_id, reported,"
+            " task_id, project_id) VALUES ('r1','m1','plan',10,20,0,?,'u3',1,'t1','p1')",
+            (fresh,))
+        conn.execute(
+            "INSERT INTO progress_reports (pm_id, reporter_id, reporter_type,"
+            " task_name, progress, status, message, timestamp)"
+            " VALUES ('pm1','s1','agent','t',50,'running','m',?)", (old,))
+        conn.execute(
+            "INSERT INTO heartbeat_log (device_id, timestamp, cpu_percent,"
+            " memory_percent, disk_percent) VALUES ('d1',?,1,1,1)", (old,))
+        conn.commit()
+
+    def test_prune_logs_expiry_and_retention(self, tmp_path):
+        """prune_logs: 各表删除过期行保留新行, 统计正确。"""
+        from lan_mesh.database import Database
+        db = Database(str(tmp_path / "p.db"))
+        try:
+            self._seed_logs(db)
+            stats = db.prune_logs(retention_days=30)
+            assert stats["llm_call_log"] == 1
+            assert stats["chat_history"] == 1
+            assert stats["resource_usage_log"] == 1
+            assert stats["progress_reports"] == 1
+            assert stats["heartbeat_log"] == 1
+            conn = db._get_conn()
+            assert conn.execute("SELECT COUNT(*) FROM llm_call_log").fetchone()[0] == 1
+            assert conn.execute("SELECT COUNT(*) FROM chat_history").fetchone()[0] == 1
+            assert conn.execute("SELECT COUNT(*) FROM resource_usage_log").fetchone()[0] == 2
+            assert conn.execute("SELECT COUNT(*) FROM progress_reports").fetchone()[0] == 0
+            # 再次修剪幂等 (无过期行)
+            assert sum(db.prune_logs(30).values()) == 0
+        finally:
+            db._local.conn.close()
+
+    def test_prune_unreported_usage_kept(self, tmp_path):
+        """resource_usage_log 未上报 (reported=0) 旧行保留等离线补报。"""
+        from lan_mesh.database import Database
+        db = Database(str(tmp_path / "u.db"))
+        try:
+            self._seed_logs(db)
+            db.prune_logs(retention_days=30)
+            conn = db._get_conn()
+            rows = conn.execute(
+                "SELECT usage_id FROM resource_usage_log ORDER BY usage_id"
+            ).fetchall()
+            ids = [r["usage_id"] for r in rows]
+            assert ids == ["u2", "u3"], ids  # 旧未上报 + 新已上报
+        finally:
+            db._local.conn.close()
+
+    def test_prune_heartbeat_24h_window(self, tmp_path):
+        """心跳固定 24h 窗口: 不随 retention 放宽。"""
+        import time as _time
+        from lan_mesh.database import Database
+        db = Database(str(tmp_path / "h.db"))
+        try:
+            conn = db._get_conn()
+            hb_old = _time.time() - 48 * 3600
+            conn.execute(
+                "INSERT INTO heartbeat_log (device_id, timestamp, cpu_percent,"
+                " memory_percent, disk_percent) VALUES ('d1',?,1,1,1)", (hb_old,))
+            conn.commit()
+            stats = db.prune_logs(retention_days=365)  # 大保留期
+            assert stats["heartbeat_log"] == 1, "心跳仍按 24h 清理"
+        finally:
+            db._local.conn.close()
+
+    def test_vacuum_ok(self, tmp_path):
+        """VACUUM 正常执行不报错。"""
+        from lan_mesh.database import Database
+        db = Database(str(tmp_path / "v.db"))
+        try:
+            self._seed_logs(db)
+            db.prune_logs(retention_days=30)
+            db.vacuum()
+        finally:
+            db._local.conn.close()
+
+    def test_log_prune_endpoint(self, tmp_path):
+        """手动修剪端点 POST /api/runtime/logs/prune 返回统计 + days 夹取。"""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.database import Database
+        from lan_mesh.station_routes_basic import build_basic_routes
+
+        class _Ctl:
+            def __init__(self):
+                self.db = Database(str(tmp_path / "ep.db"))
+                self.state = type("S", (), {
+                    "device_id": "dev-ep", "device_name": "ep",
+                    "api_port": 45470, "ws_clients": set(),
+                    "shared_folder": type("SF", (), {"path": str(tmp_path)})(),
+                })()
+                self.discovery = type("D", (), {"list_devices": lambda *a, **k: []})()
+                self.station_director = type("SD", (), {
+                    "get_resources": lambda *a, **k: [],
+                })()
+
+        ctl = _Ctl()
+        try:
+            self._seed_logs(ctl.db)
+            app = FastAPI()
+            app.include_router(build_basic_routes(ctl))
+            client = TestClient(app)
+            r = client.post("/api/runtime/logs/prune", params={"days": 30})
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["vacuum"] is True
+            assert body["pruned"]["llm_call_log"] == 1
+            assert set(body["pruned"].keys()) == {
+                "llm_call_log", "chat_history", "resource_usage_log",
+                "progress_reports", "heartbeat_log"}
+            # days 夹取: 0 → 1, 999 → 365
+            r2 = client.post("/api/runtime/logs/prune", params={"days": 999})
+            assert r2.status_code == 200
+        finally:
+            ctl.db._local.conn.close()
+
+    def test_observability_log_prune_config(self, tmp_path):
+        """ObservabilityConfig 新字段默认值/自定义解析/缺省回退。"""
+        from lan_mesh.config import AppConfig
+        cfg = AppConfig.model_validate({})
+        assert cfg.observability.log_retention_days == 30.0
+        assert cfg.observability.log_prune_interval_hours == 24.0
+        assert cfg.observability.log_vacuum is True
+        cfg2 = AppConfig.model_validate({"observability": {
+            "log_retention_days": 7, "log_prune_interval_hours": 6,
+            "log_vacuum": False}})
+        assert cfg2.observability.log_retention_days == 7
+        assert cfg2.observability.log_prune_interval_hours == 6
+        assert cfg2.observability.log_vacuum is False
+
+    def test_prune_logs_if_due_throttle(self, tmp_path):
+        """_prune_logs_if_due: 节流间隔/禁用开关/失败推进时间戳防风暴。"""
+        import time
+        from lan_mesh.config import AppConfig
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+
+        class _FakeCtl:
+            def __init__(self):
+                self.cfg = AppConfig.model_validate({})
+                self.db = Database(str(tmp_path / "ctl.db"))
+                self._last_log_prune_ts = 0.0
+
+        ctl = _FakeCtl()
+        try:
+            fn = StationController._prune_logs_if_due
+            # 首次调用: 时间戳为 0 → 立即执行 (prune+vacuum 真实跑)
+            fn(ctl)
+            assert ctl._last_log_prune_ts > 0, "首次执行推进时间戳"
+            ts1 = ctl._last_log_prune_ts
+            # 立即再调: 24h 内节流跳过, 时间戳不变
+            fn(ctl)
+            assert ctl._last_log_prune_ts == ts1, "周期内节流不推进"
+            # 禁用保留期 → no-op 且不推进
+            ctl.cfg.observability.log_retention_days = 0
+            ctl._last_log_prune_ts = 0.0
+            fn(ctl)
+            assert ctl._last_log_prune_ts == 0.0, "禁用时不推进时间戳"
+            # 周期已过 → 再执行
+            ctl.cfg.observability.log_retention_days = 30
+            ctl.cfg.observability.log_prune_interval_hours = 1
+            ctl._last_log_prune_ts = time.time() - 7200
+            fn(ctl)
+            assert ctl._last_log_prune_ts > 0
+            # db 异常 → 异常隔离不抛出, 时间戳已推进防风暴
+            ctl.db = None
+            ctl._last_log_prune_ts = 0.0
+            fn(ctl)  # 不应抛异常 (db None → prune 调用在 try 内)
+            assert ctl._last_log_prune_ts > 0
+        finally:
+            if ctl.db is not None and hasattr(ctl.db._local, "conn"):
+                ctl.db._local.conn.close()
 
 
 

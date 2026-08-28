@@ -181,6 +181,9 @@ class StationController:
         self._last_report_time: float = 0.0
         self._server = None  # uvicorn Server 引用 (dev-reload 优雅重启用)
 
+        # ── iter-54: 日志容量修剪节流 (补强#2) ──
+        self._last_log_prune_ts: float = 0.0
+
         # ── F3.1: 自动扩缩容 ──
         self._autoscale_up_threshold: int = 2    # 队列积压 >= 2 时扩容
         self._autoscale_down_threshold: int = 0  # 队列清空时记录缩容观察
@@ -1510,8 +1513,36 @@ class StationController:
             if self.secretary_active:
                 self._try_periodic_report()
 
+    def _prune_logs_if_due(self):
+        """iter-54: 按观测配置周期修剪日志表并 VACUUM (异常隔离)。
+
+        保留期/周期/开关由 config.yaml observability 段驱动:
+        log_retention_days ≤0 或 log_prune_interval_hours ≤0 禁用修剪。
+        """
+        try:
+            obs = self.cfg.observability
+            retention = float(obs.log_retention_days or 0)
+            interval = max(1.0, float(obs.log_prune_interval_hours or 0)) * 3600
+        except Exception:
+            return
+        if retention <= 0 or interval <= 0:
+            return
+        now = time.time()
+        if now - self._last_log_prune_ts < interval:
+            return
+        # 无论成败都推进时间戳, 避免每 5s 重试风暴
+        self._last_log_prune_ts = now
+        try:
+            stats = self.db.prune_logs(retention)
+            logger.info("[LogPrune] 日志修剪完成: %s", stats)
+            if getattr(obs, "log_vacuum", True):
+                self.db.vacuum()
+                logger.info("[LogPrune] VACUUM 完成")
+        except Exception as e:
+            logger.warning("[LogPrune] 日志修剪异常 (下轮重试): %s", e)
+
     def _prune_loop(self):
-        """定期清理超时离线主机, 触发 F3.3 PM 迁移与 E5 Secretary 接管检查。"""
+        """定期清理超时离线主机, 触发 F3.3 PM 迁移与 E5 Secretary 接管检查; iter-54 附带日志容量修剪。"""
         while self._running:
             time.sleep(PRUNE_INTERVAL_SECS)
             try:
@@ -1519,6 +1550,7 @@ class StationController:
                 if gone_ids:
                     self._migrate_orphaned_pms(gone_ids)
                 self._secretary_failover_check()
+                self._prune_logs_if_due()
             except Exception as e:
                 logger.error("清理离线主机异常: %s", e)
 

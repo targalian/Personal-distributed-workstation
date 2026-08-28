@@ -1964,6 +1964,50 @@ class Database:
         """, (int(limit),)).fetchall()
         return [dict(r) for r in rows]
 
+    # ── iter-54: 日志容量修剪 (补强#2) ──────────────────────────
+
+    def prune_logs(self, retention_days: float = 30.0) -> dict:
+        """iter-54: 按保留期修剪日志表, 防止 DB 无限增长 (补强#2)。
+
+        每表删除超过保留期的历史行; resource_usage_log 仅删已上报
+        (reported=1) 的行, 未上报的保留给 R3 上报线程补报。
+        返回各表删除行数统计。
+        """
+        cutoff = time.time() - float(retention_days) * 86400
+        conn = self._get_conn()
+        stats: dict = {}
+
+        # 每次 LLM 调用一行, 增长最快; 审计查询最大窗口 7 天 (metrics 端点夹取)
+        stats["llm_call_log"] = conn.execute(
+            "DELETE FROM llm_call_log WHERE created_at < ?", (cutoff,)
+        ).rowcount
+        # 聊天记录 (role/content/timestamp)
+        stats["chat_history"] = conn.execute(
+            "DELETE FROM chat_history WHERE timestamp < ?", (cutoff,)
+        ).rowcount
+        # 用量日志: 只删已上报行, 未上报 (reported=0) 保留等离线补报
+        stats["resource_usage_log"] = conn.execute(
+            "DELETE FROM resource_usage_log WHERE created_at < ? AND reported = 1",
+            (cutoff,),
+        ).rowcount
+        # PM 进度报告 (查询仅取最近 50 条)
+        stats["progress_reports"] = conn.execute(
+            "DELETE FROM progress_reports WHERE timestamp < ?", (cutoff,)
+        ).rowcount
+        # 心跳历史固定 24h 保留 (与 cleanup_old_heartbeats 同一语义)
+        hb_cutoff = time.time() - 24 * 3600
+        stats["heartbeat_log"] = conn.execute(
+            "DELETE FROM heartbeat_log WHERE timestamp < ?", (hb_cutoff,)
+        ).rowcount
+        conn.commit()
+        return stats
+
+    def vacuum(self) -> None:
+        """iter-54: VACUUM 回收删除后未释放的磁盘空间 (修剪周期内调用)。"""
+        conn = self._get_conn()
+        conn.commit()  # 提交本线程挂起事务, 避免 VACUUM 死锁
+        conn.execute("VACUUM")
+
     # ── iter-47: 错误记录持久化 (F1.4) ──────────────────────────
 
     def save_error_record(self, record: dict) -> None:

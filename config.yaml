@@ -49,6 +49,11 @@ observability:
   auto_heal_enabled: false   # 是否启用自动自愈 (打开后由守护线程周期执行)
   auto_heal_interval: 300    # 自动自愈扫描周期 (秒, 实际最小 30)
   auto_heal_cooldown: 600    # 同类别动作冷却期 (秒), 防执行风暴
+  # 日志容量修剪 (iter-54, 补强#2): 按保留期清理日志表 (llm_call_log/chat_history/
+  # resource_usage_log/progress_reports/heartbeat_log), 防止 DB 无限增长
+  log_retention_days: 30       # 日志保留天数, 0 或负数 = 禁用修剪
+  log_prune_interval_hours: 24 # 修剪周期 (小时, 实际最小 1), 0 或负数 = 禁用
+  log_vacuum: true             # 修剪后执行 VACUUM 回收磁盘空间
 
 # 安全配置
 security:

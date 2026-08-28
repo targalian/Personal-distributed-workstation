@@ -111,12 +111,15 @@ class BotConfig(BaseModel):
 
 
 class ObservabilityConfig(BaseModel):
-    """可观测性配置 (iter-43: 任务停滞检测参数配置化; iter-50: 自动自愈守护)。"""
+    """可观测性配置 (iter-43: 任务停滞检测参数配置化; iter-50: 自动自愈守护; iter-54: 日志容量修剪)。"""
     stall_check_interval: float = 60.0   # 停滞检查周期 (秒, 实际最小 10)
     stall_minutes: float = 30.0          # 停滞判定阈值 (分钟), ≤0 禁用检测与告警
     auto_heal_enabled: bool = False      # 自动自愈守护开关 (默认关, 需手动开启)
     auto_heal_interval: float = 300.0    # 自动自愈扫描周期 (秒, 实际最小 30)
     auto_heal_cooldown: float = 600.0    # 同类别动作冷却期 (秒), 防执行风暴
+    log_retention_days: float = 30.0     # 日志表保留天数 (llm_call_log/chat_history 等), ≤0 禁用修剪
+    log_prune_interval_hours: float = 24.0  # 日志修剪周期 (小时, 实际最小 1), ≤0 禁用
+    log_vacuum: bool = True              # 修剪后执行 VACUUM 回收磁盘空间
 
 
 class AppConfig(BaseModel):

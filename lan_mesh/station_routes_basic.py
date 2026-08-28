@@ -697,4 +697,22 @@ def build_basic_routes(controller) -> APIRouter:
         from .runtime_trace import check_stall_alerts
         return {"pushed": check_stall_alerts()}
 
+    @router.post("/api/runtime/logs/prune")
+    async def runtime_logs_prune(days: float = 30.0):
+        """iter-54: 手动触发日志容量修剪 (补强#2, 运维/排查用)。
+
+        days: 保留天数 (1~365), 仅删超过保留期的历史行;
+        resource_usage_log 未上报行保留等离线补报; 修剪后执行 VACUUM。
+        返回各表删除行数统计与 vacuum 结果。
+        """
+        days = max(1.0, min(days, 365.0))
+        stats = db.prune_logs(retention_days=days)
+        vacuum_ok = True
+        try:
+            db.vacuum()
+        except Exception as e:  # VACUUM 失败不阻断修剪结果返回
+            vacuum_ok = False
+            logger.warning("[LogPrune] 手动 VACUUM 失败: %s", e)
+        return {"pruned": stats, "vacuum": vacuum_ok}
+
     return router
