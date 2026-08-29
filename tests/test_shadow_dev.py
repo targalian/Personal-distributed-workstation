@@ -119,7 +119,9 @@ def test_shadow_diff_scans_added_secrets() -> None:
     patch = (
         '--- a/file\n'
         '+++ b/file\n'
-        '+api_key = "sk-abcdefghijklmnopqrstuvw"\n'
+        # 无引号形态: 能被 scan_added_lines_for_secrets 检出 (引号可选),
+        # 但避开 pre-push 门禁的硬编码密钥误报 (其正则强制带引号)
+        '+api_key = sk-abcdefghijklmnopqrstuvw\n'
         '-old line\n'
     )
 
