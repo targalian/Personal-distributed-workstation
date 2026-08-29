@@ -312,6 +312,31 @@ def build_basic_routes(controller) -> APIRouter:
             "hosts": hosts,
         }
 
+    @router.post("/api/federation/tasks/forward")
+    async def federation_task_forward(request: Request):
+        """F3.4 (iter-65): 联邦任务委托入口 — 对端 Secretary 提交任务本网段执行。
+
+        对端全权接管 (本网段选站/执行/交付), 不回调来源侧。
+        mesh token 认证由 api_guard 中间件完成。
+        """
+        payload = await request.json()
+        task_data = payload.get("task_data") or {}
+        forwarded_from = payload.get("forwarded_from", "")
+        created_by = (f"federation:{forwarded_from[:8]}" if forwarded_from
+                      else "federation")
+        # iter-65 防环: 委托任务的 _federation_relay 标记透传给选站 (跳数上限 1)
+        fed_relay = bool((task_data.get("input_data") or {}).get("_federation_relay"))
+        result = controller.submit_task_from_chat(
+            name=task_data.get("name", "联邦任务"),
+            description=task_data.get("description", ""),
+            created_by=created_by,
+            priority=(task_data.get("input_data") or {}).get("_priority", "normal"),
+            fed_relay=fed_relay,
+        )
+        logger.info("联邦委托任务入口: %s (来自 %s)",
+                    result.get("task_id", ""), forwarded_from[:8])
+        return {"ok": True, "task_id": result.get("task_id", "")}
+
     # ── 用户管理 (iter-63 团队场景深化) ─────────────────────
     # 写端点经 api_guard 角色检查 (管理员路径 /api/station/ 仅 boss 可写),
     # 读端点全角色放行但仅 boss 可见 token 尾 4 位快照。

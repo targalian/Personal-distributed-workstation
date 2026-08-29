@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "last_run": "2026-08-29T13:53:19+08:00",
-  "current_phase": "iter-64-federation",
+  "last_run": "2026-08-29T18:00:00+08:00",
+  "current_phase": "iter-65-fed-forward",
   "phase_status": "completed",
   "completed": [
     "F1.1",
@@ -73,7 +73,8 @@
     "iter-61-plugin-market",
     "iter-62-pwa-mobile",
     "iter-63-user-admin",
-    "iter-64-federation"
+    "iter-64-federation",
+    "iter-65-federation-forward"
   ],
   "failed": [],
   "blocked": [],
@@ -81,8 +82,8 @@
     "每次发布/推送后同步更新 VERSION.json 保持版本记录与实际代码一致",
     "代码设计变更时同步 docs/design 对应功能域文档 (docs-sync skill + sync_docs.py 机制, pre-push 第 8/9 项强制)"
   ],
-  "iteration_count": 64,
-  "total_files_modified": 294,
+  "iteration_count": 65,
+  "total_files_modified": 299,
   "last_error": "",
-  "notes": "iter-64: F3.4 跨网段多 Secretary 联邦 (发现层) — 静态 peer 配置 + /api/federation/info + 联邦轮询同步 (source=fed) + 选举仅限本网段 + 离线检测 + 🌐 徽标; 专项 8/8 + 真机双实例 10/10 + Browser 6/6 (UI-054) + 回归 348 passed; 遗留: 任务跨网段转发 (iter-65)"
+  "notes": "iter-65: F3.4 遗留 联邦任务跨网段转发 — 选站分层 (lan 优先/fed 兜底限 Secretary) + POST /api/federation/tasks/forward 委托端点 + forwarded 徽标 + 联邦防环 (fed_relay 参数 + _federation_relay 标记 + 跳数上限 1); 真机验证修复 2 个真实 bug (http_post 模块级 NameError 静默损坏远程派发; 联邦对端 ip 被自身报告覆盖); 专项 9/9 + 真机双实例 8/8 (含反向委托防环) + Browser UI-055 实测通过 + 回归 357 passed; 附带恢复 test_checklist.csv 54 行历史数据 (iter-64 上库截断事故)"
 }

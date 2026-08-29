@@ -1083,7 +1083,9 @@ function renderTasks(){
   grid.innerHTML=tasks.map(t=>{
     const subs=t.subtasks||[];const sc=subs.length;const done=subs.filter(s=>s.status==='completed').length;
     const pct=sc?Math.round(done/sc*100):(t.status==='completed'?100:0);
-    const c=t.status==='completed'?'idle':t.status==='failed'?'archived':t.status==='interrupted'?'archived':'busy';
+    const c=t.status==='completed'?'idle':t.status==='failed'?'archived':t.status==='interrupted'?'archived':t.status==='forwarded'?'suspended':'busy';
+    // iter-65: 联邦委托徽标 — 任务已转发对端 Secretary 执行
+    const fwdBadge=t.status==='forwarded'?`<span class="badge suspended" style="margin-left:4px" title="已委托联邦对端执行">↗ 联邦转发</span>`:'';
     const pmInfo=t.pm_agent_id?` | 🧑‍💼 PM: ${esc(t.pm_agent_id.slice(0,12))}`:'';
     // iter-52: 成本感知调度 — 预估 token + 预算适配徽章
     const ce=(t.input_data&&t.input_data._cost_estimate)||null;
@@ -1098,7 +1100,7 @@ function renderTasks(){
     const hasDelivery=t.output_data&&t.output_data._delivery;
     const deliveryBadge=hasDelivery?`<span class="badge" style="background:${t.output_data._delivery.accepted===true?'var(--green)':t.output_data._delivery.accepted===false?'#e5533c':'var(--yellow)'};color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">${t.output_data._delivery.accepted===true?'✅ 已验收':t.output_data._delivery.accepted===false?'❌ 已退回':'📦 待验收'}</span>`:'';
     return `<div class="card task-card" onclick="toggleTaskExpand(this)">
-      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span>${deliveryBadge}</div></div>
+      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span>${fwdBadge}${deliveryBadge}</div></div>
       <div class="card-meta">${esc(t.description||'-')}<br>📊 ${done}/${sc} 子任务 (${pct}%) ${projName?'| 📁 '+esc(projName):''}${pmInfo}${costBadge}</div>
       <div class="pbar"><div class="pfill ${pct>=100?'low':'mid'}" style="width:${pct}%"></div></div>
       <div class="task-expand">${subRows||'<div class="subtask-row" style="color:var(--dim)">无子任务</div>'}

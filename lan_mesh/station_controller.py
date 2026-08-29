@@ -53,6 +53,10 @@ from .api import create_worker_router
 from .skill_registry import SkillRegistry
 from .bot_gateway import BotGateway, BotChannel
 from .cloud_sync import CloudSyncManager
+# 节点间 HTTP 调用 (iter-65 修复: 模块级导入, 供 submit_task_from_chat/
+# _federation_forward_task/cancel_task/pause_task 等方法全局名引用;
+# 此前仅方法内导入, 模块级调用会 NameError 被 except 静默吞掉)
+from .http_retry import http_post
 
 
 # ── Web UI 模板路径 ─────────────────────────────────────────────
@@ -914,6 +918,8 @@ class StationController:
         for hd in (info.get("hosts") or []):
             if hd.get("device_id") == self.state.device_id:
                 continue  # 不回写自己
+            if hd.get("device_id") == info.get("device_id"):
+                continue  # iter-65 修复: 对端自身已按 peer.host 入库, 防被报告 ip 覆盖
             try:
                 records.append(HostRecord(
                     device_id=hd.get("device_id", ""),
@@ -981,7 +987,8 @@ class StationController:
                 return
 
     def submit_task_from_chat(self, name: str, description: str, created_by: str = "secretary",
-                              priority: str = "normal") -> dict:
+                              priority: str = "normal",
+                              fed_relay: bool = False) -> dict:
         """从秘书对话直接提交任务并分配 PM Agent。
 
         与 station_api.submit_task() 逻辑一致, 但同步执行。
@@ -989,6 +996,9 @@ class StationController:
 
         Args:
             priority: 优先级 (low / normal / high / urgent)
+            fed_relay: iter-65 联邦防环 — 本任务已是跨网段委托任务
+                (对端转来), 本侧选站再命中联邦主机时不再回传,
+                直接失败终止 (防 A↔B 互相委托死循环)
         """
         from .protocol import Task, PMAgent
 
@@ -1002,6 +1012,9 @@ class StationController:
         # 优化13: 记录优先级到 input_data
         task.input_data = task.input_data or {}
         task.input_data["_priority"] = priority
+        # iter-65: 联邦防环标记落盘 (审计可见)
+        if fed_relay:
+            task.input_data["_federation_relay"] = True
         # F4.4 (iter-52): 成本感知调度 — 预算预估 + 适配检查 (异常静默, 不阻断)
         try:
             from .budget_advisor import build_task_cost_estimate
@@ -1038,7 +1051,7 @@ class StationController:
         except Exception:
             pass
 
-        # 选择在线 work_station (优化13: 评级 + 负载感知)
+        # 选择在线 work_station (优化13: 评级 + 负载感知; iter-65: lan 优先 fed 兜底)
         hosts = self.db.list_hosts()
         online_hosts = [h for h in hosts if h.online and h.device_id != self.state.device_id]
         if not online_hosts:
@@ -1050,23 +1063,8 @@ class StationController:
             self.db.save_task(task)
             return task.to_dict()
 
-        # 优化13: 负载感知排序 — 评级优先, 同评级选 PM 数量少的
-        tier_order = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "": 0}
-        pm_agents = self.db.list_pm_agents()
-        # 统计每台主机上的活跃 PM 数量
-        host_pm_count: dict[str, int] = {}
-        for pm in pm_agents:
-            if pm.status in ("planning", "executing", "monitoring", "awaiting_input"):
-                host_pm_count[pm.device_id] = host_pm_count.get(pm.device_id, 0) + 1
-
-        def _host_sort_key(h):
-            tier = tier_order.get(h.rating_tier, 0)
-            load = host_pm_count.get(h.device_id, 0)
-            # 先按评级降序, 再按负载升序
-            return (-tier, load)
-
-        online_hosts.sort(key=_host_sort_key)
-        target_host = online_hosts[0]
+        # iter-65 (F3.4 联邦任务转发): 选站分层 — 本网段优先, 联邦兜底
+        target_host = self._pick_task_host(online_hosts)
 
         # 构造 Secretary URL: 本机派发用 localhost; 远程派发在回退分支重建可达地址
         secretary_url = f"http://127.0.0.1:{self.state.api_port}"
@@ -1110,6 +1108,20 @@ class StationController:
                 return task.to_dict()
             else:
                 logger.warning("本机 PM 启动失败: %s, 尝试远程派发", result.get('message'))
+
+        # iter-65 (F3.4 联邦任务转发): 目标为联邦主机时经对端 Secretary 委托执行
+        # (网段内主机 IP 跨网段不可达; 对端全权接管, 本侧标记 forwarded)
+        if target_host and getattr(target_host, "source", "lan") == "fed":
+            if fed_relay:
+                # 防环: 委托任务不再回传 (跳数上限 1), 本侧无法执行直接失败
+                task.status = "failed"
+                task.output_data = {"error": "联邦委托已达跳数上限 (防环), 本侧暂无法执行"}
+                self.db.save_task(task)
+                logger.warning("联邦委托防环终止: %s (本侧仅联邦主机可达且本机 PM 忙)",
+                               task.task_id)
+                return task.to_dict()
+            self._federation_forward_task(task, target_host)
+            return task.to_dict()
 
         # 回退: POST 到远程 Worker 启动 PM Agent
         # 修复: 如果目标就是本机 (Tailscale IP 不可达), 直接用 127.0.0.1
@@ -1173,6 +1185,84 @@ class StationController:
             self.db.save_task(task)
 
         return task.to_dict()
+
+    def _pick_task_host(self, online_hosts: list):
+        """iter-65 (F3.4 联邦任务转发): 任务目标选站 — 本网段优先, 联邦兜底。
+
+        本网段主机 (source=lan) 按评级+负载排序优先; 无本网段主机时
+        退回联邦主机, 且仅限 role=secretary 的对端 (跨网段场景下只有
+        peer.host 可达, 对端网段内主机 IP 不可达)。返回选中的 HostRecord。
+        """
+        lan_hosts = [h for h in online_hosts if getattr(h, "source", "lan") != "fed"]
+        fed_hosts = [h for h in online_hosts if getattr(h, "source", "lan") == "fed"
+                     and getattr(h, "role", "") == "secretary"]
+        if not fed_hosts:  # 无对端 Secretary 时退化为任意 fed 主机 (尽力而为)
+            fed_hosts = [h for h in online_hosts if getattr(h, "source", "lan") == "fed"]
+
+        # 优化13: 负载感知排序 — 评级优先, 同评级选 PM 数量少的
+        tier_order = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "": 0}
+        pm_agents = self.db.list_pm_agents()
+        # 统计每台主机上的活跃 PM 数量
+        host_pm_count: dict[str, int] = {}
+        for pm in pm_agents:
+            if pm.status in ("planning", "executing", "monitoring", "awaiting_input"):
+                host_pm_count[pm.device_id] = host_pm_count.get(pm.device_id, 0) + 1
+
+        def _host_sort_key(h):
+            tier = tier_order.get(h.rating_tier, 0)
+            load = host_pm_count.get(h.device_id, 0)
+            # 先按评级降序, 再按负载升序
+            return (-tier, load)
+
+        lan_hosts.sort(key=_host_sort_key)
+        fed_hosts.sort(key=_host_sort_key)
+        return (lan_hosts or fed_hosts)[0]
+
+    def _federation_forward_task(self, task, target_host) -> bool:
+        """iter-65 (F3.4 联邦任务转发): 将任务委托给对端 Secretary 网段执行。
+
+        对端调用其本网段选站流程, 全权接管任务生命周期; 本侧标记
+        forwarded (output_data 记录委托目标)。成功返回 True。
+        """
+        try:
+            # iter-65 防环: 转发的任务数据带 _federation_relay 标记 (跳数上限 1)
+            fwd_data = task.to_dict()
+            fwd_input = fwd_data.setdefault("input_data", {}) or {}
+            fwd_input["_federation_relay"] = True
+            fwd_data["input_data"] = fwd_input
+            resp = http_post(
+                f"http://{target_host.ip}:{target_host.api_port}/api/federation/tasks/forward",
+                json={
+                    "task_data": fwd_data,
+                    "forwarded_from": self.state.device_id,
+                    "federation": getattr(target_host, "federation", ""),
+                },
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                task.status = "forwarded"
+                task.output_data = {
+                    "forwarded_to": target_host.device_id,
+                    "federation": getattr(target_host, "federation", ""),
+                }
+                self.db.save_task(task)
+                self._queue_ws_broadcast("task_updated", task.to_dict())
+                self.bot_gateway.notify("task_forwarded", {
+                    "task": task.name, "task_id": task.task_id[:8],
+                    "target": target_host.device_name or target_host.hostname,
+                    "federation": getattr(target_host, "federation", ""),
+                })
+                logger.info("联邦委托任务: %s → %s (%s)",
+                            task.task_id, target_host.device_id[:8],
+                            getattr(target_host, "federation", ""))
+                return True
+            task.status = "failed"
+            task.output_data = {"error": f"联邦委托失败: {resp.text[:200]}"}
+        except Exception as e:
+            task.status = "failed"
+            task.output_data = {"error": f"联邦委托异常: {e}"}
+        self.db.save_task(task)
+        return False
 
     # ── 内嵌 Worker: 本机 PM Agent 管理 ─────────────────────
 

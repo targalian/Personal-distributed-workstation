@@ -161,6 +161,11 @@ scope 默认 `/`）; SW 注册请求由浏览器发起不带 Authorization 头,
 - Station 舰队表格设备名列: `source=fed` 主机显示 🌐 联邦徽标
   (绿底 + title 提示联邦名), lan 主机无徽标; 徽标行内不换行
 
+**任务卡片联邦转发徽标** (iter-65, F3.4 遗留):
+- 项目工作台任务卡片: `status=forwarded` 时标题栏显示 ↗ 联邦转发 徽标
+  (suspended 样式 + title=已委托联邦对端执行), 紧随 forwarded 状态徽标;
+  非 forwarded 任务无徽标; 徽标行内不换行
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
@@ -186,3 +191,4 @@ scope 默认 `/`）; SW 注册请求由浏览器发起不带 Authorization 头,
 | 2026-08-29 | iter-62 | 移动端 PWA (F5.4): sw.js 离线壳三策略 + /sw.js 根路由挂载 + 认证白名单 + SW 注册脚本; 640px 断点底部导航缺陷修复 (CSS 层叠覆盖)，UI-052 CDP 真实断网+移动视口 7/7 实测通过 |
 | 2026-08-29 | iter-63 | SPA 用户管理页 (团队场景): #/users 路由 + 👥 导航; boss 视图新增/改角色/轮换/移除 + 一次性 token 弹层; 非 boss 只读脱敏，UI-053 Browser 12/12 实测通过 |
 | 2026-08-29 | iter-64 | Station 舰队表格 🌐 联邦徽标 (F3.4): fed 来源主机设备名旁绿底徽标 + title 联邦名提示; lan 主机无徽标，UI-054 Browser 6/6 实测通过 |
+| 2026-08-29 | iter-65 | 任务卡片 ↗ 联邦转发徽标 (F3.4 遗留): forwarded 任务标题栏徽标 + title 提示委托执行，UI-055 Browser 实测通过 (截图 temp_resault/x65_fwd_badge.png) |

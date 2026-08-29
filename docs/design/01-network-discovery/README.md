@@ -96,10 +96,40 @@ orchestrator（任务分发）
 (device_id/device_name/role/api_port/secretary_active/代码版本) + 网段主机摘要,
 供对端联邦节点轮询
 
+## station_controller.py — 联邦任务跨网段转发 (F3.4 遗留, iter-65)
+
+**职责**: 任务层联邦 — 本网段无法执行的任务委任给对端网段 Secretary 全权接管。
+
+**选站分层** (`_pick_task_host`):
+- lan 优先: 本网段主机 (source=lan) 按评级 + 负载排序
+- fed 兜底: 本网段无可用主机时, 从 source=fed 主机中选 (优先 role=secretary
+  的对端, 无 secretary 时退化任意 fed 主机)
+
+**转发链路**: 本机 PM 忙/不可用 + 命中 fed 主机 → `_federation_forward_task`
+POST 对端 `/api/federation/tasks/forward` (task_data + forwarded_from) →
+对端 submit_task_from_chat 创建新任务 (created_by=federation:*), 本侧任务置
+forwarded + output_data.forwarded_to/federation → WS 广播 + Bot 通知;
+转发失败置 failed
+
+**联邦防环** (跳数上限 1):
+- 转发时 task_data.input_data 注入 `_federation_relay=True` 标记
+- 对端转发端点读出标记透传 `fed_relay` 参数, 任务落库时写回 input_data
+  (审计可见)
+- relay 任务在对端再次命中 fed 主机时不再回传, 直接 failed
+  (错误信息含「跳数上限 (防环)」) — 防止 A↔B 互相委托死循环
+
+**修复** (iter-65 真机验证发现):
+- `http_post` 改为模块级导入 — 此前仅在方法内导入, 模块级调用
+  (submit_task_from_chat 派发/转发/cancel/pause 等) LOAD_GLOBAL NameError
+  被 except 静默吞掉, 远程路径静默损坏
+- `_federation_sync_peer` hosts 循环跳过对端自身 — 此前对端被其报告网卡
+  ip 覆盖 peer.host, 跨网段转发全部不可达
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-65 | F3.4 遗留 联邦任务跨网段转发: 选站分层 (lan 优先/fed 兜底) + 转发端点 + forwarded 徽标 + 联邦防环 (跳数上限 1); 修复 http_post 静默损坏与对端 ip 覆盖 |
 | 2026-08-29 | iter-64 | F3.4 跨网段多 Secretary 联邦 (发现层): 静态 peer 配置 + /api/federation/info 端点 + 联邦轮询同步 (source=fed 隔离) + 选举仅限本网段 + 离线检测 |
 | 2026-08-16 | iter-30 补③ | P2 #5: 节点间认证默认启用 (auth_enabled 默认 true, 可显式关闭; 白名单保障注册引导/健康检查免认证) |
 | 2026-08-16 | iter-27 后 | 初建 |

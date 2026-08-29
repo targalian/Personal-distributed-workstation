@@ -49,6 +49,9 @@
 26. iter64-federation — F3.4 跨网段联邦 (发现层): 静态 peer 配置 +
     /api/federation/info 端点 + 联邦轮询同步 (source=fed 隔离) +
     选举/仲裁仅限本网段 (source=lan) + 离线检测 (iter-64)
+27. iter65-federation-forward — F3.4 联邦任务转发 (任务层): 选站分层
+    (lan 优先/fed 兜底限对端 Secretary) + 委托转发 forwarded 标记 +
+    转发端点参数传递 (iter-65)
 
 运行: pytest tests/ -v
 """
@@ -6174,5 +6177,260 @@ class TestIter64Federation:
         assert any(h["device_id"] == "h9" for h in d["hosts"])
 
 
+class TestIter65FederationForward:
+    """iter-65 F3.4 联邦任务转发 (任务层): 选站分层 (lan 优先/fed 兜底
+    限对端 Secretary) + 委托转发 forwarded 标记 + 转发端点参数传递。
+    """
+
+    def _make_db(self, tmp_path):
+        from lan_mesh.database import Database
+        return Database(str(tmp_path / "f65.db"))
+
+    def _host(self, device_id, source="lan", role="station", tier="B", fed=""):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            device_id=device_id, device_name=f"站-{device_id[:5]}",
+            hostname=None, ip="10.0.0.9", api_port=45501, online=True,
+            source=source, role=role, rating_tier=tier, federation=fed)
+
+    def _fake_ctrl(self, tmp_path):
+        import lan_mesh.station_controller as sc
+        fake = type("F", (), {
+            "db": self._make_db(tmp_path),
+            "state": type("S", (), {"device_id": "self-1",
+                                    "api_port": 45500})(),
+        })()
+        return sc, fake  # 注意: 返回模块, 避免与类名遮蔽
+
+    # ── 选站分层 ──────────────────────────────────────────
+
+    def test_pick_host_lan_priority(self, tmp_path):
+        """选站: 本网段主机优先, 即使联邦主机评级更高。"""
+        sc, fake = self._fake_ctrl(tmp_path)
+        lan = self._host("lan-1", source="lan", tier="A")
+        fed = self._host("fed-sec", source="fed", role="secretary",
+                         tier="S", fed="net-a")
+        picked = sc.StationController._pick_task_host(fake, [fed, lan])
+        assert picked.device_id == "lan-1"
+
+    def test_pick_host_fed_fallback_secretary_only(self, tmp_path):
+        """选站: 无本网段主机时兜底联邦主机, 且仅限对端 Secretary。"""
+        sc, fake = self._fake_ctrl(tmp_path)
+        fed_station = self._host("fed-w1", source="fed", tier="S")
+        fed_sec = self._host("fed-sec", source="fed", role="secretary",
+                             tier="B")
+        picked = sc.StationController._pick_task_host(fake,
+                                                      [fed_station, fed_sec])
+        assert picked.device_id == "fed-sec"
+
+    def test_pick_host_fed_fallback_any_when_no_secretary(self, tmp_path):
+        """选站: 无对端 Secretary 时退化为任意联邦主机 (尽力而为)。"""
+        sc, fake = self._fake_ctrl(tmp_path)
+        fed_w = self._host("fed-w1", source="fed", tier="C")
+        picked = sc.StationController._pick_task_host(fake, [fed_w])
+        assert picked.device_id == "fed-w1"
+
+    # ── 委托转发 ──────────────────────────────────────────
+
+    def test_federation_forward_success_marks_forwarded(self, tmp_path,
+                                                        monkeypatch):
+        """委托转发: 对端 200 → 任务 forwarded + output_data 记录目标。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+        from unittest.mock import MagicMock
+
+        db = self._make_db(tmp_path)
+        task = Task(task_id="task-f65", name="跨网段任务", description="d")
+        ws_events = []
+        fake = type("F", (), {
+            "db": db,
+            "state": type("S", (), {"device_id": "self-1"})(),
+            # 类字典 lambda 经实例访问会绑定 self → 首参为 self_
+            "_queue_ws_broadcast":
+                lambda self_, ev, data: ws_events.append(ev),
+            "bot_gateway": MagicMock(),
+        })()
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"ok": True, "task_id": "task-peer"}
+
+        monkeypatch.setattr(sc, "http_post",
+                            lambda url, json=None, timeout=15: FakeResp())
+        target = self._host("fed-sec", source="fed", role="secretary",
+                            fed="net-a")
+        assert sc.StationController._federation_forward_task(
+            fake, task, target) is True
+        assert task.status == "forwarded"
+        assert task.output_data["forwarded_to"] == "fed-sec"
+        assert task.output_data["federation"] == "net-a"
+        assert db.get_task("task-f65").status == "forwarded"
+        assert "task_updated" in ws_events
+        fake.bot_gateway.notify.assert_called_once()
+
+    def test_federation_forward_failure_marks_failed(self, tmp_path,
+                                                     monkeypatch):
+        """委托转发: 对端异常 → 任务 failed 且错误信息落库。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+        from unittest.mock import MagicMock
+
+        db = self._make_db(tmp_path)
+        task = Task(task_id="task-f65b", name="跨网段任务", description="d")
+        fake = type("F", (), {
+            "db": db,
+            "state": type("S", (), {"device_id": "self-1"})(),
+            "_queue_ws_broadcast": lambda self_, ev, data: None,
+            "bot_gateway": MagicMock(),
+        })()
+
+        def boom(url, json=None, timeout=15):
+            raise ConnectionError("peer down")
+        monkeypatch.setattr(sc, "http_post", boom)
+        target = self._host("fed-sec", source="fed", role="secretary",
+                            fed="net-a")
+        assert sc.StationController._federation_forward_task(
+            fake, task, target) is False
+        assert task.status == "failed"
+        assert "联邦委托异常" in task.output_data["error"]
+        assert db.get_task("task-f65b").status == "failed"
+
+    def test_submit_task_fed_target_goes_forward(self, tmp_path):
+        """提交链路: 选中联邦主机时走委托转发, 不直派远程 Worker。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import HostRecord
+        from unittest.mock import MagicMock
+        from types import SimpleNamespace
+
+        db = self._make_db(tmp_path)
+        db.upsert_host(HostRecord(device_id="fed-sec", device_name="对端秘书",
+                                  source="fed", federation="net-a",
+                                  role="secretary", online=True,
+                                  rating_tier="A"))
+        calls = []
+        fake = type("F", (), {
+            "db": db,
+            "state": type("S", (), {
+                "device_id": "self-1", "device_name": "本站",
+                "api_port": 45500,
+                "shared_folder": SimpleNamespace(
+                    path=str(tmp_path))})(),
+            "secretary_active": False,
+            "chat_runtime": None,
+            "bot_gateway": MagicMock(),
+            "project_manager": None,
+            "_queue_ws_broadcast": lambda self_, ev, data: None,
+            # 类字典 lambda 经实例访问会绑定 self → 签名需含 self_
+            "_pick_task_host": lambda self_, hosts: hosts[0],
+            "_federation_forward_task":
+                lambda self_, task, host: calls.append((task.task_id,
+                                                        host.device_id)),
+            "_pm_worker_map": {},
+        })()
+        result = sc.StationController.submit_task_from_chat(
+            fake, "联邦计算", "跨网段委托")
+        assert result["status"] == "pending"  # 状态由委托方 (mock) 决定
+        assert len(calls) == 1
+        assert calls[0][1] == "fed-sec"
+
+    def test_federation_forward_marks_relay_flag(self, tmp_path, monkeypatch):
+        """iter-65 防环: 转发的任务数据带 _federation_relay 标记 (跳数上限 1)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+        from unittest.mock import MagicMock
+
+        db = self._make_db(tmp_path)
+        task = Task(task_id="task-f65c", name="跨网段任务", description="d")
+        sent = []
+        fake = type("F", (), {
+            "db": db,
+            "state": type("S", (), {"device_id": "self-1"})(),
+            "_queue_ws_broadcast": lambda self_, ev, data: None,
+            "bot_gateway": MagicMock(),
+        })()
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"ok": True, "task_id": "task-peer"}
+
+        def fake_post(url, json=None, timeout=15):
+            sent.append(json)
+            return FakeResp()
+        monkeypatch.setattr(sc, "http_post", fake_post)
+        target = self._host("fed-sec", source="fed", role="secretary",
+                            fed="net-a")
+        assert sc.StationController._federation_forward_task(
+            fake, task, target) is True
+        assert sent[0]["task_data"]["input_data"]["_federation_relay"] is True
+        # 本侧任务自身的 input_data 不被污染
+        assert "_federation_relay" not in (task.input_data or {})
+
+    def test_fed_relay_no_loopback(self, tmp_path):
+        """iter-65 防环: 委托任务 (fed_relay=True) 选站再命中联邦主机时
+        直接失败终止, 不再回传 (防 A↔B 互相委托死循环)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import HostRecord
+        from unittest.mock import MagicMock
+        from types import SimpleNamespace
+
+        db = self._make_db(tmp_path)
+        db.upsert_host(HostRecord(device_id="fed-sec", device_name="对端秘书",
+                                  source="fed", federation="net-a",
+                                  role="secretary", online=True,
+                                  rating_tier="A"))
+        forward_calls = []
+        fake = type("F", (), {
+            "db": db,
+            "state": type("S", (), {
+                "device_id": "self-1", "device_name": "本站",
+                "api_port": 45500,
+                "shared_folder": SimpleNamespace(
+                    path=str(tmp_path))})(),
+            "secretary_active": False,
+            "chat_runtime": None,
+            "bot_gateway": MagicMock(),
+            "project_manager": None,
+            "_queue_ws_broadcast": lambda self_, ev, data: None,
+            "_pick_task_host": lambda self_, hosts: hosts[0],
+            "_federation_forward_task":
+                lambda self_, task, host: forward_calls.append(task.task_id),
+            "_pm_worker_map": {},
+        })()
+        result = sc.StationController.submit_task_from_chat(
+            fake, "委托任务", "二次转发", fed_relay=True)
+        assert result["status"] == "failed"
+        assert "跳数上限" in (result["output_data"] or {}).get("error", "")
+        assert forward_calls == []  # 未回传
+        assert db.get_task(result["task_id"]).input_data["_federation_relay"] is True
+
+    # ── 转发端点 ──────────────────────────────────────────
+
+    def test_federation_forward_endpoint_creates_task(self, tmp_path):
+        """转发端点: 参数传递正确, 任务由对端 submit_task_from_chat 接管。"""
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh import station_routes_basic as basic
+
+        controller = MagicMock()
+        controller.submit_task_from_chat.return_value = {"task_id": "task-x"}
+        app = FastAPI()
+        app.include_router(basic.build_basic_routes(controller))
+        client = TestClient(app)
+        d = client.post("/api/federation/tasks/forward", json={
+            "task_data": {"name": "联邦任务A", "description": "跨网段计算",
+                          "input_data": {"_priority": "high"}},
+            "forwarded_from": "self-1234abcd",
+        }).json()
+        assert d["ok"] is True and d["task_id"] == "task-x"
+        controller.submit_task_from_chat.assert_called_once()
+        kwargs = controller.submit_task_from_chat.call_args.kwargs
+        assert kwargs["name"] == "联邦任务A"
+        assert kwargs["created_by"] == "federation:self-123"
+        assert kwargs["priority"] == "high"
 
 
