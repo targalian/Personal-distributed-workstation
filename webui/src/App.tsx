@@ -2,10 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import StationPage from "./pages/StationPage";
 import TasksPage from "./pages/TasksPage";
 import DagEditorPage from "./pages/DagEditorPage";
+import UsersPage from "./pages/UsersPage";
 import { ensureMeshToken, getRole, loginUser, logoutUser } from "./api";
 
 // iter-56: hash 路由 (服务端 /spa 静态托管无 SSR 路由, hash 免服务端配置)
-type Route = "station" | "tasks" | "dag";
+type Route = "station" | "tasks" | "dag" | "users";
 
 function parseHash(): { route: Route; taskId?: string } {
   const h = window.location.hash.replace(/^#\/?/, "");
@@ -14,6 +15,8 @@ function parseHash(): { route: Route; taskId?: string } {
   // dag 无 taskId 时仍进入编辑器 (任务 ID 可手输/从列表跳转带参)
   if (first === "dag")
     return { route: "dag", taskId: second ? decodeURIComponent(second) : "" };
+  // iter-63: 用户管理页
+  if (first === "users") return { route: "users" };
   return { route: "station" };
 }
 
@@ -21,6 +24,7 @@ const NAV: { key: Route; label: string; icon: string }[] = [
   { key: "station", label: "Station", icon: "🏢" },
   { key: "tasks", label: "任务", icon: "📋" },
   { key: "dag", label: "DAG 编辑", icon: "🕸️" },
+  { key: "users", label: "用户", icon: "👥" },
 ];
 
 /** 顶栏 WS 连接状态 (与旧版 dashboard 一致的 /ws 通道)。 */
@@ -144,6 +148,7 @@ export default function App() {
           // key=role: 身份切换后重挂载, 刷新 viewer 只读状态
           <DagEditorPage key={role} taskId={route.taskId ?? ""} />
         )}
+        {route.route === "users" && <UsersPage key={role} />}
       </main>
     </div>
   );

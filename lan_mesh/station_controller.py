@@ -2579,8 +2579,14 @@ class StationController:
             self.cfg.observability.api_rate_limit_trusted)
         # iter-58 (补强#6 F5.2): 多用户权限 — 用户表注入 (空 = 关闭,
         # 所有人持 mesh token 即 boss 向后兼容)
-        from .station_routes_common import configure_users
+        # iter-63 (团队场景深化): DB 持久化优先 (users 表), config 仅作
+        # 首次种子 → token 轮换/角色修改跨重启保留
+        from .station_routes_common import (
+            configure_users, load_users_from_db, set_users_db,
+        )
+        set_users_db(self.db)
         configure_users([u.model_dump() for u in self.cfg.security.users])
+        load_users_from_db(self.db)
         app.middleware("http")(api_guard_middleware)
 
         # Station 路由 (含全部 API, Secretary 路由会检查 active 状态)

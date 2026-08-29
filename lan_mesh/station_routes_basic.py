@@ -286,6 +286,73 @@ def build_basic_routes(controller) -> APIRouter:
         from .auth import get_mesh_token
         return {"mesh_token": get_mesh_auth_token() or get_mesh_token()}
 
+    # ── 用户管理 (iter-63 团队场景深化) ─────────────────────
+    # 写端点经 api_guard 角色检查 (管理员路径 /api/station/ 仅 boss 可写),
+    # 读端点全角色放行但仅 boss 可见 token 尾 4 位快照。
+
+    @router.get("/api/station/users")
+    async def list_users(request: Request):
+        """用户列表: boss 含 token 尾 4 位 (轮换核对用); 其余角色脱敏。"""
+        from .station_routes_common import (
+            list_users_admin, list_users_public, resolve_role,
+        )
+        auth_header = request.headers.get("Authorization", "")
+        identity = resolve_role(auth_header[7:]) if auth_header.startswith("Bearer ") else None
+        if identity and identity["role"] == "boss":
+            return {"users": list_users_admin(), "admin_view": True}
+        return {"users": list_users_public(), "admin_view": False}
+
+    @router.post("/api/station/users")
+    async def create_user_endpoint(request: Request):
+        """新增用户 (boss): 生成 token, 仅本次响应返回明文。"""
+        from .station_routes_common import create_user
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="非法报文")
+        name = str(body.get("name", "")).strip()
+        role = str(body.get("role", "viewer")).strip().lower()
+        result = create_user(name, role)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        logger.info("[Station] 新增用户: %s (role=%s)", name, role)
+        return result
+
+    @router.put("/api/station/users/{name}/role")
+    async def update_user_role(name: str, request: Request):
+        """修改用户角色 (boss, 最后 boss 保护)。"""
+        from .station_routes_common import set_user_role
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="非法报文")
+        role = str(body.get("role", "")).strip().lower()
+        result = set_user_role(name, role)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        logger.info("[Station] 用户角色变更: %s -> %s", name, role)
+        return result
+
+    @router.post("/api/station/users/{name}/rotate-token")
+    async def rotate_user_token_endpoint(name: str):
+        """轮换用户 token (boss): 旧 token 立即失效, 新明文仅返回一次。"""
+        from .station_routes_common import rotate_user_token
+        result = rotate_user_token(name)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        logger.info("[Station] 用户 token 已轮换: %s", name)
+        return result
+
+    @router.delete("/api/station/users/{name}")
+    async def delete_user_endpoint(name: str):
+        """移除用户 (boss, 最后 boss 保护)。"""
+        from .station_routes_common import remove_user
+        result = remove_user(name)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        logger.info("[Station] 移除用户: %s", name)
+        return result
+
     # ── S2: 版本升级提醒 ─────────────────────────────────────
 
     @router.get("/api/version")

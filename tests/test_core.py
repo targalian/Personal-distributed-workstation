@@ -43,6 +43,9 @@
 24. iter62-pwa-mobile — F5.4 移动端 PWA: Service Worker 应用壳缓存
     (network-first 导航/API 不缓存/静态 SWR) + /sw.js 根挂载 + 认证
     白名单放行 + dashboard SW 注册 (iter-62)
+25. iter63-user-admin — 团队场景深化: users 表持久化 (token 仅存
+    SHA256 哈希, config 首次种子, 轮换跨重启保留) + 用户管理端点
+    (列表/新增/改角色/轮换/删除 + 最后 boss 防自锁) + SPA 用户页 (iter-63)
 
 运行: pytest tests/ -v
 """
@@ -4025,6 +4028,177 @@ class TestIter62PwaMobile:
         no_comments = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
         assert no_comments.count(".mobile-nav{display:none}") == 1
         assert "@media(min-width:641px){.mobile-nav{display:none}}" in html
+
+
+class TestIter63UserAdmin:
+    """iter-63 团队场景深化: 用户管理 UI + token 轮换端点。
+
+    核心: users 表持久化 (token 仅存 SHA256 哈希) + config 首次种子 +
+    管理操作 (增/改角色/轮换/删) + 最后 boss 防自锁 + HTTP 端点。
+    """
+
+    def _make_db(self, tmp_path):
+        from lan_mesh.database import Database
+        return Database(str(tmp_path / "u.db"))
+
+    def test_migration_v9_users_table(self, tmp_path):
+        """SCHEMA_VERSION=9 且迁移后 users 表可写读。"""
+        from lan_mesh import database as dbmod
+        assert dbmod.SCHEMA_VERSION == 9
+        db = self._make_db(tmp_path)
+        db.upsert_user_db("alice", "viewer", "hash1", "abcd")
+        rows = db.list_users_db()
+        assert len(rows) == 1
+        assert rows[0]["name"] == "alice" and rows[0]["token_tail4"] == "abcd"
+
+    def test_users_db_crud(self, tmp_path):
+        """DB 层增改查删 + 角色更新。"""
+        db = self._make_db(tmp_path)
+        db.upsert_user_db("alice", "viewer", "h1", "aaa1")
+        db.upsert_user_db("bob", "operator", "h2", "bbb2")
+        db.update_user_role_db("alice", "boss")
+        rows = {r["name"]: r for r in db.list_users_db()}
+        assert rows["alice"]["role"] == "boss"
+        assert rows["bob"]["role"] == "operator"
+        db.delete_user_db("bob")
+        assert [r["name"] for r in db.list_users_db()] == ["alice"]
+
+    def test_configure_users_hashes_tokens(self):
+        """iter-63: 内存表不存明文 — _user_tokens key 为 SHA256 哈希。"""
+        from lan_mesh import station_routes_common as common
+        common.set_users_db(None)
+        common.configure_users([
+            {"name": "小张", "role": "operator", "token": "op-token-63"},
+        ])
+        assert "op-token-63" not in common._user_tokens
+        assert len(common._user_tokens) == 1
+        entry = list(common._user_tokens.values())[0]
+        assert entry["token_hash"] == common._hash_token("op-token-63")
+        assert entry["token_tail4"] == "n-63"
+        # 认证仍按明文 token 工作 (内部哈希比较)
+        assert common.resolve_role("op-token-63")["role"] == "operator"
+        common.configure_users([])
+
+    def test_load_users_from_db_seed_then_load(self, tmp_path):
+        """DB 空 → config 种子导入; DB 非空 → 以 DB 为准 (轮换持久化)。"""
+        from lan_mesh import station_routes_common as common
+        db = self._make_db(tmp_path)
+        common.set_users_db(db)
+        # 首次: config 种子 → 导入 DB
+        common.configure_users([
+            {"name": "种子boss", "role": "boss", "token": "seed-token-1"},
+        ])
+        assert common.load_users_from_db(db) is True
+        assert len(db.list_users_db()) == 1
+        # 模拟重启: 轮换写入 DB 后重新加载, 内存应从 DB 恢复
+        common.rotate_user_token("种子boss")
+        common.configure_users([])  # 重启后 config 已清空
+        assert common.load_users_from_db(db) is True
+        assert common.list_users_public()[0]["name"] == "种子boss"
+        common.configure_users([])
+
+    def test_create_user_and_rotate_token(self, tmp_path):
+        """新增用户返回明文一次 + 轮换后旧 token 失效 + DB 持久化。"""
+        from lan_mesh import station_routes_common as common
+        db = self._make_db(tmp_path)
+        common.set_users_db(db)
+        common.configure_users([])
+        r = common.create_user("alice", "viewer")
+        assert r.get("token") and "error" not in r
+        assert common.resolve_role(r["token"])["name"] == "alice"
+        # 轮换: 旧 token 失效, 新 token 生效
+        old = r["token"]
+        r2 = common.rotate_user_token("alice")
+        assert r2.get("token") != old
+        assert common.resolve_role(old) is None
+        assert common.resolve_role(r2["token"])["role"] == "viewer"
+        # DB 同步: 哈希已更新
+        db_row = db.list_users_db()[0]
+        assert db_row["token_hash"] == common._hash_token(r2["token"])
+        # 重复创建同名 → 拒绝
+        assert "error" in common.create_user("alice", "viewer")
+        common.configure_users([])
+
+    def test_last_boss_guard(self, tmp_path):
+        """最后 boss 不可降级/删除; 多 boss 时可操作; 删除后不可认证。"""
+        from lan_mesh import station_routes_common as common
+        db = self._make_db(tmp_path)
+        common.set_users_db(db)
+        common.configure_users([
+            {"name": "boss1", "role": "boss", "token": "boss-token-1"},
+            {"name": "op1", "role": "operator", "token": "op-token-1"},
+        ])
+        # 唯一 boss 降级 → 拒绝
+        assert "error" in common.set_user_role("boss1", "viewer")
+        # 唯一 boss 删除 → 拒绝
+        assert "error" in common.remove_user("boss1")
+        # 加第二个 boss 后可降级原 boss
+        common.create_user("boss2", "boss")
+        assert "error" not in common.set_user_role("boss1", "operator")
+        assert common.resolve_role("boss-token-1")["role"] == "operator"
+        # 删除非 boss 用户后其 token 失效
+        assert "error" not in common.remove_user("op1")
+        assert common.resolve_role("op-token-1") is None
+        common.configure_users([])
+
+    def test_users_endpoints(self, tmp_path, monkeypatch):
+        """HTTP 层: boss 列表含尾4位 / 新增 / 改角色 / 轮换 / 删除 / 越权 403。"""
+        from fastapi.testclient import TestClient
+        from lan_mesh import station_routes_common as common
+        from lan_mesh.station_routes_basic import build_basic_routes
+
+        db = self._make_db(tmp_path)
+        common.set_users_db(db)
+        common.configure_users([
+            {"name": "boss1", "role": "boss", "token": "boss-tok-aaaa"},
+            {"name": "view1", "role": "viewer", "token": "view-tok-bbbb"},
+        ])
+        common.load_users_from_db(db)
+        # 空 controller 对象 (端点仅用 logger)
+        ctl = type("Ctl", (), {"db": db, "discovery": None,
+                              "station_director": None})()
+        ctl.state = type("St", (), {"shared_folder": None})()
+        router = build_basic_routes(ctl)
+        app = __import__("fastapi").FastAPI()
+        # 与真实环境一致: 挂限流+认证+角色分级中间件
+        from lan_mesh.station_api import configure_mesh_auth
+        configure_mesh_auth(True, "mesh-secret-63")
+        app.middleware("http")(common.api_guard_middleware)
+        app.include_router(router)
+        client = TestClient(app)
+        boss_h = {"Authorization": "Bearer boss-tok-aaaa"}
+        view_h = {"Authorization": "Bearer view-tok-bbbb"}
+        # boss 视图: 含 token 尾 4 位
+        r = client.get("/api/station/users", headers=boss_h)
+        assert r.status_code == 200 and r.json()["admin_view"] is True
+        assert any(u["token_tail4"] == "aaaa" for u in r.json()["users"])
+        # viewer 视图: 脱敏
+        r = client.get("/api/station/users", headers=view_h)
+        assert r.status_code == 200 and r.json()["admin_view"] is False
+        assert all("token_tail4" not in u for u in r.json()["users"])
+        # viewer 写 → 403 (管理员路径仅 boss)
+        r = client.post("/api/station/users", headers=view_h,
+                       json={"name": "x", "role": "viewer"})
+        assert r.status_code == 403
+        # boss 新增
+        r = client.post("/api/station/users", headers=boss_h,
+                       json={"name": "new1", "role": "operator"})
+        assert r.status_code == 200 and r.json().get("token")
+        # boss 改角色
+        r = client.put("/api/station/users/new1/role", headers=boss_h,
+                       json={"role": "viewer"})
+        assert r.status_code == 200 and r.json()["role"] == "viewer"
+        # boss 轮换 (旧 token 失效)
+        r = client.post("/api/station/users/new1/rotate-token", headers=boss_h)
+        assert r.status_code == 200 and r.json().get("token")
+        # boss 删除
+        r = client.delete("/api/station/users/new1", headers=boss_h)
+        assert r.status_code == 200
+        # 轮换后旧 token 已被端到端确认失效 (非白名单端点返回 403)
+        r = client.get("/api/station/users", headers=boss_h)
+        assert r.status_code == 200
+        common.configure_users([])
+        configure_mesh_auth(False, "")
 
 
 class TestDagEdit:

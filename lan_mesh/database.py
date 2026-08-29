@@ -21,7 +21,7 @@ logger = get_logger("database")
 # 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
 # 迁移函数签名: (conn: sqlite3.Connection) -> None
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -201,6 +201,27 @@ def _migration_v8(conn: sqlite3.Connection):
         pass
 
 
+def _migration_v9(conn: sqlite3.Connection):
+    """迁移 v9: users 表持久化多用户 (iter-63 团队场景深化)。
+
+    config.security.users 从此作为首次启动种子 (DB 空时导入),
+    之后以 DB 为准 → token 轮换/角色修改跨重启保留。
+    token 仅存 SHA256 哈希 + 尾 4 位快照 (列表展示用), 不存明文。
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            name TEXT PRIMARY KEY,
+            role TEXT NOT NULL DEFAULT 'viewer',
+            token_hash TEXT NOT NULL DEFAULT '',
+            token_tail4 TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL DEFAULT 0
+        )
+        """
+    )
+
+
 # 迁移注册表: version → 迁移函数
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
@@ -211,6 +232,7 @@ _MIGRATIONS: dict[int, callable] = {
     6: _migration_v6,
     7: _migration_v7,
     8: _migration_v8,
+    9: _migration_v9,
 }
 
 
@@ -1276,6 +1298,56 @@ class Database:
         conn = self._get_conn()
         conn.execute("DELETE FROM skills WHERE skill_id = ?", (skill_id,))
         conn.execute("DELETE FROM skill_assignments WHERE skill_id = ?", (skill_id,))
+        conn.commit()
+
+    # ── 多用户 (iter-63 团队场景深化) ─────────────────────────
+
+    def list_users_db(self) -> list[dict]:
+        """列出全部用户 (含 token 哈希与尾 4 位快照, 仅内部使用)。"""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT name, role, token_hash, token_tail4, created_at, "
+            "updated_at FROM users ORDER BY name"
+        ).fetchall()
+        return [{"name": r[0], "role": r[1], "token_hash": r[2],
+                 "token_tail4": r[3], "created_at": r[4], "updated_at": r[5]}
+                for r in rows]
+
+    def upsert_user_db(self, name: str, role: str, token_hash: str,
+                       token_tail4: str):
+        """新增或更新用户 (存在时更新 role/token 哈希)。"""
+        import time as _time
+        conn = self._get_conn()
+        now = _time.time()
+        conn.execute(
+            """
+            INSERT INTO users (name, role, token_hash, token_tail4,
+                               created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                role = excluded.role,
+                token_hash = excluded.token_hash,
+                token_tail4 = excluded.token_tail4,
+                updated_at = excluded.updated_at
+            """,
+            (name, role, token_hash, token_tail4, now, now),
+        )
+        conn.commit()
+
+    def update_user_role_db(self, name: str, role: str):
+        """仅更新用户角色。"""
+        import time as _time
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE users SET role = ?, updated_at = ? WHERE name = ?",
+            (role, _time.time(), name),
+        )
+        conn.commit()
+
+    def delete_user_db(self, name: str):
+        """删除用户。"""
+        conn = self._get_conn()
+        conn.execute("DELETE FROM users WHERE name = ?", (name,))
         conn.commit()
 
     @staticmethod

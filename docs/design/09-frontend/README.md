@@ -135,6 +135,28 @@ scope 默认 `/`）; SW 注册请求由浏览器发起不带 Authorization 头,
 `Emulation.setDeviceMetricsOverride` 390x844 移动视口底部导航可见),
 截图 temp_resault/x62_offline_real.png + x62_mobile_real.png。
 
+## 用户管理页 — SPA #/users (iter-63, 团队场景)
+
+**定位**: 多用户团队的账号管理入口 (F5.2 权限体系的 UI 闭环)。
+
+**路由与导航**: hash 路由 `#/users` (Route = "station"|"tasks"|"dag"|"users");
+导航栏新增 👥 用户入口。
+
+**视图按角色分层** (`isBoss = getRole() === "boss"`):
+- **boss**: 新增表单 (用户名+角色下拉+新增) → 一次性 token 弹层
+  (.overlay/.modal/.token-box, 复制按钮 + 「明文仅展示一次」警示);
+  用户表行内角色 select 修改 / 🔄 轮换 / 🗑 移除 (二次确认);
+  admin_view 时显示 token 尾 4 位列
+- **非 boss (operator/viewer/未登录)**: 只读列表, 无表单/无尾4位/无操作钮
+
+**数据链路**: GET /api/station/users (boss 含 token_tail4, 其余脱敏);
+写操作 POST/PUT/DELETE /api/station/users[/{name}/role|rotate-token] —
+403/401 由后端 api_guard_middleware 角色检查兜底 (前端只做显隐)。
+
+**验证**: Browser 实测 12/12 (Edge headless CDP 直连, boss/viewer 双视图
++ boss 真实新增 ui63 → token 弹层), 截图 temp_resault/x63_users_*.png;
+后端真机 16 项 + 重启持久化 (轮换 token 跨重启保留) 全过。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
@@ -158,3 +180,4 @@ scope 默认 `/`）; SW 注册请求由浏览器发起不带 Authorization 头,
 | 2026-08-29 | iter-58 | SPA 多用户权限 (F5.2): 顶栏角色徽章 + 身份切换面板 (用户 token 优先/登录/退出); DAG 编辑器 viewer 与未登录只读; ensureMeshToken 共享 Promise 防竞态，UI-050 实测通过 |
 | 2026-08-29 | iter-61 | 技能库 Tab 插件市场 (F5.3): 🛒 市场按钮 + 弹窗列表 (名称/版本/大小/已装标记); 安装/卸载按钮 + 内置/第三方来源徽标 + 空市场引导，UI-051 实测通过 (含 Toast 重复弹出缺陷修复) |
 | 2026-08-29 | iter-62 | 移动端 PWA (F5.4): sw.js 离线壳三策略 + /sw.js 根路由挂载 + 认证白名单 + SW 注册脚本; 640px 断点底部导航缺陷修复 (CSS 层叠覆盖)，UI-052 CDP 真实断网+移动视口 7/7 实测通过 |
+| 2026-08-29 | iter-63 | SPA 用户管理页 (团队场景): #/users 路由 + 👥 导航; boss 视图新增/改角色/轮换/移除 + 一次性 token 弹层; 非 boss 只读脱敏，UI-053 Browser 12/12 实测通过 |

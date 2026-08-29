@@ -126,11 +126,32 @@ def get_mesh_auth_token() -> str:
 
 
 # F5.2 (iter-58): 多用户权限 — 用户表内存态 (name → role/token),
-# 由 StationController 启动时从 security.users 注入; 空表 = 关闭
-# 多用户权限 (所有人持 mesh token 即 boss, 向后兼容)
+# 由 StationController 启动时注入; 空表 = 关闭多用户权限
+# (所有人持 mesh token 即 boss, 向后兼容)。
+# iter-63 (团队场景深化): token 仅存 SHA256 哈希 (不存明文),
+# config.security.users 作为首次种子 (DB 空时导入), 之后以 DB 为准
+# → token 轮换/角色修改跨重启保留。
 _users: dict[str, dict] = {}
 _user_tokens: dict[str, dict] = {}
+_users_db = None  # Database 引用 (set_users_db 注入, 供端点写操作持久化)
 _VALID_ROLES = {"boss", "operator", "viewer"}
+
+
+def _hash_token(token: str) -> str:
+    """token → SHA256 十六进制 (仅存哈希, 不落明文)。"""
+    import hashlib
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _gen_token() -> str:
+    """生成新用户 token (URL 安全, 含用户可见尾 4 位)。"""
+    return secrets.token_urlsafe(24)
+
+
+def set_users_db(db):
+    """注入 Database 引用 (StationController 启动时调用)。"""
+    global _users_db
+    _users_db = db
 
 
 def configure_users(users: list):
@@ -138,6 +159,8 @@ def configure_users(users: list):
 
     users: [{"name": str, "role": str, "token": str}, ...]
     非法 role 归一到 viewer; 空 token 的用户跳过。
+    iter-63: 明文 token 在此哈希化后入内存 (config 种子语义,
+    仅当 DB 为空时使用; DB 非空时调用方应改走 load_users_from_db)。
     """
     global _users, _user_tokens
     _users = {}
@@ -150,9 +173,36 @@ def configure_users(users: list):
         role = str(u.get("role", "viewer")).strip().lower()
         if role not in _VALID_ROLES:
             role = "viewer"
-        entry = {"name": name, "role": role}
+        entry = {"name": name, "role": role,
+                 "token_hash": _hash_token(token),
+                 "token_tail4": token[-4:]}
         _users[name or token[:8]] = entry
-        _user_tokens[token] = entry
+        _user_tokens[entry["token_hash"]] = entry
+
+
+def load_users_from_db(db) -> bool:
+    """从 DB users 表加载内存用户表; DB 为空时用 config 种子导入。
+
+    返回是否启用了多用户 (非空)。config 用户仅当 DB 完全为空时
+    写入 (首次启动), 之后 DB 为准 → 轮换持久化。
+    """
+    global _users, _user_tokens
+    rows = db.list_users_db()
+    if not rows:
+        # 首次启动: config 种子导入 DB (明文→哈希)
+        for entry in _users.values():
+            db.upsert_user_db(entry["name"], entry["role"],
+                              entry["token_hash"], entry["token_tail4"])
+        return bool(_users)
+    _users = {}
+    _user_tokens = {}
+    for r in rows:
+        entry = {"name": r["name"], "role": r["role"],
+                 "token_hash": r["token_hash"],
+                 "token_tail4": r["token_tail4"]}
+        _users[r["name"] or r["token_tail4"]] = entry
+        _user_tokens[r["token_hash"]] = entry
+    return True
 
 
 def resolve_role(provided_token: str) -> dict:
@@ -160,15 +210,17 @@ def resolve_role(provided_token: str) -> dict:
 
     返回 {"name", "role"}; 未知 token 返回 None。调用方应只在认证
     已通过后调用 (mesh token 优先, 用户 token 其次)。
+    iter-63: 用户 token 按 SHA256 哈希恒定时间比较 (内存不存明文)。
     """
     if _mesh_auth_enabled and _mesh_auth_token:
         from .auth import verify_token
         if verify_token(provided_token, _mesh_auth_token):
             return {"name": "节点", "role": "boss"}
-    # 用户 token 恒定时间比较 (防时序侧信道)
-    for token, entry in _user_tokens.items():
-        if secrets.compare_digest(token, provided_token):
-            return dict(entry)
+    # 用户 token 哈希恒定时间比较 (防时序侧信道)
+    provided_hash = _hash_token(provided_token)
+    entry = _user_tokens.get(provided_hash)
+    if entry is not None and secrets.compare_digest(provided_hash, entry["token_hash"]):
+        return {"name": entry["name"], "role": entry["role"]}
     return None
 
 
@@ -181,6 +233,93 @@ def list_users_public() -> list:
     """列出用户 (脱敏 token, 供管理员页面展示)。"""
     return [{"name": e["name"], "role": e["role"]}
             for e in _users.values()]
+
+
+def list_users_admin() -> list:
+    """列出用户 (含 token 尾 4 位快照, 仅 boss 端点返回)。"""
+    return [{"name": e["name"], "role": e["role"],
+             "token_tail4": e.get("token_tail4", "")}
+            for e in _users.values()]
+
+
+def _last_boss_guard(name: str, target_role: str) -> bool:
+    """最后 boss 保护: 不允许把最后一个 boss 降级/删除 (防自锁)。
+
+    target_role 仅用于语义表达 (None = 删除); 判定只看目标自身
+    是否为唯一 boss: 是 → 拦截降级与删除; 升权不受限。
+    """
+    me = _users.get(name)
+    if not me or me["role"] != "boss":
+        return False
+    boss_count = sum(1 for e in _users.values() if e["role"] == "boss")
+    return boss_count <= 1
+
+
+def create_user(name: str, role: str) -> dict:
+    """新增用户 (boss 端点): 生成 token 并写内存 + DB, 返回明文一次。"""
+    global _users, _user_tokens
+    name = name.strip()
+    role = role if role in _VALID_ROLES else "viewer"
+    if not name:
+        return {"error": "用户名不能为空"}
+    if name in _users:
+        return {"error": "用户名已存在"}
+    token = _gen_token()
+    entry = {"name": name, "role": role,
+             "token_hash": _hash_token(token), "token_tail4": token[-4:]}
+    _users[name] = entry
+    _user_tokens[entry["token_hash"]] = entry
+    if _users_db:
+        _users_db.upsert_user_db(name, role, entry["token_hash"],
+                                 entry["token_tail4"])
+    return {"name": name, "role": role, "token": token}
+
+
+def rotate_user_token(name: str) -> dict:
+    """轮换用户 token (旧 token 立即失效), 返回新明文一次。"""
+    global _user_tokens
+    entry = _users.get(name)
+    if not entry:
+        return {"error": "用户不存在"}
+    token = _gen_token()
+    old_hash = entry["token_hash"]
+    entry["token_hash"] = _hash_token(token)
+    entry["token_tail4"] = token[-4:]
+    _user_tokens.pop(old_hash, None)
+    _user_tokens[entry["token_hash"]] = entry
+    if _users_db:
+        _users_db.upsert_user_db(name, entry["role"], entry["token_hash"],
+                                 entry["token_tail4"])
+    return {"name": name, "role": entry["role"], "token": token}
+
+
+def set_user_role(name: str, role: str) -> dict:
+    """修改用户角色 (最后 boss 保护)。"""
+    entry = _users.get(name)
+    if not entry:
+        return {"error": "用户不存在"}
+    if role not in _VALID_ROLES:
+        return {"error": f"非法角色 (仅支持 {sorted(_VALID_ROLES)})"}
+    if _last_boss_guard(name, role):
+        return {"error": "不能降级最后一个 boss (防自锁)"}
+    entry["role"] = role
+    if _users_db:
+        _users_db.update_user_role_db(name, role)
+    return {"name": name, "role": role}
+
+
+def remove_user(name: str) -> dict:
+    """移除用户 (最后 boss 保护)。"""
+    entry = _users.get(name)
+    if not entry:
+        return {"error": "用户不存在"}
+    if _last_boss_guard(name, None):
+        return {"error": "不能删除最后一个 boss (防自锁)"}
+    _users.pop(name, None)
+    _user_tokens.pop(entry["token_hash"], None)
+    if _users_db:
+        _users_db.delete_user_db(name)
+    return {"name": name, "removed": True}
 
 
 # 管理员路径前缀: 仅 boss 可写 (读仍对全部角色开放)

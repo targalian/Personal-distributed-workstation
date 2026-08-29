@@ -420,3 +420,117 @@ body {
 .react-flow__edge-path {
   stroke: #5a6f9c;
 }
+
+/* ── 用户管理页 (iter-63 团队场景深化) ── */
+
+.dim {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.error-box {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: rgba(244, 67, 54, 0.12);
+  border: 1px solid rgba(244, 67, 54, 0.4);
+  border-radius: 8px;
+  color: #ff8a80;
+  font-size: 13px;
+}
+
+.btn.sm,
+.input.sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.btn.danger {
+  border-color: rgba(244, 67, 54, 0.5);
+  color: #ff8a80;
+}
+
+.btn.danger:hover {
+  border-color: #f44336;
+  background: rgba(244, 67, 54, 0.1);
+}
+
+.role-chip {
+  display: inline-block;
+  padding: 2px 10px;
+  border: 1px solid;
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.user-create {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.user-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.user-table th,
+.user-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.user-table th {
+  background: var(--bg2);
+  color: var(--dim);
+  font-weight: 600;
+}
+
+.user-table tr:last-child td {
+  border-bottom: none;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  max-width: 480px;
+  width: 90%;
+}
+
+.token-modal h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.token-box {
+  padding: 12px;
+  background: var(--bg2);
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  word-break: break-all;
+  margin-bottom: 12px;
+}
+
+.token-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
