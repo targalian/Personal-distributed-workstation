@@ -1344,11 +1344,22 @@ class StationController:
             logger.warning("排队任务接力派发失败: %s", result.get("message"))
             return False
 
-        from .protocol import PMAgent
         pm_id = result["pm_id"]
         task.pm_agent_id = pm_id
         task.status = "running"
         self.db.save_task(task)
+        self._register_local_pm(pm_id, task)
+        logger.info("排队任务已接力派发: %s (%s) → PM %s",
+                    task.task_id[:8], task.name, pm_id[:8])
+        return True
+
+    def _register_local_pm(self, pm_id: str, task) -> None:
+        """本机 PM 启动后的统一登记 (落库 + 映射 + WS 广播)。
+
+        iter-69 (Bug L 修复): 接力派发与 F3.3 本机接管共用此登记, 避免
+        接管路径漏登记导致 PM 查不到、无法取消、二次迁移失联。
+        """
+        from .protocol import PMAgent
         self.db.upsert_pm_agent(PMAgent(
             pm_id=pm_id,
             agent_name=f"PM-{pm_id[:8]}",
@@ -1373,9 +1384,6 @@ class StationController:
             "device_name": self.state.device_name,
         })
         self._queue_ws_broadcast("task_updated", task.to_dict())
-        logger.info("排队任务已接力派发: %s (%s) → PM %s",
-                    task.task_id[:8], task.name, pm_id[:8])
-        return True
 
     def _local_stop_pm(self) -> dict:
         """停止本机 PM Agent。"""
@@ -2099,11 +2107,11 @@ class StationController:
         """
         from pathlib import Path
         from .http_retry import http_get
-        from .model_resources import read_config_data
+        from . import model_resources as model_resources
         from .secret_sync import config_hash
 
         target = Path(__file__).parent / "resources.yaml"
-        cfg = read_config_data(target) if target.is_file() else {}
+        cfg = model_resources.read_config_data(target)
         mine = cfg.get("data") or {}
         mine_hash = config_hash(mine) if mine else ""
         try:
@@ -2491,29 +2499,49 @@ class StationController:
                     else:
                         # 本机接管
                         logger.info("[F3.3] 无可用 Worker, 本机接管任务 %s", task_id[:8])
-                        self._start_local_pm_for_task(task_id)
+                        if not self._start_local_pm_for_task(task_id):
+                            # iter-69 (Bug L): 接管失败任务留在 pending,
+                            # 由自动扩容/接力派发下一轮兜底重试
+                            logger.warning("[F3.3] 接管失败, 任务 %s 留在 "
+                                           "pending 等待下轮派发", task_id[:8])
 
             # 清理映射
             del self._pm_worker_map[pm_id]
 
-    def _start_local_pm_for_task(self, task_id: str):
-        """F3.3: 本机启动 PM Agent 接管指定任务。"""
-        try:
-            from .pm_agent import ProjectManagerAgent
-            task = self.db.get_task(task_id)
-            if not task:
-                return
+    def _start_local_pm_for_task(self, task_id: str) -> bool:
+        """F3.3: 本机启动 PM Agent 接管指定任务。
 
-            pm = ProjectManagerAgent(
-                pm_id=f"pm-migrated-{task_id[:8]}",
-                task=task.to_dict() if hasattr(task, 'to_dict') else {"task_id": task_id},
-                secretary_url=f"http://127.0.0.1:{self.state.api_port}",
-                runtime=None,
-            )
-            self._local_pm_agent = pm
-            logger.info("[F3.3] 本机 PM 已启动: %s", pm.pm_id[:8])
+        iter-69 (Bug L 修复): 原实现自行构造 ProjectManagerAgent 且用的是
+        早期签名 (task=/runtime=), 真机接管必然 TypeError —— 七节点实压日志
+        "[F3.3] 本机接管失败: ProjectManagerAgent.__init__() got an
+        unexpected keyword argument 'task'", 任务停在 pending 无人接管。
+        改为复用唯一入口 `_local_start_pm` (与接力派发同路径, 带 runtime
+        懒初始化 + start_task 真正跑起来), 并补齐 PM 落库 + 映射登记。
+        """
+        task = self.db.get_task(task_id)
+        if not task:
+            logger.warning("[F3.3] 本机接管失败: 任务不存在 %s", task_id[:8])
+            return False
+
+        secretary_url = f"http://127.0.0.1:{self.state.api_port}"
+        try:
+            result = self._local_start_pm(task_id, secretary_url,
+                                          task.to_dict())
         except Exception as e:
             logger.error("[F3.3] 本机接管失败: %s", e)
+            return False
+        if not result.get("ok"):
+            logger.error("[F3.3] 本机接管失败: %s", result.get("message"))
+            return False
+
+        pm_id = result["pm_id"]
+        task.pm_agent_id = pm_id
+        task.status = "running"
+        self.db.save_task(task)
+        self._register_local_pm(pm_id, task)
+        logger.info("[F3.3] 本机 PM 已接管任务 %s → PM %s",
+                    task_id[:8], pm_id[:8])
+        return True
 
     def _try_periodic_report(self):
         """优化12: 定期汇报 — 当有活跃任务时, 生成简报推送到 Web UI 和 Bot。

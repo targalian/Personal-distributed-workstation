@@ -5760,6 +5760,9 @@ class TestIter57Concurrency:
                 self._started.append(task_id)
                 return {"ok": True, "pm_id": "pm-relay-001"}
 
+            # iter-69: 登记逻辑抽为 _register_local_pm (接力/接管共用)
+            _register_local_pm = StationController._register_local_pm
+
             def _queue_ws_broadcast(self, event_type, data):
                 self._ws_events.append((event_type, data))
 
@@ -6908,5 +6911,204 @@ class TestIter66ClusterScale:
         sc.StationController._autoscale_check(fake)
         # 派发失败 → 队列未减 → 立即停止本轮 (不死循环重试)
         assert len(sent) == 1
+
+
+class TestIter69LocalTakeover:
+    """iter-69 七节点实压背书 (F3.3 本机接管 Bug L):
+
+    真机日志暴露: 6 Worker 全部离线 (无可用替补) 时 F3.3 走本机接管分支,
+    `_start_local_pm_for_task` 用早期 PM 签名 (task=/runtime=) 自行构造
+    ProjectManagerAgent → TypeError "unexpected keyword argument 'task'",
+    接管必然失败, 任务停在 pending 无人推进。
+    修复: 复用唯一入口 `_local_start_pm` + 抽出 `_register_local_pm`
+    统一落库/映射/广播。
+    """
+
+    def _fake(self, db, started=None, fail_reason=None, raises=False):
+        from types import SimpleNamespace
+        from lan_mesh.station_controller import StationController
+
+        class _Fake:
+            _local_pm_agent = None
+
+            def __init__(self):
+                self.db = db
+                self.state = SimpleNamespace(
+                    device_id="dev-ctl", api_port=45500, device_name="ctl")
+                self._pm_worker_map: dict = {}
+                self._ws_events: list = []
+
+            def _local_start_pm(self, task_id, secretary_url, task_data):
+                if raises:
+                    raise TypeError(
+                        "ProjectManagerAgent.__init__() got an unexpected "
+                        "keyword argument 'task'")
+                if started is not None:
+                    started.append((task_id, secretary_url, task_data))
+                if fail_reason:
+                    return {"ok": False, "message": fail_reason}
+                return {"ok": True, "pm_id": "pm-69-take"}
+
+            _register_local_pm = StationController._register_local_pm
+
+            def _queue_ws_broadcast(self, event_type, data):
+                self._ws_events.append((event_type, data))
+
+        return _Fake()
+
+    def test_takeover_reuses_local_start_pm_entry(self, tmp_path):
+        """接管: 走 _local_start_pm 唯一入口 (Bug L 回归 — 不再自构 PM)。"""
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        from lan_mesh.protocol import Task
+
+        db = Database(str(tmp_path / "f69a.db"))
+        task = Task(task_id="t-69-a", name="接管任务", description="d")
+        task.status = "pending"
+        db.save_task(task)
+        started: list = []
+        fake = self._fake(db, started=started)
+
+        ok = StationController._start_local_pm_for_task(fake, "t-69-a")
+        assert ok is True, "本机接管应成功"
+        # 复用唯一入口, 且带完整 task_data (PM 才能真正 start_task)
+        assert len(started) == 1
+        assert started[0][0] == "t-69-a"
+        assert started[0][1] == "http://127.0.0.1:45500"
+        assert started[0][2]["task_id"] == "t-69-a"
+
+    def test_takeover_registers_pm_and_marks_running(self, tmp_path):
+        """接管: PM 落库 + 映射带 task_id + 任务转 running + WS 广播。"""
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        from lan_mesh.protocol import Task
+
+        db = Database(str(tmp_path / "f69b.db"))
+        task = Task(task_id="t-69-b", name="接管落库", description="d")
+        task.status = "pending"
+        db.save_task(task)
+        fake = self._fake(db)
+
+        assert StationController._start_local_pm_for_task(fake, "t-69-b")
+        got = db.get_task("t-69-b")
+        assert got.status == "running"
+        assert got.pm_agent_id == "pm-69-take"
+        # PM 落库 (运维可查 / 可取消)
+        assert db.get_pm_agent("pm-69-take") is not None
+        # 映射带 task_id: 支撑二次迁移 (iter-66 Bug B 约束)
+        entry = fake._pm_worker_map["pm-69-take"]
+        assert entry["task_id"] == "t-69-b"
+        assert entry["local"] is True
+        assert entry["device_id"] == "dev-ctl"
+        types = [e[0] for e in fake._ws_events]
+        assert "pm_registered" in types and "task_updated" in types
+
+    def test_takeover_missing_task_returns_false(self, tmp_path):
+        """接管: 任务不存在 → 返回 False, 不落库不广播。"""
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+
+        db = Database(str(tmp_path / "f69c.db"))
+        fake = self._fake(db)
+        assert StationController._start_local_pm_for_task(
+            fake, "t-69-missing") is False
+        assert fake._pm_worker_map == {}
+        assert fake._ws_events == []
+
+    def test_takeover_failure_leaves_task_pending(self, tmp_path):
+        """接管失败: 任务留在 pending (由下轮扩容/接力兜底), 不误标 running。"""
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        from lan_mesh.protocol import Task
+
+        db = Database(str(tmp_path / "f69d.db"))
+        task = Task(task_id="t-69-d", name="接管失败", description="d")
+        task.status = "pending"
+        db.save_task(task)
+        fake = self._fake(db, fail_reason="本机 PM Agent 正在运行")
+
+        assert StationController._start_local_pm_for_task(
+            fake, "t-69-d") is False
+        assert db.get_task("t-69-d").status == "pending"
+        assert fake._pm_worker_map == {}
+
+    def test_takeover_swallows_exception(self, tmp_path):
+        """接管: 入口抛异常被隔离 (不打断 _migrate_orphaned_pms 循环)。"""
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        from lan_mesh.protocol import Task
+
+        db = Database(str(tmp_path / "f69e.db"))
+        task = Task(task_id="t-69-e", name="异常隔离", description="d")
+        task.status = "pending"
+        db.save_task(task)
+        fake = self._fake(db, raises=True)
+
+        assert StationController._start_local_pm_for_task(
+            fake, "t-69-e") is False
+        assert db.get_task("t-69-e").status == "pending"
+
+    def test_migrate_takeover_failure_keeps_task_pending(self, tmp_path):
+        """全 Worker 离线 + 接管失败 → 任务 pending 且映射已清理 (真机场景)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.database import Database
+        from lan_mesh.protocol import Task
+
+        db = Database(str(tmp_path / "f69f.db"))
+        task = Task(task_id="t-69-f", name="七节点全灭", description="d")
+        task.status = "running"
+        task.pm_agent_id = "pm-gone"
+        db.save_task(task)
+        fake = type("F", (), {
+            "db": db,
+            "state": type("S", (), {"device_id": "self-1",
+                                    "api_port": 45500})(),
+            "_pm_worker_map": {"pm-gone": {"device_id": "w-gone",
+                                           "task_id": "t-69-f"}},
+            "_is_worker_busy": lambda self_, h: False,
+            "_start_local_pm_for_task": lambda self_, tid: False,
+        })()
+
+        sc.StationController._migrate_orphaned_pms(fake, ["w-gone"])
+        got = db.get_task("t-69-f")
+        assert got.status == "pending"
+        assert got.pm_agent_id == ""
+        assert "pm-gone" not in fake._pm_worker_map
+
+    def test_relay_dispatch_still_registers_via_shared_helper(self, tmp_path):
+        """接力派发: 抽出 _register_local_pm 后行为不变 (iter-57 回归)。"""
+        from types import SimpleNamespace
+        from lan_mesh.database import Database
+        from lan_mesh.station_controller import StationController
+        from lan_mesh.protocol import Task
+
+        db = Database(str(tmp_path / "f69g.db"))
+        db.save_task(Task(task_id="t-69-g", name="排队", description="d",
+                          status="pending"))
+
+        class _Fake:
+            _local_pm_agent = None
+            _queued_dispatch_waiting = False
+
+            def __init__(self):
+                self.db = db
+                self.state = SimpleNamespace(
+                    device_id="dev-ctl", api_port=45500, device_name="ctl")
+                self._pm_worker_map: dict = {}
+                self._ws_events: list = []
+
+            def _local_start_pm(self, task_id, secretary_url, task_data):
+                return {"ok": True, "pm_id": "pm-69-relay"}
+
+            _register_local_pm = StationController._register_local_pm
+
+            def _queue_ws_broadcast(self, event_type, data):
+                self._ws_events.append((event_type, data))
+
+        fake = _Fake()
+        assert StationController._dispatch_queued_task(fake) is True
+        assert db.get_task("t-69-g").status == "running"
+        assert db.get_pm_agent("pm-69-relay") is not None
+        assert fake._pm_worker_map["pm-69-relay"]["task_id"] == "t-69-g"
 
 

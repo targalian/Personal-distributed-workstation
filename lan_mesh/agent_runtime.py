@@ -104,6 +104,113 @@ SHELL_BLOCKED_PATTERNS = [
     "iptables", "systemctl", "service ",
 ]
 
+# ── 自举护栏 (iter-70) ──────────────────────────────────────
+# 背景: _handle_cli_agent 会拉起 claude/codex/aider 的全自动模式, 其子进程
+# 不受本模块 SHELL_BLOCKED_PATTERNS / file_ops 路径校验约束 — 等于沙箱逃逸口。
+# 若放任 cwd 指向本仓库, Agent 可改写自身安全策略或门禁, 形成不可控自举。
+
+# 禁止 CLI Agent 直接改写的文件 (自身安全策略 / 门禁 / 推送通道)
+SELF_MOD_FORBIDDEN = [
+    "lan_mesh/agent_runtime.py",   # 本模块: 黑名单与护栏自身
+    "lan_mesh/shadow_dev.py",      # 影子模式隔离与门禁
+    "tests/test_shadow_dev.py",    # 护栏回归测试
+    "AGENTS.md",                   # Agent 硬约束
+    "AGENT_LOCKS.md",              # 多 Agent 协作锁
+    ".githooks/",                  # 9 项上库门禁
+    "scripts/dev_status.py",       # 协作态势与归属检查
+    "scripts/sync_docs.py",        # 文档清单门禁
+    "scripts/sync_push.ps1",       # 推送唯一入口
+    "scripts/ship.ps1",            # 发货通道
+    ".git/",                       # 版本库内部
+]
+
+# 允许 CLI Agent 工作的根目录白名单 (环境变量可追加, os.pathsep 分隔)
+# 默认只允许 shared_folder 与影子副本目录; 主仓库需显式放行。
+CLI_AGENT_ALLOWED_ROOTS = [
+    r for r in os.environ.get("CLI_AGENT_ALLOWED_ROOTS", "").split(os.pathsep) if r
+]
+
+# 显式开关: 置 1 才允许 CLI Agent 在主仓库内直接作业 (默认禁止, 走影子模式)
+CLI_AGENT_ALLOW_SELF_REPO = os.environ.get("CLI_AGENT_ALLOW_SELF_REPO", "") == "1"
+
+# 需要额外透传给 CLI 子进程的环境变量 (逗号分隔; 默认不透传业务密钥)
+CLI_AGENT_PASSTHROUGH_ENV = [
+    key.strip()
+    for key in os.environ.get("CLI_AGENT_PASSTHROUGH_ENV", "").split(",")
+    if key.strip()
+]
+
+
+def _repo_root() -> str:
+    """本项目仓库根目录绝对路径 (agent_runtime.py 的上一级)。"""
+    return os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def validate_cli_agent_cwd(
+        cwd: str,
+        allowed_roots: Optional[list[str]] = None) -> Optional[str]:
+    """校验 CLI Agent 工作目录是否安全。
+
+    返回 None 表示放行; 返回字符串表示拒绝原因。
+
+    规则:
+      1. 目录必须存在;
+      2. 落在主仓库内 → 默认拒绝 (需 CLI_AGENT_ALLOW_SELF_REPO=1 显式放行),
+         避免 Agent 改写自身安全策略造成不可控自举;
+      3. 必须落在显式传入根目录或 CLI_AGENT_ALLOWED_ROOTS 白名单内。
+    """
+    if not cwd:
+        return "未指定工作目录 (cwd)"
+    resolved = os.path.realpath(os.path.expanduser(cwd))
+    if not os.path.isdir(resolved):
+        return f"工作目录不存在: {cwd}"
+
+    repo = _repo_root()
+    in_repo = resolved == repo or resolved.startswith(repo + os.sep)
+    if in_repo and not CLI_AGENT_ALLOW_SELF_REPO:
+        return (f"[自举护栏] 拒绝在主仓库内运行 CLI Agent: {resolved}。"
+                f" 请使用影子模式 (lan_mesh/shadow_dev.py) 在副本上作业,"
+                f" 或显式设置 CLI_AGENT_ALLOW_SELF_REPO=1 承担风险")
+
+    if in_repo and CLI_AGENT_ALLOW_SELF_REPO:
+        return None
+
+    roots = allowed_roots if allowed_roots is not None else CLI_AGENT_ALLOWED_ROOTS
+    resolved_roots = [
+        os.path.realpath(os.path.expanduser(root))
+        for root in roots if root
+    ]
+    if not resolved_roots:
+        return "[自举护栏] 未配置 CLI Agent 允许根目录"
+    ok = any(
+        resolved == root or resolved.startswith(root + os.sep)
+        for root in resolved_roots
+    )
+    if not ok:
+        return (f"[自举护栏] 工作目录不在白名单内: {resolved}"
+                f" (允许: {resolved_roots})")
+    return None
+
+
+def check_self_mod_violations(changed_files: list[str]) -> list[str]:
+    """检查 CLI Agent 变更列表是否触碰护栏/门禁文件。
+
+    用于影子模式产出 diff 后的复核: 即使在副本中, 也不接受 Agent 改写
+    自身安全策略、协作锁或上库门禁。
+    """
+    violations: list[str] = []
+    for changed in changed_files:
+        rel = changed.replace("\\", "/").strip()
+        if rel.startswith("./"):
+            rel = rel[2:]
+        for forbidden in SELF_MOD_FORBIDDEN:
+            prefix = forbidden.rstrip("/")
+            if rel == prefix or (forbidden.endswith("/") and rel.startswith(prefix + "/")):
+                if forbidden not in violations:
+                    violations.append(forbidden)
+    return violations
+
+
 # 文件操作允许的最大文件大小 (10MB)
 MAX_FILE_SIZE = 10 * 1024 * 1024
 
@@ -165,11 +272,19 @@ CLI_AGENT_BACKENDS = {
     },
     "codex": {
         "detect": "codex",
+        # codex exec: 非交互模式 (旧 CLI 的 --quiet/--full-auto 已废弃)
+        # -s workspace-write: 沙箱限制写入范围
+        # -C cwd: 显式指定工作目录 (subprocess cwd 之外的双重保险)
+        # --output-last-message: 单文件输出最后消息, 便于机器读取
         "build_cmd": lambda prompt, cwd: [
-            "codex", "--quiet", "--full-auto", prompt,
+            "codex", "exec",
+            "-s", "workspace-write",
+            "-C", cwd,
+            "--output-last-message", os.path.join(cwd, ".codex_last_message.txt"),
+            prompt,
         ],
         "timeout": 600,
-        "description": "OpenAI Codex CLI — 沙箱编码 Agent",
+        "description": "OpenAI Codex CLI - 沙箱编码 Agent (exec 非交互模式)",
     },
 }
 
@@ -180,14 +295,44 @@ CLI_AGENT_MAX_OUTPUT = 200 * 1024  # 200KB
 
 
 def _build_cli_env(backend: str) -> dict:
-    """构建 CLI Agent 执行环境变量, 自动注入 Token Plan 凭据。
+    """构建 CLI Agent 最小执行环境, 自动注入所需后端凭据。
 
     策略:
-    - claude: 注入 ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL (Token Plan Anthropic 端点)
-    - aider:  注入 OPENAI_API_KEY + OPENAI_API_BASE (Token Plan OpenAI 端点)
-    - 如果用户已设置原生 API Key, 优先使用原生 (不覆盖)
+    - 只透传进程启动/网络/CLI 认证所需变量, 避免 CLI 子进程拿到
+      全部业务密钥、Git 凭据与无关配置;
+    - claude: 注入 ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL;
+    - aider: 注入 OPENAI_API_KEY + OPENAI_API_BASE;
+    - 额外变量必须通过 CLI_AGENT_PASSTHROUGH_ENV 显式声明;
+    - 禁用 Git 全局/系统配置与凭据助手, 降低自主 Agent 误推送风险。
     """
-    env = {**os.environ, "NO_COLOR": "1"}
+    base_keys = {
+        # Windows/Unix 进程与动态库基础
+        "PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "COMSPEC",
+        "TEMP", "TMP", "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA",
+        "PROGRAMFILES", "PROGRAMDATA", "LANG", "LC_ALL", "TERM",
+        # 网络代理与证书
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+        "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE",
+    }
+    backend_keys = {
+        "claude": {
+            "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+        },
+        "codex": {"OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_HOME"},
+        "aider": {"OPENAI_API_KEY", "OPENAI_API_BASE", "OPENAI_BASE_URL"},
+    }
+    allowed_keys = base_keys | backend_keys.get(backend, set()) | set(CLI_AGENT_PASSTHROUGH_ENV)
+    env = {
+        key: value for key, value in os.environ.items()
+        if key in allowed_keys
+    }
+    env["NO_COLOR"] = "1"
+    # Windows CLI (codex/claude) 需要 HOME; 沙箱进程可能未继承 -> 用 USERPROFILE 补
+    if not env.get("HOME") and env.get("USERPROFILE"):
+        env["HOME"] = env["USERPROFILE"]
+    _harden_git_env(env)
     token_plan_key = os.environ.get("ALIYUN_TOKENPLAN_API_KEY", "")
 
     if not token_plan_key:
@@ -208,6 +353,18 @@ def _build_cli_env(backend: str) -> dict:
             logger.debug("[CLI Agent] aider 使用 Token Plan OpenAI 端点")
 
     return env
+
+
+def _harden_git_env(env: dict) -> None:
+    """移除 Git 凭据入口并禁用全局配置, 降低误推送风险。"""
+    for key in (
+            "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH_COMMAND", "SSH_AUTH_SOCK",
+            "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+    ):
+        env.pop(key, None)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
 
 
 def _which_with_fallback(cmd: str) -> Optional[str]:
@@ -693,6 +850,13 @@ class AgentRuntime:
         cwd = input_data.get("cwd", self.shared_folder)
         timeout = min(input_data.get("timeout", CLI_AGENT_TIMEOUT), 1800)  # 最大 30min
 
+        # 自举护栏 (iter-70): CLI Agent 子进程不受本模块沙箱约束, 先校验 cwd
+        allowed_roots = [self.shared_folder, *CLI_AGENT_ALLOWED_ROOTS]
+        reject = validate_cli_agent_cwd(cwd, allowed_roots)
+        if reject:
+            logger.warning("[CLI Agent] cwd 校验拒绝: %s", reject)
+            return {"error": reject, "cwd": cwd}
+
         # 确定后端
         backend = input_data.get("backend", "").lower().strip()
         if backend and backend in CLI_AGENT_BACKENDS:
@@ -713,6 +877,13 @@ class AgentRuntime:
 
         # 构建命令
         cmd = cfg["build_cmd"](requirement, cwd)
+
+        # 检测与执行必须用同一路径: detect 走 _which_with_fallback (含 npm 目录),
+        # 但 build_cmd 给的是裸名 — 若 npm 目录不在 PATH, subprocess 必然
+        # FileNotFoundError。此处把 argv[0] 替换为绝对路径。
+        resolved_exe = _which_with_fallback(cfg["detect"])
+        if resolved_exe:
+            cmd[0] = resolved_exe
 
         # Claude Code 额外参数: 工具权限控制
         if backend == "claude":

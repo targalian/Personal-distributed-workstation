@@ -10,6 +10,7 @@
 |---|---|
 | database.py | SQLite 数据库存储层 - Secretary 端主机注册记录持久化 |
 | runtime_trace.py | 运行时追踪与性能审计 — P0/P1 运行时分析引擎 |
+| shadow_dev.py | 影子开发模式 — 让 PM/CLI Agent 在仓库副本上自主开发, 产出 diff 供人审。 |
 | singleton.py | 主机级工作站单实例守护 (E6)。 |
 | station_api.py | Station Director API 路由层 (装配入口) |
 | station_controller.py | Station Director 独立控制器 — 基础设施管理入口 |
@@ -25,7 +26,25 @@
 <!-- /AUTO:module-list -->
 ---
 
-## station_controller.py — Station 控制器（核心枢纽）
+## shadow_dev.py - 自举安全开发 (iter-70)
+
+**职责**: 把 CLI Agent 的自主开发收敛到仓库外影子副本, 主仓库全程只读;
+产出 `changes.patch` 与 `report.json`, 由人工审核后应用, 不自动提交/推送。
+
+**三道护栏**:
+1. **目录隔离** - `_handle_cli_agent` 必须命中 `shared_folder` 或
+   `CLI_AGENT_ALLOWED_ROOTS`; 主仓库默认拒绝, 只有
+   `CLI_AGENT_ALLOW_SELF_REPO=1` 可显式放行。CLI 子进程仅获得最小环境
+   (后端凭据 + 平台/网络变量), 并禁用 Git 全局凭据配置。
+2. **副本隔离** - 影子副本跳过 `.env`、`model_pool.yaml`、`config.yaml`
+   等本地敏感配置与全部符号链接, `SHADOW_DEV_HOME` 必须位于主仓库外。
+3. **产出门禁** - 副本内执行编译、导入、pytest、`sync_docs`、护栏文件
+   复核与新增行密钥扫描; 任一失败只能得到 `GATES_FAILED`, diff 保留供排查。
+
+**不变式**: `SELF_MOD_FORBIDDEN` 覆盖 runtime 安全策略、影子模式、协作锁、
+上库/发货脚本、Git hooks 与护栏测试; 这些文件出现在影子 diff 中即拒绝。
+
+## station_controller.py - Station 控制器（核心枢纽）
 
 **职责**: `python main.py station` 的进程主体，基础设施管理入口。
 
