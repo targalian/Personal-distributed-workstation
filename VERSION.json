@@ -1,6 +1,6 @@
 {
   "version": "0.31.1",
-  "commit": "1a2ffb2",
+  "commit": "021d453",
   "released_at": "2026-08-30",
   "note": "iter-70 安全自举: CLI Agent cwd 白名单 + 最小子进程环境 + 影子副本隔离/六项门禁/密钥扫描",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
