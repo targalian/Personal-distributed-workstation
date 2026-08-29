@@ -6517,6 +6517,64 @@ class TestIter66ClusterScale:
         # 映射含 task_id (Bug B 回归)
         assert fake._pm_worker_map["pm-66-1"]["task_id"] == "t-66-a"
         assert fake._pm_worker_map["pm-66-1"]["device_id"] == "w-1"
+        # Bug K 回归: 派发成功落 pm_agents 表 (运维查询/承载定位)
+        agents = [a for a in db.list_pm_agents()
+                  if getattr(a, 'task_id', '') == "t-66-a"]
+        assert len(agents) == 1
+        assert getattr(agents[0], 'device_id', '') == "w-1"
+
+    def test_autoscale_dispatches_single_queued_task(self, tmp_path,
+                                                     monkeypatch):
+        """扩容: 单任务积压 (队列=1) 也派发 (Bug J — 水位门槛调度滞后)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        task = Task(task_id="t-67-j", name="单任务积压", description="d")
+        db.save_task(task)
+        db.upsert_host(self._worker("w-1"))
+        fake = self._fake(db)
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"ok": True, "pm_id": "pm-67-1"}
+
+        sent = []
+
+        def fake_post(url, json=None, timeout=10, headers=None):
+            sent.append(json)
+            return FakeResp()
+        monkeypatch.setattr(sc, "http_post", fake_post)
+        monkeypatch.setattr("lan_mesh.host_info.pick_reachable_ip",
+                            lambda ip: "127.0.0.1")
+
+        sc.StationController._autoscale_check(fake)
+        # Bug J 回归: 队列=1 (< 原水位 2) 且有空闲 Worker → 仍派发
+        assert sent and sent[0]["task_id"] == "t-67-j"
+        assert db.get_task("t-67-j").status == "running"
+
+    def test_autoscale_skips_when_no_worker_or_empty_queue(self, tmp_path,
+                                                           monkeypatch):
+        """扩容: 无空闲 Worker 或空队列 → 不派发 (Bug J 修正不引入空转)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        task = Task(task_id="t-67-k", name="排队", description="d")
+        db.save_task(task)
+        fake = self._fake(
+            db,
+            pm_map={"pm-busy": {"device_id": "w-1", "task_id": "t-other"}},
+            busy_check=sc.StationController._is_worker_busy)
+        db.upsert_host(self._worker("w-1"))
+        dispatched = []
+        fake._dispatch_next_task_to_worker = (
+            lambda self_, h: dispatched.append(h.device_id))
+        sc.StationController._autoscale_check(fake)
+        assert dispatched == []   # w-1 忙 → 不派发
+        assert db.get_task("t-67-k").status == "pending"
 
     def test_autoscale_skips_busy_worker(self, tmp_path, monkeypatch):
         """扩容: 唯一 Worker 忙碌 → 不派发 (忙过滤, 避免叠任务)。"""
@@ -6539,13 +6597,13 @@ class TestIter66ClusterScale:
 
     def test_autoscale_idle_when_queue_below_threshold(self, tmp_path,
                                                        monkeypatch):
-        """扩容: 积压 < 2 → 不派发 (阈值边界)。"""
+        """扩容: 有积压但无在线 Worker → 不派发 (Bug J 后水位不再是门槛)。"""
         import lan_mesh.station_controller as sc
         from lan_mesh.protocol import Task
 
         db = self._make_db(tmp_path)
         db.save_task(Task(task_id="t-66-e", name="单积压", description="d"))
-        db.upsert_host(self._worker("w-1"))
+        # 不 upsert host → 无在线 Worker, 即使队列=1 也不派发
         fake = self._fake(db)
         called = []
         monkeypatch.setattr(sc, "http_post",

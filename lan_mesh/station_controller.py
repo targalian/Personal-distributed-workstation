@@ -2612,8 +2612,11 @@ class StationController:
         idle_workers = [h for h in online_workers
                        if not self._is_worker_busy(h)]
 
-        # 扩容: 队列积压且有可用 Worker
-        if queue_depth >= self._autoscale_up_threshold and idle_workers:
+        # 扩容: 队列积压且有可用 Worker (iter-67 Bug J: 门槛从
+        # queue_depth >= up_threshold 改为 >= 1 — 原水位式门槛导致
+        # 「最后 1 单滞留 pending」与「新 Worker 上线不接活」的调度滞后;
+        # 每轮仅派发 1 个 + 30s 轮询间隔承担防抖动职责)
+        if queue_depth >= 1 and idle_workers:
             target = idle_workers[0]
             logger.info("[自动扩容] 队列=%d, 激活 Worker: %s",
                        queue_depth, getattr(target, 'device_name', ''))
@@ -2679,6 +2682,20 @@ class StationController:
                         "device_id": getattr(worker_host, 'device_id', ''),
                         "task_id": task_id,
                     }
+                    # iter-67 (Bug K): 与其余 5 处派发路径对齐, 落 pm_agents 表
+                    # (运维查询任务承载 + 脚本 victim 定位依赖该表)
+                    from .protocol import PMAgent
+                    self.db.upsert_pm_agent(PMAgent(
+                        pm_id=pm_id,
+                        agent_name=f"PM-{pm_id[:8]}",
+                        task_id=task_id,
+                        project_id=getattr(task, 'project_id', '') or '',
+                        device_id=getattr(worker_host, 'device_id', ''),
+                        hostname=getattr(worker_host, 'device_name', ''),
+                        ip=ip,
+                        api_port=port,
+                        status="starting",
+                    ))
                 logger.info("[自动扩容] 任务 %s 已派发到 %s", task_id[:8], ip)
                 return True
             else:
