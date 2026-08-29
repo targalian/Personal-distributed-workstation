@@ -226,6 +226,14 @@ WebSocket 通道。
 (iter-67 Bug K: autoscaler 派发成功路径补落 `pm_agents` 表 — 与其余
 5 处派发路径对齐, 运维查询任务承载与 victim 定位依赖该表。)
 
+(iter-69 Bug L: 本机接管 `_start_local_pm_for_task` 原自行构造
+`ProjectManagerAgent` 且沿用早期签名 `task=/runtime=`, 与现签名
+`(pm_id, agent_runtime, secretary_url, device_id, device_name)` 不符 —
+七节点实压中 6 Worker 全灭走接管分支即 TypeError, 任务停在 pending 无人
+推进。改为复用唯一入口 `_local_start_pm` (含 runtime 懒初始化 +
+`start_task` 真正启动), 并把落库/映射/广播抽为 `_register_local_pm`
+与接力派发共用; 接管返回 bool, 失败时任务保持 pending 由下轮扩容兜底。)
+
 **控制命令端点** (cancel/pause/delete, Bug I): 端点保持 `async def`,
 但跨节点阻塞调用丢 `run_in_threadpool` 执行 — 同步执行会阻塞事件循环
 → Worker 状态上报请求无法进入 → 跨节点死锁级联 (S 等 W2 响应, W2 卡在
@@ -325,6 +333,7 @@ agent_runtime.execute()
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-69 | F3.3 本机接管路径修复 (七节点实压 Bug L): `_start_local_pm_for_task` 自构 PM 用早期签名 (task=/runtime=) 必然 TypeError, 全 Worker 离线时接管失败任务滞留 pending; 改为复用 `_local_start_pm` 唯一入口 + 抽出 `_register_local_pm` 统一落库/映射/广播 (接力派发共用), 接管返回 bool 失败留 pending 由下轮扩容兜底; 专项 7/7 + 回归 380 passed |
 | 2026-08-29 | iter-68 | F3.1 扩容同轮批量清空 (30s/轮×N 积压滞后修复): _autoscale_check 单轮 while 连续派发 (每次派发后重查队列与空闲 Worker, 失败/未减即 break 防死循环) + _dispatch_next_task_to_worker 返回 bool; 五节点真机 14/14 (同轮清空耗时 18s vs 旧 120s+ 滞后) + 专项 16/16 + 回归 373 passed |
 | 2026-08-29 | iter-67 | 五节点集群实压 (评估报告边界 #2 五实例模拟): Bug J 扩容门槛水位→>=1 (最后 1 单不滞留/新 Worker 上线即接活) + Bug K autoscaler 派发落 pm_agents 表; 真机 13/13 (五机互认/4 积压全部派发/深度 4→3→2→1/FIFO/4 Worker 各 1 任务无重复/5 任务并发/杀机 F3.3) + 回归 371 passed |
 | 2026-08-29 | iter-66 | F3.1/F3.3 三机集群实测背书 (评估报告剩余边界 #2): 节点间派发协议收敛 (auth_headers + task_data + 映射含 task_id + 取消清映射 + 派发即置 running + FIFO) 共修复 9 个真实 bug (A-I); 控制命令端点 run_in_threadpool 解除跨节点死锁级联; 真机 17/17 + 专项 12/12 + 回归 369 passed |

@@ -7,7 +7,10 @@
 <!-- AUTO:module-list -->
 | 文件/目录 | 职责一句话 |
 |---|---|
+| .qoder/skills/ | Qoder 技能库 (docs-sync / code-review / repowiki-update 等) |
 | quicklan-main/ | 独立子项目: Tauri + React 桌面文件共享应用 |
+| scripts/dev_status.py | Loop Engineering - 全局开发态势看板 (只读, 人在回路外时的唯一观察入口)。 |
+| scripts/ship.ps1 | ★ 一键发货: 按 Agent 归属分批提交 + 调 sync_push 推送 |
 | scripts/start_workstation.bat | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/start_workstation.ps1 | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/start_workstation.sh | 跨平台一键启动 Station (bat/ps1/sh) |

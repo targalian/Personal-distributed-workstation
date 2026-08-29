@@ -7,7 +7,8 @@
 <!-- AUTO:module-list -->
 | 文件/目录 | 职责一句话 |
 |---|---|
-| .githooks/ | commit-msg / pre-push / post-merge 钩子 |
+| .githooks/ | commit-msg / pre-push / post-merge / post-commit 钩子 |
+| AGENT_LOCKS.md | 多 Agent 占用登记与交接看板 (根目录) |
 | loop_status.json | 迭代状态机 (根目录) |
 | test_bug/api_tests.py | Loop Engineering — 自动化白盒 API 测试 |
 | test_bug/daily_loop.bat | 每日循环定时任务形态 (Windows) |

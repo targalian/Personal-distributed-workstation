@@ -50,6 +50,9 @@ secrets.yaml
 # 日志
 *.log
 
+# Repo Wiki 运行时状态 (post-commit hook 的 pending 队列/锁/Agent 日志)
+.qoder/repowiki/.pending/
+
 # 临时调试产物 (根目录下划线开头的截图/脚本)
 /_*
 
