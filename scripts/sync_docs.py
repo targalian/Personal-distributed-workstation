@@ -44,7 +44,8 @@ MAPPING = {
     "lan_mesh/protocol.py": "01-network-discovery",
     "lan_mesh/auth.py": "01-network-discovery",
     "lan_mesh/http_retry.py": "01-network-discovery",
-    # 02-station-core — Station 基础设施
+    # 02-station-core - Station 基础设施
+    'lan_mesh/shadow_dev.py': '02-station-core',
     "lan_mesh/station_controller.py": "02-station-core",
     "lan_mesh/station_director.py": "02-station-core",
     "lan_mesh/station_api.py": "02-station-core",
@@ -114,7 +115,8 @@ MAPPING = {
                               "CSS/JS 静态资源 (含 spa/ React 构建产物)"),
     "webui/": ("09-frontend",
                "React SPA 源码 (Vite+TS+xyflow, 构建产物 → web/static/spa/)"),
-    # 10-test-loop — 测试与验证循环
+    # 10-test-loop - 测试与验证循环
+    'tests/test_shadow_dev.py': '10-test-loop',
     "tests/test_core.py": "10-test-loop",
     "test_bug/run_loop.py": "10-test-loop",
     "test_bug/dev_loop.py": "10-test-loop",

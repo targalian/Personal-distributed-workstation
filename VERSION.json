@@ -1,7 +1,7 @@
 {
-  "version": "0.31.0",
-  "commit": "79cb918",
-  "released_at": "2026-08-29",
-  "note": "P3 任务流全链路追踪 (task_flow 阶段事件钩子 + /api/runtime/task-flow 瀑布端点 + Dashboard 运行时 Tab 瀑布查询) + 单测 198",
+  "version": "0.31.1",
+  "commit": "1a2ffb2",
+  "released_at": "2026-08-30",
+  "note": "iter-70 安全自举: CLI Agent cwd 白名单 + 最小子进程环境 + 影子副本隔离/六项门禁/密钥扫描",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }

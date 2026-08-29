@@ -2,7 +2,143 @@
 # 复制为 model_pool.yaml 并填入实际 API Key 环境变量名
 # model_pool.yaml 已在 .gitignore 中排除,请勿提交到版本库
 
+# 全局默认模型 (秘书聊天/PM规划固定使用此模型, 留空则走自动路由)
+# 当前推荐默认模型: glm-5.3
+# Auto 模式 (ark-code-latest / auto) 需通过火山方舟控制台切换, 不在 API 侧强制指定
+default_model: glm-5.3
+
 models:
+  # ── 火山方舟 Coding Plan (订阅制, 编程套餐) ───────────────────
+  # 获取 API Key: https://console.volcengine.com/ark/region:ark+cn-beijing/apikey
+  # 环境变量: ARK_API_KEY="ark-xxxx"
+  # 注意: 必须使用 /api/coding/v3 端点才消耗套餐额度, 勿用 /api/v3 (按量计费)
+  # 模型名 (Model Name) 2026-08 实测可用 (plans model-list 输出名):
+  #   doubao-seed-evolving / doubao-seed-2-1-turbo / doubao-seed-2.0-lite /
+  #   glm-5-3-flash / glm-5.3 / deepseek-v4-pro / deepseek-v4-flash /
+  #   glm-5.2 / kimi-k2.7-code / minimax-m3 / ark-code-latest
+  # 注意: auto (智能调度) 在 /api/coding/v3/chat/completions 返 404
+  #   (仅支持控制台/Responses 入口), 勿加入模型池; ark-code-latest 可用
+  # 抵扣说明: 不同模型抵扣系数有差异; Auto 模式 (ark-code-latest / auto)
+  #   由控制台(开通管理页面)切换模型, 统一按基础最低系数抵扣, 最省额度
+
+  - id: doubao-seed-2-1-turbo
+    provider: volcengine-ark
+    api_key_env: ARK_API_KEY
+    base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+    cost_input_per_1k: 0.0     # 订阅制, 按套餐计量
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.90
+    speed_score: 0.85
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [deepseek-v4-flash, qwen3.7-plus, deepseek-v4-pro]
+
+  - id: deepseek-v4-flash
+    provider: volcengine-ark
+    api_key_env: ARK_API_KEY
+    base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [coding, lightweight]
+    quality_score: 0.80
+    speed_score: 0.92
+    rate_limit_rpm: 300
+    max_context_tokens: 131072
+    fallback: [doubao-seed-2-1-turbo, qwen3.6-flash, deepseek-chat]
+
+  - id: ark-code-latest
+    provider: volcengine-ark
+    api_key_env: ARK_API_KEY
+    base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.95
+    speed_score: 0.95
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [doubao-seed-2-1-turbo, qwen3.7-max, glm-5.2]
+
+  # 2026-08 新增实测模型 (套餐模型清单对齐, 均按订阅计量)
+  - id: doubao-seed-evolving
+    provider: volcengine-ark
+    api_key_env: ARK_API_KEY
+    base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.96
+    speed_score: 0.80
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [ark-code-latest, doubao-seed-2-1-turbo]
+
+  - id: doubao-seed-2.0-lite
+    provider: volcengine-ark
+    api_key_env: ARK_API_KEY
+    base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [general, lightweight]
+    quality_score: 0.78
+    speed_score: 0.90
+    rate_limit_rpm: 300
+    max_context_tokens: 131072
+    fallback: [deepseek-v4-flash, qwen3.6-flash]
+
+  - id: glm-5-3-flash
+    provider: volcengine-ark
+    api_key_env: ARK_API_KEY
+    base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.88
+    speed_score: 0.85
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [glm-5.3, deepseek-v4-flash]
+
+  - id: glm-5.3
+    provider: volcengine-ark
+    api_key_env: ARK_API_KEY
+    base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.92
+    speed_score: 0.75
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [glm-5-3-flash, ark-code-latest]
+
+  - id: kimi-k2.7-code
+    provider: volcengine-ark
+    api_key_env: ARK_API_KEY
+    base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.90
+    speed_score: 0.70
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [doubao-seed-2-1-turbo, deepseek-v4-pro]
+
+  - id: minimax-m3
+    provider: volcengine-ark
+    api_key_env: ARK_API_KEY
+    base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding, long_context]
+    quality_score: 0.87
+    speed_score: 0.78
+    rate_limit_rpm: 200
+    max_context_tokens: 131072
+    fallback: [doubao-seed-2-1-turbo, deepseek-v4-flash]
+
   # ── DeepSeek ─────────────────────────────────────────────────────
   - id: deepseek-chat
     provider: deepseek
