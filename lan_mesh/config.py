@@ -125,6 +125,29 @@ class ObservabilityConfig(BaseModel):
     api_rate_limit_trusted: int = 1000   # 信任桶限流 (req/min, 合法 mesh token), ≤0 禁用
 
 
+class FederationPeer(BaseModel):
+    """F3.4 (iter-64): 跨网段联邦对端 — 静态配置的远端可达节点。
+
+    UDP 发现无法跨越广播域, 联邦通过 HTTP 通道连接对端 Secretary/Station。
+    port 为对端 API 端口 (0 = 使用本机 api_port)。
+    """
+    name: str = ""    # 联邦名 (如 office-a, 用于主机来源标记)
+    host: str = ""    # 可达地址 (IP 或域名)
+    port: int = 0
+
+
+class FederationConfig(BaseModel):
+    """F3.4 (iter-64): 跨网段多 Secretary 联邦 (静态 peer 联邦)。
+
+    enabled=False 时不启动联邦轮询线程 (向后兼容); 联邦对端不参与
+    本网段 Secretary 仲裁 (各网段保留自己的 Secretary, 联邦共存)。
+    """
+    enabled: bool = False
+    interval: int = 15        # 轮询间隔 (秒)
+    offline_after: int = 3    # 连续失败 N 次标记对端离线
+    peers: list[FederationPeer] = []
+
+
 class AppConfig(BaseModel):
     """应用顶层配置 (iter-61: 技能市场目录与包大小限制)。"""
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
@@ -134,6 +157,7 @@ class AppConfig(BaseModel):
     cloud_storage: CloudStorageConfig = Field(default_factory=CloudStorageConfig)
     security: "SecurityConfig" = Field(default_factory=lambda: SecurityConfig())
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    federation: FederationConfig = Field(default_factory=FederationConfig)
     auto_upgrade: bool = True  # F1: 版本落后时自动 git pull 对齐 (工作区脏则跳过)
     skill_market_dir: str = "skills_market"  # iter-61: 第三方技能市场目录 (相对项目根, 每个子目录为一个可安装包)
     skill_max_size_kb: int = 200  # iter-61: 单个技能包最大体积 (KB), 防止第三方内容注入超大文本

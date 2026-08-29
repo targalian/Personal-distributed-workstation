@@ -46,6 +46,9 @@
 25. iter63-user-admin — 团队场景深化: users 表持久化 (token 仅存
     SHA256 哈希, config 首次种子, 轮换跨重启保留) + 用户管理端点
     (列表/新增/改角色/轮换/删除 + 最后 boss 防自锁) + SPA 用户页 (iter-63)
+26. iter64-federation — F3.4 跨网段联邦 (发现层): 静态 peer 配置 +
+    /api/federation/info 端点 + 联邦轮询同步 (source=fed 隔离) +
+    选举/仲裁仅限本网段 (source=lan) + 离线检测 (iter-64)
 
 运行: pytest tests/ -v
 """
@@ -1401,7 +1404,8 @@ class TestSecretaryFailover:
             secretary_active = active
             state = type("S", (), {"device_id": self_id,
                                    "device_name": "本机"})()
-            db = type("D", (), {"list_hosts": lambda self_: hosts})()
+            # iter-64: 选举/仲裁仅限本网段, list_hosts 带 source 过滤参数
+            db = type("D", (), {"list_hosts": lambda self_, source=None: hosts})()
             bot_gateway = type(
                 "B", (), {"notify": lambda self, *a, **k: None})()
             activated = []
@@ -4042,9 +4046,9 @@ class TestIter63UserAdmin:
         return Database(str(tmp_path / "u.db"))
 
     def test_migration_v9_users_table(self, tmp_path):
-        """SCHEMA_VERSION=9 且迁移后 users 表可写读。"""
+        """迁移链完整 (SCHEMA_VERSION 随迭代递增) 且 users 表可写读。"""
         from lan_mesh import database as dbmod
-        assert dbmod.SCHEMA_VERSION == 9
+        assert dbmod.SCHEMA_VERSION >= 9
         db = self._make_db(tmp_path)
         db.upsert_user_db("alice", "viewer", "hash1", "abcd")
         rows = db.list_users_db()
@@ -5967,6 +5971,207 @@ security:
         common.configure_users([])
         d = client.get("/api/station/auth-token").json()
         assert d["role"] == "boss" and d["mesh_token"] == "mesh-secret"
+
+
+class TestIter64Federation:
+    """iter-64 F3.4 跨网段联邦 (发现层): 静态 peer 配置 + 信息端点 +
+    联邦轮询同步 (source=fed 隔离) + 选举/仲裁仅限本网段 + 离线检测。
+    """
+
+    def _make_db(self, tmp_path):
+        from lan_mesh.database import Database
+        return Database(str(tmp_path / "f.db"))
+
+    def _peer(self, name="office-a", host="10.9.0.2", port=45501):
+        from lan_mesh.config import FederationPeer
+        return FederationPeer(name=name, host=host, port=port)
+
+    def test_federation_config_parse(self):
+        """配置解析: 默认关闭 + peers 列表; 缺段时向后兼容。"""
+        from lan_mesh.config import AppConfig, FederationConfig
+        c = AppConfig()
+        assert c.federation.enabled is False
+        assert c.federation.peers == []
+        f = FederationConfig(enabled=True, interval=7,
+                             peers=[{"name": "o", "host": "1.2.3.4", "port": 5}])
+        assert f.peers[0].name == "o" and f.peers[0].port == 5
+
+    def test_migration_v10_source_columns(self, tmp_path):
+        """迁移 v10: hosts 表新增 source/federation 列 (默认 lan)。"""
+        from lan_mesh import database as dbmod
+        assert dbmod.SCHEMA_VERSION >= 10
+        db = self._make_db(tmp_path)
+        from lan_mesh.protocol import HostRecord
+        db.upsert_host(HostRecord(device_id="h1", device_name="本机"))
+        h = db.get_host("h1")
+        assert h.source == "lan" and h.federation == ""
+
+    def test_upsert_host_persists_fed_source(self, tmp_path):
+        """联邦主机写入 DB 后 source=fed + federation 名持久化。"""
+        db = self._make_db(tmp_path)
+        from lan_mesh.protocol import HostRecord
+        db.upsert_host(HostRecord(device_id="h2", device_name="远端",
+                                  source="fed", federation="office-a"))
+        rows = db.list_hosts(source="fed")
+        assert len(rows) == 1
+        assert rows[0].device_id == "h2" and rows[0].federation == "office-a"
+        # lan 过滤不含联邦主机
+        assert [h.device_id for h in db.list_hosts(source="lan")] == []
+
+    def test_federation_sync_peer_upserts_remote(self, tmp_path, monkeypatch):
+        """联邦同步: 拉取对端信息后对端自身+其主机入库 (source=fed)。"""
+        db = self._make_db(tmp_path)
+        import lan_mesh.station_controller as sc
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "device_id": "peer-a", "device_name": "对端站",
+                    "role": "secretary", "api_port": 45501,
+                    "secretary_active": True,
+                    "code_version": "abc", "version_ts": 1.0,
+                    "hosts": [{
+                        "device_id": "peer-w1", "device_name": "对端Worker",
+                        "role": "station", "online": True,
+                        "cpu_count": 8, "rating_tier": "B",
+                    }],
+                }
+
+        import requests
+        monkeypatch.setattr(requests, "get",
+                            lambda url, headers=None, timeout=8: FakeResp())
+
+        fake = type("F", (), {
+            "db": db, "state": type("S", (), {"device_id": "self-1",
+                                              "api_port": 45500})(),
+            "_mesh_auth_enabled": True, "_mesh_token": "tk",
+        })()
+        assert sc.StationController._federation_sync_peer(
+            fake, self._peer()) == 1
+        fed = db.list_hosts(source="fed")
+        ids = {h.device_id: h for h in fed}
+        assert "peer-a" in ids and "peer-w1" in ids
+        assert ids["peer-a"].role == "secretary"
+        assert ids["peer-a"].federation == "office-a"
+        assert ids["peer-w1"].federation == "office-a"
+        # 本网段过滤仍为空 (隔离)
+        assert db.list_hosts(source="lan") == []
+
+    def test_federation_sync_skips_self(self, tmp_path, monkeypatch):
+        """对端回显本机时不回写 (防自环)。"""
+        db = self._make_db(tmp_path)
+        import lan_mesh.station_controller as sc
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "device_id": "peer-a", "device_name": "对端",
+                    "role": "station", "api_port": 45501,
+                    "hosts": [{"device_id": "self-1", "device_name": "本机"}],
+                }
+
+        import requests
+        monkeypatch.setattr(requests, "get",
+                            lambda url, headers=None, timeout=8: FakeResp())
+        fake = type("F", (), {
+            "db": db, "state": type("S", (), {"device_id": "self-1",
+                                              "api_port": 45500})(),
+            "_mesh_auth_enabled": False, "_mesh_token": "",
+        })()
+        assert sc.StationController._federation_sync_peer(
+            fake, self._peer()) == 1
+        ids = [h.device_id for h in db.list_hosts(source="fed")]
+        assert ids == ["peer-a"]  # self-1 被跳过
+
+    def test_federation_offline_after_failures(self, tmp_path, monkeypatch):
+        """连续失败 offline_after 次 → 该联邦主机集合置离线。"""
+        db = self._make_db(tmp_path)
+        from lan_mesh.protocol import HostRecord
+        db.upsert_host(HostRecord(device_id="peer-a", device_name="对端",
+                                  online=True, source="fed",
+                                  federation="office-a"))
+        import lan_mesh.station_controller as sc
+        from lan_mesh.config import FederationConfig
+
+        import requests
+
+        def boom(url, headers=None, timeout=8):
+            raise ConnectionError("down")
+        monkeypatch.setattr(requests, "get", boom)
+        # sleep 一次后抛异常退出 loop (offline_after=1 → 首轮失败即置离线)
+        def fake_sleep(secs):
+            raise RuntimeError("stop")
+        monkeypatch.setattr(sc.time, "sleep", fake_sleep)
+
+        fake = type("F", (), {
+            "db": db,
+            "cfg": type("C", (), {
+                "federation": FederationConfig(
+                    enabled=True, interval=1, offline_after=1,
+                    peers=[{"name": "office-a", "host": "10.9.0.2",
+                            "port": 45501}])})(),
+            "state": type("S", (), {"device_id": "self-1",
+                                      "api_port": 45500})(),
+            "_running": True,
+            "_mesh_auth_enabled": False, "_mesh_token": "",
+            "_federation_sync_peer":
+                sc.StationController._federation_sync_peer,
+        })()
+        try:
+            sc.StationController._federation_loop(fake)
+        except RuntimeError:
+            pass  # 由 fake_sleep 退出 loop
+        assert db.get_host("peer-a").online is False
+
+    def test_secretary_election_ignores_fed(self, tmp_path):
+        """选举避让: 联邦远端 Secretary 不阻止本网段当选 (source 隔离)。"""
+        db = self._make_db(tmp_path)
+        from lan_mesh.protocol import HostRecord
+        db.upsert_host(HostRecord(device_id="peer-sec", device_name="远端秘",
+                                  role="secretary", online=True,
+                                  source="fed", federation="office-a"))
+        import lan_mesh.station_controller as sc
+        fake = type("F", (), {
+            "db": db,
+            "state": type("S", (), {"device_id": "self-1"})(),
+        })()
+        assert sc.StationController._find_existing_secretary(fake) == ""
+        # 本网段 Secretary 仍可被发现
+        db.upsert_host(HostRecord(device_id="lan-sec", device_name="本网秘",
+                                  role="secretary", online=True,
+                                  source="lan"))
+        assert sc.StationController._find_existing_secretary(fake) == "本网秘"
+
+    def test_federation_info_endpoint(self, tmp_path):
+        """HTTP 端点: 返回本机身份/角色/主机列表 (无需 Secretary)。"""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh import station_routes_basic as basic
+        from lan_mesh.database import Database
+
+        db = Database(str(tmp_path / "e.db"))
+        from lan_mesh.protocol import HostRecord
+        db.upsert_host(HostRecord(device_id="h9", device_name="主机9",
+                                  source="lan"))
+        controller = MagicMock()
+        controller.db = db
+        controller.secretary_active = False
+        controller.state = SimpleNamespace(device_id="self-1",
+                                           device_name="本站", api_port=45500,
+                                           shared_folder=None)
+        app = FastAPI()
+        app.include_router(basic.build_basic_routes(controller))
+        client = TestClient(app)
+        d = client.get("/api/federation/info").json()
+        assert d["device_id"] == "self-1"
+        assert d["role"] == "station" and d["secretary_active"] is False
+        assert any(h["device_id"] == "h9" for h in d["hosts"])
 
 
 

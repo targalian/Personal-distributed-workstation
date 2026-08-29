@@ -804,8 +804,12 @@ class StationController:
                          name="station-yield-converge", daemon=True).start()
 
     def _find_existing_secretary(self) -> str:
-        """查找网络中已存在的在线 Secretary。返回设备名或空字符串。"""
-        hosts = self.db.list_hosts()
+        """查找网络中已存在的在线 Secretary。返回设备名或空字符串。
+
+        F3.4 (iter-64): 仅考虑本网段主机 (source=lan) — 联邦远端
+        Secretary 不参与本网段仲裁, 各网段 Secretary 联邦共存。
+        """
+        hosts = self.db.list_hosts(source="lan")
         for h in hosts:
             if (getattr(h, 'device_id', '') != self.state.device_id
                     and getattr(h, 'role', '') == 'secretary'
@@ -826,7 +830,8 @@ class StationController:
         """
         if self.secretary_active:
             return
-        hosts = self.db.list_hosts()
+        # F3.4 (iter-64): 仅本网段主机参与仲裁 (联邦远端 Secretary 隔离)
+        hosts = self.db.list_hosts(source="lan")
         for h in hosts:
             if (getattr(h, "device_id", "") != self.state.device_id
                     and getattr(h, "role", "") == "secretary"
@@ -861,6 +866,119 @@ class StationController:
             })
         except Exception:
             pass
+
+    # ── F3.4 (iter-64): 跨网段联邦 ────────────────────────────
+
+    def _federation_sync_peer(self, peer) -> int:
+        """同步单个联邦对端: 拉取对方与网段主机写入 DB (source=fed)。
+
+        返回 1 成功 / 0 失败。对端自身与其网段全部主机均标记
+        source=fed + federation=peer.name, 与 UDP 发现的本网段主机
+        (source=lan) 完全隔离 (选举/仲裁互不干扰)。
+        """
+        import requests as _requests
+        from .protocol import HostRecord
+
+        port = int(peer.port or self.state.api_port)
+        url = f"http://{peer.host}:{port}/api/federation/info"
+        headers = {}
+        if getattr(self, "_mesh_auth_enabled", False) and getattr(self, "_mesh_token", ""):
+            headers["Authorization"] = f"Bearer {self._mesh_token}"
+        try:
+            resp = _requests.get(url, headers=headers, timeout=8)
+            if resp.status_code != 200:
+                return 0
+            info = resp.json() or {}
+        except Exception as e:
+            logger.debug("[F3.4] 联邦对端 %s 拉取失败: %s", peer.name, e)
+            return 0
+
+        now = time.time()
+        records: list[HostRecord] = []
+        # 对端自身
+        records.append(HostRecord(
+            device_id=info.get("device_id", ""),
+            device_name=info.get("device_name", "") or peer.name,
+            role=info.get("role", "station"),
+            ip=peer.host,
+            api_port=port,
+            online=True,
+            registered_at=now,
+            last_seen=now,
+            code_version=info.get("code_version", ""),
+            version_ts=info.get("version_ts", 0.0),
+            source="fed",
+            federation=peer.name,
+        ))
+        # 对端网段主机 (转播其本地视图, 含其自身联邦转发)
+        for hd in (info.get("hosts") or []):
+            if hd.get("device_id") == self.state.device_id:
+                continue  # 不回写自己
+            try:
+                records.append(HostRecord(
+                    device_id=hd.get("device_id", ""),
+                    device_name=hd.get("device_name", ""),
+                    role=hd.get("role", "station"),
+                    hostname=hd.get("hostname", ""),
+                    platform=hd.get("platform", ""),
+                    ip=hd.get("ip", ""),
+                    api_port=hd.get("api_port", 0),
+                    cpu_count=hd.get("cpu_count", 0),
+                    memory_total_mb=hd.get("memory_total_mb", 0),
+                    disk_total_gb=hd.get("disk_total_gb", 0),
+                    cpu_percent=hd.get("cpu_percent", 0.0),
+                    memory_percent=hd.get("memory_percent", 0.0),
+                    disk_percent=hd.get("disk_percent", 0.0),
+                    shared_folder=hd.get("shared_folder", ""),
+                    online=bool(hd.get("online", True)),
+                    registered_at=now,
+                    last_seen=now,
+                    rating_tier=hd.get("rating_tier", ""),
+                    rating_score=hd.get("rating_score", 0),
+                    rating_summary=hd.get("rating_summary", ""),
+                    code_version=hd.get("code_version", ""),
+                    version_ts=hd.get("version_ts", 0.0),
+                    source="fed",
+                    federation=peer.name,
+                ))
+            except Exception:
+                continue
+        for rec in records:
+            if not rec.device_id:
+                continue
+            try:
+                self.db.upsert_host(rec)
+            except Exception as e:
+                logger.warning("[F3.4] 联邦主机入库失败 %s: %s", rec.device_id, e)
+        return 1
+
+    def _federation_loop(self):
+        """F3.4 (iter-64): 跨网段联邦轮询线程。
+
+        周期拉取全部配置对端; 连续 offline_after 次失败将该联邦
+        主机集合置离线。配置变更需重启生效 (静态联邦 v1)。
+        """
+        cfg = self.cfg.federation
+        failures: dict[str, int] = {}
+        logger.info("[F3.4] 联邦轮询启动: %d 个对端, 间隔 %ds",
+                    len(cfg.peers), cfg.interval)
+        while self._running:
+            for peer in cfg.peers:
+                ok = self._federation_sync_peer(peer)
+                failures[peer.name] = 0 if ok else failures.get(peer.name, 0) + 1
+                if failures[peer.name] >= cfg.offline_after:
+                    try:
+                        for h in self.db.list_hosts(source="fed"):
+                            if h.federation == peer.name and h.online:
+                                self.db.set_offline(h.device_id)
+                    except Exception:
+                        pass
+                    logger.warning("[F3.4] 联邦对端 %s 连续 %d 次不可达, 已标记离线",
+                                   peer.name, failures[peer.name])
+            try:
+                time.sleep(max(1, int(cfg.interval)))
+            except Exception:
+                return
 
     def submit_task_from_chat(self, name: str, description: str, created_by: str = "secretary",
                               priority: str = "normal") -> dict:
@@ -2813,6 +2931,17 @@ class StationController:
 
         # F3.1: 启动自动扩缩容监控
         self._start_autoscaler()
+
+        # F3.4 (iter-64): 跨网段联邦轮询线程 (静态 peer, 配置启用才启动)
+        if self.cfg.federation.enabled and self.cfg.federation.peers:
+            try:
+                federation_thread = threading.Thread(
+                    target=self._federation_loop, name="station-federation", daemon=True
+                )
+                federation_thread.start()
+                self._threads.append(federation_thread)
+            except Exception as e:
+                logger.warning("联邦轮询线程启动失败 (no-op): %s", e)
 
         # Secretary 自动选举 (First-Station-Wins, 后台线程不阻塞 API 启动)
         election_thread = threading.Thread(

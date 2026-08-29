@@ -21,7 +21,7 @@ logger = get_logger("database")
 # 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
 # 迁移函数签名: (conn: sqlite3.Connection) -> None
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -201,6 +201,21 @@ def _migration_v8(conn: sqlite3.Connection):
         pass
 
 
+def _migration_v10(conn: sqlite3.Connection):
+    """迁移 v10: hosts 表增加联邦来源列 (iter-64 F3.4 跨网段联邦)。
+
+    source: lan=本网段发现 / fed=跨网段联邦; federation: 所属联邦名。
+    """
+    for col, dtype, default in [
+        ("source", "TEXT", "'lan'"),
+        ("federation", "TEXT", "''"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE hosts ADD COLUMN {col} {dtype} NOT NULL DEFAULT {default}")
+        except sqlite3.OperationalError:
+            pass
+
+
 def _migration_v9(conn: sqlite3.Connection):
     """迁移 v9: users 表持久化多用户 (iter-63 团队场景深化)。
 
@@ -233,6 +248,7 @@ _MIGRATIONS: dict[int, callable] = {
     7: _migration_v7,
     8: _migration_v8,
     9: _migration_v9,
+    10: _migration_v10,
 }
 
 
@@ -675,7 +691,7 @@ class Database:
                 shared_folder, shared_file_count, online,
                 registered_at, last_seen, latency_ms,
                 rating_tier, rating_score, rating_summary,
-                code_version, version_ts
+                code_version, version_ts, source, federation
             ) VALUES (
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
@@ -683,7 +699,7 @@ class Database:
                 ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
-                ?, ?
+                ?, ?, ?, ?
             )
             ON CONFLICT(device_id) DO UPDATE SET
                 device_name=excluded.device_name,
@@ -707,7 +723,9 @@ class Database:
                 rating_score=excluded.rating_score,
                 rating_summary=excluded.rating_summary,
                 code_version=excluded.code_version,
-                version_ts=excluded.version_ts
+                version_ts=excluded.version_ts,
+                source=excluded.source,
+                federation=excluded.federation
         """, (
             record.device_id, record.device_name, record.role,
             record.hostname, record.platform,
@@ -719,6 +737,7 @@ class Database:
             record.registered_at, record.last_seen, record.latency_ms,
             record.rating_tier, record.rating_score, record.rating_summary,
             record.code_version, record.version_ts,
+            record.source, record.federation,
         ))
         conn.commit()
 
@@ -759,6 +778,8 @@ class Database:
             rating_summary=r["rating_summary"] if "rating_summary" in r.keys() else "",
             code_version=r["code_version"] if "code_version" in r.keys() else "",
             version_ts=r["version_ts"] if "version_ts" in r.keys() else 0.0,
+            source=r["source"] if "source" in r.keys() else "lan",
+            federation=r["federation"] if "federation" in r.keys() else "",
         )
 
     def get_host(self, device_id: str) -> Optional[HostRecord]:
@@ -771,12 +792,18 @@ class Database:
             return self._row_to_host(row)
         return None
 
-    def list_hosts(self) -> list[HostRecord]:
-        """列出所有主机记录。"""
+    def list_hosts(self, source: Optional[str] = None) -> list[HostRecord]:
+        """列出所有主机记录 (source 可选: 'lan' 本网段 / 'fed' 联邦远端)。"""
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM hosts ORDER BY online DESC, device_name ASC"
-        ).fetchall()
+        if source:
+            rows = conn.execute(
+                "SELECT * FROM hosts WHERE source = ? "
+                "ORDER BY online DESC, device_name ASC", (source,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM hosts ORDER BY online DESC, device_name ASC"
+            ).fetchall()
         return [self._row_to_host(r) for r in rows]
 
     def set_offline(self, device_id: str):

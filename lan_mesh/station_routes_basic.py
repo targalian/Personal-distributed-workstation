@@ -286,6 +286,32 @@ def build_basic_routes(controller) -> APIRouter:
         from .auth import get_mesh_token
         return {"mesh_token": get_mesh_auth_token() or get_mesh_token()}
 
+    # ── 联邦 (iter-64 F3.4 跨网段多 Secretary) ──────────────
+
+    @router.get("/api/federation/info")
+    async def federation_info():
+        """F3.4 (iter-64): 联邦信息端点 — 供对端联邦节点轮询。
+
+        返回本机身份与网段主机摘要 (含远端联邦主机, 实现多级转发
+        可视化)。mesh token 认证由 api_guard 中间件完成。
+        """
+        try:
+            from .version_sync import local_version_info
+            ver = local_version_info()
+        except Exception:
+            ver = {}
+        hosts = [h.to_dict() for h in db.list_hosts()]
+        return {
+            "device_id": state.device_id,
+            "device_name": state.device_name,
+            "role": "secretary" if controller.secretary_active else "station",
+            "api_port": state.api_port,
+            "secretary_active": bool(controller.secretary_active),
+            "code_version": ver.get("commit", ""),
+            "version_ts": ver.get("commit_time", 0.0),
+            "hosts": hosts,
+        }
+
     # ── 用户管理 (iter-63 团队场景深化) ─────────────────────
     # 写端点经 api_guard 角色检查 (管理员路径 /api/station/ 仅 boss 可写),
     # 读端点全角色放行但仅 boss 可见 token 尾 4 位快照。

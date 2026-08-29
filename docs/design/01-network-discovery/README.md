@@ -73,9 +73,33 @@ database.py 迁移三处，缺一不可（S2 迭代教训）。
 **主要使用方**: station_controller（注册/推送/拉取）、pm_monitor（进度轮询）、
 orchestrator（任务分发）
 
+## station_controller.py — 跨网段联邦 (F3.4, iter-64)
+
+**职责**: 静态 peer 联邦发现层 — 跨网段(不同 UDP 广播域)的 Secretary 节点互相
+感知、主机记录互通、离线检测。任务跨网段转发留待 iter-65。
+
+**配置** (config.py `federation`):
+- `enabled` / `interval` (轮询秒) / `offline_after` (连续失败 N 次置离线)
+- `peers`: 静态联邦对端列表 `{name, host, port}` (name 即联邦名, 用于主机来源标记)
+
+**机制**:
+- `_federation_loop` 轮询线程: 定期拉取对端 `GET /api/federation/info`
+  (mesh token 认证) → 对端自身 + 对端网段主机写入 hosts 表 (source=fed,
+  federation=peer.name) → 连续失败 offline_after 次标记该联邦主机离线
+- 防自环: 转播时跳过 device_id 与本机相同的主机
+- 选举/仲裁隔离: `_find_existing_secretary` / `_secretary_failover_check`
+  仅查询 `list_hosts(source="lan")` — 联邦远端 Secretary 不参与本网段仲裁,
+  各网段 Secretary 联邦共存
+- DB 迁移 v10: hosts 表新增 source / federation 列
+
+**端点** (station_routes_basic): `GET /api/federation/info` — 本机身份
+(device_id/device_name/role/api_port/secretary_active/代码版本) + 网段主机摘要,
+供对端联邦节点轮询
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-64 | F3.4 跨网段多 Secretary 联邦 (发现层): 静态 peer 配置 + /api/federation/info 端点 + 联邦轮询同步 (source=fed 隔离) + 选举仅限本网段 + 离线检测 |
 | 2026-08-16 | iter-30 补③ | P2 #5: 节点间认证默认启用 (auth_enabled 默认 true, 可显式关闭; 白名单保障注册引导/健康检查免认证) |
 | 2026-08-16 | iter-27 后 | 初建 |

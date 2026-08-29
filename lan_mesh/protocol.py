@@ -150,6 +150,9 @@ class HostRecord:
     # ── S2/S3: 代码版本 (跨主机版本统计与升级提醒) ──
     code_version: str = ""      # git 短 commit
     version_ts: float = 0.0     # commit 提交时间戳
+    # ── F3.4 (iter-64): 联邦来源标记 ──
+    source: str = "lan"         # lan=本网段发现 / fed=跨网段联邦
+    federation: str = ""        # 所属联邦名 (source=fed 时非空)
 
     def to_dict(self) -> dict:
         return asdict(self)
