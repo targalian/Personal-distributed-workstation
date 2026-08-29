@@ -193,6 +193,35 @@ WebSocket 通道。
 - `/api/version/upgrade-notice` 收到领先通知时触发 `_auto_upgrade`
   自动升级（F1，工作区脏则安全跳过）
 
+## 集群调度 (F3.1/F3.3) 与节点间派发协议 (iter-66 三机实测收敛)
+
+**定位**: >2 节点集群的自动扩缩容与 PM 故障迁移, iter-66 三机集群
+(1 Secretary + 2 Worker + mock LLM) 真机实测背书 (17/17)。
+
+**节点间派发协议** (`_dispatch_task_to_worker`, F3.1/F3.3 共用):
+- 必须携带 `auth_headers()` (Bearer mesh_token): Worker 端
+  `/role/start-pm` 不在 `_AUTH_WHITELIST`, 认证启用时缺头 401 静默失败
+- 必须携带 `task_data` (任务完整 dict): 任务仅存于 Secretary DB,
+  Worker 本地查不到任务, 缺时 start-pm 409「无法获取任务详情」
+- 派发成功即置 running 并回写 `pm_agent_id` (防重复派发)
+- 映射 `_pm_worker_map[pm_id]` 统一含 `task_id` 键 (迁移/扩容/忙判定
+  依赖), 取消成功路径 pop 清理 (防 `_is_worker_busy` 误判阻塞扩容)
+
+**F3.1 自动扩缩容**: `_autoscaler_loop` 30s 轮询 —
+队列 pending ≥ `_autoscale_up_threshold`(2) 且存在空闲在线 worker →
+`_next_pending_task` FIFO 取最早任务 (DESC LIFO 饥饿修复) → 派发。
+
+**F3.3 PM 迁移**: `_prune_loop` 5s → `prune_offline(device_ttl=8)` →
+`_migrate_orphaned_pms` 按 `device_id` 匹配孤立 PM → 任务重置 pending
+(`save_task` upsert 语义, 无 `upsert_task`) → 排除离线/忙碌后精确派发
+替代 Worker, 无可用时本机接管。
+
+**控制命令端点** (cancel/pause/delete, Bug I): 端点保持 `async def`,
+但跨节点阻塞调用丢 `run_in_threadpool` 执行 — 同步执行会阻塞事件循环
+→ Worker 状态上报请求无法进入 → 跨节点死锁级联 (S 等 W2 响应, W2 卡在
+report_status 等 S) ; 同时控制命令 http_post `retries=1` (默认 3 次
+重试 + 退避在死锁场景放大超时至 40s+)。
+
 ## 历史遗留清理 (P3)
 
 - **secretary.py 已删除**: 早期独立 Secretary 进程实现，能力早已由
@@ -286,6 +315,7 @@ agent_runtime.execute()
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-66 | F3.1/F3.3 三机集群实测背书 (评估报告剩余边界 #2): 节点间派发协议收敛 (auth_headers + task_data + 映射含 task_id + 取消清映射 + 派发即置 running + FIFO) 共修复 9 个真实 bug (A-I); 控制命令端点 run_in_threadpool 解除跨节点死锁级联; 真机 17/17 + 专项 12/12 + 回归 369 passed |
 | 2026-08-29 | iter-57 | 并发压力验证 (补强#5): DB 加固 busy_timeout 30s + WAL (每线程独立连接); 限流双桶 (信任桶 token 高阈值/严格桶防滥用, 阈值配置化 observability.api_rate_limit[_trusted], ≤0 禁用); 本机 PM 忙时任务排队 pending 而非瞬时 failed, PM 结束接力派发 (_dispatch_queued_task); /api/health 补登白名单; 真机压测 1800 req 0 错误 + 20 并发提交全 200 (1 running + 19 排队) |
 | 2026-08-29 | iter-58 | 多用户权限 (补强#6 F5.2): security.users 配置驱动用户表 + 中间件角色分层 (boss/operator/viewer) + auth-token 收紧 (仅 boss 获 mesh_token); SPA 角色徽章/登录面板/viewer 只读; 真机 API 13 项 + Browser 5 步实测通过 (UI-050), 发现并修复未登录误显 boss 竞态与退出后 DAG 可编辑两缺陷 |
 | 2026-08-29 | iter-63 | 用户管理持久化 (团队场景): 迁移 v9 users 表 + token 哈希存储 (不存明文) + config 首次种子 + 5 管理端点 + 最后 boss 防自锁; 真机 16 项 + 重启持久化 (轮换 token 跨重启保留) + Browser 12/12 (UI-053) 全过 |

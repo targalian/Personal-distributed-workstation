@@ -1093,6 +1093,7 @@ class StationController:
                     "api_port": self.state.api_port,
                     "device_id": self.state.device_id,
                     "local": True,
+                    "task_id": task.task_id,   # iter-66 (Bug B): F3.3 迁移依赖
                 }
                 logger.info("PM Agent 本机启动: %s", pm_id[:12])
                 # WS 广播: 通知前端 PM 面板 + 任务面板刷新
@@ -1167,6 +1168,7 @@ class StationController:
                     "ip": target_host.ip,
                     "api_port": target_host.api_port,
                     "device_id": target_host.device_id,
+                    "task_id": task.task_id,   # iter-66 (Bug B): F3.3 迁移依赖
                 }
                 logger.info("PM Agent 已启动: %s → %s", pm_id[:12], target_host.device_name)
                 self.bot_gateway.notify("pm_registered", {
@@ -1334,7 +1336,8 @@ class StationController:
         pending = [t for t in tasks if getattr(t, 'status', '') == 'pending']
         if not pending:
             return False
-        task = pending[0]
+        # iter-66 (Bug D 修复): FIFO — 取最早提交的任务 (list_tasks 为 DESC)
+        task = min(pending, key=lambda t: getattr(t, 'created_at', 0) or 0)
         secretary_url = f"http://127.0.0.1:{self.state.api_port}"
         result = self._local_start_pm(task.task_id, secretary_url, task.to_dict())
         if not result.get("ok"):
@@ -1362,6 +1365,7 @@ class StationController:
             "api_port": self.state.api_port,
             "device_id": self.state.device_id,
             "local": True,
+            "task_id": task.task_id,   # iter-66 (Bug B): F3.3 迁移依赖
         }
         self._queue_ws_broadcast("pm_registered", {
             "pm_id": pm_id, "task_id": task.task_id,
@@ -1609,6 +1613,8 @@ class StationController:
             self._local_cancel_pm()
             self.db.update_task_status(task_id, "cancelled")
             self.db.update_pm_status(pm_id, "cancelled")
+            # iter-66 (Bug H): 清理映射, 防止 busy 误判
+            self._pm_worker_map.pop(pm_id, None)
             logger.info("本机任务已取消: %s", task_id)
             self.bot_gateway.notify("task_cancelled", {"task_id": task_id, "name": task.name})
             return {"ok": True, "message": "任务已取消"}
@@ -1619,13 +1625,20 @@ class StationController:
             return {"ok": False, "message": "Worker 地址信息不完整"}
 
         try:
+            # iter-66 (Bug G): 认证启用时远程 stop/cancel 端点同样要求 Bearer
+            from .http_retry import auth_headers
             resp = http_post(
                 f"http://{ip}:{port}/role/cancel-pm",
+                headers=auth_headers(),
+                retries=1,
                 timeout=10,
             )
             if resp.status_code == 200:
                 self.db.update_task_status(task_id, "cancelled")
                 self.db.update_pm_status(pm_id, "cancelled")
+                # iter-66 (Bug H): 清理映射, 否则 _is_worker_busy 误判
+                # Worker 仍忙 → F3.1 自动扩容永不派发到该 Worker
+                self._pm_worker_map.pop(pm_id, None)
                 logger.info("任务已取消: %s", task_id)
                 self.bot_gateway.notify("task_cancelled", {
                     "task_id": task_id, "name": task.name,
@@ -1672,8 +1685,12 @@ class StationController:
             return {"ok": False, "message": "Worker 地址信息不完整"}
 
         try:
+            # iter-66 (Bug G 同类): 认证启用时远程 pause 端点同样要求 Bearer
+            from .http_retry import auth_headers
             resp = http_post(
                 f"http://{ip}:{port}/role/pause-pm",
+                headers=auth_headers(),
+                retries=1,
                 timeout=10,
             )
             if resp.status_code == 200:
@@ -2426,7 +2443,7 @@ class StationController:
         策略:
         1. 扫描 _pm_worker_map, 找出 device_id 在 gone_ids 中的 PM
         2. 查找该 PM 关联的任务, 重置为 pending
-        3. 优先派发到其他在线 Worker, 否则本机接管
+        3. 优先派发到其他空闲在线 Worker, 否则本机接管
         """
         gone_set = set(gone_device_ids)
         orphaned_pms = []
@@ -2440,13 +2457,14 @@ class StationController:
 
         logger.warning("[F3.3] 检测到 %d 个 PM 因主机离线而孤立", len(orphaned_pms))
 
-        # 查找可用替代 Worker
+        # 查找可用替代 Worker (在线 + 排除离线 + 排除忙碌, iter-66 修复)
         hosts = self.db.list_hosts()
         available_workers = [
             h for h in hosts
             if getattr(h, 'online', False)
             and getattr(h, 'role', '') == 'worker'
             and getattr(h, 'device_id', '') not in gone_set
+            and not self._is_worker_busy(h)
         ]
 
         for pm_id, info in orphaned_pms:
@@ -2458,15 +2476,18 @@ class StationController:
                     # 重置任务状态
                     task.status = "pending"
                     task.pm_agent_id = ""
-                    self.db.upsert_task(task)
+                    # iter-66 修复 (Bug A): Database 无 upsert_task, save_task
+                    # 自带 ON CONFLICT DO UPDATE 的 upsert 语义
+                    self.db.save_task(task)
                     logger.info("[F3.3] 任务 %s 已重置为 pending", task_id[:8])
 
                     # 尝试迁移
                     if available_workers:
                         target = available_workers[0]
-                        self._dispatch_next_task_to_worker(target)
-                        logger.info("[F3.3] 任务已迁移到 %s",
-                                   getattr(target, 'device_name', ''))
+                        ok = self._dispatch_task_to_worker(task, target)
+                        logger.info("[F3.3] 任务已迁移到 %s (派发%s)",
+                                   getattr(target, 'device_name', ''),
+                                   "成功" if ok else "失败")
                     else:
                         # 本机接管
                         logger.info("[F3.3] 无可用 Worker, 本机接管任务 %s", task_id[:8])
@@ -2611,20 +2632,18 @@ class StationController:
                 return True
         return False
 
-    def _dispatch_next_task_to_worker(self, worker_host):
-        """F3.1: 将队列中下一个 pending 任务派发到指定 Worker。"""
-        all_tasks = self.db.list_tasks()
-        pending = [t for t in all_tasks if getattr(t, 'status', '') == 'pending']
-        if not pending:
-            return
+    def _dispatch_task_to_worker(self, task, worker_host) -> bool:
+        """iter-66 (F3.1/F3.3 修复): 将指定任务派发到指定 Worker 并更新任务状态。
 
-        task = pending[0]
+        成功: 置 running + 落库 + 记录 PM→Worker 映射 (含 task_id, F3.3 迁移依赖);
+        失败: 返回 False (任务状态由调用方决定, 避免误置 failed 影响迁移重试)。
+        """
         task_id = getattr(task, 'task_id', '')
         ip = getattr(worker_host, 'ip', '')
         port = getattr(worker_host, 'api_port', 0)
 
         if not ip or not port:
-            return
+            return False
 
         # 修复 (任务③): 远程 PM 回报地址用本机对目标可达的 IP, 非 127.0.0.1
         from .host_info import pick_reachable_ip
@@ -2634,15 +2653,61 @@ class StationController:
             if reach_ip else f"http://127.0.0.1:{self.state.api_port}"
         )
         try:
+            # iter-66 (Bug E): 节点间认证启用时 Worker 端 /role/start-pm
+            # 要求 Bearer mesh_token, 不带认证头会 401 静默失败
+            from .http_retry import auth_headers
             resp = http_post(
                 f"http://{ip}:{port}/role/start-pm",
-                json={"task_id": task_id, "secretary_url": sec_url},
+                json={"task_id": task_id, "secretary_url": sec_url,
+                      # iter-66 (Bug F): 任务仅存于 Secretary DB, Worker 端
+                      # 无法从本地 DB 获取 → 缺 task_data 时 409「无法获取任务详情」
+                      "task_data": task.to_dict()},
+                headers=auth_headers(),
                 timeout=10,
             )
             if resp.status_code == 200:
+                pm_data = resp.json()
+                pm_id = pm_data.get("pm_id", "")
+                task.pm_agent_id = pm_id
+                task.status = "running"
+                self.db.save_task(task)
+                if pm_id:
+                    # iter-66 修复 (Bug B): 补 task_id 键, F3.3 迁移依赖
+                    self._pm_worker_map[pm_id] = {
+                        "ip": ip,
+                        "api_port": port,
+                        "device_id": getattr(worker_host, 'device_id', ''),
+                        "task_id": task_id,
+                    }
                 logger.info("[自动扩容] 任务 %s 已派发到 %s", task_id[:8], ip)
+                return True
+            else:
+                # iter-66: 非 200 明确记录状态码, 便于定位 401/404/500
+                logger.warning("[自动扩容] 派发被拒: %s → %s:%s/role/start-pm "
+                               "HTTP %d (%s)", task_id[:8], ip, port,
+                               resp.status_code, resp.text[:120])
         except Exception as e:
-            logger.debug("[自动扩容] 派发失败: %s", e)
+            logger.warning("[自动扩容] 派发失败: %s", e)
+        return False
+
+    def _next_pending_task(self):
+        """iter-66 (Bug D 修复): 取队列中最早提交的 pending 任务 (FIFO)。
+
+        list_tasks 默认 ORDER BY created_at DESC, 直接取 [0] 是 LIFO,
+        持续有新任务提交时旧任务会饥饿; 此处显式重排取最早任务。
+        """
+        all_tasks = self.db.list_tasks()
+        pending = [t for t in all_tasks if getattr(t, 'status', '') == 'pending']
+        if not pending:
+            return None
+        return min(pending, key=lambda t: getattr(t, 'created_at', 0) or 0)
+
+    def _dispatch_next_task_to_worker(self, worker_host):
+        """F3.1: 将队列中最早 pending 任务派发到指定 Worker。"""
+        task = self._next_pending_task()
+        if not task:
+            return
+        self._dispatch_task_to_worker(task, worker_host)
 
     # ── S1: API Key 加密自动分发 ────────────────────────────
 

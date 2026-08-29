@@ -6434,3 +6434,345 @@ class TestIter65FederationForward:
         assert kwargs["priority"] == "high"
 
 
+class TestIter66ClusterScale:
+    """iter-66 三机集群背书 (F3.1 自动扩缩容 + F3.3 PM 迁移):
+
+    修复 3 个真实 bug 后回归验证:
+    - Bug A: _migrate_orphaned_pms 调用不存在的 db.upsert_task → save_task
+    - Bug B: _pm_worker_map 缺 task_id 键致迁移分支永不执行
+    - Bug C: 扩容派发不置 running 致重复派发同一任务
+    另有迁移精确派发目标任务 (非 pending[0]) 与忙 Worker 过滤。
+    """
+
+    def _make_db(self, tmp_path):
+        from lan_mesh.database import Database
+        return Database(str(tmp_path / "f66.db"))
+
+    def _worker(self, device_id, ip="10.0.0.9", port=45501):
+        from lan_mesh.protocol import HostRecord
+        return HostRecord(device_id=device_id, device_name=f"工-{device_id[-4:]}",
+                          role="worker", ip=ip, api_port=port, online=True,
+                          rating_tier="B")
+
+    def _fake(self, db, pm_map=None, dispatch=None, takeover=None,
+              busy_check=None, up_threshold=2):
+        import lan_mesh.station_controller as sc
+        fake = type("F", (), {
+            "db": db,
+            "state": type("S", (), {"device_id": "self-1",
+                                    "api_port": 45500})(),
+            "_pm_worker_map": pm_map or {},
+            "_autoscale_up_threshold": up_threshold,
+            "_is_worker_busy": busy_check or (lambda self_, h: False),
+            "_dispatch_task_to_worker": dispatch or (
+                sc.StationController._dispatch_task_to_worker),
+            "_dispatch_next_task_to_worker":
+                sc.StationController._dispatch_next_task_to_worker,
+            "_next_pending_task":
+                sc.StationController._next_pending_task,
+            "_start_local_pm_for_task": takeover or (
+                lambda self_, tid: None),
+        })()
+        return fake
+
+    # ── F3.1 自动扩容 ─────────────────────────────────────
+
+    def test_autoscale_dispatches_backlog_and_marks_running(self, tmp_path,
+                                                            monkeypatch):
+        """扩容: 积压>=2 且有空闲 Worker → 派发并置 running (Bug C 回归)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        ta = Task(task_id="t-66-a", name="积压A", description="d")
+        ta.created_at = 1000.0   # 早提交 (FIFO 应优先)
+        db.save_task(ta)
+        tb = Task(task_id="t-66-b", name="积压B", description="d")
+        tb.created_at = 2000.0
+        db.save_task(tb)
+        db.upsert_host(self._worker("w-1"))
+        fake = self._fake(db)
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"ok": True, "pm_id": "pm-66-1"}
+
+        sent = []
+
+        def fake_post(url, json=None, timeout=10, headers=None):
+            sent.append(json)
+            return FakeResp()
+        monkeypatch.setattr(sc, "http_post", fake_post)
+        monkeypatch.setattr("lan_mesh.host_info.pick_reachable_ip",
+                            lambda ip: "127.0.0.1")
+
+        sc.StationController._autoscale_check(fake)
+        assert sent and sent[0]["task_id"] == "t-66-a"   # FIFO: 早任务优先
+        # Bug F 回归: 派发必须携带 task_data (Worker 本地 DB 无此任务)
+        assert sent[0]["task_data"]["task_id"] == "t-66-a"
+        assert db.get_task("t-66-a").status == "running"   # Bug C 回归
+        assert db.get_task("t-66-b").status == "pending"
+        # 映射含 task_id (Bug B 回归)
+        assert fake._pm_worker_map["pm-66-1"]["task_id"] == "t-66-a"
+        assert fake._pm_worker_map["pm-66-1"]["device_id"] == "w-1"
+
+    def test_autoscale_skips_busy_worker(self, tmp_path, monkeypatch):
+        """扩容: 唯一 Worker 忙碌 → 不派发 (忙过滤, 避免叠任务)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        db.save_task(Task(task_id="t-66-c", name="积压C", description="d"))
+        db.save_task(Task(task_id="t-66-d", name="积压D", description="d"))
+        db.upsert_host(self._worker("w-1"))
+        fake = self._fake(
+            db, pm_map={"pm-busy": {"device_id": "w-1", "task_id": "t-old"}},
+            busy_check=sc.StationController._is_worker_busy)
+        called = []
+        monkeypatch.setattr(sc, "http_post",
+                            lambda *a, **k: called.append(1))
+        sc.StationController._autoscale_check(fake)
+        assert called == []
+        assert db.get_task("t-66-c").status == "pending"
+
+    def test_autoscale_idle_when_queue_below_threshold(self, tmp_path,
+                                                       monkeypatch):
+        """扩容: 积压 < 2 → 不派发 (阈值边界)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        db.save_task(Task(task_id="t-66-e", name="单积压", description="d"))
+        db.upsert_host(self._worker("w-1"))
+        fake = self._fake(db)
+        called = []
+        monkeypatch.setattr(sc, "http_post",
+                            lambda *a, **k: called.append(1))
+        sc.StationController._autoscale_check(fake)
+        assert called == []
+
+    def test_dispatch_next_task_fifo_order(self, tmp_path, monkeypatch):
+        """派发顺序: FIFO — 早提交任务先派发 (Bug D 回归,
+        list_tasks 为 created_at DESC 时不可 LIFO 饥饿)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        early = Task(task_id="t-66-early", name="早任务", description="d")
+        early.created_at = 1000.0
+        db.save_task(early)
+        late = Task(task_id="t-66-late", name="晚任务", description="d")
+        late.created_at = 2000.0
+        db.save_task(late)
+        fake = self._fake(db)
+        sent = []
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"ok": True, "pm_id": "pm-66-f"}
+        monkeypatch.setattr(sc, "http_post",
+                            lambda url, json=None, timeout=10,
+                            headers=None: FakeResp())
+        monkeypatch.setattr("lan_mesh.host_info.pick_reachable_ip",
+                            lambda ip: "127.0.0.1")
+        fake._dispatch_next_task_to_worker = (
+            sc.StationController._dispatch_next_task_to_worker)
+        sc.StationController._dispatch_next_task_to_worker(
+            fake, self._worker("w-1"))
+        assert db.get_task("t-66-early").status == "running"   # 早任务优先
+        assert db.get_task("t-66-late").status == "pending"
+
+    def test_dispatch_task_failure_keeps_pending(self, tmp_path, monkeypatch):
+        """派发: Worker 不可达 → 返回 False, 任务保持 pending (可重试)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        task = Task(task_id="t-66-f", name="派发失败", description="d")
+        db.save_task(task)
+        fake = self._fake(db)
+
+        def boom(url, json=None, timeout=10):
+            raise ConnectionError("peer down")
+        monkeypatch.setattr(sc, "http_post", boom)
+        ok = sc.StationController._dispatch_task_to_worker(
+            fake, task, self._worker("w-1"))
+        assert ok is False
+        assert db.get_task("t-66-f").status == "pending"
+
+    # ── F3.3 PM 迁移 ──────────────────────────────────────
+
+    def test_migrate_resets_task_and_redispatches_to_target(self, tmp_path):
+        """迁移: running 任务 → pending 落库 (Bug A 回归) → 精确派发
+        目标任务到替代 Worker (语义修正, 非 pending[0])。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        task = Task(task_id="t-66-m", name="迁移任务", description="d")
+        task.status = "running"
+        task.pm_agent_id = "pm-old"
+        db.save_task(task)
+        db.upsert_host(self._worker("w-2", ip="10.0.0.10", port=45502))
+        dispatched = []
+        fake = self._fake(
+            db,
+            pm_map={"pm-old": {"device_id": "gone-1",
+                               "task_id": "t-66-m"}},
+            dispatch=lambda self_, t, h: (
+                dispatched.append((t.task_id, h.device_id)) or True))
+        sc.StationController._migrate_orphaned_pms(fake, ["gone-1"])
+        # 任务重置 pending 并落库 (Bug A 回归: save_task 存在且生效)
+        got = db.get_task("t-66-m")
+        assert got.status == "pending"
+        assert got.pm_agent_id == ""
+        # 精确派发目标任务到替代 Worker
+        assert dispatched == [("t-66-m", "w-2")]
+        # 旧映射清理
+        assert "pm-old" not in fake._pm_worker_map
+
+    def test_migrate_local_takeover_when_no_workers(self, tmp_path):
+        """迁移: 无替代 Worker → 本机接管。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        task = Task(task_id="t-66-n", name="孤立任务", description="d")
+        task.status = "monitoring"
+        db.save_task(task)
+        taken = []
+        fake = self._fake(
+            db,
+            pm_map={"pm-old": {"device_id": "gone-1",
+                               "task_id": "t-66-n"}},
+            takeover=lambda self_, tid: taken.append(tid))
+        sc.StationController._migrate_orphaned_pms(fake, ["gone-1"])
+        assert db.get_task("t-66-n").status == "pending"
+        assert taken == ["t-66-n"]
+        assert "pm-old" not in fake._pm_worker_map
+
+    def test_migrate_skips_busy_replacement_worker(self, tmp_path):
+        """迁移: 替代 Worker 忙碌 → 本机接管 (忙过滤)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        task = Task(task_id="t-66-p", name="忙过滤", description="d")
+        task.status = "running"
+        db.save_task(task)
+        db.upsert_host(self._worker("w-2", ip="10.0.0.10", port=45502))
+        taken = []
+        fake = self._fake(
+            db,
+            pm_map={
+                "pm-old": {"device_id": "gone-1", "task_id": "t-66-p"},
+                "pm-w2": {"device_id": "w-2", "task_id": "t-other"},
+            },
+            busy_check=sc.StationController._is_worker_busy,
+            takeover=lambda self_, tid: taken.append(tid))
+        sc.StationController._migrate_orphaned_pms(fake, ["gone-1"])
+        assert taken == ["t-66-p"]  # w-2 忙 → 本机接管
+
+    def test_migrate_entry_without_task_id_cleans_map_only(self, tmp_path):
+        """迁移: 映射无 task_id (Bug B 历史数据) → 仅清理映射, 不抛异常。"""
+        import lan_mesh.station_controller as sc
+
+        db = self._make_db(tmp_path)
+        dispatched = []
+        fake = self._fake(
+            db,
+            pm_map={"pm-old": {"device_id": "gone-1"}},
+            dispatch=lambda self_, t, h: dispatched.append(t.task_id))
+        sc.StationController._migrate_orphaned_pms(fake, ["gone-1"])
+        assert dispatched == []
+        assert "pm-old" not in fake._pm_worker_map
+
+    def test_migrate_ignores_non_running_task(self, tmp_path):
+        """迁移: 关联任务非 running/monitoring (如已 failed) → 不重置不派发。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        task = Task(task_id="t-66-q", name="已完成", description="d")
+        task.status = "completed"
+        db.save_task(task)
+        dispatched = []
+        fake = self._fake(
+            db,
+            pm_map={"pm-old": {"device_id": "gone-1",
+                               "task_id": "t-66-q"}},
+            dispatch=lambda self_, t, h: dispatched.append(t.task_id))
+        sc.StationController._migrate_orphaned_pms(fake, ["gone-1"])
+        assert dispatched == []
+        assert db.get_task("t-66-q").status == "completed"  # 状态不变
+        assert "pm-old" not in fake._pm_worker_map
+
+    # ── 取消任务 (Bug G/H 回归) ─────────────────────────
+
+    def test_cancel_remote_sends_auth_headers_and_clears_map(self, tmp_path,
+                                                             monkeypatch):
+        """取消: 远程 PM 需带认证头 (Bug G), 成功后清理映射 (Bug H)。"""
+        import lan_mesh.http_retry as hr
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        task = Task(task_id="t-66-c", name="取消目标", description="d")
+        task.status = "running"
+        task.pm_agent_id = "pm-c1"
+        db.save_task(task)
+        fake = self._fake(db, pm_map={
+            "pm-c1": {"ip": "10.0.0.2", "api_port": 9081,
+                      "device_id": "w-1"}})
+        fake.bot_gateway = type("B", (), {
+            "notify": lambda self, *a, **kw: None})()
+        monkeypatch.setattr(hr, "_auth_token", "mesh-test-token")
+
+        class FakeResp:
+            status_code = 200
+            text = ""
+
+        sent = []
+
+        def fake_post(url, json=None, timeout=10, headers=None, retries=3):
+            sent.append({"url": url, "headers": headers, "retries": retries})
+            return FakeResp()
+        monkeypatch.setattr(sc, "http_post", fake_post)
+
+        result = sc.StationController.cancel_task(fake, "t-66-c")
+        assert result.get("ok")
+        assert sent and "role/cancel-pm" in sent[0]["url"]
+        # Bug G 回归: 认证头必须携带 (Worker 端要求 Bearer mesh_token)
+        assert sent[0]["headers"].get("Authorization") == "Bearer mesh-test-token"
+        # Bug I 回归: 控制命令重试降为 1, 避免死锁级联时重试放大超时
+        assert sent[0]["retries"] == 1
+        assert db.get_task("t-66-c").status == "cancelled"
+        # Bug H 回归: 映射清理, 防止 _is_worker_busy 误判
+        assert "pm-c1" not in fake._pm_worker_map
+
+    def test_cancel_local_clears_map(self, tmp_path):
+        """取消: 本机 PM 取消后同样清理映射 (Bug H)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        task = Task(task_id="t-66-l", name="本机取消", description="d")
+        task.status = "running"
+        task.pm_agent_id = "pm-l1"
+        db.save_task(task)
+        fake = self._fake(db, pm_map={
+            "pm-l1": {"local": True, "device_id": "self-1"}})
+        fake._local_cancel_pm = lambda: None
+        fake.bot_gateway = type("B", (), {
+            "notify": lambda self, *a, **kw: None})()
+
+        result = sc.StationController.cancel_task(fake, "t-66-l")
+        assert result.get("ok")
+        assert "pm-l1" not in fake._pm_worker_map
+        assert db.get_task("t-66-l").status == "cancelled"
+
+

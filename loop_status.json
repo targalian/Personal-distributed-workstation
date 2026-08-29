@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "last_run": "2026-08-29T18:00:00+08:00",
-  "current_phase": "iter-65-fed-forward",
+  "last_run": "2026-08-29T18:30:00+08:00",
+  "current_phase": "iter-66-cluster-scale",
   "phase_status": "completed",
   "completed": [
     "F1.1",
@@ -74,7 +74,8 @@
     "iter-62-pwa-mobile",
     "iter-63-user-admin",
     "iter-64-federation",
-    "iter-65-federation-forward"
+    "iter-65-federation-forward",
+    "iter-66-cluster-scale"
   ],
   "failed": [],
   "blocked": [],
@@ -82,8 +83,8 @@
     "每次发布/推送后同步更新 VERSION.json 保持版本记录与实际代码一致",
     "代码设计变更时同步 docs/design 对应功能域文档 (docs-sync skill + sync_docs.py 机制, pre-push 第 8/9 项强制)"
   ],
-  "iteration_count": 65,
-  "total_files_modified": 299,
+  "iteration_count": 66,
+  "total_files_modified": 302,
   "last_error": "",
-  "notes": "iter-65: F3.4 遗留 联邦任务跨网段转发 — 选站分层 (lan 优先/fed 兜底限 Secretary) + POST /api/federation/tasks/forward 委托端点 + forwarded 徽标 + 联邦防环 (fed_relay 参数 + _federation_relay 标记 + 跳数上限 1); 真机验证修复 2 个真实 bug (http_post 模块级 NameError 静默损坏远程派发; 联邦对端 ip 被自身报告覆盖); 专项 9/9 + 真机双实例 8/8 (含反向委托防环) + Browser UI-055 实测通过 + 回归 357 passed; 附带恢复 test_checklist.csv 54 行历史数据 (iter-64 上库截断事故)"
+  "notes": "iter-66: F3.1/F3.3 三机集群实测背书 (评估报告剩余边界 #2) — 真机 17/17 全过 (选举/auth-token/三机互认/本机 PM/忙回退远程派发/杀机 F3.3 孤立检测+重置+迁移/取消释放 worker/队列积压 F3.1 扩容+派发 running); 共修复 9 个真实 bug (A: upsert_task 不存在 / B: _pm_worker_map 缺 task_id / C: 派发不置 running 重复派发 / D: list_tasks LIFO 饥饿 / E: 派发缺 auth_headers 401 / F: 缺 task_data 409 / G: cancel 缺 auth_headers / H: cancel 不清理映射 busy 误判 / I: async 控制端点阻塞事件循环死锁级联); 专项 12/12 + 回归 369 passed; docs: 评估报告边界 #2 刷新 + 02-station-core 派发协议章节"
 }

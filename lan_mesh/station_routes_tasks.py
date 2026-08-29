@@ -15,6 +15,7 @@ import uuid as _uuid
 import requests as http_requests
 
 from fastapi import APIRouter, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from .protocol import AgentCard, Task
 from .http_retry import auth_headers
@@ -186,6 +187,8 @@ def build_task_routes(controller) -> APIRouter:
                     "api_port": state.api_port,
                     "device_id": state.device_id,
                     "local": True,
+                    # iter-66 (Bug B 补): F3.3 迁移依赖 task_id 定位任务
+                    "task_id": task.task_id,
                 }
                 await _broadcast(state, "pm_registered", {
                     "pm_id": pm_id, "task_id": task.task_id,
@@ -255,6 +258,8 @@ def build_task_routes(controller) -> APIRouter:
                     "ip": target_ip,
                     "api_port": target_host.api_port,
                     "device_id": target_host.device_id,
+                    # iter-66 (Bug B 补): F3.3 迁移依赖 task_id 定位任务
+                    "task_id": task.task_id,
                 }
 
                 await _broadcast(state, "pm_registered", {
@@ -299,7 +304,9 @@ def build_task_routes(controller) -> APIRouter:
     async def cancel_task(task_id: str):
         """取消指定任务及其 PM Agent。"""
         check_secretary(controller)
-        result = controller.cancel_task(task_id)
+        # iter-66 (Bug I): 控制命令含跨节点 HTTP 调用, 同步执行会阻塞事件循环
+        # → Worker 的状态上报请求无法进入 → 跨节点死锁级联超时
+        result = await run_in_threadpool(controller.cancel_task, task_id)
         if result.get("ok"):
             await _broadcast(state, "task_cancelled", {
                 "task_id": task_id, "message": result.get("message", ""),
@@ -311,7 +318,8 @@ def build_task_routes(controller) -> APIRouter:
     async def pause_task(task_id: str):
         """暂停指定任务及其 PM Agent。"""
         check_secretary(controller)
-        result = controller.pause_task(task_id)
+        # iter-66 (Bug I 同类): 见 cancel_task 说明
+        result = await run_in_threadpool(controller.pause_task, task_id)
         if result.get("ok"):
             await _broadcast(state, "task_paused", {
                 "task_id": task_id, "message": result.get("message", ""),
@@ -327,7 +335,8 @@ def build_task_routes(controller) -> APIRouter:
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
         if task.status in ("running", "monitoring"):
-            controller.cancel_task(task_id)
+            # iter-66 (Bug I 同类): 取消含跨节点调用, 丢线程池避免阻塞事件循环
+            await run_in_threadpool(controller.cancel_task, task_id)
         if task.pm_agent_id and task.pm_agent_id in controller._pm_worker_map:
             del controller._pm_worker_map[task.pm_agent_id]
         # 联动清理: 从对话中解绑 PM 线程
