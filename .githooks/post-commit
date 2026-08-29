@@ -63,7 +63,7 @@ if [ "$LAN_MESH_WIKI_DRY_RUN" = "1" ]; then
     exit 0
 fi
 if command -v qoderclicn >/dev/null 2>&1; then
-    PROMPT="你是 LAN Mesh 项目的 Wiki 维护 Agent。请严格按 .qoder/skills/repowiki-update/SKILL.md 的流程执行: 1) 读取 .qoder/repowiki/.pending/pending-commits.txt 的待办提交; 2) git show 分析各提交变更; 3) 运行 python .qoder/skills/repowiki-update/scripts/scan_refs.py 扫描过时引用; 4) 按技能映射规则更新 .qoder/repowiki/ 下的 content 与 knowledge 条目; 5) 运行 scan_refs.py --verify 验证零残留; 6) git add .qoder/repowiki 排除 .pending 后提交为 docs(station): 同步 repo wiki; 7) 清空 pending-commits.txt 并删除 .pending/.lock。禁止修改 .qoder/repowiki 以外的任何文件。"
+    PROMPT="你是 LAN Mesh 项目的 Wiki 维护 Agent。请严格按 .qoder/skills/repowiki-update/SKILL.md 的流程执行: 1) 读取 .qoder/repowiki/.pending/pending-commits.txt 的待办提交; 2) git show 分析各提交变更; 3) 运行 python .qoder/skills/repowiki-update/scripts/scan_refs.py 扫描过时引用; 4) 按技能映射规则更新 .qoder/repowiki/ 下的 content 与 knowledge 条目; 5) 运行 scan_refs.py --verify 验证零残留; 6) 无文件变更时跳过提交直接清理; 有变更时 git add .qoder/repowiki 排除 .pending 后提交为 docs(station): 同步 repo wiki; 7) 清空 pending-commits.txt 并删除 .pending/.lock。禁止修改 .qoder/repowiki 以外的任何文件。"
     nohup qoderclicn -p "$PROMPT" -w "$REPO_ROOT" --permission-mode accept_edits > "$PENDING_DIR/agent-run.log" 2>&1 &
     AGENT_PID=$!
     echo -e "${GREEN}[TRIGGER] 已后台拉起 qoderclicn wiki 更新任务 (PID ${AGENT_PID})${NC}"

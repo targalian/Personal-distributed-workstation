@@ -53,7 +53,11 @@ python .qoder/skills/repowiki-update/scripts/scan_refs.py --verify
 
 退出码 0 = 零残留引用 + 全部 `_module.yaml` 可解析，才允许进入提交步骤。
 
+**零残留且无任何文件变更时：跳过提交，直接执行清理步骤**（不要用 `--allow-empty` 创建空提交）。
+
 ### 5. 自动提交
+
+仅当本轮回扫发现需要修改的条目时才提交：
 
 ```bash
 git add .qoder/repowiki
@@ -61,7 +65,8 @@ git reset -q .qoder/repowiki/.pending   # 运行时状态不入库 (.gitignore �
 git commit -m "docs(station): 同步 repo wiki <short-hash>"
 ```
 
-提交只含 repowiki 变更 → post-commit 守卫 1 跳过，不会递归触发。scope 用 `station`（commit-msg 白名单），勿用 `wiki`。
+已变更时提交：`git commit -m "docs(station): 同步 repo wiki <short-hash>"`；
+无变更时跳过提交，直接清理。已变更时提交：`git commit -m "docs(station): 同步 repo wiki <short-hash>"`；无变更时跳过提交，直接清理。提交只含 repowiki 变更 → post-commit 守卫 1 跳过，不会递归触发。scope 用 `station`（commit-msg 白名单），勿用 `wiki`。
 
 ### 6. 清理
 
