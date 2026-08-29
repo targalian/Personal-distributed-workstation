@@ -8,7 +8,7 @@
 - [lan_mesh/project.py](file://lan_mesh/project.py)
 - [lan_mesh/station_controller.py](file://lan_mesh/station_controller.py)
 - [lan_mesh/worker.py](file://lan_mesh/worker.py)
-- [lan_mesh/secretary.py](file://lan_mesh/secretary.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 - [lan_mesh/station_director.py](file://lan_mesh/station_director.py)
 - [lan_mesh/discovery.py](file://lan_mesh/discovery.py)
 - [lan_mesh/database.py](file://lan_mesh/database.py)
@@ -48,7 +48,7 @@ PM Agent 系统是一个基于局域网的分布式主机管理与任务编排�
 graph TB
 A["main.py<br/>统一入口"] --> B["lan_mesh/config.py<br/>配置管理"]
 A --> C["lan_mesh/station_controller.py<br/>Station Director 控制器"]
-A --> D["lan_mesh/secretary.py<br/>Secretary 控制器"]
+A --> D["station_controller.py<br/>Station Director"]
 A --> E["lan_mesh/worker.py<br/>Worker 守护进程"]
 C --> F["lan_mesh/station_director.py<br/>工作站主管"]
 C --> G["lan_mesh/discovery.py<br/>UDP 发现服务"]
@@ -72,7 +72,7 @@ E --> O["lan_mesh/api.py<br/>Worker API"]
 **图表来源**
 - [main.py:1-98](file://main.py#L1-L98)
 - [lan_mesh/station_controller.py:1-494](file://lan_mesh/station_controller.py#L1-L494)
-- [lan_mesh/secretary.py:1-342](file://lan_mesh/secretary.py#L1-L342)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L342)
 - [lan_mesh/worker.py:1-593](file://lan_mesh/worker.py#L1-L593)
 
 **章节来源**
@@ -98,7 +98,7 @@ E --> O["lan_mesh/api.py<br/>Worker API"]
 - [lan_mesh/host_info.py:1-212](file://lan_mesh/host_info.py#L1-L212)
 - [lan_mesh/shared_folder.py:1-219](file://lan_mesh/shared_folder.py#L1-L219)
 - [lan_mesh/station_director.py:1-224](file://lan_mesh/station_director.py#L1-L224)
-- [lan_mesh/secretary.py:1-342](file://lan_mesh/secretary.py#L1-L342)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L342)
 - [lan_mesh/worker.py:1-593](file://lan_mesh/worker.py#L1-L593)
 - [lan_mesh/project.py:1-320](file://lan_mesh/project.py#L1-L320)
 - [lan_mesh/model_router.py:1-327](file://lan_mesh/model_router.py#L1-L327)
@@ -140,7 +140,7 @@ WRK --> AG
 
 **图表来源**
 - [lan_mesh/station_controller.py:1-494](file://lan_mesh/station_controller.py#L1-L494)
-- [lan_mesh/secretary.py:1-342](file://lan_mesh/secretary.py#L1-L342)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L342)
 - [lan_mesh/worker.py:1-593](file://lan_mesh/worker.py#L1-L593)
 
 ## 详细组件分析
@@ -423,12 +423,12 @@ SEC->>DB : "更新任务状态"
 ```
 
 **图表来源**
-- [lan_mesh/secretary.py:69-342](file://lan_mesh/secretary.py#L69-L342)
+- [station_controller.py](file://lan_mesh/station_controller.py#L69-L342)
 - [lan_mesh/station_director.py:108-140](file://lan_mesh/station_director.py#L108-L140)
 - [lan_mesh/database.py:582-652](file://lan_mesh/database.py#L582-L652)
 
 **章节来源**
-- [lan_mesh/secretary.py:1-342](file://lan_mesh/secretary.py#L1-L342)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L342)
 
 ### Worker（工作节点）
 Worker 是各主机上的守护进程，负责自动注册、心跳上报与任务执行。
@@ -488,7 +488,7 @@ Controllers --> Router["模型路由"]
 **图表来源**
 - [lan_mesh/api.py:1-757](file://lan_mesh/api.py#L1-L757)
 - [lan_mesh/station_controller.py:1-494](file://lan_mesh/station_controller.py#L1-L494)
-- [lan_mesh/secretary.py:1-342](file://lan_mesh/secretary.py#L1-L342)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L342)
 
 **章节来源**
 - [lan_mesh/api.py:1-757](file://lan_mesh/api.py#L1-L757)

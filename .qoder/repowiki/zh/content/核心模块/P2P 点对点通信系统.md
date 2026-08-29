@@ -15,7 +15,7 @@
 - [lan_mesh/api.py](file://lan_mesh/api.py)
 - [lan_mesh/station_director.py](file://lan_mesh/station_director.py)
 - [lan_mesh/station_controller.py](file://lan_mesh/station_controller.py)
-- [lan_mesh/secretary.py](file://lan_mesh/secretary.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 - [lan_mesh/worker.py](file://lan_mesh/worker.py)
 </cite>
 
@@ -37,7 +37,7 @@
 项目主要分为三层：
 - 入口与配置层：main.py、config.yaml、requirements.txt
 - 核心协议与基础设施：protocol.py、discovery.py、host_info.py、shared_folder.py、database.py
-- 控制器与路由层：station_controller.py、secretary.py、worker.py、api.py
+- 控制器与路由层：station_controller.py、station_controller.py、worker.py、api.py
 - 系统集成：station_director.py
 
 ```mermaid
@@ -56,7 +56,7 @@ DB["database.py"]
 end
 subgraph "控制器与路由"
 STATION_CTRL["station_controller.py"]
-SECRETARY["secretary.py"]
+SECRETARY["station_controller.py"]
 WORKER["worker.py"]
 API["api.py"]
 STATION_DIR["station_director.py"]
@@ -82,7 +82,7 @@ STATION_DIR --> DISC
 **图表来源**
 - [main.py:1-105](file://main.py#L1-L105)
 - [lan_mesh/station_controller.py:1-556](file://lan_mesh/station_controller.py#L1-L556)
-- [lan_mesh/secretary.py:1-342](file://lan_mesh/secretary.py#L1-L342)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L342)
 - [lan_mesh/worker.py:1-593](file://lan_mesh/worker.py#L1-L593)
 - [lan_mesh/discovery.py:1-259](file://lan_mesh/discovery.py#L1-L259)
 - [lan_mesh/database.py:1-800](file://lan_mesh/database.py#L1-L800)
@@ -112,7 +112,7 @@ STATION_DIR --> DISC
 - [lan_mesh/shared_folder.py:1-219](file://lan_mesh/shared_folder.py#L1-L219)
 - [lan_mesh/database.py:1-800](file://lan_mesh/database.py#L1-L800)
 - [lan_mesh/station_controller.py:1-556](file://lan_mesh/station_controller.py#L1-L556)
-- [lan_mesh/secretary.py:1-342](file://lan_mesh/secretary.py#L1-L342)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L342)
 - [lan_mesh/worker.py:1-593](file://lan_mesh/worker.py#L1-L593)
 - [lan_mesh/api.py:1-793](file://lan_mesh/api.py#L1-L793)
 
@@ -477,7 +477,7 @@ API-->>SC : "服务就绪"
 - 关键流程：启动前自检、UDP 发现、部署采集脚本、配置刷新、FastAPI 启动、WS 推送。
 
 **章节来源**
-- [lan_mesh/secretary.py:1-342](file://lan_mesh/secretary.py#L1-L342)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L342)
 
 #### WorkerAgent（工作节点）
 - 职责：启动 Worker，注册到 Secretary，周期性心跳，提供共享文件 API 与任务执行端点，支持远程启动/停止 Secretary 与 PM Agent。
@@ -519,7 +519,7 @@ API->>WS : "broadcast_ws() 推送"
 - 内部模块耦合：
   - discovery.py 与 protocol.py 紧密耦合（数据结构与端口常量）。
   - api.py 依赖 database.py、shared_folder.py、protocol.py。
-  - station_controller.py/secretary.py/worker.py 依赖 discovery.py、database.py、shared_folder.py、api.py。
+  - station_controller.py/station_controller.py/worker.py 依赖 discovery.py、database.py、shared_folder.py、api.py。
   - station_director.py 依赖 database.py、discovery.py、host_info.py、host_rating.py。
 
 ```mermaid
@@ -532,7 +532,7 @@ SHARE["shared_folder.py"]
 DB["database.py"]
 API["api.py"]
 STATION_CTRL["station_controller.py"]
-SECRETARY["secretary.py"]
+SECRETARY["station_controller.py"]
 WORKER["worker.py"]
 STATION_DIR["station_director.py"]
 REQ --> STATION_CTRL
@@ -564,7 +564,7 @@ STATION_DIR --> SECRETARY
 - [lan_mesh/discovery.py:22-30](file://lan_mesh/discovery.py#L22-L30)
 - [lan_mesh/api.py:33-34](file://lan_mesh/api.py#L33-L34)
 - [lan_mesh/station_controller.py:35-49](file://lan_mesh/station_controller.py#L35-L49)
-- [lan_mesh/secretary.py:32-47](file://lan_mesh/secretary.py#L32-L47)
+- [station_controller.py](file://lan_mesh/station_controller.py#L32-L47)
 - [lan_mesh/worker.py:31-48](file://lan_mesh/worker.py#L31-L48)
 - [lan_mesh/station_director.py:20-25](file://lan_mesh/station_director.py#L20-L25)
 

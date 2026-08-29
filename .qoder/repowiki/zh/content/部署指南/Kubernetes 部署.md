@@ -7,7 +7,7 @@
 - [requirements.txt](file://requirements.txt)
 - [lan_mesh/config.py](file://lan_mesh/config.py)
 - [lan_mesh/api.py](file://lan_mesh/api.py)
-- [lan_mesh/master.py](file://lan_mesh/master.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 - [lan_mesh/worker.py](file://lan_mesh/worker.py)
 - [lan_mesh/database.py](file://lan_mesh/database.py)
 - [lan_mesh/discovery.py](file://lan_mesh/discovery.py)
@@ -54,7 +54,7 @@ QL --> M
 ```
 
 **图表来源**
-- [lan_mesh/master.py:1-324](file://lan_mesh/master.py#L1-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L324)
 - [lan_mesh/worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
 - [lan_mesh/database.py:1-611](file://lan_mesh/database.py#L1-L611)
 - [lan_mesh/shared_folder.py:1-219](file://lan_mesh/shared_folder.py#L1-L219)
@@ -64,7 +64,7 @@ QL --> M
 - [config.yaml:1-22](file://config.yaml#L1-L22)
 - [main.py:1-90](file://main.py#L1-L90)
 - [lan_mesh/config.py:1-84](file://lan_mesh/config.py#L1-L84)
-- [lan_mesh/master.py:1-324](file://lan_mesh/master.py#L1-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L324)
 - [lan_mesh/worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
 - [lan_mesh/database.py:1-611](file://lan_mesh/database.py#L1-L611)
 - [lan_mesh/shared_folder.py:1-219](file://lan_mesh/shared_folder.py#L1-L219)
@@ -80,7 +80,7 @@ QL --> M
 **章节来源**
 - [lan_mesh/config.py:1-84](file://lan_mesh/config.py#L1-L84)
 - [config.yaml:1-22](file://config.yaml#L1-L22)
-- [lan_mesh/master.py:1-324](file://lan_mesh/master.py#L1-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L324)
 - [lan_mesh/worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
 - [lan_mesh/discovery.py:1-259](file://lan_mesh/discovery.py#L1-L259)
 - [lan_mesh/database.py:1-611](file://lan_mesh/database.py#L1-L611)
@@ -117,7 +117,7 @@ end
 ```
 
 **图表来源**
-- [lan_mesh/master.py:187-324](file://lan_mesh/master.py#L187-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L187-L324)
 - [lan_mesh/worker.py:219-325](file://lan_mesh/worker.py#L219-L325)
 - [lan_mesh/database.py:22-26](file://lan_mesh/database.py#L22-L26)
 - [lan_mesh/shared_folder.py:23-37](file://lan_mesh/shared_folder.py#L23-L37)
@@ -147,11 +147,11 @@ F-->>C : 返回响应(JSON/HTML)
 ```
 
 **图表来源**
-- [lan_mesh/master.py:290-324](file://lan_mesh/master.py#L290-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L290-L324)
 - [lan_mesh/api.py:187-223](file://lan_mesh/api.py#L187-L223)
 
 **章节来源**
-- [lan_mesh/master.py:187-324](file://lan_mesh/master.py#L187-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L187-L324)
 - [lan_mesh/api.py:187-223](file://lan_mesh/api.py#L187-L223)
 
 ### Worker 守护进程（Deployment + Service）
@@ -228,11 +228,11 @@ S_W --> P_WN["Pod: worker-N"]
 ```
 
 **图表来源**
-- [lan_mesh/master.py:290-324](file://lan_mesh/master.py#L290-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L290-L324)
 - [lan_mesh/worker.py:219-325](file://lan_mesh/worker.py#L219-L325)
 
 **章节来源**
-- [lan_mesh/master.py:290-324](file://lan_mesh/master.py#L290-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L290-L324)
 - [lan_mesh/worker.py:219-325](file://lan_mesh/worker.py#L219-L325)
 
 ### 滚动更新、回滚策略与故障恢复
@@ -252,11 +252,11 @@ stateDiagram-v2
 ```
 
 **图表来源**
-- [lan_mesh/master.py:290-324](file://lan_mesh/master.py#L290-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L290-L324)
 - [lan_mesh/worker.py:219-325](file://lan_mesh/worker.py#L219-L325)
 
 **章节来源**
-- [lan_mesh/master.py:290-324](file://lan_mesh/master.py#L290-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L290-L324)
 - [lan_mesh/worker.py:219-325](file://lan_mesh/worker.py#L219-L325)
 
 ### 监控与日志收集
@@ -274,7 +274,7 @@ stateDiagram-v2
 graph TB
 CFG["lan_mesh/config.py"]
 API["lan_mesh/api.py"]
-MAST["lan_mesh/master.py"]
+MAST["station_controller.py"]
 WORK["lan_mesh/worker.py"]
 DISC["lan_mesh/discovery.py"]
 HOST["lan_mesh/host_info.py"]
@@ -299,7 +299,7 @@ REQ --> WORK
 **图表来源**
 - [lan_mesh/config.py:1-84](file://lan_mesh/config.py#L1-L84)
 - [lan_mesh/api.py:1-539](file://lan_mesh/api.py#L1-L539)
-- [lan_mesh/master.py:1-324](file://lan_mesh/master.py#L1-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L324)
 - [lan_mesh/worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
 - [lan_mesh/discovery.py:1-259](file://lan_mesh/discovery.py#L1-L259)
 - [lan_mesh/host_info.py:1-212](file://lan_mesh/host_info.py#L1-L212)
@@ -310,7 +310,7 @@ REQ --> WORK
 **章节来源**
 - [lan_mesh/config.py:1-84](file://lan_mesh/config.py#L1-L84)
 - [lan_mesh/api.py:1-539](file://lan_mesh/api.py#L1-L539)
-- [lan_mesh/master.py:1-324](file://lan_mesh/master.py#L1-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L324)
 - [lan_mesh/worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
 - [lan_mesh/discovery.py:1-259](file://lan_mesh/discovery.py#L1-L259)
 - [lan_mesh/host_info.py:1-212](file://lan_mesh/host_info.py#L1-L212)

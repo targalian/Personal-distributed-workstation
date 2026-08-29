@@ -7,7 +7,7 @@
 - [mcp_client.py](file://lan_mesh/mcp_client.py)
 - [tool_registry.py](file://lan_mesh/tool_registry.py)
 - [protocol.py](file://lan_mesh/protocol.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [config.py](file://lan_mesh/config.py)
 - [database.py](file://lan_mesh/database.py)
 - [host_info.py](file://lan_mesh/host_info.py)
@@ -81,7 +81,7 @@ API --> SF
 - [mcp_gateway.py](file://lan_mesh/mcp_gateway.py)
 - [mcp_client.py](file://lan_mesh/mcp_client.py)
 - [tool_registry.py](file://lan_mesh/tool_registry.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [config.py](file://lan_mesh/config.py)
 - [database.py](file://lan_mesh/database.py)
 - [shared_folder.py](file://lan_mesh/shared_folder.py)
@@ -105,7 +105,7 @@ API --> SF
 - 协议与模型（protocol.py）
   - ToolDef、AgentCard、HostInfo、HostRecord 等数据结构
   - MCP 兼容的工具定义与输入 Schema
-- Master 控制器（master.py）
+- Station Director（station_api.py）
   - 集成 MCPGateway 并在 FastAPI 中暴露 /tools/* 接口
   - 提供 Web UI 仪表盘与 WebSocket 实时推送
 - 配置与持久化
@@ -117,7 +117,7 @@ API --> SF
 - [mcp_client.py](file://lan_mesh/mcp_client.py)
 - [tool_registry.py](file://lan_mesh/tool_registry.py)
 - [protocol.py](file://lan_mesh/protocol.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [config.py](file://lan_mesh/config.py)
 - [config.yaml](file://config.yaml)
 - [database.py](file://lan_mesh/database.py)
@@ -338,7 +338,7 @@ API --> DB["database.py"]
 API --> SF["shared_folder.py"]
 GW --> CLI["mcp_client.py"]
 GW --> TR["tool_registry.py"]
-MASTER["master.py"] --> API
+MASTER["station_api.py"] --> API
 MASTER --> GW
 CONFIG["config.py"] --> MASTER
 CONFIG --> GW
@@ -351,7 +351,7 @@ CONFIG --> GW
 - [tool_registry.py](file://lan_mesh/tool_registry.py)
 - [database.py](file://lan_mesh/database.py)
 - [shared_folder.py](file://lan_mesh/shared_folder.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [config.py](file://lan_mesh/config.py)
 
 **章节来源**
@@ -361,7 +361,7 @@ CONFIG --> GW
 - [tool_registry.py](file://lan_mesh/tool_registry.py)
 - [database.py](file://lan_mesh/database.py)
 - [shared_folder.py](file://lan_mesh/shared_folder.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [config.py](file://lan_mesh/config.py)
 
 ## 性能考虑
@@ -437,7 +437,7 @@ MCP 工具网关通过统一的 API 接口与灵活的服务器管理机制，�
 
 **章节来源**
 - [mcp_gateway.py](file://lan_mesh/mcp_gateway.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [config.yaml](file://config.yaml)
 
 ### 配置项说明

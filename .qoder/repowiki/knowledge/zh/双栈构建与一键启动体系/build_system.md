@@ -1,6 +1,6 @@
 ## 1. 系统概述
 本项目采用**双技术栈并行**的构建与部署模式：
-- **LAN Mesh (Python)**: 基于 `FastAPI` 的后端服务，通过 `main.py` 统一入口管理多角色节点（Station, Worker, Secretary）。
+- **LAN Mesh (Python)**: 基于 `FastAPI` 的后端服务，通过 `main.py` 统一入口管理多角色节点（Station, Worker, Resources）。
 - **QuickLAN (Tauri + React)**: 基于 `Tauri 2` 的跨平台桌面应用，前端使用 `Vite + React`，后端使用 `Rust`。
 
 项目未引入复杂的 CI/CD 流水线或容器化方案（如 Docker），而是侧重于**本地环境的一键初始化与启动**，通过脚本自动化处理依赖安装、虚拟环境配置及配置文件生成。
@@ -29,7 +29,7 @@
 | 模块 | 关键文件 | 说明 |
 | :--- | :--- | :--- |
 | **Python 依赖** | `requirements.txt` | 定义后端运行时依赖。 |
-| **统一入口** | `main.py` | 所有 Python 节点的启动器，支持 `station/worker/secretary` 角色切换。 |
+| **统一入口** | `main.py` | 所有 Python 节点的启动器，支持 `station/worker/resources` 角色切换。 |
 | **启动脚本** | `scripts/start_workstation.*` | 跨平台的一键启动脚本，封装了环境准备逻辑。 |
 | **前端配置** | `quicklan-main/package.json` | 定义 Vite 脚本及 Tauri CLI 集成。 |
 | **Rust 配置** | `quicklan-main/src-tauri/Cargo.toml` | 定义 Rust 依赖及 Tauri 插件。 |

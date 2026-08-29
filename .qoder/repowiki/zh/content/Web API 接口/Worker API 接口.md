@@ -4,7 +4,7 @@
 **本文档引用的文件**
 - [worker.py](file://lan_mesh/worker.py)
 - [api.py](file://lan_mesh/api.py)
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [shared_folder.py](file://lan_mesh/shared_folder.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [host_info.py](file://lan_mesh/host_info.py)
@@ -394,7 +394,7 @@ W6[agent_runtime.py]
 W7[protocol.py]
 end
 subgraph "Secretary 依赖"
-S1[secretary.py]
+S1[station_api.py]
 S2[database.py]
 S3[config.py]
 end

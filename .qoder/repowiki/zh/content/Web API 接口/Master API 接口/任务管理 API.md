@@ -11,7 +11,7 @@
 - [worker.py](file://lan_mesh/worker.py)
 - [agent_runtime.py](file://lan_mesh/agent_runtime.py)
 - [agent_card.py](file://lan_mesh/agent_card.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [config.yaml](file://config.yaml)
 </cite>
 
@@ -48,7 +48,7 @@ API["FastAPI 路由<br/>api.py"]
 ORCH["编排器<br/>orchestrator.py"]
 DB["数据库<br/>database.py"]
 PROJ["项目管理<br/>project.py"]
-MAST["Master 控制器<br/>master.py"]
+MAST["Station Director<br/>station_api.py"]
 end
 subgraph "Worker 节点"
 WRK["Worker 守护进程<br/>worker.py"]
@@ -72,11 +72,11 @@ MAST --> API
 - [worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
 - [agent_runtime.py:28-242](file://lan_mesh/agent_runtime.py#L28-L242)
 - [agent_card.py:167-228](file://lan_mesh/agent_card.py#L167-L228)
-- [master.py:67-324](file://lan_mesh/master.py#L67-L324)
+- [station_api.py](file://lan_mesh/station_api.py#L67-L324)
 
 章节来源
 - [api.py:103-526](file://lan_mesh/api.py#L103-L526)
-- [master.py:187-324](file://lan_mesh/master.py#L187-L324)
+- [station_api.py](file://lan_mesh/station_api.py#L187-L324)
 
 ## 核心组件
 - 任务模型与状态机：Task、SubTask、TaskStatus，支持 pending → assigned → running → completed/failed。

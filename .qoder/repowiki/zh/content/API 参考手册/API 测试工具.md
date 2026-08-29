@@ -6,7 +6,7 @@
 - [config.yaml](file://config.yaml)
 - [requirements.txt](file://requirements.txt)
 - [lan_mesh/api.py](file://lan_mesh/api.py)
-- [lan_mesh/master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [lan_mesh/worker.py](file://lan_mesh/worker.py)
 - [lan_mesh/config.py](file://lan_mesh/config.py)
 - [lan_mesh/database.py](file://lan_mesh/database.py)
@@ -54,7 +54,7 @@ Work Station 由三层组成：
 ```mermaid
 graph TB
 subgraph "后端服务层"
-M["MasterController<br/>lan_mesh/master.py"]
+M["StationDirector<br/>station_api.py"]
 W["WorkerAgent<br/>lan_mesh/worker.py"]
 API["API 路由<br/>lan_mesh/api.py"]
 DB["数据库<br/>lan_mesh/database.py"]
@@ -81,7 +81,7 @@ TAURI --> TYPES
 ```
 
 图表来源
-- [lan_mesh/master.py:1-324](file://lan_mesh/master.py#L1-L324)
+- [station_api.py](file://lan_mesh/station_api.py#L1-L324)
 - [lan_mesh/worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
 - [lan_mesh/api.py:1-539](file://lan_mesh/api.py#L1-L539)
 - [lan_mesh/database.py:1-611](file://lan_mesh/database.py#L1-L611)
@@ -107,7 +107,7 @@ TAURI --> TYPES
 - 协议模型：DiscoveryPacket、HostInfo、HostRecord、AgentCard、Task、Project 等
 
 章节来源
-- [lan_mesh/master.py:67-324](file://lan_mesh/master.py#L67-L324)
+- [station_api.py](file://lan_mesh/station_api.py#L67-L324)
 - [lan_mesh/worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
 - [lan_mesh/api.py:37-526](file://lan_mesh/api.py#L37-L526)
 - [lan_mesh/database.py:16-611](file://lan_mesh/database.py#L16-L611)
@@ -121,7 +121,7 @@ TAURI --> TYPES
 ```mermaid
 sequenceDiagram
 participant CLI as "命令行入口<br/>main.py"
-participant MC as "MasterController<br/>lan_mesh/master.py"
+participant MC as "StationDirector<br/>station_api.py"
 participant WC as "WorkerAgent<br/>lan_mesh/worker.py"
 participant API as "API 路由<br/>lan_mesh/api.py"
 participant DB as "数据库<br/>lan_mesh/database.py"
@@ -140,7 +140,7 @@ API->>DB : 主机/Agent/任务/项目/用量持久化
 
 图表来源
 - [main.py:25-86](file://main.py#L25-L86)
-- [lan_mesh/master.py:187-324](file://lan_mesh/master.py#L187-L324)
+- [station_api.py](file://lan_mesh/station_api.py#L187-L324)
 - [lan_mesh/worker.py:219-325](file://lan_mesh/worker.py#L219-L325)
 - [lan_mesh/api.py:37-526](file://lan_mesh/api.py#L37-L526)
 - [lan_mesh/database.py:36-143](file://lan_mesh/database.py#L36-L143)
@@ -184,11 +184,11 @@ MasterController --> ProjectManager : "使用"
 ```
 
 图表来源
-- [lan_mesh/master.py:55-114](file://lan_mesh/master.py#L55-L114)
-- [lan_mesh/master.py:67-114](file://lan_mesh/master.py#L67-L114)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L114)
+- [station_api.py](file://lan_mesh/station_api.py#L67-L114)
 
 章节来源
-- [lan_mesh/master.py:67-324](file://lan_mesh/master.py#L67-L324)
+- [station_api.py](file://lan_mesh/station_api.py#L67-L324)
 
 ### Worker 代理
 - 职责：发现 Master、注册与心跳、暴露 Worker API、共享文件夹管理
@@ -433,7 +433,7 @@ REQ --> PS["psutil"]
 章节来源
 - [lan_mesh/api.py:148-168](file://lan_mesh/api.py#L148-L168)
 - [lan_mesh/worker.py:126-146](file://lan_mesh/worker.py#L126-L146)
-- [lan_mesh/master.py:166-174](file://lan_mesh/master.py#L166-L174)
+- [station_api.py](file://lan_mesh/station_api.py#L166-L174)
 
 ## 测试环境搭建与 Mock 服务
 - 环境准备

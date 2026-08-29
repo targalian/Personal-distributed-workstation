@@ -4,7 +4,7 @@
 **本文档引用的文件**
 - [api.py](file://lan_mesh/api.py)
 - [discovery.py](file://lan_mesh/discovery.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [host_info.py](file://lan_mesh/host_info.py)
 - [database.py](file://lan_mesh/database.py)
 - [protocol.py](file://lan_mesh/protocol.py)
@@ -65,11 +65,11 @@ UI --> |"HTTP/WebSocket"| API
 - [api.py:103-256](file://lan_mesh/api.py#L103-L256)
 - [discovery.py:33-135](file://lan_mesh/discovery.py#L33-L135)
 - [database.py:16-144](file://lan_mesh/database.py#L16-L144)
-- [master.py:67-125](file://lan_mesh/master.py#L67-L125)
+- [station_api.py](file://lan_mesh/station_api.py#L67-L125)
 
 章节来源
 - [api.py:10-19](file://lan_mesh/api.py#L10-L19)
-- [master.py:48-53](file://lan_mesh/master.py#L48-L53)
+- [station_api.py](file://lan_mesh/station_api.py#L48-L53)
 
 ## 核心组件
 - API 路由层：实现 /api/register、/api/heartbeat、/api/hosts、/api/hosts/{device_id} 等接口，负责请求解析、业务逻辑处理与响应构造。
@@ -218,7 +218,7 @@ Master-->>Client : HostRecord 或发现设备信息
 
 章节来源
 - [protocol.py:24](file://lan_mesh/protocol.py#L24)
-- [master.py:166-174](file://lan_mesh/master.py#L166-L174)
+- [station_api.py](file://lan_mesh/station_api.py#L166-L174)
 - [discovery.py:216-228](file://lan_mesh/discovery.py#L216-L228)
 - [database.py:272-280](file://lan_mesh/database.py#L272-L280)
 - [database.py:194-201](file://lan_mesh/database.py#L194-L201)
@@ -249,7 +249,7 @@ Master-->>Client : HostRecord 或发现设备信息
 
 章节来源
 - [api.py:116-168](file://lan_mesh/api.py#L116-L168)
-- [master.py:166-174](file://lan_mesh/master.py#L166-L174)
+- [station_api.py](file://lan_mesh/station_api.py#L166-L174)
 - [discovery.py:216-228](file://lan_mesh/discovery.py#L216-L228)
 
 ### 请求参数格式与响应数据结构

@@ -16,7 +16,7 @@
 - [station_director.py](file://lan_mesh/station_director.py)
 - [host_rating.py](file://lan_mesh/host_rating.py)
 - [station_controller.py](file://lan_mesh/station_controller.py)
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [skill_registry.py](file://lan_mesh/skill_registry.py)
 - [bot_gateway.py](file://lan_mesh/bot_gateway.py)
 - [config.py](file://lan_mesh/config.py)
@@ -117,7 +117,7 @@ P2PAPI --> WorkerAPI
 ```
 
 **图表来源**
-- [master.py:66-319](file://lan_mesh/master.py#L66-L319)
+- [station_api.py](file://lan_mesh/station_api.py#L66-L319)
 - [worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
 - [api.py:37-570](file://lan_mesh/api.py#L37-L570)
 - [station_api.py:85-1031](file://lan_mesh/station_api.py#L85-L1031)
@@ -129,7 +129,7 @@ P2PAPI --> WorkerAPI
 - [bot_gateway.py:1-354](file://lan_mesh/bot_gateway.py#L1-L354)
 
 **章节来源**
-- [master.py:1-332](file://lan_mesh/master.py#L1-L332)
+- [station_api.py](file://lan_mesh/station_api.py#L1-L332)
 - [worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
 - [api.py:1-793](file://lan_mesh/api.py#L1-L793)
 - [station_api.py:1-1230](file://lan_mesh/station_api.py#L1-L1230)
@@ -226,7 +226,7 @@ Bot 网关负责：
 - 异步消息发送（避免阻塞调用方）
 
 **章节来源**
-- [master.py:66-170](file://lan_mesh/master.py#L66-L170)
+- [station_api.py](file://lan_mesh/station_api.py#L66-L170)
 - [worker.py:62-120](file://lan_mesh/worker.py#L62-L120)
 - [discovery.py:33-136](file://lan_mesh/discovery.py#L33-L136)
 - [project.py:62-320](file://lan_mesh/project.py#L62-L320)
@@ -321,7 +321,7 @@ MCPGateway --> TCP
 ```
 
 **图表来源**
-- [master.py:183-218](file://lan_mesh/master.py#L183-L218)
+- [station_api.py](file://lan_mesh/station_api.py#L183-L218)
 - [worker.py:219-238](file://lan_mesh/worker.py#L219-L238)
 - [api.py:37-570](file://lan_mesh/api.py#L37-L570)
 - [station_api.py:85-1031](file://lan_mesh/station_api.py#L85-L1031)
@@ -1649,7 +1649,7 @@ P2PHandler --> P2PReceiver
 ```
 
 **图表来源**
-- [master.py:32-106](file://lan_mesh/master.py#L32-L106)
+- [station_api.py](file://lan_mesh/station_api.py#L32-L106)
 - [worker.py:43-44](file://lan_mesh/worker.py#L43-L44)
 - [api.py:33-34](file://lan_mesh/api.py#L33-L34)
 - [station_api.py:31-70](file://lan_mesh/station_api.py#L31-L70)
@@ -1936,7 +1936,7 @@ P2PTransferFailed --> Response
 5. 检查网络连接的中断和重连机制
 
 **章节来源**
-- [master.py:300-313](file://lan_mesh/master.py#L300-L313)
+- [station_api.py](file://lan_mesh/station_api.py#L300-L313)
 - [worker.py:314-318](file://lan_mesh/worker.py#L314-L318)
 - [station_director.py:92-150](file://lan_mesh/station_director.py#L92-L150)
 - [station_api.py:411-418](file://lan_mesh/station_api.py#L411-L418)

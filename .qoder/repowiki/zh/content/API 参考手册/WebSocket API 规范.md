@@ -4,7 +4,7 @@
 **本文引用的文件**
 - [main.py](file://main.py)
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [database.py](file://lan_mesh/database.py)
@@ -45,7 +45,7 @@ Browser["浏览器/前端<br/>dashboard.html"]
 end
 subgraph "Master 节点"
 MasterAPI["FastAPI 路由<br/>api.py"]
-MasterCtrl["MasterController<br/>master.py"]
+MasterCtrl["StationDirector<br/>station_api.py"]
 Broadcast["广播函数<br/>broadcast_ws"]
 DB["数据库<br/>database.py"]
 end
@@ -67,13 +67,13 @@ Discovery --> MasterAPI
 
 **图表来源**
 - [api.py:500-539](file://lan_mesh/api.py#L500-L539)
-- [master.py:55-65](file://lan_mesh/master.py#L55-L65)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L65)
 - [worker.py:62-71](file://lan_mesh/worker.py#L62-L71)
 
 **章节来源**
 - [main.py:1-90](file://main.py#L1-L90)
 - [api.py:1-539](file://lan_mesh/api.py#L1-L539)
-- [master.py:1-324](file://lan_mesh/master.py#L1-L324)
+- [station_api.py](file://lan_mesh/station_api.py#L1-L324)
 - [worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
 
 ## 核心组件
@@ -86,7 +86,7 @@ WebSocket API 的核心组件包括：
 
 **章节来源**
 - [api.py:500-539](file://lan_mesh/api.py#L500-L539)
-- [master.py:55-65](file://lan_mesh/master.py#L55-L65)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L65)
 
 ## 架构概览
 WebSocket 架构采用客户端-服务器模式，Master 节点作为服务器，Worker 节点与浏览器客户端作为客户端。消息流通过广播函数分发到所有连接的客户端。
@@ -114,7 +114,7 @@ API->>Client : 心跳确认
 
 **图表来源**
 - [api.py:500-539](file://lan_mesh/api.py#L500-L539)
-- [master.py:175-184](file://lan_mesh/master.py#L175-L184)
+- [station_api.py](file://lan_mesh/station_api.py#L175-L184)
 
 ## 详细组件分析
 
@@ -245,11 +245,11 @@ stateDiagram-v2
 ```
 
 **图表来源**
-- [master.py:55-65](file://lan_mesh/master.py#L55-L65)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L65)
 - [api.py:514-524](file://lan_mesh/api.py#L514-L524)
 
 **章节来源**
-- [master.py:55-65](file://lan_mesh/master.py#L55-L65)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L65)
 - [api.py:514-524](file://lan_mesh/api.py#L514-L524)
 
 ### 心跳机制
@@ -266,7 +266,7 @@ stateDiagram-v2
 - 状态指示：实时显示 WebSocket 连接状态
 
 **章节来源**
-- [master.py:175-184](file://lan_mesh/master.py#L175-L184)
+- [station_api.py](file://lan_mesh/station_api.py#L175-L184)
 - [api.py:514-518](file://lan_mesh/api.py#L514-L518)
 - [dashboard.html:195-208](file://lan_mesh/web/templates/dashboard.html#L195-L208)
 
@@ -305,7 +305,7 @@ DB["Database<br/>database.py"]
 Models["数据模型<br/>protocol.py"]
 end
 subgraph "服务层"
-MasterCtrl["MasterController<br/>master.py"]
+MasterCtrl["StationDirector<br/>station_api.py"]
 WorkerAgent["WorkerAgent<br/>worker.py"]
 Discovery["DiscoveryService<br/>discovery.py"]
 end
@@ -320,13 +320,13 @@ DB --> Models
 
 **图表来源**
 - [api.py:529-539](file://lan_mesh/api.py#L529-L539)
-- [master.py:55-65](file://lan_mesh/master.py#L55-L65)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L65)
 - [database.py:16-27](file://lan_mesh/database.py#L16-L27)
 - [protocol.py:1-356](file://lan_mesh/protocol.py#L1-L356)
 
 **章节来源**
 - [api.py:32-35](file://lan_mesh/api.py#L32-L35)
-- [master.py:32-46](file://lan_mesh/master.py#L32-L46)
+- [station_api.py](file://lan_mesh/station_api.py#L32-L46)
 - [database.py:16-27](file://lan_mesh/database.py#L16-L27)
 
 ## 性能考虑

@@ -7,7 +7,7 @@
 - [protocol.py](file://lan_mesh/protocol.py)
 - [database.py](file://lan_mesh/database.py)
 - [worker.py](file://lan_mesh/worker.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [orchestrator.py](file://lan_mesh/orchestrator.py)
 - [agent_runtime.py](file://lan_mesh/agent_runtime.py)
 - [task.py](file://lan_mesh/task.py)
@@ -64,12 +64,12 @@ W_API --> M_API
 
 **图表来源**
 - [api.py:103-266](file://lan_mesh/api.py#L103-L266)
-- [master.py:187-224](file://lan_mesh/master.py#L187-L224)
+- [station_api.py](file://lan_mesh/station_api.py#L187-L224)
 - [worker.py:219-238](file://lan_mesh/worker.py#L219-L238)
 
 **章节来源**
 - [api.py:10-19](file://lan_mesh/api.py#L10-L19)
-- [master.py:1-324](file://lan_mesh/master.py#L1-L324)
+- [station_api.py](file://lan_mesh/station_api.py#L1-L324)
 - [worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
 
 ## 核心组件
@@ -362,12 +362,12 @@ Orchestrator --> TaskDAG["TaskDAG"]
 ```
 
 **图表来源**
-- [master.py:32-45](file://lan_mesh/master.py#L32-L45)
+- [station_api.py](file://lan_mesh/station_api.py#L32-L45)
 - [worker.py:42-44](file://lan_mesh/worker.py#L42-L44)
 - [orchestrator.py:19-21](file://lan_mesh/orchestrator.py#L19-L21)
 
 **章节来源**
-- [master.py:32-45](file://lan_mesh/master.py#L32-L45)
+- [station_api.py](file://lan_mesh/station_api.py#L32-L45)
 - [worker.py:42-44](file://lan_mesh/worker.py#L42-L44)
 - [orchestrator.py:19-21](file://lan_mesh/orchestrator.py#L19-L21)
 

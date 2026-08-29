@@ -3,7 +3,7 @@
 <cite>
 **本文引用的文件**
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [host_info.py](file://lan_mesh/host_info.py)
@@ -68,7 +68,7 @@ M_API <- --> W_API
 ```
 
 **图表来源**
-- [master.py:187-324](file://lan_mesh/master.py#L187-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L187-L324)
 - [worker.py:219-325](file://lan_mesh/worker.py#L219-L325)
 - [api.py:37-526](file://lan_mesh/api.py#L37-L526)
 
@@ -89,7 +89,7 @@ M_API <- --> W_API
 **章节来源**
 - [protocol.py:17-25](file://lan_mesh/protocol.py#L17-L25)
 - [config.py:21-34](file://lan_mesh/config.py#L21-L34)
-- [master.py:225-234](file://lan_mesh/master.py#L225-L234)
+- [station_controller.py](file://lan_mesh/station_controller.py#L225-L234)
 - [worker.py:240-249](file://lan_mesh/worker.py#L240-L249)
 
 ### 时间常量与超时机制
@@ -326,7 +326,7 @@ Config[config.py]
 HostInfo[host_info.py]
 end
 subgraph "业务模块"
-Master[master.py]
+Master[station_controller.py]
 Worker[worker.py]
 API[api.py]
 Discovery[discovery.py]
@@ -350,7 +350,7 @@ Shared --> Worker
 ```
 
 **图表来源**
-- [master.py:32-45](file://lan_mesh/master.py#L32-L45)
+- [station_controller.py](file://lan_mesh/station_controller.py#L32-L45)
 - [worker.py:28-44](file://lan_mesh/worker.py#L28-L44)
 - [api.py:33-34](file://lan_mesh/api.py#L33-L34)
 
@@ -363,7 +363,7 @@ Shared --> Worker
 - **sqlite3**：本地数据库
 
 **章节来源**
-- [master.py:27-45](file://lan_mesh/master.py#L27-L45)
+- [station_controller.py](file://lan_mesh/station_controller.py#L27-L45)
 - [worker.py:24-44](file://lan_mesh/worker.py#L24-L44)
 
 ## 性能考虑

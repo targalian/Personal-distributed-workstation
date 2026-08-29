@@ -4,7 +4,7 @@
 **本文引用的文件**
 - [main.py](file://main.py)
 - [api.py](file://lan_mesh/api.py)
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
@@ -52,7 +52,7 @@
 graph TB
 subgraph "后端"
 A["FastAPI 应用<br/>lan_mesh/api.py"]
-B["Secretary 控制器<br/>lan_mesh/secretary.py"]
+B["Station Director<br/>station_api.py"]
 C["Station Director 控制器<br/>lan_mesh/station_controller.py"]
 D["Worker 守护进程<br/>lan_mesh/worker.py"]
 E["协议与模型<br/>lan_mesh/protocol.py"]
@@ -76,7 +76,7 @@ H --> |"HTTP API"| A
 
 图表来源
 - [api.py](file://lan_mesh/api.py)
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [protocol.py](file://lan_mesh/protocol.py)
@@ -87,7 +87,7 @@ H --> |"HTTP API"| A
 章节来源
 - [main.py](file://main.py)
 - [api.py](file://lan_mesh/api.py)
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
@@ -107,7 +107,7 @@ H --> |"HTTP API"| A
 
 章节来源
 - [api.py](file://lan_mesh/api.py)
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
@@ -126,7 +126,7 @@ WebSocket 实时推送的整体流程如下：
 sequenceDiagram
 participant Client as "客户端"
 participant WS as "WebSocket 路由<br/>lan_mesh/api.py"
-participant State as "SecretaryState<br/>lan_mesh/secretary.py"
+participant State as "WebSocket 状态<br/>station_api.py"
 participant StationState as "StationState<br/>lan_mesh/station_controller.py"
 participant P2PHandler as "P2P 处理器<br/>lan_mesh/station_api.py"
 participant DB as "数据库<br/>lan_mesh/api.py"
@@ -152,7 +152,7 @@ Client->>Client : "显示聊天消息"
 
 图表来源
 - [api.py](file://lan_mesh/api.py)
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [station_api.py](file://lan_mesh/station_api.py)
@@ -207,7 +207,7 @@ Client->>Client : "显示聊天消息"
 - broadcast_ws 在发送失败时收集异常客户端并清理集合，避免后续发送异常。
 
 章节来源
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [api.py](file://lan_mesh/api.py)
 
 ### Station Director 事件驱动推送
@@ -295,7 +295,7 @@ Client->>Client : "显示聊天消息"
 
 章节来源
 - [api.py](file://lan_mesh/api.py)
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [station_api.py](file://lan_mesh/station_api.py)
@@ -328,7 +328,7 @@ WebSocket 实时通信涉及以下关键依赖：
 
 ```mermaid
 graph LR
-WS["WebSocket 路由<br/>lan_mesh/api.py"] --> SecState["SecretaryState<br/>lan_mesh/secretary.py"]
+WS["WebSocket 路由<br/>lan_mesh/api.py"] --> SecState["WebSocket 状态<br/>station_api.py"]
 WS --> StaState["StationState<br/>lan_mesh/station_controller.py"]
 SecState --> DB["数据库<br/>lan_mesh/api.py"]
 StaState --> DB
@@ -343,7 +343,7 @@ P2P --> DB
 
 图表来源
 - [api.py](file://lan_mesh/api.py)
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)
@@ -389,7 +389,7 @@ P2P --> DB
 
 章节来源
 - [api.py](file://lan_mesh/api.py)
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [station_controller.py](file://lan_mesh/station_controller.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [dashboard.html](file://lan_mesh/web/templates/dashboard.html)

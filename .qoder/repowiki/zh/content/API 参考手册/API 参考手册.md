@@ -7,7 +7,7 @@
 - [lan_mesh/api.py](file://lan_mesh/api.py)
 - [lan_mesh/protocol.py](file://lan_mesh/protocol.py)
 - [lan_mesh/database.py](file://lan_mesh/database.py)
-- [lan_mesh/master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [lan_mesh/worker.py](file://lan_mesh/worker.py)
 - [quicklan-main/src/api.ts](file://quicklan-main/src/api.ts)
 - [quicklan-main/src/types.ts](file://quicklan-main/src/types.ts)
@@ -47,7 +47,7 @@ Work Station 项目由两部分组成：
 ```mermaid
 graph TB
 subgraph "Python 后端"
-M["MasterController<br/>lan_mesh/master.py"]
+M["StationDirector<br/>station_api.py"]
 W["WorkerAgent<br/>lan_mesh/worker.py"]
 API["FastAPI 路由<br/>lan_mesh/api.py"]
 DB["SQLite 数据库<br/>lan_mesh/database.py"]
@@ -70,7 +70,7 @@ TSAPI --> RL
 ```
 
 **图表来源**
-- [lan_mesh/master.py:1-200](file://lan_mesh/master.py#L1-L200)
+- [station_api.py](file://lan_mesh/station_api.py#L1-L200)
 - [lan_mesh/worker.py:1-200](file://lan_mesh/worker.py#L1-L200)
 - [lan_mesh/api.py:1-539](file://lan_mesh/api.py#L1-L539)
 - [lan_mesh/database.py:1-611](file://lan_mesh/database.py#L1-L611)
@@ -95,7 +95,7 @@ TSAPI --> RL
 - Rust+Tauri 前端：提供本地控制 API（127.0.0.1:45456）、LAN manifest API（TCP），以及前端 JS SDK
 
 **章节来源**
-- [lan_mesh/master.py:67-200](file://lan_mesh/master.py#L67-L200)
+- [station_api.py](file://lan_mesh/station_api.py#L67-L200)
 - [lan_mesh/worker.py:62-200](file://lan_mesh/worker.py#L62-L200)
 - [lan_mesh/api.py:37-539](file://lan_mesh/api.py#L37-L539)
 - [lan_mesh/database.py:16-144](file://lan_mesh/database.py#L16-L144)
@@ -106,7 +106,7 @@ TSAPI --> RL
 ```mermaid
 sequenceDiagram
 participant CLI as "命令行入口<br/>main.py"
-participant Master as "MasterController<br/>lan_mesh/master.py"
+participant Master as "StationDirector<br/>station_api.py"
 participant Worker as "WorkerAgent<br/>lan_mesh/worker.py"
 participant API as "FastAPI 路由<br/>lan_mesh/api.py"
 participant DB as "SQLite 数据库<br/>lan_mesh/database.py"
@@ -123,7 +123,7 @@ Master->>Worker : 任务/工具调用
 
 **图表来源**
 - [main.py:25-90](file://main.py#L25-L90)
-- [lan_mesh/master.py:187-200](file://lan_mesh/master.py#L187-L200)
+- [station_api.py](file://lan_mesh/station_api.py#L187-L200)
 - [lan_mesh/worker.py:126-195](file://lan_mesh/worker.py#L126-L195)
 - [lan_mesh/api.py:112-526](file://lan_mesh/api.py#L112-L526)
 - [lan_mesh/database.py:16-144](file://lan_mesh/database.py#L16-L144)
@@ -582,7 +582,7 @@ PROJECTS ||--o{ USAGE_LOG : "project_id"
 graph LR
 Req["requirements.txt<br/>FastAPI, Uvicorn, psutil, pydantic, PyYAML, requests, multipart"]
 Main["main.py<br/>入口"]
-Master["lan_mesh/master.py<br/>MasterController"]
+Master["station_api.py<br/>StationDirector"]
 Worker["lan_mesh/worker.py<br/>WorkerAgent"]
 API["lan_mesh/api.py<br/>FastAPI 路由"]
 DB["lan_mesh/database.py<br/>SQLite"]
@@ -604,7 +604,7 @@ RL --> LA
 **图表来源**
 - [requirements.txt:1-8](file://requirements.txt#L1-L8)
 - [main.py:25-90](file://main.py#L25-L90)
-- [lan_mesh/master.py:77-114](file://lan_mesh/master.py#L77-L114)
+- [station_api.py](file://lan_mesh/station_api.py#L77-L114)
 - [lan_mesh/worker.py:73-97](file://lan_mesh/worker.py#L73-L97)
 - [lan_mesh/api.py:37-113](file://lan_mesh/api.py#L37-L113)
 - [lan_mesh/database.py:16-40](file://lan_mesh/database.py#L16-L40)
@@ -630,7 +630,7 @@ RL --> LA
 
 **章节来源**
 - [lan_mesh/database.py:62-143](file://lan_mesh/database.py#L62-L143)
-- [lan_mesh/master.py:166-184](file://lan_mesh/master.py#L166-L184)
+- [station_api.py](file://lan_mesh/station_api.py#L166-L184)
 - [lan_mesh/api.py:500-525](file://lan_mesh/api.py#L500-L525)
 
 ## 故障排除指南

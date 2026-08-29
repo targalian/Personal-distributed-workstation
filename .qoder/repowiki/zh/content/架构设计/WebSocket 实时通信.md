@@ -45,7 +45,7 @@
 ```mermaid
 graph TB
 subgraph "Python 层"
-M["Master 控制器<br/>lan_mesh/master.py"]
+M["Station Director<br/>station_controller.py"]
 API["FastAPI 路由<br/>lan_mesh/api.py"]
 DB["数据库封装<br/>lan_mesh/database.py"]
 Proto["协议与模型<br/>lan_mesh/protocol.py"]

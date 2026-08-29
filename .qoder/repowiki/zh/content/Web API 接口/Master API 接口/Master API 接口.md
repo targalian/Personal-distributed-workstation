@@ -3,7 +3,7 @@
 <cite>
 **本文档引用的文件**
 - [api.py](file://lan_mesh/api.py)
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [discovery.py](file://lan_mesh/discovery.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [database.py](file://lan_mesh/database.py)
@@ -72,11 +72,11 @@ MCP --> API
 ```
 
 **图表来源**
-- [secretary.py:187-223](file://lan_mesh/secretary.py#L187-L223)
+- [station_api.py](file://lan_mesh/station_api.py#L187-L223)
 - [api.py:103-112](file://lan_mesh/api.py#L103-L112)
 
 **章节来源**
-- [secretary.py:1-332](file://lan_mesh/secretary.py#L1-L332)
+- [station_api.py](file://lan_mesh/station_api.py#L1-L332)
 - [config.py:1-84](file://lan_mesh/config.py#L1-L84)
 
 ## 核心组件
@@ -107,7 +107,7 @@ Secretary 控制器是系统的核心协调者，负责：
 - 使用记录追踪
 
 **章节来源**
-- [secretary.py:67-332](file://lan_mesh/secretary.py#L67-L332)
+- [station_api.py](file://lan_mesh/station_api.py#L67-L332)
 - [api.py:103-570](file://lan_mesh/api.py#L103-L570)
 - [database.py:16-611](file://lan_mesh/database.py#L16-L611)
 
@@ -604,7 +604,7 @@ DB --> SQLite
 ```
 
 **图表来源**
-- [secretary.py:27-45](file://lan_mesh/secretary.py#L27-L45)
+- [station_api.py](file://lan_mesh/station_api.py#L27-L45)
 - [api.py:26-35](file://lan_mesh/api.py#L26-L35)
 
 ### 组件耦合分析
@@ -616,7 +616,7 @@ DB --> SQLite
 - **可维护性**：模块化设计便于测试和调试
 
 **章节来源**
-- [secretary.py:32-45](file://lan_mesh/secretary.py#L32-L45)
+- [station_api.py](file://lan_mesh/station_api.py#L32-L45)
 - [api.py:36-570](file://lan_mesh/api.py#L36-L570)
 
 ## 性能考虑
@@ -681,7 +681,7 @@ DB --> SQLite
 
 **章节来源**
 - [api.py:153-154](file://lan_mesh/api.py#L153-L154)
-- [secretary.py:238-318](file://lan_mesh/secretary.py#L238-L318)
+- [station_api.py](file://lan_mesh/station_api.py#L238-L318)
 
 ## 结论
 

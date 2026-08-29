@@ -85,7 +85,7 @@ SF["shared_folder.py<br/>文件共享/配置报告"]
 end
 subgraph "入口"
 WK["worker.py<br/>Worker启动/注册/心跳/技能拉取"]
-MK["master.py<br/>Master启动/注册/清理/WebUI"]
+MK["station_controller.py<br/>Master启动/注册/清理/WebUI"]
 end
 HI --> AC
 AC --> WK
@@ -116,7 +116,7 @@ AR --> SR
 - [station_api.py:623-714](file://lan_mesh/station_api.py#L623-L714)
 - [shared_folder.py:16-219](file://lan_mesh/shared_folder.py#L16-L219)
 - [worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
-- [master.py:67-324](file://lan_mesh/master.py#L67-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L67-L324)
 
 **章节来源**
 - [protocol.py:159-298](file://lan_mesh/protocol.py#L159-L298)
@@ -131,7 +131,7 @@ AR --> SR
 - [station_api.py:623-714](file://lan_mesh/station_api.py#L623-L714)
 - [shared_folder.py:16-219](file://lan_mesh/shared_folder.py#L16-L219)
 - [worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
-- [master.py:67-324](file://lan_mesh/master.py#L67-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L67-L324)
 
 ## 核心组件
 - AgentCard：借鉴 A2A 协议的 Agent 能力卡片，包含 agent_id、agent_name、version、宿主信息（device_id、hostname、ip、api_port）、能力声明（skills、tools、model_preferences、max_concurrent_tasks）、运行时状态（status、current_task_count、registered_at、last_seen）
@@ -152,7 +152,7 @@ AR --> SR
 - [task.py:16-91](file://lan_mesh/task.py#L16-L91)
 - [discovery.py:33-259](file://lan_mesh/discovery.py#L33-L259)
 - [worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
-- [master.py:67-324](file://lan_mesh/master.py#L67-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L67-L324)
 
 ## 架构总览
 Agent 能力声明系统的核心流程：
@@ -329,7 +329,7 @@ class AgentRuntime {
 
 **章节来源**
 - [worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
-- [master.py:67-324](file://lan_mesh/master.py#L67-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L67-L324)
 - [api.py:39-649](file://lan_mesh/api.py#L39-L649)
 - [station_api.py:623-714](file://lan_mesh/station_api.py#L623-L714)
 - [discovery.py:33-259](file://lan_mesh/discovery.py#L33-L259)
@@ -342,7 +342,7 @@ class AgentRuntime {
 ```mermaid
 graph LR
 Protocol["protocol.py"] --> Worker["worker.py"]
-Protocol --> Master["master.py"]
+Protocol --> Master["station_controller.py"]
 Protocol --> AgentRuntime["agent_runtime.py"]
 Protocol --> SkillRegistry["skill_registry.py"]
 Protocol --> ToolRegistry["tool_registry.py"]
@@ -366,7 +366,7 @@ AgentRuntime --> Worker
 **图表来源**
 - [protocol.py:159-298](file://lan_mesh/protocol.py#L159-L298)
 - [worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
-- [master.py:67-324](file://lan_mesh/master.py#L67-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L67-L324)
 - [agent_runtime.py:28-357](file://lan_mesh/agent_runtime.py#L28-L357)
 - [skill_registry.py:43-388](file://lan_mesh/skill_registry.py#L43-L388)
 - [tool_registry.py:217-338](file://lan_mesh/tool_registry.py#L217-L338)
@@ -381,7 +381,7 @@ AgentRuntime --> Worker
 **章节来源**
 - [protocol.py:159-298](file://lan_mesh/protocol.py#L159-L298)
 - [worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
-- [master.py:67-324](file://lan_mesh/master.py#L67-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L67-L324)
 - [agent_runtime.py:28-357](file://lan_mesh/agent_runtime.py#L28-L357)
 - [skill_registry.py:43-388](file://lan_mesh/skill_registry.py#L43-L388)
 - [tool_registry.py:217-338](file://lan_mesh/tool_registry.py#L217-L338)

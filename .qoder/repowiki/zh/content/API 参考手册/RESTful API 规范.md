@@ -3,7 +3,7 @@
 <cite>
 **本文引用的文件**
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [worker.py](file://lan_mesh/worker.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [database.py](file://lan_mesh/database.py)
@@ -34,7 +34,7 @@
 ## 项目结构
 - 后端核心位于 lan_mesh 包：
   - 路由与 API：api.py
-  - Master 控制器：master.py
+  - Station Director：station_api.py
   - Worker 守护进程：worker.py
   - 协议与数据模型：protocol.py
   - 数据库与持久化：database.py
@@ -49,7 +49,7 @@
 ```mermaid
 graph TB
 subgraph "后端"
-A["MasterController<br/>lan_mesh/master.py"]
+A["StationDirector<br/>station_api.py"]
 B["WorkerAgent<br/>lan_mesh/worker.py"]
 C["API 路由<br/>lan_mesh/api.py"]
 D["数据库<br/>lan_mesh/database.py"]
@@ -75,7 +75,7 @@ B --> J
 ```
 
 图表来源
-- [master.py:187-223](file://lan_mesh/master.py#L187-L223)
+- [station_api.py](file://lan_mesh/station_api.py#L187-L223)
 - [worker.py:219-238](file://lan_mesh/worker.py#L219-L238)
 - [api.py:39-98](file://lan_mesh/api.py#L39-L98)
 - [api.py:103-526](file://lan_mesh/api.py#L103-L526)
@@ -480,7 +480,7 @@ OverBudget --> |否| Done(["完成"])
 - 外部依赖：FastAPI、Uvicorn、Pydantic、Requests、PyYAML、psutil、python-multipart。
 - 内部模块耦合：
   - api.py 依赖 protocol、database、shared_folder、orchestrator、mcp_gateway、project。
-  - master.py/worker.py 依赖 api.py 路由工厂。
+  - station_api.py/worker.py 依赖 api.py 路由工厂。
   - database.py 依赖 protocol 数据模型。
   - orchestrator.py 依赖 database 与 protocol。
   - mcp_gateway.py 依赖 mcp_client（未在本仓库中）。
@@ -494,7 +494,7 @@ API --> SF["shared_folder.py"]
 API --> Orchestrator["orchestrator.py"]
 API --> MCP["mcp_gateway.py"]
 API --> Proj["project.py"]
-Master["master.py"] --> API
+Master["station_api.py"] --> API
 Worker["worker.py"] --> API
 Orchestrator --> DB
 Proj --> DB
@@ -502,13 +502,13 @@ Proj --> DB
 
 图表来源
 - [api.py:33-34](file://lan_mesh/api.py#L33-L34)
-- [master.py:32-45](file://lan_mesh/master.py#L32-L45)
+- [station_api.py](file://lan_mesh/station_api.py#L32-L45)
 - [worker.py:42-44](file://lan_mesh/worker.py#L42-L44)
 
 章节来源
 - [requirements.txt:1-8](file://requirements.txt#L1-L8)
 - [api.py:33-34](file://lan_mesh/api.py#L33-L34)
-- [master.py:32-45](file://lan_mesh/master.py#L32-L45)
+- [station_api.py](file://lan_mesh/station_api.py#L32-L45)
 - [worker.py:42-44](file://lan_mesh/worker.py#L42-L44)
 
 ## 性能考虑
@@ -536,7 +536,7 @@ Proj --> DB
 - [api.py:308-317](file://lan_mesh/api.py#L308-L317)
 - [api.py:460-468](file://lan_mesh/api.py#L460-L468)
 - [shared_folder.py:88-101](file://lan_mesh/shared_folder.py#L88-L101)
-- [master.py:256-269](file://lan_mesh/master.py#L256-L269)
+- [station_api.py](file://lan_mesh/station_api.py#L256-L269)
 - [worker.py:126-146](file://lan_mesh/worker.py#L126-L146)
 
 ## 结论
@@ -685,6 +685,6 @@ Proj --> DB
 - 建议：对外发布前明确版本号，遵循语义化版本，避免破坏性变更。
 
 章节来源
-- [master.py:189](file://lan_mesh/master.py#L189)
+- [station_api.py](file://lan_mesh/station_api.py#L189)
 - [worker.py:221](file://lan_mesh/worker.py#L221)
 - [database.py:138-143](file://lan_mesh/database.py#L138-L143)

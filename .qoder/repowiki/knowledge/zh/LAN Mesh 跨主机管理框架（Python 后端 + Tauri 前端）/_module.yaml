@@ -2,6 +2,17 @@ schema_version: 1
 module_path: ""
 title: LAN Mesh 跨主机管理框架（Python 后端 + Tauri 前端）
 scope: []
-source_files: []
+source_files:
+    - main.py
+    - lan_mesh/station_controller.py
+    - lan_mesh/station_api.py
+    - lan_mesh/worker.py
+    - lan_mesh/pm_agent.py
+    - lan_mesh/orchestrator.py
+    - lan_mesh/database.py
+    - lan_mesh/model_router.py
+    - lan_mesh/chat_handler.py
+    - lan_mesh/discovery.py
+    - README.md
 depends_on: []
 related_to: []

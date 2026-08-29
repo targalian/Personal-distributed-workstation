@@ -3,7 +3,7 @@
 <cite>
 **本文引用的文件**
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [database.py](file://lan_mesh/database.py)
 - [discovery.py](file://lan_mesh/discovery.py)
@@ -36,7 +36,7 @@
 graph TB
 subgraph "后端"
 A["FastAPI 应用<br/>lan_mesh/api.py"]
-B["Master 控制器<br/>lan_mesh/master.py"]
+B["Station Director<br/>station_api.py"]
 C["协议与模型<br/>lan_mesh/protocol.py"]
 D["数据库层<br/>lan_mesh/database.py"]
 E["UDP 发现服务<br/>lan_mesh/discovery.py"]
@@ -54,7 +54,7 @@ F --> G
 
 **图表来源**
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
-- [master.py:48-323](file://lan_mesh/master.py#L48-L323)
+- [station_api.py](file://lan_mesh/station_api.py#L48-L323)
 - [protocol.py:1-356](file://lan_mesh/protocol.py#L1-L356)
 - [database.py:1-611](file://lan_mesh/database.py#L1-L611)
 - [discovery.py:1-259](file://lan_mesh/discovery.py#L1-L259)
@@ -63,7 +63,7 @@ F --> G
 
 **章节来源**
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
-- [master.py:48-323](file://lan_mesh/master.py#L48-L323)
+- [station_api.py](file://lan_mesh/station_api.py#L48-L323)
 - [protocol.py:1-356](file://lan_mesh/protocol.py#L1-L356)
 - [database.py:1-611](file://lan_mesh/database.py#L1-L611)
 - [discovery.py:1-259](file://lan_mesh/discovery.py#L1-L259)
@@ -94,7 +94,7 @@ WebSocket 实时通信在后端由 FastAPI 路由与 Master 控制器协作完�
 sequenceDiagram
 participant Client as "客户端"
 participant API as "FastAPI 路由<br/>lan_mesh/api.py"
-participant State as "MasterState<br/>lan_mesh/master.py"
+participant State as "MasterState<br/>station_api.py"
 participant DB as "数据库<br/>lan_mesh/database.py"
 Client->>API : "建立 /ws 连接"
 API->>API : "接受连接并加入 State.ws_clients"
@@ -111,7 +111,7 @@ State-->>Client : "向所有连接推送消息"
 
 **图表来源**
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
-- [master.py:55-65](file://lan_mesh/master.py#L55-L65)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L65)
 - [database.py:233-262](file://lan_mesh/database.py#L233-L262)
 
 ## 详细组件分析
@@ -191,13 +191,13 @@ Ping --> WSRecv
 **图表来源**
 - [api.py:148-168](file://lan_mesh/api.py#L148-L168)
 - [database.py:194-201](file://lan_mesh/database.py#L194-L201)
-- [master.py:175-183](file://lan_mesh/master.py#L175-L183)
+- [station_api.py](file://lan_mesh/station_api.py#L175-L183)
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
 
 **章节来源**
 - [api.py:148-168](file://lan_mesh/api.py#L148-L168)
 - [database.py:194-201](file://lan_mesh/database.py#L194-L201)
-- [master.py:175-183](file://lan_mesh/master.py#L175-L183)
+- [station_api.py](file://lan_mesh/station_api.py#L175-L183)
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
 
 ### 消息类型定义与数据格式
@@ -243,7 +243,7 @@ Ping --> WSRecv
 
 ```mermaid
 graph LR
-API["lan_mesh/api.py"] --> State["lan_mesh/master.py<br/>MasterState.ws_clients"]
+API["lan_mesh/api.py"] --> State["station_api.py<br/>MasterState.ws_clients"]
 API --> DB["lan_mesh/database.py<br/>Database"]
 API --> Proto["lan_mesh/protocol.py<br/>HostRecord/AgentCard/Task/Project"]
 API --> Disc["lan_mesh/discovery.py<br/>DiscoveryService"]
@@ -252,7 +252,7 @@ FE["quicklan-main/src/*"] --> Types["quicklan-main/src/types.ts"]
 
 **图表来源**
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
-- [master.py:55-65](file://lan_mesh/master.py#L55-L65)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L65)
 - [database.py:147-192](file://lan_mesh/database.py#L147-L192)
 - [protocol.py:115-147](file://lan_mesh/protocol.py#L115-L147)
 - [protocol.py:202-234](file://lan_mesh/protocol.py#L202-L234)
@@ -263,7 +263,7 @@ FE["quicklan-main/src/*"] --> Types["quicklan-main/src/types.ts"]
 
 **章节来源**
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
-- [master.py:55-65](file://lan_mesh/master.py#L55-L65)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L65)
 - [database.py:147-192](file://lan_mesh/database.py#L147-L192)
 - [protocol.py:115-147](file://lan_mesh/protocol.py#L115-L147)
 - [protocol.py:202-234](file://lan_mesh/protocol.py#L202-L234)

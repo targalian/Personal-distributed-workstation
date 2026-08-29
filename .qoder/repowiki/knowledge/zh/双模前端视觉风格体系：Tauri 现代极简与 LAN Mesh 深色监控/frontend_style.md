@@ -25,7 +25,7 @@
     *   **色彩系统**：典型的“深色模式”监控仪表盘风格。背景为深黑蓝 (`#0f1117`)，表面层为稍亮的深蓝灰 (`#1a1d27`)，强调色为荧光蓝 (`#5b8cff`) 和状态绿 (`#4ade80`)。
     *   **数据可视化**：
         *   **进度条**：使用 `.pbar` 和 `.pfill` 类展示 CPU/内存/磁盘占用率，并根据负载动态切换颜色（绿/黄/红）。
-        *   **徽章系统**：通过 `.badge` 类区分主机角色（Secretary/Worker）和状态（Idle/Busy/Archived）。
+        *   **徽章系统**：通过 `.badge` 类区分主机角色（Station/Worker）和状态（Idle/Busy/Archived）。
     *   **布局策略**：
         *   **卡片网格**：使用 `grid-template-columns: repeat(auto-fill, minmax(360px, 1fr))` 实现主机卡片的自动换行排列。
         *   **表格视图**：在 Station Director 面板中使用紧凑的 `.fleet-table` 展示主机舰队状态。

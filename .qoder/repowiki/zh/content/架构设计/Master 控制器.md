@@ -2,7 +2,7 @@
 
 <cite>
 **本文档引用的文件**
-- [secretary.py](file://lan_mesh/secretary.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 - [database.py](file://lan_mesh/database.py)
 - [orchestrator.py](file://lan_mesh/orchestrator.py)
 - [mcp_gateway.py](file://lan_mesh/mcp_gateway.py)
@@ -92,12 +92,12 @@ API --> WebUI
 ```
 
 **图表来源**
-- [secretary.py:68-332](file://lan_mesh/secretary.py#L68-L332)
+- [station_controller.py](file://lan_mesh/station_controller.py#L68-L332)
 - [database.py:16-611](file://lan_mesh/database.py#L16-L611)
 - [api.py:103-539](file://lan_mesh/api.py#L103-L539)
 
 **章节来源**
-- [secretary.py:1-332](file://lan_mesh/secretary.py#L1-L332)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L332)
 - [config.yaml:1-22](file://config.yaml#L1-L22)
 
 ## 核心组件
@@ -135,12 +135,12 @@ Secretary-->>App : 初始化完成
 ```
 
 **图表来源**
-- [secretary.py:246-326](file://lan_mesh/secretary.py#L246-L326)
+- [station_controller.py](file://lan_mesh/station_controller.py#L246-L326)
 - [preflight.py:226-290](file://lan_mesh/preflight.py#L226-L290)
 
 **章节来源**
-- [secretary.py:68-121](file://lan_mesh/secretary.py#L68-L121)
-- [secretary.py:246-326](file://lan_mesh/secretary.py#L246-L326)
+- [station_controller.py](file://lan_mesh/station_controller.py#L68-L121)
+- [station_controller.py](file://lan_mesh/station_controller.py#L246-L326)
 
 ### SecretaryState 数据结构
 
@@ -152,7 +152,7 @@ SecretaryState 是秘书官控制器的运行时共享状态容器，包含以�
 - **运行时信息**：WebSocket客户端连接状态
 
 **章节来源**
-- [secretary.py:56-66](file://lan_mesh/secretary.py#L56-L66)
+- [station_controller.py](file://lan_mesh/station_controller.py#L56-L66)
 
 ## 架构概览
 
@@ -191,7 +191,7 @@ Loop --> TaskDispatch
 ```
 
 **图表来源**
-- [secretary.py:167-191](file://lan_mesh/secretary.py#L167-L191)
+- [station_controller.py](file://lan_mesh/station_controller.py#L167-L191)
 - [discovery.py:71-89](file://lan_mesh/discovery.py#L71-L89)
 
 ### 组件交互图
@@ -218,7 +218,7 @@ Secretary->>SF : 刷新配置报告
 ```
 
 **图表来源**
-- [secretary.py:264-326](file://lan_mesh/secretary.py#L264-L326)
+- [station_controller.py](file://lan_mesh/station_controller.py#L264-L326)
 - [api.py:116-168](file://lan_mesh/api.py#L116-L168)
 
 ## 详细组件分析
@@ -410,7 +410,7 @@ SF --> Protocol
 ```
 
 **图表来源**
-- [secretary.py:78-121](file://lan_mesh/secretary.py#L78-L121)
+- [station_controller.py](file://lan_mesh/station_controller.py#L78-L121)
 - [api.py:103-112](file://lan_mesh/api.py#L103-L112)
 
 ### 组件耦合度分析
@@ -423,7 +423,7 @@ SF --> Protocol
 - **可测试性**：组件间依赖通过构造函数注入，便于单元测试
 
 **章节来源**
-- [secretary.py:103-117](file://lan_mesh/secretary.py#L103-L117)
+- [station_controller.py](file://lan_mesh/station_controller.py#L103-L117)
 - [api.py:103-112](file://lan_mesh/api.py#L103-L112)
 
 ## 性能考虑

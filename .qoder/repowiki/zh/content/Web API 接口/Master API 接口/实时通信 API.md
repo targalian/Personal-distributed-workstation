@@ -3,7 +3,7 @@
 <cite>
 **本文引用的文件**
 - [api.py](file://lan_mesh/api.py)
-- [master.py](file://lan_mesh/master.py)
+- [station_api.py](file://lan_mesh/station_api.py)
 - [discovery.py](file://lan_mesh/discovery.py)
 - [protocol.py](file://lan_mesh/protocol.py)
 - [database.py](file://lan_mesh/database.py)
@@ -28,7 +28,7 @@
 ## 项目结构
 实时通信相关代码主要分布在以下模块：
 - WebSocket 路由与广播：lan_mesh/api.py
-- Master 控制器与状态管理：lan_mesh/master.py
+- Station Director与状态管理：station_api.py
 - UDP 发现与网络状态：lan_mesh/discovery.py
 - 协议与数据模型：lan_mesh/protocol.py
 - 数据持久化与查询：lan_mesh/database.py
@@ -55,13 +55,13 @@ API --> |"查询/更新"| DB
 
 图表来源
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
-- [master.py:175-183](file://lan_mesh/master.py#L175-L183)
+- [station_api.py](file://lan_mesh/station_api.py#L175-L183)
 - [discovery.py:139-228](file://lan_mesh/discovery.py#L139-L228)
 - [database.py:233-262](file://lan_mesh/database.py#L233-L262)
 
 章节来源
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
-- [master.py:175-183](file://lan_mesh/master.py#L175-L183)
+- [station_api.py](file://lan_mesh/station_api.py#L175-L183)
 - [discovery.py:139-228](file://lan_mesh/discovery.py#L139-L228)
 - [database.py:233-262](file://lan_mesh/database.py#L233-L262)
 
@@ -80,7 +80,7 @@ API --> |"查询/更新"| DB
 
 章节来源
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
-- [master.py:55-64](file://lan_mesh/master.py#L55-L64)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L64)
 - [discovery.py:33-67](file://lan_mesh/discovery.py#L33-L67)
 - [protocol.py:29-147](file://lan_mesh/protocol.py#L29-L147)
 - [database.py:16-143](file://lan_mesh/database.py#L16-L143)
@@ -115,7 +115,7 @@ API->>State : "移除断开客户端"
 
 图表来源
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
-- [master.py:175-183](file://lan_mesh/master.py#L175-L183)
+- [station_api.py](file://lan_mesh/station_api.py#L175-L183)
 - [database.py:233-262](file://lan_mesh/database.py#L233-L262)
 
 ## 详细组件分析
@@ -191,14 +191,14 @@ MasterController --> Database : "使用"
 ```
 
 图表来源
-- [master.py:55-64](file://lan_mesh/master.py#L55-L64)
-- [master.py:67-114](file://lan_mesh/master.py#L67-L114)
-- [master.py:175-183](file://lan_mesh/master.py#L175-L183)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L64)
+- [station_api.py](file://lan_mesh/station_api.py#L67-L114)
+- [station_api.py](file://lan_mesh/station_api.py#L175-L183)
 
 章节来源
-- [master.py:55-64](file://lan_mesh/master.py#L55-L64)
-- [master.py:67-114](file://lan_mesh/master.py#L67-L114)
-- [master.py:175-183](file://lan_mesh/master.py#L175-L183)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L64)
+- [station_api.py](file://lan_mesh/station_api.py#L67-L114)
+- [station_api.py](file://lan_mesh/station_api.py#L175-L183)
 
 ### UDP 发现与网络状态
 - 发现服务
@@ -274,10 +274,10 @@ Prune["prune_loop"] --> Clean["清理超时设备"]
 
 ```mermaid
 graph LR
-API["api.py:/ws"] --> State["master.py:MasterState"]
+API["api.py:/ws"] --> State["station_api.py:MasterState"]
 API --> DB["database.py:Database"]
 API --> Broadcast["api.py:broadcast_ws"]
-Master["master.py:MasterController"] --> State
+Master["station_api.py:StationDirector"] --> State
 Master --> DB
 Master --> Disc["discovery.py:DiscoveryService"]
 UI["dashboard.html:WS 客户端"] --> API
@@ -285,14 +285,14 @@ UI["dashboard.html:WS 客户端"] --> API
 
 图表来源
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
-- [master.py:55-64](file://lan_mesh/master.py#L55-L64)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L64)
 - [database.py:233-262](file://lan_mesh/database.py#L233-L262)
 - [discovery.py:139-228](file://lan_mesh/discovery.py#L139-L228)
 - [dashboard.html:195-208](file://lan_mesh/web/templates/dashboard.html#L195-L208)
 
 章节来源
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
-- [master.py:55-64](file://lan_mesh/master.py#L55-L64)
+- [station_api.py](file://lan_mesh/station_api.py#L55-L64)
 - [database.py:233-262](file://lan_mesh/database.py#L233-L262)
 - [discovery.py:139-228](file://lan_mesh/discovery.py#L139-L228)
 - [dashboard.html:195-208](file://lan_mesh/web/templates/dashboard.html#L195-L208)
@@ -311,7 +311,7 @@ UI["dashboard.html:WS 客户端"] --> API
 
 章节来源
 - [api.py:529-538](file://lan_mesh/api.py#L529-L538)
-- [master.py:175-183](file://lan_mesh/master.py#L175-L183)
+- [station_api.py](file://lan_mesh/station_api.py#L175-L183)
 - [dashboard.html:195-208](file://lan_mesh/web/templates/dashboard.html#L195-L208)
 
 ## 故障排查指南
@@ -330,7 +330,7 @@ UI["dashboard.html:WS 客户端"] --> API
 章节来源
 - [api.py:500-538](file://lan_mesh/api.py#L500-L538)
 - [api.py:529-538](file://lan_mesh/api.py#L529-L538)
-- [master.py:175-183](file://lan_mesh/master.py#L175-L183)
+- [station_api.py](file://lan_mesh/station_api.py#L175-L183)
 - [discovery.py:139-228](file://lan_mesh/discovery.py#L139-L228)
 
 ## 结论
@@ -401,6 +401,6 @@ UI["dashboard.html:WS 客户端"] --> API
   - 通过 DiscoveryService 与数据库的 TTL 机制，定期清理离线设备，避免陈旧状态污染。
 
 章节来源
-- [master.py:175-183](file://lan_mesh/master.py#L175-L183)
+- [station_api.py](file://lan_mesh/station_api.py#L175-L183)
 - [discovery.py:216-228](file://lan_mesh/discovery.py#L216-L228)
 - [database.py:272-280](file://lan_mesh/database.py#L272-L280)

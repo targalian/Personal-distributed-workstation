@@ -6,7 +6,7 @@
 - [requirements.txt](file://requirements.txt)
 - [config.yaml](file://config.yaml)
 - [lan_mesh/api.py](file://lan_mesh/api.py)
-- [lan_mesh/master.py](file://lan_mesh/master.py)
+- [station_controller.py](file://lan_mesh/station_controller.py)
 - [lan_mesh/worker.py](file://lan_mesh/worker.py)
 - [lan_mesh/config.py](file://lan_mesh/config.py)
 - [lan_mesh/database.py](file://lan_mesh/database.py)
@@ -61,7 +61,7 @@ Q --> M
 ```
 
 图表来源
-- [lan_mesh/master.py:187-223](file://lan_mesh/master.py#L187-L223)
+- [station_controller.py](file://lan_mesh/station_controller.py#L187-L223)
 - [lan_mesh/worker.py:219-238](file://lan_mesh/worker.py#L219-L238)
 - [lan_mesh/database.py:16-26](file://lan_mesh/database.py#L16-L26)
 - [lan_mesh/shared_folder.py:16-37](file://lan_mesh/shared_folder.py#L16-L37)
@@ -69,7 +69,7 @@ Q --> M
 
 章节来源
 - [main.py:1-90](file://main.py#L1-L90)
-- [lan_mesh/master.py:1-324](file://lan_mesh/master.py#L1-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L1-L324)
 - [lan_mesh/worker.py:1-325](file://lan_mesh/worker.py#L1-L325)
 - [lan_mesh/database.py:1-611](file://lan_mesh/database.py#L1-L611)
 - [lan_mesh/shared_folder.py:1-219](file://lan_mesh/shared_folder.py#L1-L219)
@@ -83,7 +83,7 @@ Q --> M
 - 共享文件夹：自动创建、文件列举/下载/上传、主机配置报告生成
 
 章节来源
-- [lan_mesh/master.py:67-324](file://lan_mesh/master.py#L67-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L67-L324)
 - [lan_mesh/worker.py:62-325](file://lan_mesh/worker.py#L62-L325)
 - [lan_mesh/config.py:36-84](file://lan_mesh/config.py#L36-L84)
 - [lan_mesh/database.py:16-143](file://lan_mesh/database.py#L16-L143)
@@ -118,7 +118,7 @@ C_W --- NET
 图表来源
 - [lan_mesh/api.py:103-112](file://lan_mesh/api.py#L103-L112)
 - [lan_mesh/api.py:39-43](file://lan_mesh/api.py#L39-L43)
-- [lan_mesh/master.py:290-304](file://lan_mesh/master.py#L290-L304)
+- [station_controller.py](file://lan_mesh/station_controller.py#L290-L304)
 - [lan_mesh/worker.py:304-312](file://lan_mesh/worker.py#L304-L312)
 
 ## 详细组件分析
@@ -152,11 +152,11 @@ Master-->>Client : "注册成功"
 图表来源
 - [lan_mesh/api.py:170-204](file://lan_mesh/api.py#L170-L204)
 - [lan_mesh/api.py:116-146](file://lan_mesh/api.py#L116-L146)
-- [lan_mesh/master.py:187-223](file://lan_mesh/master.py#L187-L223)
+- [station_controller.py](file://lan_mesh/station_controller.py#L187-L223)
 - [lan_mesh/database.py:147-192](file://lan_mesh/database.py#L147-L192)
 
 章节来源
-- [lan_mesh/master.py:67-324](file://lan_mesh/master.py#L67-L324)
+- [station_controller.py](file://lan_mesh/station_controller.py#L67-L324)
 - [lan_mesh/api.py:103-112](file://lan_mesh/api.py#L103-L112)
 - [lan_mesh/database.py:16-143](file://lan_mesh/database.py#L16-L143)
 
@@ -218,7 +218,7 @@ FE["Vite + React"] --> Dev["开发服务器: 1420"]
 图表来源
 - [requirements.txt:1-8](file://requirements.txt#L1-L8)
 - [lan_mesh/api.py:26-31](file://lan_mesh/api.py#L26-L31)
-- [lan_mesh/master.py:298-304](file://lan_mesh/master.py#L298-L304)
+- [station_controller.py](file://lan_mesh/station_controller.py#L298-L304)
 - [quicklan-main/vite.config.ts:7-13](file://quicklan-main/vite.config.ts#L7-L13)
 
 章节来源
@@ -232,7 +232,7 @@ FE["Vite + React"] --> Dev["开发服务器: 1420"]
 - 文件操作：共享文件夹采用安全路径解析与文件名清洗，避免路径穿越
 
 章节来源
-- [lan_mesh/master.py:160-183](file://lan_mesh/master.py#L160-L183)
+- [station_controller.py](file://lan_mesh/station_controller.py#L160-L183)
 - [lan_mesh/worker.py:203-215](file://lan_mesh/worker.py#L203-L215)
 - [lan_mesh/shared_folder.py:88-118](file://lan_mesh/shared_folder.py#L88-L118)
 
@@ -245,7 +245,7 @@ FE["Vite + React"] --> Dev["开发服务器: 1420"]
 
 章节来源
 - [lan_mesh/api.py:242-250](file://lan_mesh/api.py#L242-L250)
-- [lan_mesh/master.py:238-318](file://lan_mesh/master.py#L238-L318)
+- [station_controller.py](file://lan_mesh/station_controller.py#L238-L318)
 - [lan_mesh/worker.py:253-318](file://lan_mesh/worker.py#L253-L318)
 
 ## 结论
@@ -294,7 +294,7 @@ FE["Vite + React"] --> Dev["开发服务器: 1420"]
 - [lan_mesh/api.py:116-146](file://lan_mesh/api.py#L116-L146)
 - [lan_mesh/api.py:501-525](file://lan_mesh/api.py#L501-L525)
 - [lan_mesh/worker.py:268-269](file://lan_mesh/worker.py#L268-L269)
-- [lan_mesh/master.py:248-254](file://lan_mesh/master.py#L248-L254)
+- [station_controller.py](file://lan_mesh/station_controller.py#L248-L254)
 
 ### 环境变量与配置管理
 - LAN_MESH_CONFIG：指向 YAML 配置文件路径
@@ -322,7 +322,7 @@ FE["Vite + React"] --> Dev["开发服务器: 1420"]
 
 章节来源
 - [lan_mesh/api.py:242-250](file://lan_mesh/api.py#L242-L250)
-- [lan_mesh/master.py:298-304](file://lan_mesh/master.py#L298-L304)
+- [station_controller.py](file://lan_mesh/station_controller.py#L298-L304)
 
 ### 部署命令与使用示例
 - 构建镜像：docker build -t lan-mesh .
@@ -333,5 +333,5 @@ FE["Vite + React"] --> Dev["开发服务器: 1420"]
 
 章节来源
 - [main.py:25-85](file://main.py#L25-L85)
-- [lan_mesh/master.py:238-318](file://lan_mesh/master.py#L238-L318)
+- [station_controller.py](file://lan_mesh/station_controller.py#L238-L318)
 - [lan_mesh/worker.py:253-318](file://lan_mesh/worker.py#L253-L318)

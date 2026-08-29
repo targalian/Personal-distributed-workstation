@@ -1,6 +1,6 @@
 ## 1. 系统概述
 
-LAN Mesh 项目目前**未集成标准的 Python `logging` 模块或第三方日志框架**（如 `loguru`、`structlog` 等）。整个系统的运行时信息输出完全依赖于内置的 `print()` 函数，配合手动添加的**模块前缀标签**来实现基本的日志分类和追踪。
+LAN Mesh 项目早期未集成标准 `logging` 模块，运行时信息输出完全依赖内置的 `print()` 函数配合模块前缀标签。**当前核心模块（`station_controller.py`、`worker.py`、`agent_runtime.py`、`pm_agent.py`、`chat_handler.py` 等）已迁移到标准 `logging`**，由 `lan_mesh/logger.py` 统一提供格式、控制台/文件双通道与日志轮转；其余模块仍保留 `print` 前缀风格。
 
 这种模式属于**开发阶段或轻量级应用**常见的简易日志策略，具备实现简单、无依赖的优点，但缺乏日志级别管理、结构化输出、文件持久化及异步处理能力。
 
@@ -15,7 +15,7 @@ LAN Mesh 项目目前**未集成标准的 Python `logging` 模块或第三方日
 `[模块名] 消息内容`
 
 常见的前缀标记包括：
-- `[Secretary]`: 中心控制节点的主流程日志（启动、配置加载、Web UI 地址）。
+- `[Station]`: Station Director 主控的主流程日志（启动、配置加载、Web UI 地址、Secretary 激活）。
 - `[Worker]`: 工作节点的主流程日志（注册、心跳、共享文件夹状态）。
 - `[发现]` (Discovery): UDP 广播发现服务的底层网络事件（端口绑定、设备_seen、回调异常）。
 - `[Orchestrator]`: 任务编排引擎的状态变更（任务提交、子任务分发、完成/失败）。
@@ -35,7 +35,8 @@ LAN Mesh 项目目前**未集成标准的 Python `logging` 模块或第三方日
 
 | 文件路径 | 主要日志内容 |
 | :--- | :--- |
-| `lan_mesh/secretary.py` | Secretary 启动流程、端口检测、Web UI 地址、配置刷新异常 |
+| `lan_mesh/logger.py` | 结构化日志系统：统一格式、控制台 + 文件双通道、5MB 轮转、LAN_MESH_LOG_* 环境变量控制 |
+| `lan_mesh/station_controller.py` | Station 启动流程、端口检测、Web UI 地址、Secretary 激活/停用 |
 | `lan_mesh/worker.py` | Worker 启动、注册结果、心跳状态、Agent 运行时初始化 |
 | `lan_mesh/discovery.py` | UDP 端口绑定错误、设备发现回调异常、降级运行提示 |
 | `lan_mesh/orchestrator.py` | 任务分解结果、模型路由决策详情、子任务 HTTP 调用状态 |
@@ -50,7 +51,7 @@ LAN Mesh 项目目前**未集成标准的 Python `logging` 模块或第三方日
 2. **缺乏结构化数据**：日志为纯文本，难以被 ELK、Promtail 等日志收集系统解析字段（如 `device_id`, `task_id`）。
 3. **无持久化机制**：重启后日志丢失，不利于故障回溯。
 4. **线程安全隐忧**：虽然 CPython 的 `print` 大致线程安全，但在高并发多线程环境下（如多个 Worker 心跳线程、UDP 监听线程），日志行可能会交错截断。
-5. **Uvicorn 日志隔离**：在 `secretary.py` 和 `worker.py` 中，Uvicorn 的 `log_level` 被硬编码为 `"warning"`，这意味着 HTTP 请求日志默认被抑制，仅保留应用层的 `print` 输出。
+5. **Uvicorn 日志隔离**：在 `station_controller.py` 和 `worker.py` 中，Uvicorn 的 `log_level` 被硬编码为 `"warning"`，这意味着 HTTP 请求日志默认被抑制，仅保留应用层的日志输出。
 
 ### 4.2 开发者规范
 在当前架构下，开发人员应遵循以下约定：
