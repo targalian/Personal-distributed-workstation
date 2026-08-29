@@ -6491,7 +6491,7 @@ class TestIter66ClusterScale:
         tb.created_at = 2000.0
         db.save_task(tb)
         db.upsert_host(self._worker("w-1"))
-        fake = self._fake(db)
+        fake = self._fake(db, busy_check=sc.StationController._is_worker_busy)
 
         class FakeResp:
             status_code = 200
@@ -6832,5 +6832,81 @@ class TestIter66ClusterScale:
         assert result.get("ok")
         assert "pm-l1" not in fake._pm_worker_map
         assert db.get_task("t-66-l").status == "cancelled"
+
+    # ── iter-68 扩容批量清空 ───────────────────────────
+
+    def test_autoscale_clears_backlog_in_one_pass(self, tmp_path,
+                                                  monkeypatch):
+        """扩容: 同轮连续派发清空积压 (iter-68 — 30s/轮滞后修复)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        ta = Task(task_id="t-68-a", name="积压A", description="d")
+        ta.created_at = 1000.0
+        db.save_task(ta)
+        tb = Task(task_id="t-68-b", name="积压B", description="d")
+        tb.created_at = 2000.0
+        db.save_task(tb)
+        db.upsert_host(self._worker("w-1", ip="10.0.0.1", port=45501))
+        db.upsert_host(self._worker("w-2", ip="10.0.0.2", port=45502))
+        fake = self._fake(db, busy_check=sc.StationController._is_worker_busy)
+
+        sent = []
+        pm_counter = {"n": 0}
+
+        def fake_post(url, json=None, timeout=10, headers=None):
+            sent.append(json)
+            pm_counter["n"] += 1
+
+            class R:
+                status_code = 200
+
+                def json(self):
+                    return {"ok": True, "pm_id": f"pm-68-{pm_counter['n']}"}
+            return R()
+        monkeypatch.setattr(sc, "http_post", fake_post)
+        monkeypatch.setattr("lan_mesh.host_info.pick_reachable_ip",
+                            lambda ip: "127.0.0.1")
+
+        sc.StationController._autoscale_check(fake)
+        # 同轮连续派发 2 个任务 (不再等 30s 下一轮)
+        assert len(sent) == 2
+        assert sent[0]["task_id"] == "t-68-a"   # FIFO
+        assert sent[1]["task_id"] == "t-68-b"
+        assert db.get_task("t-68-a").status == "running"
+        assert db.get_task("t-68-b").status == "running"
+        assert len(fake._pm_worker_map) == 2
+
+    def test_autoscale_stops_batch_on_failed_dispatch(self, tmp_path,
+                                                      monkeypatch):
+        """扩容: 派发失败立即停止本轮 (iter-68 防死循环)。"""
+        import lan_mesh.station_controller as sc
+        from lan_mesh.protocol import Task
+
+        db = self._make_db(tmp_path)
+        for i in range(3):
+            t = Task(task_id=f"t-68-f{i}", name="积压", description="d")
+            t.created_at = 1000.0 + i
+            db.save_task(t)
+        db.upsert_host(self._worker("w-1", ip="10.0.0.1", port=45501))
+        fake = self._fake(db)
+
+        sent = []
+
+        class R:
+            status_code = 500
+            text = "boom"
+
+        def fake_post(url, json=None, timeout=10, headers=None):
+            sent.append(json)
+            return R()
+        monkeypatch.setattr(sc, "http_post", fake_post)
+        monkeypatch.setattr("lan_mesh.host_info.pick_reachable_ip",
+                            lambda ip: "127.0.0.1")
+
+        sc.StationController._autoscale_check(fake)
+        # 派发失败 → 队列未减 → 立即停止本轮 (不死循环重试)
+        assert len(sent) == 1
 
 

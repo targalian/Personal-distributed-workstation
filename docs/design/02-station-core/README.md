@@ -213,6 +213,10 @@ WebSocket 通道。
 (iter-67 Bug J: 门槛从水位式 `>= up_threshold` 改为 `>= 1` — 原水位
 导致「最后 1 单滞留 pending」与「新 Worker 上线不接活」调度滞后;
 每轮仅派发 1 个 + 30s 轮询承担防抖动。)
+(iter-68 批量清空: 单轮 while 连续派发直至队列空/无空闲 Worker —
+原「每轮 1 个」在积压 N 单时需 N×30s 滞后 (五节点实测 4 积压 120s+),
+改为每次派发后重查队列与空闲 Worker, 派发失败/队列未减即停止本轮
+防死循环; 五节点实测 4 积压 18s 内全部 running。)
 
 **F3.3 PM 迁移**: `_prune_loop` 5s → `prune_offline(device_ttl=8)` →
 `_migrate_orphaned_pms` 按 `device_id` 匹配孤立 PM → 任务重置 pending
@@ -321,6 +325,7 @@ agent_runtime.execute()
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-08-29 | iter-68 | F3.1 扩容同轮批量清空 (30s/轮×N 积压滞后修复): _autoscale_check 单轮 while 连续派发 (每次派发后重查队列与空闲 Worker, 失败/未减即 break 防死循环) + _dispatch_next_task_to_worker 返回 bool; 五节点真机 14/14 (同轮清空耗时 18s vs 旧 120s+ 滞后) + 专项 16/16 + 回归 373 passed |
 | 2026-08-29 | iter-67 | 五节点集群实压 (评估报告边界 #2 五实例模拟): Bug J 扩容门槛水位→>=1 (最后 1 单不滞留/新 Worker 上线即接活) + Bug K autoscaler 派发落 pm_agents 表; 真机 13/13 (五机互认/4 积压全部派发/深度 4→3→2→1/FIFO/4 Worker 各 1 任务无重复/5 任务并发/杀机 F3.3) + 回归 371 passed |
 | 2026-08-29 | iter-66 | F3.1/F3.3 三机集群实测背书 (评估报告剩余边界 #2): 节点间派发协议收敛 (auth_headers + task_data + 映射含 task_id + 取消清映射 + 派发即置 running + FIFO) 共修复 9 个真实 bug (A-I); 控制命令端点 run_in_threadpool 解除跨节点死锁级联; 真机 17/17 + 专项 12/12 + 回归 369 passed |
 | 2026-08-29 | iter-57 | 并发压力验证 (补强#5): DB 加固 busy_timeout 30s + WAL (每线程独立连接); 限流双桶 (信任桶 token 高阈值/严格桶防滥用, 阈值配置化 observability.api_rate_limit[_trusted], ≤0 禁用); 本机 PM 忙时任务排队 pending 而非瞬时 failed, PM 结束接力派发 (_dispatch_queued_task); /api/health 补登白名单; 真机压测 1800 req 0 错误 + 20 并发提交全 200 (1 running + 19 排队) |

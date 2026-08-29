@@ -2612,18 +2612,31 @@ class StationController:
         idle_workers = [h for h in online_workers
                        if not self._is_worker_busy(h)]
 
-        # 扩容: 队列积压且有可用 Worker (iter-67 Bug J: 门槛从
-        # queue_depth >= up_threshold 改为 >= 1 — 原水位式门槛导致
-        # 「最后 1 单滞留 pending」与「新 Worker 上线不接活」的调度滞后;
-        # 每轮仅派发 1 个 + 30s 轮询间隔承担防抖动职责)
-        if queue_depth >= 1 and idle_workers:
+        # 扩容: 队列积压且有可用 Worker (iter-67 Bug J: 门槛 >= 1)
+        # iter-68: 同轮连续派发清空积压 — 原 30s/轮 × N 积压滞后严重
+        # (五节点实测 4 积压需 120s); 每次派发后重查队列与空闲 Worker,
+        # 派发失败立即停止本轮防死循环 (30s 后下轮再试)
+        while queue_depth >= 1 and idle_workers:
             target = idle_workers[0]
             logger.info("[自动扩容] 队列=%d, 激活 Worker: %s",
                        queue_depth, getattr(target, 'device_name', ''))
-            self._dispatch_next_task_to_worker(target)
+            ok = self._dispatch_next_task_to_worker(target)
+            new_depth = len([t for t in self.db.list_tasks()
+                             if getattr(t, 'status', '')
+                             in ('pending', 'queued')])
+            if not ok or new_depth >= queue_depth:
+                # 派发失败或队列未减: 停止本轮 (防死循环)
+                break
+            queue_depth = new_depth
+            hosts = self.db.list_hosts()
+            online_workers = [h for h in hosts
+                              if getattr(h, 'online', False)
+                              and getattr(h, 'role', '') == 'worker']
+            idle_workers = [h for h in online_workers
+                            if not self._is_worker_busy(h)]
 
         # 缩容日志 (仅记录, 不主动关闭 Worker)
-        elif queue_depth == 0 and active_count == 0 and online_workers:
+        if queue_depth == 0 and active_count == 0 and online_workers:
             logger.debug("[缩容观察] 无活跃任务, %d 台 Worker 空闲", len(online_workers))
 
     def _is_worker_busy(self, host) -> bool:
@@ -2719,12 +2732,16 @@ class StationController:
             return None
         return min(pending, key=lambda t: getattr(t, 'created_at', 0) or 0)
 
-    def _dispatch_next_task_to_worker(self, worker_host):
-        """F3.1: 将队列中最早 pending 任务派发到指定 Worker。"""
+    def _dispatch_next_task_to_worker(self, worker_host) -> bool:
+        """F3.1: 将队列中最早 pending 任务派发到指定 Worker。
+
+        Returns:
+            True = 派发成功 (iter-68 起供扩容批量清空循环判定)
+        """
         task = self._next_pending_task()
         if not task:
-            return
-        self._dispatch_task_to_worker(task, worker_host)
+            return False
+        return self._dispatch_task_to_worker(task, worker_host)
 
     # ── S1: API Key 加密自动分发 ────────────────────────────
 
