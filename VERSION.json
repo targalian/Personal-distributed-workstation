@@ -1,6 +1,6 @@
 {
   "version": "0.32.0",
-  "commit": "d458dec",
+  "commit": "b377c6b",
   "released_at": "2026-08-30",
   "note": "iter-71 影子 API: 常驻单队列守护 + 运行提交/查询/状态端点",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
