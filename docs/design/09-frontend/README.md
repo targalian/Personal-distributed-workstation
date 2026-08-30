@@ -166,6 +166,53 @@ scope 默认 `/`）; SW 注册请求由浏览器发起不带 Authorization 头,
   (suspended 样式 + title=已委托联邦对端执行), 紧随 forwarded 状态徽标;
   非 forwarded 任务无徽标; 徽标行内不换行
 
+## 工作站优化 UI (iter-72)
+
+**定位**: 常驻「自我优化」工作流的 UI 呈现与秘书交互入口。
+优化项三类来源 (boss 要求 / bottleneck 瓶颈 / agent 建议),
+六种状态 (candidate/waiting_boss/queued/running/completed/rejected)。
+后端 API (`/api/workstation-optimization/*`) 由 Codex 实现;
+Quest 仅前端, 后端未实现时自动回退 localStorage mock。
+
+**Mock 适配层**: `optIsApiMissing()` (dashboard) / `optRawFetch` (SPA)
+判定 404/405/501 → 回退本地存储 (键 `lan_mesh_opt_items_v1`,
+两处 UI 共享实现数据互通), 面板显示「本地演示数据」徽标;
+其他错误 (401/5xx) → 错误态 + 重试按钮 (未登录 401 不回退 mock 属设计决策)。
+mock 守护定时器 5s 推进 queued→running→completed 演示状态流转;
+空数组被尊重 (不重新播种), 空队列/加载中/接口错误三态 UI 齐全。
+
+**dashboard 三大区域**:
+- Station 首页 `opt-status-card`: 守护状态圆点/队列数/执行中项/
+  待 Boss 决策数/最近完成项 + 「查看优化面板」跳转秘书页
+- 秘书页 `opt-panel` (🛠️ 优化按钮展开, 待决策角标): 按状态分六组
+  展示 (waiting_boss→running→queued→candidate→completed→rejected),
+  每条含标题/来源徽标/优先级徽标/状态徽标/创建时间/说明,
+  操作: 确认执行/拒绝/补充说明 (clarify modal)/查看详情
+- 对话流: `handleOptChatCommand()` 拦截快捷入口
+  (「优化工作站:…」直入队/「遇到瓶颈:…」high/「添加优化建议:…」waiting/
+  「查看优化…」渲染卡片组) 本地处理不回秘书 API;
+  `appendChatMessage` 支持 `extra.type='opt_items'` 渲染优化项卡片组
+  (含确认/拒绝/补充按钮, 决策后写回当前对话流)
+
+**SPA 同步** (`OptimizationCard.tsx`): Station 首页卡片位新增
+🛠️ 工作站优化卡 — KPI kv (守护/队列/执行中/待决策/最近完成) +
+⏳ 待决策列表 (优先级排序前 5 条, 确认/拒绝按钮) + 10s 轮询 +
+空/加载/错误三态 + mock 徽标; 完整队列引导回旧版仪表盘面板。
+
+**WS 事件**: `onStationEvent` 已接 `workstation_optimization_created/updated/
+waiting_boss/completed` 四事件 → `handleOptEvent()` 按 id 幂等合并
+(本地操作与推送同入口, rAF + JSON 快照防闪烁), 后端接通即自动生效。
+
+**iter-72 移动端修复** (CDP 真实 390x844 + safe-area 模拟实测):
+聊天输入区曾因 `.chat-layout` 固定高 `calc(100vh-160px)` 未计入底部
+导航 (62px) 且断点规则位于普通规则之前被覆盖 (iter-62 同型陷阱),
+加 opt-panel 展开后输入条被 chat-container overflow:hidden 裁截。
+修复: 断点规则移至普通规则之后
+(`height:calc(100vh - 190px - env(safe-area-inset-bottom))`) +
+`.chat-container{min-height:96px}` + `.opt-panel{flex-shrink:1}`;
+实测 inputAboveNav/inputBelowPanel/inputUsable/inputFocusable 全 true,
+桌面 1280x800 回归无影响。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
@@ -192,3 +239,4 @@ scope 默认 `/`）; SW 注册请求由浏览器发起不带 Authorization 头,
 | 2026-08-29 | iter-63 | SPA 用户管理页 (团队场景): #/users 路由 + 👥 导航; boss 视图新增/改角色/轮换/移除 + 一次性 token 弹层; 非 boss 只读脱敏，UI-053 Browser 12/12 实测通过 |
 | 2026-08-29 | iter-64 | Station 舰队表格 🌐 联邦徽标 (F3.4): fed 来源主机设备名旁绿底徽标 + title 联邦名提示; lan 主机无徽标，UI-054 Browser 6/6 实测通过 |
 | 2026-08-29 | iter-65 | 任务卡片 ↗ 联邦转发徽标 (F3.4 遗留): forwarded 任务标题栏徽标 + title 提示委托执行，UI-055 Browser 实测通过 (截图 temp_resault/x65_fwd_badge.png) |
+| 2026-08-30 | iter-72 | 工作站优化 UI: dashboard 优化面板+Station 状态卡+秘书快捷入口与聊天卡片 (mock 适配层 404/405/501→localStorage 回退) + SPA OptimizationCard 同步 + 移动端聊天输入区让位修复，UI-056/057/058 CDP 桌面+移动实测通过 (截图 temp_resault/x72_opt_*.png) |

@@ -3,8 +3,8 @@
 多 Agent（Codex CLI / Qoder Quest）并行开发时的文件占用与交接看板。
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
-- 更新时间：2026-08-29
-- 当前迭代：`iter-69-local-takeover`（phase_status=completed，尚未推送）
+- 更新时间：2026-08-30
+- 当前迭代：`iter-72`（工作站优化 UI，Quest 已完成待 Boss 发货）
 
 ## 一、职责边界（长期约定）
 
@@ -24,8 +24,8 @@
 
 | Agent | 占用文件 | 任务 | 开始 | 状态 |
 |---|---|---|---|---|
-| Codex | -- | 无 | -- | 空闲 |
-| Quest | —— | 无 | —— | 空闲 |
+| Codex | `lan_mesh/workstation_optimizer.py`、`lan_mesh/station_routes_optimization.py`、`lan_mesh/station_api.py`、`lan_mesh/station_controller.py`、`lan_mesh/chat_handler.py`、`lan_mesh/database.py`、`tests/test_workstation_optimizer.py`、`tests/test_core.py` | iter-72 常驻优化任务闭环 | 2026-08-30 | 进行中 |
+| Quest | —— | iter-72 工作站优化 UI（已完成验证） | —— | 已释放 |
 
 > 认领格式：一行一个 Agent，`占用文件` 写通配范围（如 `lan_mesh/station_*.py`），
 > `状态` 取 `进行中` / `待验证` / `已释放`。释放后把该行改回 `——`。
@@ -49,6 +49,13 @@
 **Boss 手改（2026-08-30 确认保留，随 Quest 批次入库）**
 - `lan_mesh/model_pool.example.yaml`（+135 行火山方舟 Coding Plan / Auto 模式示例）
 - `AGENTS.md`（新增 repowiki-update 技能引用、日志前缀白名单等）
+
+**Quest（iter-72 工作站优化 UI，已完成验证待发货）**
+- `lan_mesh/web/templates/dashboard.html`（优化面板 + Station 状态卡 + 聊天卡片 + 移动端输入区让位修复）
+- `webui/src/**` + `lan_mesh/web/static/spa/**`（OptimizationCard + 构建产物）
+- `docs/design/09-frontend/README.md`（工作站优化 UI 段落 + 变更记录）
+- `test_bug/test_checklist.csv`（UI-056/057/058，均检测通过）
+- 后端 `/api/workstation-optimization/*` 由 Codex 后续实现（UI 已按契约预留）
 
 ## 四、下一轮排期建议（避免同文件竞争）
 

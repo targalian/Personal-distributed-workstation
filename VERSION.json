@@ -1,7 +1,7 @@
 {
-  "version": "0.32.0",
+  "version": "0.33.0",
   "commit": "b377c6b",
   "released_at": "2026-08-30",
-  "note": "iter-71 影子 API: 常驻单队列守护 + 运行提交/查询/状态端点",
+  "note": "iter-72 工作站优化 UI: 优化面板/状态卡/聊天卡片/秘书快捷入口 + SPA 同步 (mock 适配层, 后端契约待 Codex)",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }
