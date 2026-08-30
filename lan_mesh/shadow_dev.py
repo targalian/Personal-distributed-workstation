@@ -33,6 +33,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -268,11 +270,16 @@ def simulate_agent_change(shadow: Path) -> None:
                 newline='\n').write(text + marker)
 
 
-def do_run(task: str, backend: str, timeout: int, keep: bool,
-           simulate: bool = False) -> int:
-    """执行一次完整影子开发流程。"""
+def new_run_id() -> str:
+    """生成同秒内也不冲突的影子运行 ID。"""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{stamp}-{uuid.uuid4().hex[:6]}"
+
+
+def execute_run(run_id: str, task: str, backend: str, timeout: int,
+                keep: bool, simulate: bool = False) -> dict:
+    """执行一次完整影子开发流程并返回报告。"""
     ensure_shadow_home_outside_repo()
-    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = SHADOW_HOME / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -281,7 +288,8 @@ def do_run(task: str, backend: str, timeout: int, keep: bool,
     log(f"任务: {task[:120]}")
     log("=" * 56)
 
-    report = {"run_id": run_id, "task": task, "started_at": datetime.now().isoformat(),
+    report = {"run_id": run_id, "task": task,
+              "started_at": datetime.now().isoformat(),
               "backend": backend or "auto"}
     try:
         report['backend'] = 'simulate' if simulate else (backend or 'auto')
@@ -340,7 +348,149 @@ def do_run(task: str, backend: str, timeout: int, keep: bool,
     log("  然后走 powershell -File scripts/ship.ps1 提交推送")
     if not keep and report.get("verdict") == "AGENT_FAILED":
         log("(失败运行的副本已保留供排查, 可手工删除)")
+    return report
+
+
+def do_run(task: str, backend: str, timeout: int, keep: bool,
+           simulate: bool = False) -> int:
+    """执行一次完整影子开发流程 (CLI 兼容入口)。"""
+    report = execute_run(new_run_id(), task, backend, timeout, keep, simulate)
     return 0 if report.get("verdict") == "READY_FOR_REVIEW" else 1
+
+
+class ShadowDevManager:
+    """常驻影子开发守护: 串行队列 + 内存状态 + 历史报告聚合。"""
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._queue: list[dict] = []
+        self._runs: dict[str, dict] = {}
+        self._thread: threading.Thread | None = None
+        self._stopping = False
+
+    def start_guardian(self) -> dict:
+        """启动常驻守护线程 (幂等)。"""
+        with self._condition:
+            if self._thread and self._thread.is_alive():
+                return {"running": True, "queued": len(self._queue)}
+            self._stopping = False
+            self._thread = threading.Thread(
+                target=self._guardian_loop, name="shadow-dev-guardian", daemon=True)
+            self._thread.start()
+            return {"running": True, "queued": len(self._queue)}
+
+    def stop_guardian(self) -> dict:
+        """停止守护线程; 已进入 CLI 的任务无法强制中断。"""
+        with self._condition:
+            self._stopping = True
+            for run in self._queue:
+                self._runs[run["run_id"]]["status"] = "cancelled"
+            self._queue.clear()
+            self._condition.notify_all()
+        if self._thread and self._thread is not threading.current_thread():
+            self._thread.join(timeout=2)
+        return {"running": self._thread is not None and self._thread.is_alive(),
+                "cancelled": True}
+
+    def submit(self, task: str, backend: str = "", timeout: int = 1800,
+               simulate: bool = False) -> dict:
+        """提交影子任务; 同一时间只执行一个, 其余排队。"""
+        task = task.strip()
+        if not task:
+            raise ValueError("task 不能为空")
+        run_id = new_run_id()
+        record = {
+            "run_id": run_id,
+            "task": task,
+            "backend": "simulate" if simulate else (backend or "auto"),
+            "timeout": max(30, min(timeout, 1800)),
+            "simulate": simulate,
+            "status": "queued",
+            "created_at": datetime.now().isoformat(),
+        }
+        with self._condition:
+            if self._stopping:
+                raise RuntimeError("影子开发守护已停止")
+            self._runs[run_id] = record
+            self._queue.append(record)
+            self._condition.notify_all()
+        self.start_guardian()
+        return record
+
+    def status(self) -> dict:
+        """返回守护状态与队列摘要。"""
+        with self._condition:
+            queued = len(self._queue)
+            running = any(run["status"] == "running" for run in self._runs.values())
+            thread_alive = bool(self._thread and self._thread.is_alive())
+            return {"running": thread_alive, "busy": running,
+                    "queued": queued, "stopping": self._stopping}
+
+    def list_runs(self) -> list[dict]:
+        """合并内存队列/运行状态与历史报告。"""
+        with self._condition:
+            records = [dict(run) for run in self._runs.values()]
+        known = {run["run_id"] for run in records}
+        records.extend(self._load_history(known))
+        return sorted(records, key=lambda run: run.get("run_id", ""), reverse=True)
+
+    def get_run(self, run_id: str) -> dict | None:
+        """获取单次运行详情。"""
+        with self._condition:
+            if run_id in self._runs:
+                return dict(self._runs[run_id])
+        return self._read_report(run_id)
+
+    def _guardian_loop(self) -> None:
+        """串行消费影子任务队列。"""
+        while True:
+            with self._condition:
+                while not self._queue and not self._stopping:
+                    self._condition.wait()
+                if self._stopping:
+                    return
+                request = self._queue.pop(0)
+                run_id = request["run_id"]
+                self._runs[run_id]["status"] = "running"
+                self._runs[run_id]["started_at"] = datetime.now().isoformat()
+            try:
+                report = execute_run(
+                    run_id, request["task"], request["backend"],
+                    request["timeout"], True, request["simulate"])
+                with self._condition:
+                    self._runs[run_id].update(report)
+                    self._runs[run_id]["status"] = report.get("verdict", "ERROR")
+            except Exception as exc:
+                log(f"守护执行异常 {run_id}: {exc}")
+                with self._condition:
+                    self._runs[run_id]["status"] = "ERROR"
+                    self._runs[run_id]["error"] = str(exc)
+                    self._runs[run_id]["finished_at"] = datetime.now().isoformat()
+
+    def _read_report(self, run_id: str) -> dict | None:
+        """读取历史 report.json。"""
+        report_path = SHADOW_HOME / run_id / "report.json"
+        if not report_path.is_file():
+            return None
+        try:
+            data = json.loads(report_path.read_text(encoding="utf-8"))
+            data["status"] = data.get("verdict", "unknown")
+            return data
+        except Exception:
+            return {"run_id": run_id, "status": "REPORT_ERROR"}
+
+    def _load_history(self, known_ids: set[str]) -> list[dict]:
+        """加载不在内存中的历史运行。"""
+        if not SHADOW_HOME.is_dir():
+            return []
+        records = []
+        for directory in SHADOW_HOME.iterdir():
+            if not directory.name.startswith("20") or directory.name in known_ids:
+                continue
+            report = self._read_report(directory.name)
+            if report:
+                records.append(report)
+        return records
 
 
 def do_list() -> int:

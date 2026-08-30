@@ -194,6 +194,8 @@ class StationController:
         self._running = False
         self._start_timestamp: float = time.time()  # F1.2: 启动时间戳
         self._threads: list[threading.Thread] = []
+        from .shadow_dev import ShadowDevManager
+        self.shadow_dev_manager = ShadowDevManager()
         self._ws_push_event: Optional[asyncio.Event] = None  # 在 async 上下文中初始化
         self._ws_broadcast_queue: list = []  # 同步代码向 WS 队列塞事件
 
@@ -2989,8 +2991,13 @@ class StationController:
             dev_reload: 开发模式, 监控 lan_mesh/ 文件变动自动重启进程。
         """
         self._running = True
+        try:
+            guardian = self.shadow_dev_manager.start_guardian()
+            logger.info("[Station] 影子开发守护已启动: %s", guardian)
+        except Exception as exc:
+            logger.warning("[Station] 影子开发守护启动失败: %s", exc)
 
-        # E6: 主机级单实例守护 — 同版本/更新实例在跑则取消启动;
+        # E6: 主机级单实例守护 - 同版本/更新实例在跑则取消启动;
         # 旧版实例在跑则关闭后由本进程接管 (杜绝端口回退双实例)
         from .singleton import ensure_single_instance, register_cleanup
         from .version_sync import local_version_info
@@ -3208,6 +3215,11 @@ class StationController:
     def stop(self):
         """停止 Station Director。"""
         self._running = False
+        if self.shadow_dev_manager:
+            try:
+                self.shadow_dev_manager.stop_guardian()
+            except Exception as exc:
+                logger.warning("[Station] 影子开发守护停止失败: %s", exc)
         if self.state.cloud_sync:
             self.state.cloud_sync.stop()
         if self.discovery:

@@ -1,7 +1,11 @@
 '''Shadow development guardrail tests.'''
 
 import os
+import time
 from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -127,3 +131,97 @@ def test_shadow_diff_scans_added_secrets() -> None:
 
     assert scan_added_lines_for_secrets(patch)
     assert not scan_added_lines_for_secrets('+++ b/file\n+safe = "value"\n')
+
+
+def test_shadow_manager_runs_queued_task(monkeypatch, tmp_path: Path) -> None:
+    '''Guardian executes submissions serially and records the report.'''
+    import lan_mesh.shadow_dev as shadow_dev
+
+    executed: list[str] = []
+
+    def fake_execute(run_id: str, task: str, backend: str, timeout: int,
+                     keep: bool, simulate: bool) -> dict:
+        executed.append(run_id)
+        return {
+            'run_id': run_id,
+            'task': task,
+            'backend': backend,
+            'verdict': 'READY_FOR_REVIEW',
+            'diff': {'diff_file': str(tmp_path / 'changes.patch')},
+        }
+
+    monkeypatch.setattr(shadow_dev, 'execute_run', fake_execute)
+    manager = shadow_dev.ShadowDevManager()
+    record = manager.submit('demo task', simulate=True)
+
+    for _ in range(200):
+        if manager.get_run(record['run_id'])['status'] != 'queued':
+            break
+        time.sleep(0.01)
+
+    manager.stop_guardian()
+
+    assert executed == [record['run_id']]
+    assert manager.get_run(record['run_id'])['status'] == 'READY_FOR_REVIEW'
+    assert manager.status()['running'] is False
+    assert manager.status()['queued'] == 0
+
+
+def test_shadow_manager_merges_history(monkeypatch, tmp_path: Path) -> None:
+    '''Historical reports are listed even after process restart.'''
+    import json
+    import lan_mesh.shadow_dev as shadow_dev
+
+    run_id = '20260830-120000-oldrun'
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / 'report.json').write_text(
+        json.dumps({'run_id': run_id, 'verdict': 'READY_FOR_REVIEW'}),
+        encoding='utf-8')
+    monkeypatch.setattr(shadow_dev, 'SHADOW_HOME', tmp_path)
+    manager = shadow_dev.ShadowDevManager()
+
+    runs = manager.list_runs()
+
+    assert runs[0]['run_id'] == run_id
+    assert runs[0]['status'] == 'READY_FOR_REVIEW'
+
+
+def test_shadow_dev_api_contract() -> None:
+    '''Shadow API submits work and returns status/list/detail.'''
+    from lan_mesh.station_routes_shadow import build_shadow_dev_routes
+
+    class FakeManager:
+        def submit(self, task: str, backend: str, timeout: int,
+                   simulate: bool) -> dict:
+            return {'run_id': 'run-1', 'task': task, 'backend': backend,
+                    'timeout': timeout, 'status': 'queued'}
+
+        def list_runs(self) -> list[dict]:
+            return [{'run_id': 'run-1', 'status': 'queued'}]
+
+        def get_run(self, run_id: str) -> dict | None:
+            return {'run_id': run_id, 'status': 'queued'} if run_id == 'run-1' else None
+
+        def status(self) -> dict:
+            return {'running': True, 'busy': False, 'queued': 1}
+
+    class FakeController:
+        shadow_dev_manager = FakeManager()
+
+    app = FastAPI()
+    app.include_router(build_shadow_dev_routes(FakeController()))
+    client = TestClient(app)
+
+    created = client.post('/api/shadow-dev/runs', json={'task': 'demo'})
+    listed = client.get('/api/shadow-dev/runs')
+    detail = client.get('/api/shadow-dev/runs/run-1')
+    missing = client.get('/api/shadow-dev/runs/missing')
+    status = client.get('/api/shadow-dev/status')
+
+    assert created.status_code == 202
+    assert created.json()['run_id'] == 'run-1'
+    assert listed.json()['runs'][0]['status'] == 'queued'
+    assert detail.status_code == 200
+    assert missing.status_code == 404
+    assert status.json()['queued'] == 1

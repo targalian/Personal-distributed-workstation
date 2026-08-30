@@ -21,6 +21,7 @@
 | station_routes_pm.py | Station PM 路由 — PM Agent 管理/进度上报/子任务同步/团队 (P1 #2 拆分产物) |
 | station_routes_projects.py | Station 项目与能力路由 — 项目管理/MCP 工具/模型路由/技能库/Bot 通道 (P1 #2 拆分产物) |
 | station_routes_resources.py | Station 资源与密钥路由 — 模型资源池/配置向导/密钥同步/事件与角色卡 (P1 #2 拆分产物) |
+| station_routes_shadow.py | 影子开发 API 路由 - 提交、查询与守护状态接口。 |
 | station_routes_tasks.py | Station 任务路由 — Agent 管理/任务生命周期/图结构/交付闭环/任务记忆 (P1 #2 拆分产物) |
 | station_routes_worker.py | Station Worker 侧路由 — 内嵌 Worker 端点/P2P 通讯/云存储同步 (P1 #2 拆分产物) |
 <!-- /AUTO:module-list -->
@@ -43,6 +44,12 @@
 
 **不变式**: `SELF_MOD_FORBIDDEN` 覆盖 runtime 安全策略、影子模式、协作锁、
 上库/发货脚本、Git hooks 与护栏测试; 这些文件出现在影子 diff 中即拒绝。
+
+**常驻守护与 API (iter-71)**: `ShadowDevManager` 在 Station 启动时创建
+并运行单队列守护线程; `POST /api/shadow-dev/runs` 提交任务后立即返回
+202, `GET /api/shadow-dev/runs` / `GET /api/shadow-dev/runs/{run_id}`
+查询队列与报告, `GET /api/shadow-dev/status` 查看守护状态。守护串行执行,
+停止 Station 时未开始的排队任务会被取消, 不强制中断已进入 CLI 的任务。
 
 ## station_controller.py - Station 控制器（核心枢纽）
 
