@@ -23,6 +23,7 @@
 | test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_shadow_dev.py | Shadow development guardrail tests. |
+| tests/test_workstation_optimizer.py | Tests for the resident workstation optimization workflow. |
 <!-- /AUTO:module-list -->
 ---
 

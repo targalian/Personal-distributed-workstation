@@ -196,6 +196,10 @@ class StationController:
         self._threads: list[threading.Thread] = []
         from .shadow_dev import ShadowDevManager
         self.shadow_dev_manager = ShadowDevManager()
+        from .workstation_optimizer import WorkstationOptimizationManager
+        self.workstation_optimizer = WorkstationOptimizationManager(
+            self.db, self.shadow_dev_manager,
+            broadcast=self._queue_ws_broadcast)
         self._ws_push_event: Optional[asyncio.Event] = None  # 在 async 上下文中初始化
         self._ws_broadcast_queue: list = []  # 同步代码向 WS 队列塞事件
 
@@ -2996,6 +3000,11 @@ class StationController:
             logger.info("[Station] 影子开发守护已启动: %s", guardian)
         except Exception as exc:
             logger.warning("[Station] 影子开发守护启动失败: %s", exc)
+        try:
+            optimizer = self.workstation_optimizer.start_guardian()
+            logger.info("[Station] 工作站优化守护已启动: %s", optimizer)
+        except Exception as exc:
+            logger.warning("[Station] 工作站优化守护启动失败: %s", exc)
 
         # E6: 主机级单实例守护 - 同版本/更新实例在跑则取消启动;
         # 旧版实例在跑则关闭后由本进程接管 (杜绝端口回退双实例)
@@ -3215,6 +3224,11 @@ class StationController:
     def stop(self):
         """停止 Station Director。"""
         self._running = False
+        if self.workstation_optimizer:
+            try:
+                self.workstation_optimizer.stop_guardian()
+            except Exception as exc:
+                logger.warning("[Station] 工作站优化守护停止失败: %s", exc)
         if self.shadow_dev_manager:
             try:
                 self.shadow_dev_manager.stop_guardian()

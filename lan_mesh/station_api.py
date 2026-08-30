@@ -13,6 +13,7 @@ P1 #2 按路由分层拆分: 原 2500+ 行单文件拆为公共层 + 6 个路由
   - station_routes_projects 项目/MCP 工具/模型路由/技能库/Bot 通道 (Secretary)
   - station_routes_worker   内嵌 Worker 端点/P2P/云同步 (始终可用)
   - station_routes_shadow   影子开发提交/查询/守护状态 (始终可用)
+  - station_routes_optimization 工作站常驻优化提交/决策/状态 (始终可用)
 
 设计要点:
   - 所有组件通过 controller 对象访问 (可变引用)
@@ -27,6 +28,7 @@ from .logger import get_logger
 from .station_routes_basic import build_basic_routes
 from .station_routes_chat import build_chat_routes
 from .station_routes_pm import build_pm_routes
+from .station_routes_optimization import build_optimization_routes
 from .station_routes_projects import build_project_routes
 from .station_routes_shadow import build_shadow_dev_routes
 from .station_routes_resources import apply_usage_batch, build_resource_routes
@@ -52,6 +54,7 @@ def create_station_router(controller) -> APIRouter:
     """
     router = APIRouter()
     router.include_router(build_basic_routes(controller))
+    router.include_router(build_optimization_routes(controller))
     router.include_router(build_shadow_dev_routes(controller))
     router.include_router(build_task_routes(controller))
     router.include_router(build_resource_routes(controller))

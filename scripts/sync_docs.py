@@ -52,6 +52,8 @@ MAPPING = {
     "lan_mesh/station_routes_common.py": "02-station-core",
     "lan_mesh/station_routes_basic.py": "02-station-core",
     "lan_mesh/station_routes_shadow.py": "02-station-core",
+    "lan_mesh/station_routes_optimization.py": "02-station-core",
+    "lan_mesh/workstation_optimizer.py": "02-station-core",
     "lan_mesh/station_routes_tasks.py": "02-station-core",
     "lan_mesh/station_routes_resources.py": "02-station-core",
     "lan_mesh/station_routes_pm.py": "02-station-core",
@@ -118,6 +120,7 @@ MAPPING = {
                "React SPA 源码 (Vite+TS+xyflow, 构建产物 → web/static/spa/)"),
     # 10-test-loop - 测试与验证循环
     'tests/test_shadow_dev.py': '10-test-loop',
+    'tests/test_workstation_optimizer.py': '10-test-loop',
     "tests/test_core.py": "10-test-loop",
     "test_bug/run_loop.py": "10-test-loop",
     "test_bug/dev_loop.py": "10-test-loop",

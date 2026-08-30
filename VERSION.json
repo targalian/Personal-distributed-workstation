@@ -1,7 +1,7 @@
 {
   "version": "0.33.0",
-  "commit": "b377c6b",
+  "commit": "295f5dd",
   "released_at": "2026-08-30",
-  "note": "iter-72 工作站优化 UI: 优化面板/状态卡/聊天卡片/秘书快捷入口 + SPA 同步 (mock 适配层, 后端契约待 Codex)",
+  "note": "iter-72 工作站常驻优化: UI 面板/秘书交互 + SQLite 持久化/审批守护/影子执行/API/WS 闭环",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }

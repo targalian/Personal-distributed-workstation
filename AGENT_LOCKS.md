@@ -4,7 +4,7 @@
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
 - 更新时间：2026-08-30
-- 当前迭代：`iter-72`（工作站优化 UI，Quest 已完成待 Boss 发货）
+- 当前迭代：`iter-72`（工作站优化 UI + 后端闭环已完成，待 Boss 发货）
 
 ## 一、职责边界（长期约定）
 
@@ -24,7 +24,7 @@
 
 | Agent | 占用文件 | 任务 | 开始 | 状态 |
 |---|---|---|---|---|
-| Codex | `lan_mesh/workstation_optimizer.py`、`lan_mesh/station_routes_optimization.py`、`lan_mesh/station_api.py`、`lan_mesh/station_controller.py`、`lan_mesh/chat_handler.py`、`lan_mesh/database.py`、`tests/test_workstation_optimizer.py`、`tests/test_core.py` | iter-72 常驻优化任务闭环 | 2026-08-30 | 进行中 |
+| Codex | -- | 无 | -- | 空闲 |
 | Quest | —— | iter-72 工作站优化 UI（已完成验证） | —— | 已释放 |
 
 > 认领格式：一行一个 Agent，`占用文件` 写通配范围（如 `lan_mesh/station_*.py`），

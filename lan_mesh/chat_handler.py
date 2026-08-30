@@ -10,6 +10,7 @@
 
 聊天历史持久化到 SQLite DB (chat_history 表), 重启不丢失。
 """
+import re
 import time
 from typing import Optional
 
@@ -22,6 +23,13 @@ logger = get_logger("chat_handler")
 # ── 操作意图关键词映射 ──────────────────────────────────────────
 
 _ACTION_KEYWORDS = {
+    "优化工作站": "workstation_optimization",
+    "工作站优化": "workstation_optimization",
+    "遇到瓶颈": "workstation_optimization",
+    "工作站限制": "workstation_optimization",
+    "添加优化建议": "workstation_optimization",
+    "确认优化": "workstation_optimization",
+    "拒绝优化": "workstation_optimization",
     # 自然语言 DAG 编辑 (F4.3, iter-51): Boss 口述修改图结构 — 优先级最高
     "编辑图": "edit_task_graph",
     "修改图": "edit_task_graph",
@@ -805,6 +813,17 @@ class ChatHandler:
             secretary_status = "已激活" if self.controller.secretary_active else "未激活"
             lines.append(f"- Secretary: {secretary_status}")
 
+            # 工作站常驻优化状态 (iter-72)
+            try:
+                optimizer = getattr(self.controller, "workstation_optimizer", None)
+                if optimizer:
+                    opt_summary = optimizer.summary()
+                    lines.append(
+                        f"- 工作站优化: 队列 {opt_summary['queue_count']} 个, "
+                        f"待决策 {opt_summary['waiting_boss_count']} 个")
+            except Exception:
+                pass
+
             # PM Agent 状态
             try:
                 pm_agents = self.controller.db.list_pm_agents()
@@ -950,6 +969,8 @@ class ChatHandler:
                 return self._action_reject_delivery(message)
             elif action == "create_project":
                 return self._action_create_project(message)
+            elif action == "workstation_optimization":
+                return self._action_workstation_optimization(message)
             elif action == "edit_task_graph":
                 return self._action_edit_task_graph(message)
             return ""
@@ -1034,6 +1055,102 @@ class ChatHandler:
                 msg += f"\n\n💡 历史参考: {memory_hint}"
             return msg
         return f"任务已创建: {name} (状态: {status})"
+
+    def _action_workstation_optimization(self, message: str) -> str:
+        """Handle workstation optimization queries, submissions, and decisions."""
+        manager = getattr(self.controller, "workstation_optimizer", None)
+        if manager is None:
+            return "工作站优化功能未初始化"
+        try:
+            decision = self._parse_optimization_decision(message)
+            if decision:
+                item = manager.decide(
+                    decision["item_id"], decision["decision"], decision["reply"])
+                return self._format_optimization_item(item, "决策已更新")
+            if self._is_optimization_query(message):
+                summary = manager.summary()
+                return (
+                    f"工作站优化状态:\n"
+                    f"- 守护: {'运行中' if summary['guardian_running'] else '未运行'}\n"
+                    f"- 队列: {summary['queue_count']}\n"
+                    f"- 待决策: {summary['waiting_boss_count']}"
+                )
+            source = self._parse_optimization_source(message)
+            title, description = self._parse_optimization_text(message)
+            priority = self._parse_optimization_priority(message)
+            item = manager.submit(source, title, description, priority)
+            return self._format_optimization_item(item, "优化项已创建")
+        except Exception as exc:
+            return f"工作站优化操作失败: {exc}"
+
+    def _parse_optimization_source(self, message: str) -> str:
+        """Infer optimization source from natural language."""
+        if "瓶颈" in message or "限制" in message:
+            return "bottleneck"
+        if "agent建议" in message or "任务建议" in message or "自己思考" in message:
+            return "agent"
+        return "boss"
+
+    def _parse_optimization_text(self, message: str) -> tuple[str, str]:
+        """Extract a compact title and full description."""
+        text = message.strip()
+        for prefix in ("优化工作站:", "优化工作站：", "工作站优化:", "工作站优化：",
+                       "遇到瓶颈:", "遇到瓶颈：", "添加优化建议:", "添加优化建议："):
+            if text.startswith(prefix):
+                text = text[len(prefix):].strip()
+                break
+        if ":" in text or "：" in text:
+            parts = re.split(r"[:：]", text, maxsplit=1)
+            text = parts[1].strip() if len(parts) == 2 and parts[1] else text
+        title = text[:40] if len(text) <= 40 else text[:37] + "…"
+        return title, text
+
+    def _parse_optimization_priority(self, message: str) -> str:
+        """Infer optimization priority from natural language."""
+        lowered = message.lower()
+        if "紧急" in message or "urgent" in lowered:
+            return "urgent"
+        if "优先" in message or "重要" in message or "high" in lowered:
+            return "high"
+        if "不急" in message or "低优先" in message or "low" in lowered:
+            return "low"
+        return "normal"
+
+    def _parse_optimization_decision(self, message: str) -> dict:
+        """Parse approve/reject/clarify commands with an optimization item id."""
+        match = re.search(r"(opt-[A-Za-z0-9]+)", message)
+        if not match:
+            return {}
+        if "确认优化" in message or "批准优化" in message:
+            return {"item_id": match.group(1), "decision": "approve", "reply": ""}
+        if "拒绝优化" in message:
+            return {"item_id": match.group(1), "decision": "reject", "reply": ""}
+        if "补充说明优化" in message:
+            reply = re.sub(r"^.*?(?:补充说明优化[:：])?", "", message).strip()
+            return {"item_id": match.group(1), "decision": "clarify", "reply": reply}
+        return {}
+
+    def _is_optimization_query(self, message: str) -> bool:
+        """Detect read-only workstation optimization status requests."""
+        if any(marker in message for marker in ("创建", "添加", "建议:", "建议：")):
+            return False
+        return any(marker in message for marker in ("状态", "队列", "列表", "多少"))
+
+    def _format_optimization_item(self, item: dict, headline: str) -> str:
+        """Format one optimization item for the secretary chat reply."""
+        status_label = {
+            "candidate": "待 Boss 评估", "waiting_boss": "待 Boss 决策",
+            "queued": "已排队", "running": "执行中", "completed": "已完成",
+            "rejected": "已拒绝", "failed": "失败",
+        }.get(item.get("status", ""), item.get("status", ""))
+        return (
+            f"🛠️ {headline}\n"
+            f"- ID: {item.get('id', '')}\n"
+            f"- 标题: {item.get('title', '')}\n"
+            f"- 来源: {item.get('source', '')}\n"
+            f"- 优先级: {item.get('priority', '')}\n"
+            f"- 状态: {status_label}"
+        )
 
     def _action_create_project(self, message: str) -> str:
         """从对话创建项目 (BUG-026: 秘书幻觉修复配套)。"""

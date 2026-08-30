@@ -21,7 +21,7 @@ logger = get_logger("database")
 # 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
 # 迁移函数签名: (conn: sqlite3.Connection) -> None
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -238,6 +238,29 @@ def _migration_v9(conn: sqlite3.Connection):
 
 
 # 迁移注册表: version → 迁移函数
+def _migration_v11(conn: sqlite3.Connection):
+    """Migration v11: persistent workstation optimization items (iter-72)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS workstation_optimization_items (
+            item_id        TEXT PRIMARY KEY,
+            source         TEXT NOT NULL,
+            title          TEXT NOT NULL,
+            description    TEXT NOT NULL,
+            priority       TEXT NOT NULL DEFAULT 'normal',
+            status         TEXT NOT NULL DEFAULT 'waiting_boss',
+            decision_reply TEXT NOT NULL DEFAULT '',
+            shadow_run_id  TEXT NOT NULL DEFAULT '',
+            result_json    TEXT NOT NULL DEFAULT '{}',
+            created_at     REAL NOT NULL,
+            updated_at     REAL NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_workstation_opt_status
+            ON workstation_optimization_items(status, updated_at)
+    """)
+
+
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
     2: _migration_v2,
@@ -249,6 +272,7 @@ _MIGRATIONS: dict[int, callable] = {
     8: _migration_v8,
     9: _migration_v9,
     10: _migration_v10,
+    11: _migration_v11,
 }
 
 
@@ -1030,6 +1054,72 @@ class Database:
         return None
 
     # ── Task CRUD ───────────────────────────────────────────────
+
+    def save_optimization_item(self, item: dict) -> None:
+        """Save one persistent workstation optimization item."""
+        item_id = str(item.get("id", item.get("item_id", "")))
+        if not item_id:
+            raise ValueError("optimization item id is required")
+        now = time.time()
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO workstation_optimization_items (
+                item_id, source, title, description, priority, status,
+                decision_reply, shadow_run_id, result_json,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(item_id) DO UPDATE SET
+                source=excluded.source, title=excluded.title,
+                description=excluded.description, priority=excluded.priority,
+                status=excluded.status, decision_reply=excluded.decision_reply,
+                shadow_run_id=excluded.shadow_run_id,
+                result_json=excluded.result_json, updated_at=excluded.updated_at
+        """, (
+            item_id, str(item.get("source", "agent")), str(item.get("title", "")),
+            str(item.get("description", "")), str(item.get("priority", "normal")),
+            str(item.get("status", "waiting_boss")), str(item.get("decision_reply", "")),
+            str(item.get("shadow_run_id", "")),
+            json.dumps(item.get("result", {}), ensure_ascii=False),
+            float(item.get("created_at", now)), float(item.get("updated_at", now)),
+        ))
+        conn.commit()
+
+    def get_optimization_item(self, item_id: str) -> Optional[dict]:
+        """Return one workstation optimization item."""
+        row = self._get_conn().execute(
+            "SELECT * FROM workstation_optimization_items WHERE item_id = ?",
+            (item_id,)).fetchone()
+        return self._optimization_row_to_dict(row) if row else None
+
+    def list_optimization_items(self, status: str = "",
+                                limit: int = 100) -> list[dict]:
+        """List workstation optimization items."""
+        conn = self._get_conn()
+        if status:
+            rows = conn.execute("""
+                SELECT * FROM workstation_optimization_items
+                WHERE status = ? ORDER BY updated_at DESC LIMIT ?
+            """, (status, limit)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT * FROM workstation_optimization_items
+                ORDER BY updated_at DESC LIMIT ?
+            """, (limit,)).fetchall()
+        return [self._optimization_row_to_dict(row) for row in rows]
+
+    def _optimization_row_to_dict(self, row: sqlite3.Row) -> dict:
+        """Convert an optimization row to the API-facing dictionary."""
+        try:
+            result = json.loads(row["result_json"])
+        except (TypeError, ValueError):
+            result = {}
+        return {
+            "id": row["item_id"], "source": row["source"], "title": row["title"],
+            "description": row["description"], "priority": row["priority"],
+            "status": row["status"], "decision_reply": row["decision_reply"],
+            "shadow_run_id": row["shadow_run_id"], "result": result,
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+        }
 
     def save_task(self, task: Task):
         """保存任务 (含子任务)。"""

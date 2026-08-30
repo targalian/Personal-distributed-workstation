@@ -18,12 +18,14 @@
 | station_routes_basic.py | Station 基础路由 — 健康/错误/角色/注册心跳/主机网络/Director (P1 #2 拆分产物) |
 | station_routes_chat.py | Station 交互路由 — 秘书聊天/多对话/PM 线程/Bot 消息入口 (P1 #2 拆分产物) |
 | station_routes_common.py | Station API 路由公共层 — 限流/认证中间件与共享工具 (P1 #2 拆分产物) |
+| station_routes_optimization.py | Station routes for the resident workstation optimization workflow. |
 | station_routes_pm.py | Station PM 路由 — PM Agent 管理/进度上报/子任务同步/团队 (P1 #2 拆分产物) |
 | station_routes_projects.py | Station 项目与能力路由 — 项目管理/MCP 工具/模型路由/技能库/Bot 通道 (P1 #2 拆分产物) |
 | station_routes_resources.py | Station 资源与密钥路由 — 模型资源池/配置向导/密钥同步/事件与角色卡 (P1 #2 拆分产物) |
 | station_routes_shadow.py | 影子开发 API 路由 - 提交、查询与守护状态接口。 |
 | station_routes_tasks.py | Station 任务路由 — Agent 管理/任务生命周期/图结构/交付闭环/任务记忆 (P1 #2 拆分产物) |
 | station_routes_worker.py | Station Worker 侧路由 — 内嵌 Worker 端点/P2P 通讯/云存储同步 (P1 #2 拆分产物) |
+| workstation_optimizer.py | 工作站常驻自我优化管理器 - 汇聚建议、审批与影子执行。 |
 <!-- /AUTO:module-list -->
 ---
 
@@ -50,6 +52,21 @@
 202, `GET /api/shadow-dev/runs` / `GET /api/shadow-dev/runs/{run_id}`
 查询队列与报告, `GET /api/shadow-dev/status` 查看守护状态。守护串行执行,
 停止 Station 时未开始的排队任务会被取消, 不强制中断已进入 CLI 的任务。
+
+## workstation_optimizer.py - 常驻自我优化 (iter-72)
+
+**职责**: 聚合 Boss 主动要求、开发任务瓶颈与 Agent 自主建议, 经 Boss
+决策后串行交给影子开发执行, 产出待审 diff 而不直接修改主仓库。
+
+**数据与状态**: SQLite v11 新增 `workstation_optimization_items`; 来源
+`boss/bottleneck/agent` 分别进入 `queued/waiting_boss/candidate`, 决策后
+进入 `queued/rejected`, 执行后进入 `completed/failed`。
+
+**API 与事件**: `GET /api/workstation-optimization/summary`、
+`GET/POST /api/workstation-optimization/items`、
+`POST /api/workstation-optimization/items/{id}/decision`; 通过
+`workstation_optimization_*` WebSocket 事件实时推送。秘书对话支持
+`优化工作站:`、`遇到瓶颈:` 与状态查询等自然语言入口。
 
 ## station_controller.py - Station 控制器（核心枢纽）
 
