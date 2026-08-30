@@ -534,3 +534,102 @@ body {
   gap: 8px;
   margin-bottom: 10px;
 }
+
+/* ── 工作站优化状态卡 (iter-72) ── */
+.opt-badges {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.opt-badge {
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.opt-src-boss {
+  background: rgba(76, 141, 255, 0.15);
+  color: var(--accent);
+}
+
+.opt-src-bottleneck {
+  background: rgba(244, 67, 54, 0.12);
+  color: var(--err);
+}
+
+.opt-src-agent {
+  background: rgba(168, 85, 247, 0.15);
+  color: #a855f7;
+}
+
+.opt-pri-urgent {
+  background: rgba(244, 67, 54, 0.15);
+  color: var(--err);
+}
+
+.opt-pri-high {
+  background: rgba(255, 152, 0, 0.18);
+  color: var(--warn);
+}
+
+.opt-pri-normal {
+  background: rgba(76, 141, 255, 0.15);
+  color: var(--accent);
+}
+
+.opt-pri-low {
+  background: rgba(136, 147, 176, 0.15);
+  color: var(--dim);
+}
+
+.opt-waiting-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.opt-waiting-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn);
+}
+
+.opt-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+}
+
+.opt-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.opt-row-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+
+.opt-row-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.opt-row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}

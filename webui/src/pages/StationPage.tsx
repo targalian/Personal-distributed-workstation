@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiFetch, HealthInfo } from "../api";
+import OptimizationCard from "./OptimizationCard";
 
 // iter-56: Station 总览页 — 健康状态轮询 (5s) + 组件/资源/负载三卡片
 function fmtUptime(secs: number): string {
@@ -51,6 +52,7 @@ export default function StationPage() {
       {health && (
         <>
           <div className="cards">
+            <OptimizationCard />
             <div className="card">
               <h3>组件状态</h3>
               <ul className="kv">
