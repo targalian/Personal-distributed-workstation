@@ -51,6 +51,7 @@ MAPPING = {
     "lan_mesh/station_api.py": "02-station-core",
     "lan_mesh/station_routes_common.py": "02-station-core",
     "lan_mesh/station_routes_basic.py": "02-station-core",
+    "lan_mesh/station_routes_shadow.py": "02-station-core",
     "lan_mesh/station_routes_tasks.py": "02-station-core",
     "lan_mesh/station_routes_resources.py": "02-station-core",
     "lan_mesh/station_routes_pm.py": "02-station-core",

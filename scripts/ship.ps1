@@ -167,10 +167,10 @@ if ($DryRun) {
 }
 
 # 批 1 先行 + 静音 hook：避免 Quest 后台任务与批 2 抢 repowiki 脏文件
-$msg1 = "docs(scripts): Agent 协作锁与发货看板 + 方舟模型池示例 + 参考文档更新"
+$msg1 = "chore(config): iter-71 迭代状态与文档清单同步"
 Invoke-Batch "② 批 1 — Quest 文档 / wiki / 协作机制" $questSet $msg1 $true | Out-Null
 
-$msg2 = "feat(station): iter-69/70 F3.3 接管唯一入口 + CLI Agent 自举护栏与影子开发模式"
+$msg2 = "feat(station): iter-71 影子开发 API + 常驻单队列守护"
 Invoke-Batch "③ 批 2 — Codex 代码修复" $codexSet $msg2 $false | Out-Null
 
 # ── 3. 推送 ──────────────────────────────────────────────────
