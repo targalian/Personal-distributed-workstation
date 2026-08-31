@@ -357,6 +357,27 @@
   .opt-empty .icon{font-size:28px;opacity:.4;margin-bottom:8px}
   .opt-loading{padding:22px 14px;text-align:center;color:var(--dim);font-size:13px}
   .opt-error{padding:16px 14px;text-align:center;font-size:13px;color:var(--red)}
+  /* iter-73: 优化讨论窗口 (面板内嵌, 与秘书互动) */
+  .opt-discuss{border-top:1px solid var(--border);background:var(--bg);display:flex;flex-direction:column;flex-shrink:0}
+  .opt-discuss-head{display:flex;align-items:center;gap:8px;padding:6px 14px;font-size:12px;color:var(--dim);cursor:pointer;user-select:none}
+  .opt-discuss-head .oh-title{font-size:12px;font-weight:700;color:var(--text)}
+  .opt-discuss-topic{font-size:11px;padding:1px 8px;border-radius:10px;background:rgba(91,140,255,.12);color:var(--accent);max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .opt-discuss-topic.all{background:var(--surface2);color:var(--dim)}
+  .opt-discuss-pending{font-size:10px;padding:1px 7px;border-radius:4px;background:rgba(251,191,36,.1);color:var(--yellow);border:1px dashed rgba(251,191,36,.5)}
+  .opt-discuss-collapse{margin-left:auto;font-size:13px;transition:transform .2s}
+  .opt-discuss.collapsed .opt-discuss-collapse{transform:rotate(-90deg)}
+  .opt-discuss.collapsed .opt-discuss-log,.opt-discuss.collapsed .opt-discuss-input-bar{display:none}
+  .opt-discuss-log{height:120px;overflow-y:auto;padding:6px 12px;display:flex;flex-direction:column;gap:6px}
+  .opt-discuss-msg{max-width:92%;padding:6px 10px;border-radius:8px;font-size:12.5px;line-height:1.5;word-break:break-word}
+  .opt-discuss-msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:2px}
+  .opt-discuss-msg.assistant{align-self:flex-start;background:var(--surface2);border:1px solid var(--border);border-bottom-left-radius:2px}
+  .opt-discuss-msg.pending{align-self:flex-start;background:var(--surface2);border:1px dashed rgba(251,191,36,.5);color:var(--dim);font-size:11.5px}
+  .opt-discuss-msg .ts{display:block;font-size:10px;opacity:.6;margin-top:2px}
+  .opt-discuss-input-bar{display:flex;gap:6px;padding:7px 12px 9px;border-top:1px solid var(--border)}
+  .opt-discuss-input-bar input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-size:13px;outline:none;min-width:0}
+  .opt-discuss-input-bar input:focus{border-color:var(--accent)}
+  .opt-discuss-input-bar .btn{padding:5px 14px;font-size:13px;min-height:0;flex-shrink:0}
+  .opt-item.topic-active{outline:2px solid var(--accent);outline-offset:1px}
   @media(max-width:640px){
     .opt-status-card{flex-direction:column;align-items:stretch;gap:10px}
     .opt-status-card .opt-cta{margin-left:0}
@@ -368,6 +389,8 @@
     .chat-layout{height:calc(100vh - 190px - env(safe-area-inset-bottom))}
     /* 保证输入条完整可见 (opt-panel 展开时不挤压输入区) */
     .chat-container{min-height:96px}
+    /* iter-73: 窄屏压缩讨论区高度, 保证列表仍有可见空间 */
+    .opt-discuss-log{height:104px}
   }
   /* L1 系统通知卡片 */
   .chat-msg.sys-card{align-self:stretch;max-width:100%;background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--yellow);border-radius:8px;padding:12px 16px;font-size:13px;line-height:1.6}
@@ -460,6 +483,20 @@
           <span class="oh-close" onclick="toggleOptPanel(false)" title="收起">✕</span>
         </div>
         <div class="opt-panel-body" id="opt-panel-body"></div>
+        <!-- iter-73: 优化讨论窗口 (面板内嵌, 与秘书互动; 发送通道待 Codex 后端接入) -->
+        <div class="opt-discuss" id="opt-discuss">
+          <div class="opt-discuss-head" onclick="optDiscussToggle()" title="点击收起/展开讨论区">
+            <span class="oh-title">💬 优化讨论</span>
+            <span class="opt-discuss-topic all" id="opt-discuss-topic">总体优化</span>
+            <span class="opt-discuss-pending" id="opt-discuss-pending" title="讨论通道待后端接入, 消息暂存本地">通道待接入</span>
+            <span class="opt-discuss-collapse" id="opt-discuss-collapse">▾</span>
+          </div>
+          <div class="opt-discuss-log" id="opt-discuss-log"></div>
+          <div class="opt-discuss-input-bar">
+            <input type="text" id="opt-discuss-input" placeholder="和秘书讨论优化…" onkeydown="if(event.key==='Enter')optDiscussSend()">
+            <button class="btn sm primary" id="opt-discuss-send" onclick="optDiscussSend()">发送</button>
+          </div>
+        </div>
       </div>
       <div class="chat-container">
         <div class="chat-messages" id="chat-messages">
@@ -2162,12 +2199,16 @@ function optActionsHtml(it,{inChat=false}={}){
 function optItemHtml(it,{inChat=false}={}){
   const cls=inChat?'opt-chat-card':'opt-item';
   const id=esc(it.id);
-  let h='<div class="'+cls+' '+esc(it.status)+'" data-opt-id="'+id+'">';
+  const topicCls=(!inChat&&optDiscussTopicKey()===it.id)?' topic-active':'';
+  let h='<div class="'+cls+' '+esc(it.status)+topicCls+'" data-opt-id="'+id+'">';
   h+='<div class="opt-item-head"><span class="opt-item-title">'+esc(it.title)+'</span>'+optBadges(it)+'</div>';
   if(it.description)h+='<div class="opt-item-desc">'+esc(it.description)+'</div>';
   if(it.decision_reply)h+='<div class="opt-item-desc" style="color:var(--yellow)">💬 Boss 补充: '+esc(it.decision_reply)+'</div>';
   h+='<div class="opt-item-meta"><span>🕐 '+fmtTime(it.created_at)+'</span>';
-  if(!inChat)h+='<span style="cursor:pointer;color:var(--accent)" onclick="showOptDetail(' + "'" + id + "'" + ')">👁 详情</span>';
+  if(!inChat){
+    h+='<span style="cursor:pointer;color:var(--accent)" onclick="showOptDetail(' + "'" + id + "'" + ')">👁 详情</span>';
+    h+='<span style="cursor:pointer;color:var(--accent)" onclick="optDiscussSelect(' + "'" + id + "'" + ')">💬 讨论</span>';
+  }
   h+='</div>'+optActionsHtml(it,{inChat:inChat});
   h+='</div>';
   return h;
@@ -2210,6 +2251,7 @@ function renderOptPanel(){
   if(snap===optRenderSnap)return;
   optRenderSnap=snap;
   document.getElementById('opt-panel-body').innerHTML=optPanelBodyHtml();
+  renderOptDiscuss(); // iter-73: 面板打开/重绘时同步讨论区
   const stats=document.getElementById('opt-panel-stats');
   const w=optGroup(optItems,'waiting_boss').length;
   const q=optGroup(optItems,'queued').length;
@@ -2397,6 +2439,84 @@ function handleOptChatCommand(text){
   }
   return false;
 }
+// ── iter-73: 优化讨论窗口 (面板内嵌; 发送通道待 Codex 后端接入) ──
+const OPT_DISCUSS_LS_KEY='lan_mesh_opt_discuss_v1';
+let _optDiscuss={active:'__all__',topics:{}}; // topics: {topicKey:[{role,content,ts}]}
+let _optDiscussCollapsed=false;
+function optDiscussLoad(){
+  try{
+    const raw=localStorage.getItem(OPT_DISCUSS_LS_KEY);
+    if(raw){const d=JSON.parse(raw);if(d&&d.topics)_optDiscuss={active:d.active||'__all__',topics:d.topics};}
+  }catch(e){/* 损坏忽略 */}
+}
+function optDiscussSave(){
+  try{localStorage.setItem(OPT_DISCUSS_LS_KEY,JSON.stringify(_optDiscuss));}catch(e){/* 配额满忽略 */}
+}
+function optDiscussTopicKey(){return _optDiscuss.active||'__all__';}
+function optDiscussTopicLabel(){
+  const key=optDiscussTopicKey();
+  if(key==='__all__')return '总体优化';
+  const it=optItems.find(x=>x.id===key);
+  return it?it.title.slice(0,14):'总体优化';
+}
+function optDiscussMsgs(){return _optDiscuss.topics[optDiscussTopicKey()]||[];}
+function optDiscussSelect(id){
+  // 点优化项「💬 讨论」: 切换话题上下文并聚焦输入框
+  _optDiscuss.active=id||'__all__';
+  optDiscussSave();
+  optRenderSnap='';           // 强制面板重绘 (刷新 topic-active 高亮)
+  optScheduleRender();
+  renderOptDiscuss();
+  const input=document.getElementById('opt-discuss-input');
+  if(input)input.focus();
+}
+function optDiscussToggle(){
+  _optDiscussCollapsed=!_optDiscussCollapsed;
+  const el=document.getElementById('opt-discuss');
+  if(el)el.classList.toggle('collapsed',_optDiscussCollapsed);
+}
+function renderOptDiscuss(){
+  const log=document.getElementById('opt-discuss-log');
+  if(!log)return;
+  const topic=document.getElementById('opt-discuss-topic');
+  if(topic){
+    topic.textContent=optDiscussTopicLabel();
+    topic.className='opt-discuss-topic'+(optDiscussTopicKey()==='__all__'?' all':'');
+  }
+  const input=document.getElementById('opt-discuss-input');
+  if(input){
+    if(optDiscussTopicKey()==='__all__')input.placeholder='和秘书讨论总体优化…';
+    else{const it=optItems.find(x=>x.id===optDiscussTopicKey());input.placeholder='和秘书讨论「'+(it?it.title.slice(0,16):'该优化项')+'」…';}
+  }
+  const msgs=optDiscussMsgs();
+  let h=msgs.map(m=>{
+    const who=m.role==='user'?'Boss':'秘书';
+    return '<div class="opt-discuss-msg '+esc(m.role)+'">'+esc(m.content)+'<span class="ts">'+who+' · '+fmtTime(m.ts)+'</span></div>';
+  }).join('');
+  if(!msgs.length){
+    h='<div class="opt-discuss-msg assistant">💬 就优化项向秘书提问或讨论, 例如: 「这条建议的详细执行方案是什么?」</div>';
+  }else if(msgs[msgs.length-1].role==='user'){
+    h+='<div class="opt-discuss-msg pending">⏳ 等待秘书回复 — 讨论通道待后端接入</div>';
+  }
+  log.innerHTML=h;
+  log.scrollTop=log.scrollHeight;
+}
+function optDiscussSend(){
+  // 前端骨架: 消息暂存本地。Codex 后端接入后改为调用 /api/secretary/chat
+  // (约定 payload: {message, conv_id, discuss_context:{topic:itemId}}), 秘书回复
+  // 由后端返回 + WS 广播, 此处去掉 pending 提示即可。
+  const input=document.getElementById('opt-discuss-input');
+  const text=input.value.trim();
+  if(!text)return;
+  input.value='';
+  const key=optDiscussTopicKey();
+  if(!_optDiscuss.topics[key])_optDiscuss.topics[key]=[];
+  _optDiscuss.topics[key].push({role:'user',content:text,ts:Date.now()/1000});
+  optDiscussSave();
+  renderOptDiscuss();
+  showToast('💬 讨论通道待 Codex 后端接入, 消息已暂存本地','info');
+}
+optDiscussLoad(); // iter-73: 脚本执行时载入讨论历史 (声明区已就绪, 避免 TDZ)
 function optMockGuardianStart(){
   // mock 守护: 周期推进 queued → running → completed, 演示完整状态流转
   if(optGuardTimer||!optMockMode)return;

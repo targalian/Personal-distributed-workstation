@@ -169,14 +169,15 @@ class ChatHandler:
     # ── 公开接口 ──────────────────────────────────────────────────
 
     def chat(self, message: str, conv_id: str = "", history: Optional[list] = None,
-             pm_thread_id: str = "") -> dict:
+             pm_thread_id: str = "", discuss_context: Optional[dict] = None) -> dict:
         """处理用户消息, 返回回复。
 
         Args:
             message: 用户输入文本
             conv_id: 对话 ID (留空则用当前活跃对话)
             history: 可选外部历史 (向后兼容)
-            pm_thread_id: 方案C — 若指定, 消息直接路由到 PM 线程 (L2), 跳过秘书 LLM
+            pm_thread_id: 方案C - 若指定, 消息直接路由到 PM 线程 (L2), 跳过秘书 LLM
+            discuss_context: 优化讨论上下文; 非空时跳过命令意图, 仅纯对话
 
         Returns:
             {"reply": str, "action_taken": str, "timestamp": float, "conv_id": str}
@@ -207,90 +208,142 @@ class ChatHandler:
 
         # 2. 构建 system prompt
         system_prompt = self._build_system_prompt(status_context)
+        discussion_context = ""
+        if discuss_context:
+            discussion_context = self._build_discussion_context(discuss_context)
+            if discussion_context:
+                system_prompt = f"{system_prompt}\n\n{discussion_context}"
 
         # 3. 拼接对话历史 + 用户消息
         prompt = self._build_prompt(message, chat_history)
 
-        # 4. 调用 LLM (优先用全局默认模型, 否则走自动路由)
+        reply_text = self._call_chat_llm(message, prompt, system_prompt)
+        reply_text, action_taken = self._apply_chat_action(
+            message, reply_text, discuss_context)
+        now = self._save_chat_turn(cid, message, reply_text, action_taken)
+        return {"reply": reply_text, "action_taken": action_taken,
+                "timestamp": now, "conv_id": cid}
+
+    def _call_chat_llm(self, message: str, prompt: str,
+                       system_prompt: str) -> str:
+        """调用秘书 LLM, 优先默认模型并保留降级链。"""
         model_pref = ""
         fallback_models = []
-
-        # 全局默认模型 (model_pool.yaml 中配置)
-        default_model = getattr(self.controller, '_default_model', '')
+        default_model = getattr(self.controller, "_default_model", "")
         if default_model:
             model_pref = default_model
-            # 降级链: 从模型池中获取 fallback
             if self.controller.model_router:
                 entry = self.controller.model_router._entries.get(default_model)
-                if entry and hasattr(entry, 'fallback'):
+                if entry and hasattr(entry, "fallback"):
                     fallback_models = entry.fallback or []
         elif self.controller.model_router:
             try:
-                routing = self.controller.model_router.route(message, skill="document_summary")
+                routing = self.controller.model_router.route(
+                    message, skill="document_summary")
                 model_pref = routing.selected_model
                 fallback_models = routing.fallback_chain
             except Exception:
                 pass
+        resp = self.runtime._call_llm_with_routing(prompt, {
+            "_model_preference": model_pref,
+            "_fallback_models": fallback_models,
+            "_system_prompt": system_prompt,
+        })
+        return resp.get("content", "[LLM 调用失败]")
 
-        resp = self.runtime._call_llm_with_routing(
-            prompt,
-            {
-                "_model_preference": model_pref,
-                "_fallback_models": fallback_models,
-                "_system_prompt": system_prompt,  # 注入秘书专用 system prompt
-            },
-        )
-        reply_text = resp.get("content", "[LLM 调用失败]")
-
-        # 5. 检测操作意图
-        action_taken = ""
-        action_result = ""
+    def _apply_chat_action(self, message: str, reply_text: str,
+                           discuss_context: Optional[dict]) -> tuple[str, str]:
+        """执行普通消息命令; 讨论模式仅标记 opt_discuss。"""
+        if discuss_context:
+            print("[Chat] 优化讨论消息已跳过命令检测", flush=True)
+            return reply_text, "opt_discuss"
         action = self._detect_action(message)
-        if action:
-            action_result = self._execute_action(action, message)
-            if action_result:
-                reply_text += f"\n\n📋 **操作结果**: {action_result}"
-                action_taken = action
+        if not action:
+            return reply_text, ""
+        action_result = self._execute_action(action, message)
+        if action_result:
+            return f"{reply_text}\n\n📋 **操作结果**: {action_result}", action
+        return reply_text, ""
 
-        # 6. 保存到对话 + 持久化
+    def _save_chat_turn(self, cid: str, message: str, reply_text: str,
+                        action_taken: str) -> float:
+        """保存一轮对话到内存、共享文件夹和数据库。"""
         now = time.time()
         user_msg = {"role": "user", "content": message, "timestamp": now}
-        asst_msg = {"role": "assistant", "content": reply_text, "timestamp": now, "action_taken": action_taken}
-
-        if cid not in self._conversations:
-            self._conversations[cid] = []
-        self._conversations[cid].append(user_msg)
-        self._conversations[cid].append(asst_msg)
-        # 裁剪过长对话
+        asst_msg = {"role": "assistant", "content": reply_text,
+                    "timestamp": now, "action_taken": action_taken}
+        self._conversations.setdefault(cid, [])
+        self._conversations[cid].extend((user_msg, asst_msg))
         if len(self._conversations[cid]) > self._max_history * 2:
             self._conversations[cid] = self._conversations[cid][-(self._max_history * 2):]
-
-        # 持久化: 共享文件夹 (权威源) + DB (本地缓存)
         self._save_message_to_file(cid, user_msg)
         self._save_message_to_file(cid, asst_msg)
         self._save_to_db("user", message, timestamp=now)
-        self._save_to_db("assistant", reply_text, action_taken=action_taken, timestamp=now)
-        # 更新索引时间
+        self._save_to_db("assistant", reply_text,
+                         action_taken=action_taken, timestamp=now)
         self._touch_conv(cid)
-
-        # O1: 自动标题生成 (首次对话后)
         if len(self._conversations.get(cid, [])) == 2:
             meta = self._get_conv_meta(cid)
             if meta and meta.get("title", "") in ("新对话", "默认对话", ""):
                 self._auto_title(cid, message)
-
-        return {
-            "reply": reply_text,
-            "action_taken": action_taken,
-            "timestamp": now,
-            "conv_id": cid,
-        }
+        return now
 
     def get_history(self, limit: int = 50, conv_id: str = "") -> list[dict]:
         """返回指定对话的最近消息。"""
         cid = conv_id or self._active_conv_id
         msgs = self._conversations.get(cid, [])
         return msgs[-limit:]
+
+    def _build_discussion_context(self, discuss_context: dict) -> str:
+        """构建优化讨论上下文, 供纯对话模式避免误执行命令。"""
+        if not isinstance(discuss_context, dict):
+            return ""
+        optimizer = getattr(self.controller, "workstation_optimizer", None)
+        if optimizer is None:
+            return "【优化讨论上下文】优化模块暂不可用, 请基于 Boss 问题继续讨论。"
+        topic = str(discuss_context.get("topic", "")).strip()
+        try:
+            if topic and topic != "__all__":
+                item = optimizer.get_item(topic)
+                if item:
+                    return self._format_discussion_item(item)
+                overview = self._format_discussion_overview(optimizer)
+                return f"{overview}\n- 指定优化项 {topic} 不存在, 以上为总览。"
+            return self._format_discussion_overview(optimizer)
+        except Exception as exc:
+            print(f"[Chat] 优化讨论上下文获取失败: {exc}", flush=True)
+            return "【优化讨论上下文】优化信息暂不可用, 请基于已知内容讨论。"
+
+    def _format_discussion_item(self, item: dict) -> str:
+        """格式化单个优化讨论话题。"""
+        return (
+            "【优化讨论上下文】\n"
+            f"- 标题: {item.get('title', '')}\n"
+            f"- ID: {item.get('id', '')}\n"
+            f"- 来源: {item.get('source', '')}\n"
+            f"- 优先级: {item.get('priority', '')}\n"
+            f"- 状态: {item.get('status', '')}\n"
+            f"- 说明: {item.get('description', '')}\n"
+            f"- Boss 补充: {item.get('decision_reply', '')}"
+        )
+
+    def _format_discussion_overview(self, optimizer) -> str:
+        """格式化优化队列总览讨论话题。"""
+        summary = optimizer.summary()
+        items = optimizer.list_items(limit=100)
+        interesting = [item for item in items if item.get("status") in (
+            "waiting_boss", "candidate", "queued", "running")]
+        lines = [
+            "【优化讨论上下文】",
+            f"- 守护状态: {'运行中' if summary.get('guardian_running') else '未运行'}",
+            f"- 队列数量: {summary.get('queue_count', 0)}",
+            f"- 待 Boss 决策: {summary.get('waiting_boss_count', 0)}",
+        ]
+        for item in interesting[:10]:
+            lines.append(
+                f"- {item.get('id', '')} [{item.get('status', '')}] "
+                f"{item.get('title', '')}")
+        return "\n".join(lines)
 
     def clear_history(self, conv_id: str = ""):
         """清空指定对话历史。"""

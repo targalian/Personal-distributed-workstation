@@ -36,7 +36,11 @@ def build_chat_routes(controller) -> APIRouter:
             raise HTTPException(status_code=400, detail="消息不能为空")
         conv_id = payload.get("conv_id", "")
         history = payload.get("history")
-        result = chat_handler.chat(message, conv_id=conv_id, history=history)
+        raw_context = payload.get("discuss_context")
+        discuss_context = raw_context if isinstance(raw_context, dict) else None
+        result = chat_handler.chat(
+            message, conv_id=conv_id, history=history,
+            discuss_context=discuss_context)
         await _broadcast(state, "chat_reply", result)
         return result
 

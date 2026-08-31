@@ -36,6 +36,16 @@ LLM 解析结构化编辑指令 (add_node/remove_node/add_edge/remove_edge) →
 TaskDAG 应用 (自带环检测回滚) → `update_task_graph` 落盘；
 防幻觉: 真实执行并返回落盘结果, 解析失败/未找到任务均明确报错不虚报。
 
+**优化讨论纯对话通道** (iter-73): `chat()` 新增 `discuss_context` 参数
+(契约 `{topic: 优化项 id | __all__}`, 由 `POST /api/secretary/chat` 透传) —
+非空即进入讨论模式: (1) `_build_discussion_context()` 把话题对应优化项详情
+(标题/来源/优先级/状态/说明/Boss 补充) 或队列总览 (守护状态/队列数/待决策数 +
+活跃项前 10 条) 追加进 system prompt; (2) `_apply_chat_action()` 跳过
+`_detect_action` 关键词检测, `action_taken` 固定为 `opt_discuss`。
+**动因**: `_ACTION_KEYWORDS` 是子串匹配, 讨论文本里的「状态」「帮我写」
+「遇到瓶颈」会误触发查询/建任务/优化守护等副作用; 讨论区需要的是纯解释而非执行。
+优化器缺失或取数异常时降级为占位提示文案, 不打断对话。
+
 ## bot_gateway.py — Bot 网关（手机通道）
 
 **架构**:
@@ -77,4 +87,5 @@ normal 优先级, 💰 图标) — 任务提交时预估超预算 (tight/insuffi
 | 2026-08-27 | iter-45 | bot_gateway 两处错误追踪埋点 (推送重试耗尽/秘书对话链异常, 异常隔离) |
 | 2026-08-28 | iter-51 | chat_handler 自然语言 DAG 编辑意图 (F4.3): 图编辑关键词组 + _action_edit_task_graph (任务定位/LLM 指令解析/TaskDAG 应用/落盘, 防幻觉真实执行) |
 | 2026-08-28 | iter-52 | bot_gateway 新增 cost_budget_warning 事件模板 (预算适配告警, normal 优先级, 任务提交预估超预算时推送) |
+| 2026-09-01 | iter-73 | chat_handler 优化讨论纯对话通道: chat() 增 discuss_context (话题优化项/队列总览注入 system prompt + 跳过命令关键词检测, action_taken=opt_discuss), /api/secretary/chat 透传 |
 | 2026-08-16 | iter-27 后 | 初建 |

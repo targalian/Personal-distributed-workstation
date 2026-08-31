@@ -213,6 +213,26 @@ waiting_boss/completed` 四事件 → `handleOptEvent()` 按 id 幂等合并
 实测 inputAboveNav/inputBelowPanel/inputUsable/inputFocusable 全 true,
 桌面 1280x800 回归无影响。
 
+**iter-73 优化讨论窗口 (面板内嵌, 与秘书互动)**:
+Boss 反馈「优化 UI 缺与秘书互动的聊天窗口」→ opt-panel 改两段式:
+上段优化项队列列表, 下段 `opt-discuss` 讨论区 (头部话题标签 + 「通道待接入」
+徽标 + 消息流 + 输入条)。优化项 meta 行新增「💬 讨论」按钮
+(`optDiscussSelect(id)`): 切换话题上下文 (卡片 `topic-active` 高亮 +
+输入框 placeholder 跟随话题), 话题键为优化项 id 或 `__all__` (总体)。
+消息按话题持久化 localStorage (`lan_mesh_opt_discuss_v1`), 折叠按钮
+(`optDiscussToggle`) 可收起讨论区; 移动端 640px 断点压缩讨论区高度
+(104px) 保证列表可见。
+
+**发送通道契约 (iter-73 后端已接入)**: `optDiscussSend()` 曾为骨架 —
+消息暂存本地并提示「通道待接入」。后端约定 (已实现):
+`POST /api/secretary/chat` payload 增 `discuss_context: {topic: itemId}`,
+后端据此跳过命令式关键词检测 (_ACTION_KEYWORDS 子串匹配会误伤
+「状态/帮我写/遇到瓶颈」等讨论文本) 并将话题优化项注入 system prompt;
+秘书回复由响应返回 + WS 广播 (`chat_reply`)。
+后端已落地 (见 docs/design/06-interaction iter-73 段): `chat_handler.chat` 收
+`discuss_context` 后注入话题上下文并跳过命令检测, 返回 `action_taken=opt_discuss`;
+UI 侧只需去掉 pending 徽标并改调真实端点即可点亮 (Quest 后续一轮)。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
@@ -240,3 +260,5 @@ waiting_boss/completed` 四事件 → `handleOptEvent()` 按 id 幂等合并
 | 2026-08-29 | iter-64 | Station 舰队表格 🌐 联邦徽标 (F3.4): fed 来源主机设备名旁绿底徽标 + title 联邦名提示; lan 主机无徽标，UI-054 Browser 6/6 实测通过 |
 | 2026-08-29 | iter-65 | 任务卡片 ↗ 联邦转发徽标 (F3.4 遗留): forwarded 任务标题栏徽标 + title 提示委托执行，UI-055 Browser 实测通过 (截图 temp_resault/x65_fwd_badge.png) |
 | 2026-08-30 | iter-72 | 工作站优化 UI: dashboard 优化面板+Station 状态卡+秘书快捷入口与聊天卡片 (mock 适配层 404/405/501→localStorage 回退) + SPA OptimizationCard 同步 + 移动端聊天输入区让位修复，UI-056/057/058 CDP 桌面+移动实测通过 (截图 temp_resault/x72_opt_*.png) |
+| 2026-08-31 | iter-73 | 优化讨论窗口 (面板内嵌): opt-panel 两段式 + 💬 讨论话题切换 (卡片高亮/placeholder 跟随) + 消息按话题 localStorage 持久化 + 折叠/移动端适配; 发送通道骨架暂存 (契约留 Codex: /api/secretary/chat 增 discuss_context)，UI-059 CDP 桌面+移动实测通过 (截图 temp_resault/_x73_desktop.png / _x73_mobile.png) |
+| 2026-09-01 | iter-73 | 优化讨论发送通道后端接入 (Codex): /api/secretary/chat 透传 discuss_context → chat_handler 注入话题上下文 + 跳过命令检测 (action_taken=opt_discuss); UI 侧待去掉 pending 徽标改调真实端点 |

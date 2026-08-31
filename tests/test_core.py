@@ -7112,3 +7112,192 @@ class TestIter69LocalTakeover:
         assert fake._pm_worker_map["pm-69-relay"]["task_id"] == "t-69-g"
 
 
+class TestIter73OptimizationDiscuss:
+    """iter-73: 优化讨论纯对话通道与 discuss_context 透传。"""
+
+    @staticmethod
+    def _optimizer():
+        class _Optimizer:
+            def summary(self):
+                return {
+                    "guardian_running": True, "queue_count": 1,
+                    "waiting_boss_count": 1, "running_item": None,
+                    "recent_completed": None,
+                }
+
+            def list_items(self, status="", limit=100):
+                return [
+                    {"id": "opt-73", "title": "讨论上下文", "status": "waiting_boss"},
+                    {"id": "opt-old", "title": "已完成项", "status": "completed"},
+                ]
+
+            def get_item(self, item_id):
+                if item_id != "opt-73":
+                    return None
+                return {
+                    "id": "opt-73", "title": "讨论上下文",
+                    "description": "解释优化项状态", "source": "boss",
+                    "priority": "high", "status": "waiting_boss",
+                    "decision_reply": "关注验证",
+                }
+
+        return _Optimizer()
+
+    @staticmethod
+    def _handler(tmp_path, runtime):
+        from lan_mesh.chat_handler import ChatHandler
+        from lan_mesh.database import Database
+
+        class _Controller:
+            _default_model = ""
+            model_router = None
+            workstation_optimizer = TestIter73OptimizationDiscuss._optimizer()
+            db = Database(str(tmp_path / "discuss.db"))
+
+        handler = ChatHandler.__new__(ChatHandler)
+        handler.runtime = runtime
+        handler.controller = _Controller()
+        handler._conversations = {"c1": []}
+        handler._conv_index = [{"id": "c1", "title": "默认对话"}]
+        handler._active_conv_id = "c1"
+        handler._max_history = 50
+        return handler
+
+    def test_discuss_mode_skips_commands_and_route_passes_context(
+            self, tmp_path, monkeypatch):
+        """讨论模式不触发任务创建; API 路由原样透传 discuss_context。"""
+        from lan_mesh.chat_handler import ChatHandler
+
+        class _Runtime:
+            def __init__(self):
+                self.opts = None
+
+            def _call_llm_with_routing(self, prompt, opts):
+                self.opts = opts
+                return {"content": "这是纯讨论回复"}
+
+        runtime = _Runtime()
+        handler = self._handler(tmp_path, runtime)
+        monkeypatch.setattr(ChatHandler, "_build_status_context",
+                            lambda self: "状态")
+        monkeypatch.setattr(ChatHandler, "_build_system_prompt",
+                            lambda self, context: "秘书 prompt")
+        monkeypatch.setattr(ChatHandler, "_save_message_to_file",
+                            lambda self, cid, msg: None)
+        monkeypatch.setattr(ChatHandler, "_save_to_db",
+                            lambda self, *args, **kwargs: None)
+        monkeypatch.setattr(ChatHandler, "_auto_title",
+                            lambda self, cid, msg: None)
+        monkeypatch.setattr(ChatHandler, "_touch_conv",
+                            lambda self, cid: None)
+
+        result = handler.chat("帮我写一个补丁", conv_id="c1",
+                              discuss_context={"topic": "opt-73"})
+
+        assert result["action_taken"] == "opt_discuss"
+        assert handler.controller.db.list_tasks() == []
+        assert "讨论上下文" in runtime.opts["_system_prompt"]
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lan_mesh.station_routes_chat import build_chat_routes
+
+        class _RouteHandler:
+            def __init__(self):
+                self.context = None
+
+            def chat(self, message, conv_id="", history=None,
+                     pm_thread_id="", discuss_context=None):
+                self.context = discuss_context
+                return {"reply": "ok", "action_taken": "opt_discuss",
+                        "timestamp": 1, "conv_id": conv_id}
+
+        class _RouteController:
+            secretary_active = True
+            state = object()
+            chat_handler = _RouteHandler()
+
+        async def _fake_broadcast(state, event_type, data):
+            return None
+
+        monkeypatch.setattr("lan_mesh.station_routes_chat._broadcast",
+                            _fake_broadcast)
+        app = FastAPI()
+        app.include_router(build_chat_routes(_RouteController()))
+        response = TestClient(app).post("/api/secretary/chat", json={
+            "message": "为什么遇到瓶颈", "conv_id": "c1",
+            "discuss_context": {"topic": "__all__"},
+        })
+        assert response.status_code == 200
+        assert _RouteController.chat_handler.context == {"topic": "__all__"}
+
+    def test_discussion_context_overview_and_item(self, tmp_path, monkeypatch):
+        """__all__ 注入总览; 指定 ID 注入详情, 缺失时退化为总览。"""
+        from lan_mesh.chat_handler import ChatHandler
+
+        class _Runtime:
+            def __init__(self):
+                self.opts = None
+
+            def _call_llm_with_routing(self, prompt, opts):
+                self.opts = opts
+                return {"content": "ok"}
+
+        runtime = _Runtime()
+        handler = self._handler(tmp_path, runtime)
+        monkeypatch.setattr(ChatHandler, "_build_status_context",
+                            lambda self: "状态")
+        monkeypatch.setattr(ChatHandler, "_build_system_prompt",
+                            lambda self, context: "秘书 prompt")
+        monkeypatch.setattr(ChatHandler, "_save_message_to_file",
+                            lambda self, cid, msg: None)
+        monkeypatch.setattr(ChatHandler, "_save_to_db",
+                            lambda self, *args, **kwargs: None)
+        monkeypatch.setattr(ChatHandler, "_auto_title",
+                            lambda self, cid, msg: None)
+        monkeypatch.setattr(ChatHandler, "_touch_conv",
+                            lambda self, cid: None)
+
+        handler.chat("当前整体进展如何", conv_id="c1",
+                     discuss_context={"topic": "__all__"})
+        all_context = runtime.opts["_system_prompt"]
+        assert "队列数量: 1" in all_context
+        assert "opt-old" not in all_context
+
+        handler.chat("这项为什么要等待", conv_id="c1",
+                     discuss_context={"topic": "opt-73"})
+        item_context = runtime.opts["_system_prompt"]
+        assert "关注验证" in item_context
+        assert "waiting_boss" in item_context
+
+    def test_chat_without_discuss_context_keeps_action_behavior(
+            self, tmp_path, monkeypatch):
+        """不传 discuss_context 时, 命令式消息仍走既有意图执行路径。"""
+        from lan_mesh.chat_handler import ChatHandler
+
+        class _Runtime:
+            def _call_llm_with_routing(self, prompt, opts):
+                return {"content": '{"name": "补丁任务", "description": "写补丁"}'}
+
+        handler = self._handler(tmp_path, _Runtime())
+        monkeypatch.setattr(ChatHandler, "_build_status_context",
+                            lambda self: "状态")
+        monkeypatch.setattr(ChatHandler, "_build_system_prompt",
+                            lambda self, context: "秘书 prompt")
+        monkeypatch.setattr(ChatHandler, "_save_message_to_file",
+                            lambda self, cid, msg: None)
+        monkeypatch.setattr(ChatHandler, "_save_to_db",
+                            lambda self, *args, **kwargs: None)
+        monkeypatch.setattr(ChatHandler, "_auto_title",
+                            lambda self, cid, msg: None)
+        monkeypatch.setattr(ChatHandler, "_touch_conv",
+                            lambda self, cid: None)
+        handler.controller.submit_task_from_chat = (
+            lambda name, description, created_by, priority:
+            {"status": "running", "task_id": "task-73"})
+
+        result = handler.chat("帮我写一个补丁", conv_id="c1")
+
+        assert result["action_taken"] == "submit_task"
+
+
