@@ -3,8 +3,8 @@
 多 Agent（Codex CLI / Qoder Quest）并行开发时的文件占用与交接看板。
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
-- 更新时间：2026-08-30
-- 当前迭代：`iter-72`（工作站优化 UI + 后端闭环已完成，待 Boss 发货）
+- 更新时间：2026-09-01
+- 当前迭代：`iter-73`（优化讨论窗口 UI + discuss_context 后端通道均已完成，待 Boss 发货）
 
 ## 一、职责边界（长期约定）
 
@@ -24,8 +24,8 @@
 
 | Agent | 占用文件 | 任务 | 开始 | 状态 |
 |---|---|---|---|---|
-| Codex | -- | 无 | -- | 空闲 |
-| Quest | —— | iter-72 工作站优化 UI（已完成验证） | —— | 已释放 |
+| Codex | —— | —— | —— | 已释放 |
+| Quest | `lan_mesh/web/templates/dashboard.html` | iter-73 优化讨论窗口 UI（验证已通过） | 2026-08-31 | 待 Boss 发货 |
 
 > 认领格式：一行一个 Agent，`占用文件` 写通配范围（如 `lan_mesh/station_*.py`），
 > `状态` 取 `进行中` / `待验证` / `已释放`。释放后把该行改回 `——`。
@@ -35,32 +35,24 @@
 `scripts/sync_push.ps1` 要求工作区干净，因此下列改动必须**分两次提交**、
 按归属各自提交，不要互相 `git add .`：
 
-**Codex（iter-69）**
-- `lan_mesh/station_controller.py`、`tests/test_core.py`、`docs/design/02-station-core/README.md`
-- `loop_status.json`（iter-69 段落）
+**Quest（iter-73 优化讨论窗口 UI，已验证待 Boss 发货）**
+- `lan_mesh/web/templates/dashboard.html`（opt-panel 两段式 + 优化讨论窗口 + 💬 话题切换 + 发送骨架）
+- `docs/design/09-frontend/README.md`（iter-73 段落 + 变更记录）
+- `test_bug/test_checklist.csv`（UI-059，检测通过）
+- `loop_status.json`（iter-73 `[Quest]` 段落）
+- 发送通道契约留 Codex：`POST /api/secretary/chat` 增 `discuss_context`（详见 docs/design/09-frontend iter-73 段）
 
-**Quest（wiki + 提案）**
-- `.qoder/repowiki/**`（65 个文件）、`.gitignore`（`.pending/` 排除项）
-- `.githooks/post-commit`、`scripts/sync_docs.py`、`docs/design/10-test-loop/README.md`、
-  `docs/design/11-scripts-subprojects/README.md`
-- `docs/reference/api-contract-audit-taskflow.md`、`docs/reference/controller-split-plan.md`
-- `docs/reference/project-capability-assessment.md`、`loop_status.json`（`[Quest]` 段落）
-
-**Boss 手改（2026-08-30 确认保留，随 Quest 批次入库）**
-- `lan_mesh/model_pool.example.yaml`（+135 行火山方舟 Coding Plan / Auto 模式示例）
-- `AGENTS.md`（新增 repowiki-update 技能引用、日志前缀白名单等）
-
-**Quest（iter-72 工作站优化 UI，已完成验证待发货）**
-- `lan_mesh/web/templates/dashboard.html`（优化面板 + Station 状态卡 + 聊天卡片 + 移动端输入区让位修复）
-- `webui/src/**` + `lan_mesh/web/static/spa/**`（OptimizationCard + 构建产物）
-- `docs/design/09-frontend/README.md`（工作站优化 UI 段落 + 变更记录）
-- `test_bug/test_checklist.csv`（UI-056/057/058，均检测通过）
-- 后端 `/api/workstation-optimization/*` 由 Codex 后续实现（UI 已按契约预留）
+**Codex（iter-73 discuss_context 后端通道，已验证待 Boss 发货）**
+- `lan_mesh/chat_handler.py`（chat 增 discuss_context 参数 + 讨论上下文注入 + 跳过命令检测）
+- `lan_mesh/station_routes_chat.py`（`/api/secretary/chat` 透传 discuss_context）
+- `tests/test_core.py`（TestIter73OptimizationDiscuss 3 例，pytest 397 passed）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-73 收尾 + 锁释放）
 
 ## 四、下一轮排期建议（避免同文件竞争）
 
 | 任务 | 建议归属 | 冲突面 |
 |---|---|---|
+| 点亮优化讨论发送 UI（`optDiscussSend()` 改调 `POST /api/secretary/chat` 带 `discuss_context`，去掉「通道待接入」徽标，渲染秘书回复；后端已就绪） | **Quest** | `dashboard.html` 单文件，与 Codex 无冲突 |
 | `station_controller.py` 拆 8 mixin（见 `docs/reference/controller-split-plan.md` Phase 1-2） | **Codex 独占** | 需独占 `lan_mesh/station_*.py` 全窗口，期间 Quest 勿改 `docs/design/02-station-core` |
 | 拆分后 repowiki / design 文档同步 | **Quest 承接** | 必须等 Codex 释放锁并推送后再启动 |
 | 真物理多机实压 F3.1/F3.3 | Codex | 需真实主机，与拆分互斥（勿同轮） |
