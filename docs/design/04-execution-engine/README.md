@@ -52,6 +52,22 @@ capture 到 module=`llm` (context 携带失败链), 异常隔离不影响降级�
 - `main.py` 启动 dotenv ImportError 时同样手动解析兜底 (基础解释器
   无 python-dotenv 场景, 否则 Key 全部缺失)
 
+**SSE 流式中文解码修复** (iter-74, Boss 报告「秘书回复乱码」): `_call_openai_compatible`
+以 `resp.iter_lines(decode_unicode=True)` 读流式输出, 解码用的是 `resp.encoding` —
+而 requests 对 `text/*` 且不带 charset 的响应一律推断为 ISO-8859-1
+(RFC 2616 遗留默认, 见 `requests.utils.get_encoding_from_headers`)。
+火山方舟等端点返回 `Content-Type: text/event-stream` 不带 charset, 于是 UTF-8
+中文被逐字节拆成 Latin-1 字符 (「你好秘书」→ `ä½ å¥½ç§ä¹¦`)。
+**修复**: `raise_for_status()` 后, 仅当响应头未显式声明 charset 时兜底 
+`resp.encoding = "utf-8"` (SSE 规范强制 UTF-8); 服务端显式声明的仍按声明走,
+不武断覆盖。requests 的增量解码器使用 `errors='replace'`, 故跨 chunk 截断的
+多字节字符不会抛异常。
+**影响面**: 全库仅此一处流式 LLM 调用 (`iter_lines` / `stream=True` 唯一出现处),
+但秘书聊天 / PM 规划 / Worker 子 Agent 的中文回复全部经由此处, 属全局性缺陷。
+此前未暴露: default_model 于 2026-08-30 切至无 charset 声明的端点, 且 iter-74
+讨论通道点亮后中文对话量骤增才显形。回归锚点见 `TestIter74SseUtf8Decoding`
+(三例: 无 charset 兜底 / 显式 charset 尊重 / ASCII 不受影响; 已验证移除修复即 FAIL)。
+
 ## agent_card.py — Agent Card（借鉴 A2A 协议）
 
 每个 Worker 启动时生成能力卡片（技能声明、可用工具、模型偏好），
@@ -155,6 +171,7 @@ planner/dispatcher/monitor 的共享引用有效 (resume 关键约束)
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-01 | iter-74 | SSE 流式中文乱码修复 (Boss 报告, Quest 定位): requests 对 text/event-stream 无 charset 响应按 ISO-8859-1 解码致 UTF-8 中文逐字节拆成乱码; 改为响应头未声明 charset 时兜底 resp.encoding='utf-8' (显式声明仍尊重); 全库唯一流式调用点, 影响秘书/PM/Worker 全部中文回复; 新增 3 例回归 (移除修复即 FAIL), pytest 400 passed |
 | 2026-08-29 | iter-61 | F5.3 插件系统: skill_market 第三方技能市场 (浏览/白名单安装/卸载) + skills 表 origin 列 (迁移 v8) + 安全护栏 (体积/ID/内置冲突/安全默认仅 station) + dashboard 技能库 Tab 市场 UI |
 | 2026-08-29 | iter-55 | 多机实测加固 (补强#3): PROVIDER_CONFIG 补 volcengine-ark 置首位; _get_default_model 补齐定义; _ensure_env_loaded 重写 (ARK key + 部分 key 不再提前 return + dotenv 缺失手动解析); main.py dotenv 兜底 |
 | 2026-08-28 | iter-53 | PM 执行态快照持久化 + 断点恢复: PMState 序列化/就地恢复 + 六阶段快照写点 + resume_from_snapshot/_run_resumed 四场景续跑 + multi 模式聚合修复 (_multi_monitoring) |

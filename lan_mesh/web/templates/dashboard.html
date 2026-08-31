@@ -363,7 +363,6 @@
   .opt-discuss-head .oh-title{font-size:12px;font-weight:700;color:var(--text)}
   .opt-discuss-topic{font-size:11px;padding:1px 8px;border-radius:10px;background:rgba(91,140,255,.12);color:var(--accent);max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .opt-discuss-topic.all{background:var(--surface2);color:var(--dim)}
-  .opt-discuss-pending{font-size:10px;padding:1px 7px;border-radius:4px;background:rgba(251,191,36,.1);color:var(--yellow);border:1px dashed rgba(251,191,36,.5)}
   .opt-discuss-collapse{margin-left:auto;font-size:13px;transition:transform .2s}
   .opt-discuss.collapsed .opt-discuss-collapse{transform:rotate(-90deg)}
   .opt-discuss.collapsed .opt-discuss-log,.opt-discuss.collapsed .opt-discuss-input-bar{display:none}
@@ -483,12 +482,11 @@
           <span class="oh-close" onclick="toggleOptPanel(false)" title="收起">✕</span>
         </div>
         <div class="opt-panel-body" id="opt-panel-body"></div>
-        <!-- iter-73: 优化讨论窗口 (面板内嵌, 与秘书互动; 发送通道待 Codex 后端接入) -->
+        <!-- iter-73/74: 优化讨论窗口 (面板内嵌, 与秘书互动; iter-74 发送通道点亮真实后端) -->
         <div class="opt-discuss" id="opt-discuss">
           <div class="opt-discuss-head" onclick="optDiscussToggle()" title="点击收起/展开讨论区">
             <span class="oh-title">💬 优化讨论</span>
             <span class="opt-discuss-topic all" id="opt-discuss-topic">总体优化</span>
-            <span class="opt-discuss-pending" id="opt-discuss-pending" title="讨论通道待后端接入, 消息暂存本地">通道待接入</span>
             <span class="opt-discuss-collapse" id="opt-discuss-collapse">▾</span>
           </div>
           <div class="opt-discuss-log" id="opt-discuss-log"></div>
@@ -1054,7 +1052,13 @@ function connectWS(){
     // iter-61: 安装/卸载 Toast 由本地操作函数弹出, WS 事件仅静默刷新 (防双重 Toast)
     if(msg.type==='skill_installed'||msg.type==='skill_uninstalled')refreshSkills();
     // PM Agent 架构: 新消息类型
-    if(msg.type==='chat_reply'){appendChatMessage('assistant',msg.data.reply,msg.data.timestamp);}
+    // iter-74: 讨论回复 (action_taken=opt_discuss) 不进主聊天流 — 讨论区由 HTTP 响应
+    // 渲染 (WS data 不含 topic 无法归属话题), 避免串台与「HTTP+WS」双渲染
+    if(msg.type==='chat_reply'){
+      if(!(msg.data&&msg.data.action_taken==='opt_discuss')){
+        appendChatMessage('assistant',msg.data.reply,msg.data.timestamp);
+      }
+    }
     if(msg.type==='pm_registered'){refreshPMAgents();refreshTasks();loadPMThreads();}
     if(msg.type==='pm_status_change'){
       refreshPMAgents();onPMThreadStatusChange(msg.data);
@@ -1990,7 +1994,18 @@ async function loadChatHistory(){
     const d=await r.json();
     const container=document.getElementById('chat-messages');
     container.innerHTML='';
-    const msgs=d.messages||[];
+    const raw=d.messages||[];
+    // iter-74: 讨论消息 (action_taken=opt_discuss) 不进主聊天流 — 后端会将其与
+    // 普通对话一同落库, 历史回放时需过滤, 否则讨论回复串入主聊天窗口
+    const msgs=[];
+    for(const m of raw){
+      if(m.role==='assistant'&&m.action_taken==='opt_discuss'){
+        const last=msgs[msgs.length-1];
+        if(last&&last.role==='user')msgs.pop(); // 配对 user 提问一并移除 (后端成对落库)
+        continue;
+      }
+      msgs.push(m);
+    }
     if(!msgs.length){
       chatMessages=[];
       container.innerHTML='<div class="empty"><div class="icon">💬</div><p>向秘书发送消息开始对话</p><p class="hint">例如: "当前状态如何?" 或 "提交一个代码审查任务"</p></div>';
@@ -2439,10 +2454,12 @@ function handleOptChatCommand(text){
   }
   return false;
 }
-// ── iter-73: 优化讨论窗口 (面板内嵌; 发送通道待 Codex 后端接入) ──
+// ── iter-73/74: 优化讨论窗口 (面板内嵌; iter-74 发送通道点亮真实后端) ──
 const OPT_DISCUSS_LS_KEY='lan_mesh_opt_discuss_v1';
 let _optDiscuss={active:'__all__',topics:{}}; // topics: {topicKey:[{role,content,ts}]}
 let _optDiscussCollapsed=false;
+let _optDiscussSending=false;   // 请求 in-flight 锁 (禁用输入/按钮)
+let _optDiscussInflight=false;  // 思考态气泡开关 (仅请求期间显示)
 function optDiscussLoad(){
   try{
     const raw=localStorage.getItem(OPT_DISCUSS_LS_KEY);
@@ -2495,16 +2512,24 @@ function renderOptDiscuss(){
   }).join('');
   if(!msgs.length){
     h='<div class="opt-discuss-msg assistant">💬 就优化项向秘书提问或讨论, 例如: 「这条建议的详细执行方案是什么?」</div>';
-  }else if(msgs[msgs.length-1].role==='user'){
-    h+='<div class="opt-discuss-msg pending">⏳ 等待秘书回复 — 讨论通道待后端接入</div>';
+  }else if(_optDiscussInflight&&msgs[msgs.length-1].role==='user'){
+    // 真实思考态: 仅请求 in-flight 期间显示, 请求结束即撤
+    h+='<div class="opt-discuss-msg pending">⏳ 秘书思考中…</div>';
   }
   log.innerHTML=h;
   log.scrollTop=log.scrollHeight;
 }
-function optDiscussSend(){
-  // 前端骨架: 消息暂存本地。Codex 后端接入后改为调用 /api/secretary/chat
-  // (约定 payload: {message, conv_id, discuss_context:{topic:itemId}}), 秘书回复
-  // 由后端返回 + WS 广播, 此处去掉 pending 提示即可。
+function _optDiscussLock(locked){
+  // 讨论区自己的输入锁 (勿复用 _setChatLock, 那是主聊天的)
+  const input=document.getElementById('opt-discuss-input');
+  const btn=document.getElementById('opt-discuss-send');
+  if(input)input.disabled=locked;
+  if(btn){btn.disabled=locked;btn.textContent=locked?'思考中…':'发送';}
+}
+async function optDiscussSend(){
+  // iter-74: 调真实后端 POST /api/secretary/chat (discuss_context 通道, Codex iter-73 已落地)。
+  // 讨论回复仅由 HTTP 响应渲染 (WS chat_reply 已按 action_taken=opt_discuss 分流), 防双渲染。
+  if(_optDiscussSending)return;
   const input=document.getElementById('opt-discuss-input');
   const text=input.value.trim();
   if(!text)return;
@@ -2513,8 +2538,50 @@ function optDiscussSend(){
   if(!_optDiscuss.topics[key])_optDiscuss.topics[key]=[];
   _optDiscuss.topics[key].push({role:'user',content:text,ts:Date.now()/1000});
   optDiscussSave();
+  _optDiscussSending=true;
+  _optDiscussInflight=true;
+  _optDiscussLock(true);
   renderOptDiscuss();
-  showToast('💬 讨论通道待 Codex 后端接入, 消息已暂存本地','info');
+  const t0=Date.now();
+  const abortCtrl=new AbortController();
+  const timeout=setTimeout(()=>abortCtrl.abort(),60000);
+  try{
+    const r=await apiFetch('/api/secretary/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conv_id:_activeConvId,discuss_context:{topic:key}}),signal:abortCtrl.signal});
+    clearTimeout(timeout);
+    if(r.ok){
+      const d=await r.json();
+      const reply=(d&&d.reply)?d.reply:'[秘书返回空回复]';
+      _optDiscuss.topics[key].push({role:'assistant',content:reply,ts:(d&&d.timestamp)||Date.now()/1000});
+      optDiscussSave();
+      const elapsed=((Date.now()-t0)/1000).toFixed(1);
+      showToast(`💬 秘书已回复 (${elapsed}s)`, 'info', 2500);
+      // 不调 loadConversations(): 会触发 switchConversation→loadChatHistory 重绘
+      // 主聊天窗口, 讨论场景下副作用明显; 侧边栏时间下次自然刷新
+    }else if(r.status===503){
+      // 秘书未激活 (check_secretary): 明确提示, 不静默失败不落空回复
+      const msg='🔕 秘书未激活, 无法讨论。请在 Station 面板点击「启动秘书」后重试。';
+      _optDiscuss.topics[key].push({role:'assistant',content:msg,ts:Date.now()/1000});
+      optDiscussSave();
+      showToast('秘书未激活, 无法讨论','err');
+    }else{
+      const msg='[接口错误] HTTP '+r.status;
+      _optDiscuss.topics[key].push({role:'assistant',content:msg,ts:Date.now()/1000});
+      optDiscussSave();
+      showToast('讨论接口错误: HTTP '+r.status,'err');
+    }
+  }catch(e){
+    clearTimeout(timeout);
+    const msg=e.name==='AbortError'?'[超时] 秘书响应超过60s,请重试':'[通信失败] '+e.message;
+    _optDiscuss.topics[key].push({role:'assistant',content:msg,ts:Date.now()/1000});
+    optDiscussSave();
+    showToast(e.name==='AbortError'?'秘书响应超时':'讨论通信失败','err');
+  }finally{
+    _optDiscussSending=false;
+    _optDiscussInflight=false;
+    _optDiscussLock(false);
+    renderOptDiscuss();
+    if(!_optDiscussCollapsed)input.focus();
+  }
 }
 optDiscussLoad(); // iter-73: 脚本执行时载入讨论历史 (声明区已就绪, 避免 TDZ)
 function optMockGuardianStart(){

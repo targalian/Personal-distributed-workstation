@@ -15,6 +15,10 @@
 | station_api.py | Station Director API 路由层 (装配入口) |
 | station_controller.py | Station Director 独立控制器 — 基础设施管理入口 |
 | station_director.py | Station Director (工作站主管) — 基础设施资源管理器 |
+| station_hosts.py | 主机与发现域 — 发现回调、主机信息采集、配置刷新下发、日志修剪、Bot 通道。 |
+| station_lifecycle.py | 进程生命周期与 Web 装配 — 端口选择、FastAPI 装配、WS 推流、dev-reload。 |
+| station_local_pm.py | 内嵌 PM 执行域 — 本机启停/恢复/注入、队列派发、子 Agent、孤儿迁移。 |
+| station_pm_control.py | PM 远程反向控制与任务 DAG 图读写 — 取消/暂停/注入/图更新。 |
 | station_routes_basic.py | Station 基础路由 — 健康/错误/角色/注册心跳/主机网络/Director (P1 #2 拆分产物) |
 | station_routes_chat.py | Station 交互路由 — 秘书聊天/多对话/PM 线程/Bot 消息入口 (P1 #2 拆分产物) |
 | station_routes_common.py | Station API 路由公共层 — 限流/认证中间件与共享工具 (P1 #2 拆分产物) |
@@ -25,6 +29,10 @@
 | station_routes_shadow.py | 影子开发 API 路由 - 提交、查询与守护状态接口。 |
 | station_routes_tasks.py | Station 任务路由 — Agent 管理/任务生命周期/图结构/交付闭环/任务记忆 (P1 #2 拆分产物) |
 | station_routes_worker.py | Station Worker 侧路由 — 内嵌 Worker 端点/P2P 通讯/云存储同步 (P1 #2 拆分产物) |
+| station_scheduler.py | 任务提交与调度域 — 负载选站、联邦转发轮询、自动扩容派发。 |
+| station_secretary.py | Secretary 激活/停用与选举故障转移 — 模型资源预加载、让位、接管。 |
+| station_selfheal.py | 自愈闭环 (F4.2) — 修复动作执行、自动守护、写动作配额与熔断护栏。 |
+| station_sync.py | 集群同步域 — 密钥/资源/配置/版本四类同步与对齐。 |
 | workstation_optimizer.py | 工作站常驻自我优化管理器 - 汇聚建议、审批与影子执行。 |
 <!-- /AUTO:module-list -->
 ---
@@ -372,10 +380,46 @@ agent_runtime.execute()
 
 **依赖**: 无外部依赖（标准库 sqlite3）
 
+## station_controller.py 职责域拆分 (iter-74)
+
+**动因**: 单文件 152KB / 3253 行 / 83 个顶层方法, 耦合八类互不相干职责 —
+review 困难、并行开发几乎必撞 git 冲突、新职责无家可归只能继续堆积。
+方案见 `docs/reference/controller-split-plan.md` (Quest 提案稿)。
+
+**组合方式**: mixin 而非继承树 —
+`class StationController(Lifecycle, SelfHeal, Secretary, LocalPm, PmControl,
+Scheduler, Sync, Hosts)`。mixin 之间互不继承 (MRO 扁平, 深度 10),
+仅通过 `self` 属性交互。
+
+**契约面零变化 (硬约束)**:
+- `from lan_mesh.station_controller import StationController` 路径不变 (main.py + tests 43 处 + AGENTS.md 验证命令)
+- 方法名与属性名一律不改, 路由层以闭包持有 controller 整体对象, 零感知
+- `StationState` / `STATIC_DIR` / `TEMPLATES_DIR` 仍在本模块, 不改 DB 结构、不删端点
+
+**Phase 1-2 落地范围** (渐进迁移, 每步可独立回滚):
+
+| Mixin | 文件 | 状态 | 方法数 |
+|---|---|---|---|
+| SelfHeal | `station_selfheal.py` | **已搬入** | 9 |
+| Hosts | `station_hosts.py` | **已搬入** | 10 |
+| Sync | `station_sync.py` | **已搬入** | 9 |
+| Lifecycle / Secretary / LocalPm / PmControl / Scheduler | `station_{lifecycle,secretary,local_pm,pm_control,scheduler}.py` | 空壳待搬 (Phase 3-5) | 0 |
+
+空壳 mixin 已进组合链但方法体仍在壳类内 — **类内定义优先于 mixin**,
+故行为零变化, 后续搬移只需剪切方法体, 无需再改类声明。
+
+**搬移时同步迁移的模块级依赖**: `shutil` / `collect_host_info` / `make_discovery_packet` / `BotChannel` / `DiscoveryPacket` / `HostInfo` / 心跳与修剪间隔常量随 Hosts 迁出,
+壳类同步剪除死 import。各 mixin 自带 `logger = get_logger("station")`, 日志前缀 `[Station]` 不变。
+
+**验证**: 方法可见集合与基线逐字一致 (82 个, 零缺失零重复);
+门禁违规集合与基线逐字一致 (7 处超长函数 + 6 处缺类型标注均为既有事实,
+提案 §8 明确不在本次拆分中重构); pytest 397 passed; 壳类 3253 → 2322 行。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-01 | iter-74 | StationController 职责域拆分 Phase 1-2: 8 mixin 组合接线 (mixin 互不继承, MRO 扁平) + SelfHeal/Hosts/Sync 三块 28 方法搬入独立模块, 壳类 3253→2322 行; import 路径/方法名/属性名/端点零变化, 方法可见集合与门禁违规集合均与基线逐字一致; pytest 397 passed |
 | 2026-08-29 | iter-69 | F3.3 本机接管路径修复 (七节点实压 Bug L): `_start_local_pm_for_task` 自构 PM 用早期签名 (task=/runtime=) 必然 TypeError, 全 Worker 离线时接管失败任务滞留 pending; 改为复用 `_local_start_pm` 唯一入口 + 抽出 `_register_local_pm` 统一落库/映射/广播 (接力派发共用), 接管返回 bool 失败留 pending 由下轮扩容兜底; 专项 7/7 + 回归 380 passed |
 | 2026-08-29 | iter-68 | F3.1 扩容同轮批量清空 (30s/轮×N 积压滞后修复): _autoscale_check 单轮 while 连续派发 (每次派发后重查队列与空闲 Worker, 失败/未减即 break 防死循环) + _dispatch_next_task_to_worker 返回 bool; 五节点真机 14/14 (同轮清空耗时 18s vs 旧 120s+ 滞后) + 专项 16/16 + 回归 373 passed |
 | 2026-08-29 | iter-67 | 五节点集群实压 (评估报告边界 #2 五实例模拟): Bug J 扩容门槛水位→>=1 (最后 1 单不滞留/新 Worker 上线即接活) + Bug K autoscaler 派发落 pm_agents 表; 真机 13/13 (五机互认/4 积压全部派发/深度 4→3→2→1/FIFO/4 Worker 各 1 任务无重复/5 任务并发/杀机 F3.3) + 回归 371 passed |

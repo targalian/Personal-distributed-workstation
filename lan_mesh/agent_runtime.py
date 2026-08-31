@@ -1330,6 +1330,15 @@ class AgentRuntime:
         )
         resp.raise_for_status()
 
+        # 中文乱码修复 (iter-74): SSE 响应 Content-Type 常为 text/event-stream
+        # 且不带 charset, 而 requests 对 text/* 无 charset 一律按 ISO-8859-1 解码
+        # (RFC 2616 遗留默认), 使 UTF-8 中文被逐字节拆成乱码 (你好 → ä½ å¥½)。
+        # SSE 规范强制 UTF-8, 故服务端未声明 charset 时兜底为 utf-8;
+        # 显式声明的仍按服务端声明走。requests 的增量解码器用 errors='replace',
+        # 故跨 chunk 截断的多字节字符不会抛异常。
+        if "charset" not in resp.headers.get("Content-Type", "").lower():
+            resp.encoding = "utf-8"
+
         # 流式读取 + 活性检测
         collected = []
         input_tokens = 0

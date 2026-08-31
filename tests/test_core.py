@@ -7301,3 +7301,59 @@ class TestIter73OptimizationDiscuss:
         assert result["action_taken"] == "submit_task"
 
 
+class TestIter74SseUtf8Decoding:
+    """iter-74: SSE 流式响应中文解码 (Latin-1 乱码修复)。"""
+
+    @staticmethod
+    def _sse_payload(text):
+        import json as _json
+        chunk = {"choices": [{"delta": {"content": text}}]}
+        return ("data: " + _json.dumps(chunk, ensure_ascii=False) + "\n\n"
+                "data: [DONE]\n\n").encode("utf-8")
+
+    @classmethod
+    def _fake_response(cls, content_type, text):
+        import io
+        import requests
+        from requests.structures import CaseInsensitiveDict
+        from requests.utils import get_encoding_from_headers
+        from urllib3.response import HTTPResponse
+
+        headers = CaseInsensitiveDict({"Content-Type": content_type})
+        resp = requests.Response()
+        resp.raw = HTTPResponse(body=io.BytesIO(cls._sse_payload(text)),
+                                preload_content=False, status=200,
+                                headers={"Content-Type": content_type})
+        resp.status_code = 200
+        resp.headers = headers
+        # 复刻 requests 内部推断: text/* 无 charset → ISO-8859-1
+        resp.encoding = get_encoding_from_headers(headers)
+        return resp
+
+    def _run(self, monkeypatch, content_type, text):
+        from lan_mesh.agent_runtime import AgentRuntime
+
+        resp = self._fake_response(content_type, text)
+        monkeypatch.setattr("lan_mesh.agent_runtime.requests.post",
+                            lambda *a, **k: resp)
+        rt = AgentRuntime.__new__(AgentRuntime)
+        return rt._call_openai_compatible(
+            "问候", "test-model", "http://x/v1", "k")
+
+    def test_sse_without_charset_decodes_utf8(self, monkeypatch):
+        """text/event-stream 不带 charset 时中文不再被 ISO-8859-1 拆成乱码。"""
+        result = self._run(monkeypatch, "text/event-stream", "你好秘书")
+        assert result["content"] == "你好秘书"
+        # 回归锚点: 修复前的实测乱码序列
+        assert result["content"] != "ä½\xa0å¥½ç§\x98ä¹¦"
+
+    def test_explicit_charset_is_respected(self, monkeypatch):
+        """服务端显式声明 charset 时沿用声明, 不被兜底覆盖。"""
+        result = self._run(
+            monkeypatch, "text/event-stream; charset=utf-8", "秘书回复")
+        assert result["content"] == "秘书回复"
+
+    def test_ascii_content_unaffected(self, monkeypatch):
+        """纯 ASCII 内容行为不变 (兜底不引入回归)。"""
+        result = self._run(monkeypatch, "text/event-stream", "hello")
+        assert result["content"] == "hello"

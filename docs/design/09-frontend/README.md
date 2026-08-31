@@ -223,15 +223,20 @@ Boss 反馈「优化 UI 缺与秘书互动的聊天窗口」→ opt-panel 改两
 (`optDiscussToggle`) 可收起讨论区; 移动端 640px 断点压缩讨论区高度
 (104px) 保证列表可见。
 
-**发送通道契约 (iter-73 后端已接入)**: `optDiscussSend()` 曾为骨架 —
-消息暂存本地并提示「通道待接入」。后端约定 (已实现):
+**发送通道契约 (iter-73 后端已接入, iter-74 UI 点亮)**: `optDiscussSend()`
+曾为骨架 — 消息暂存本地并提示「通道待接入」。后端约定 (已实现):
 `POST /api/secretary/chat` payload 增 `discuss_context: {topic: itemId}`,
 后端据此跳过命令式关键词检测 (_ACTION_KEYWORDS 子串匹配会误伤
 「状态/帮我写/遇到瓶颈」等讨论文本) 并将话题优化项注入 system prompt;
 秘书回复由响应返回 + WS 广播 (`chat_reply`)。
 后端已落地 (见 docs/design/06-interaction iter-73 段): `chat_handler.chat` 收
 `discuss_context` 后注入话题上下文并跳过命令检测, 返回 `action_taken=opt_discuss`;
-UI 侧只需去掉 pending 徽标并改调真实端点即可点亮 (Quest 后续一轮)。
+**iter-74 UI 点亮**: pending 徽标已删, 发送改调真实端点 (AbortController 60s
+超时 + 输入锁), 请求期显示真实「秘书思考中…」态。去重策略: 讨论回复仅由
+HTTP 响应渲染落话题 (闭包持有发送时 topic key); WS `chat_reply` handler 按
+`action_taken==='opt_discuss'` 分流不进主聊天流; `loadChatHistory` 过滤
+`opt_discuss` 历史消息 (含配对 user 提问) 防刷新后历史回放串台 (后端会将
+讨论消息与普通对话一同落库)。503 (秘书未激活) 时讨论区落明确提示。
 
 ## 变更记录
 
@@ -262,3 +267,4 @@ UI 侧只需去掉 pending 徽标并改调真实端点即可点亮 (Quest 后续
 | 2026-08-30 | iter-72 | 工作站优化 UI: dashboard 优化面板+Station 状态卡+秘书快捷入口与聊天卡片 (mock 适配层 404/405/501→localStorage 回退) + SPA OptimizationCard 同步 + 移动端聊天输入区让位修复，UI-056/057/058 CDP 桌面+移动实测通过 (截图 temp_resault/x72_opt_*.png) |
 | 2026-08-31 | iter-73 | 优化讨论窗口 (面板内嵌): opt-panel 两段式 + 💬 讨论话题切换 (卡片高亮/placeholder 跟随) + 消息按话题 localStorage 持久化 + 折叠/移动端适配; 发送通道骨架暂存 (契约留 Codex: /api/secretary/chat 增 discuss_context)，UI-059 CDP 桌面+移动实测通过 (截图 temp_resault/_x73_desktop.png / _x73_mobile.png) |
 | 2026-09-01 | iter-73 | 优化讨论发送通道后端接入 (Codex): /api/secretary/chat 透传 discuss_context → chat_handler 注入话题上下文 + 跳过命令检测 (action_taken=opt_discuss); UI 侧待去掉 pending 徽标改调真实端点 |
+| 2026-09-01 | iter-74 | 优化讨论发送通道 UI 点亮 (Quest): optDiscussSend 改调真实端点 (60s 超时/输入锁/思考态); WS chat_reply 按 action_taken 分流 + loadChatHistory 过滤 opt_discuss 历史防主聊天串台/双渲染; 503 秘书未激活明确提示，UI-060 CDP 桌面+移动 30/30 实测通过 (截图 temp_resault/_x74_desktop.png / _x74_mobile.png) |
