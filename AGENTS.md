@@ -15,6 +15,8 @@
 | 文件 | 职责 |
 |------|------|
 | `lan_mesh/station_controller.py` | Station Director 主控：生命周期、Secretary 激活、内嵌 PM、负载选站 |
+| `lan_mesh/station_{selfheal,sync,hosts}.py` | 主控职责域 mixin（iter-74 拆分）：自愈闭环 / 集群同步 / 发现与主机 |
+| `lan_mesh/station_{lifecycle,secretary,local_pm,pm_control,scheduler}.py` | 主控职责域 mixin 空壳，方法体待 Phase 3-5 搬入（见 docs/design/02-station-core） |
 | `lan_mesh/station_api.py` | Secretary HTTP API：任务/PM/团队/项目/Bot/Graph 端点 |
 | `lan_mesh/chat_handler.py` | 秘书对话：LLM 回复 + 意图检测 + 操作执行 |
 | `lan_mesh/pm_agent.py` | PM Agent：任务规划、团队组建、子任务分发、结果聚合、交付闭环 |

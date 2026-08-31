@@ -4,7 +4,7 @@
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
 - 更新时间：2026-09-01
-- 当前迭代：`iter-73`（优化讨论窗口 UI + discuss_context 后端通道均已完成，待 Boss 发货）
+- 当前迭代：`iter-74`（讨论通道后端+UI、controller 拆分 Phase 1-2、SSE 中文乱码修复，均待 Boss 发货）
 
 ## 一、职责边界（长期约定）
 
@@ -24,8 +24,8 @@
 
 | Agent | 占用文件 | 任务 | 开始 | 状态 |
 |---|---|---|---|---|
-| Codex | —— | —— | —— | 已释放 |
-| Quest | `lan_mesh/web/templates/dashboard.html` | iter-73 优化讨论窗口 UI（验证已通过） | 2026-08-31 | 待 Boss 发货 |
+| Codex | 空闲 | 无 | —— | 已释放 |
+| Quest | 空闲 | 无 | —— | 已释放 |
 
 > 认领格式：一行一个 Agent，`占用文件` 写通配范围（如 `lan_mesh/station_*.py`），
 > `状态` 取 `进行中` / `待验证` / `已释放`。释放后把该行改回 `——`。
@@ -35,25 +35,28 @@
 `scripts/sync_push.ps1` 要求工作区干净，因此下列改动必须**分两次提交**、
 按归属各自提交，不要互相 `git add .`：
 
-**Quest（iter-73 优化讨论窗口 UI，已验证待 Boss 发货）**
-- `lan_mesh/web/templates/dashboard.html`（opt-panel 两段式 + 优化讨论窗口 + 💬 话题切换 + 发送骨架）
-- `docs/design/09-frontend/README.md`（iter-73 段落 + 变更记录）
-- `test_bug/test_checklist.csv`（UI-059，检测通过）
-- `loop_status.json`（iter-73 `[Quest]` 段落）
-- 发送通道契约留 Codex：`POST /api/secretary/chat` 增 `discuss_context`（详见 docs/design/09-frontend iter-73 段）
+**Quest（iter-73 优化讨论窗口 UI + iter-74 发送通道点亮，已验证待 Boss 发货）**
+- `lan_mesh/web/templates/dashboard.html`（opt-panel 两段式 + 优化讨论窗口 + 💬 话题切换 + iter-74 发送通道点亮: optDiscussSend 调真实端点 / WS chat_reply 分流 / loadChatHistory 过滤 opt_discuss 历史防串台 / 503 提示）
+- `docs/design/09-frontend/README.md`（iter-73/74 段落 + 变更记录）
+- `test_bug/test_checklist.csv`（UI-059 + UI-060，检测通过）
+- `loop_status.json`（iter-74 `[Quest]` 段落）
 
-**Codex（iter-73 discuss_context 后端通道，已验证待 Boss 发货）**
-- `lan_mesh/chat_handler.py`（chat 增 discuss_context 参数 + 讨论上下文注入 + 跳过命令检测）
-- `lan_mesh/station_routes_chat.py`（`/api/secretary/chat` 透传 discuss_context）
-- `tests/test_core.py`（TestIter73OptimizationDiscuss 3 例，pytest 397 passed）
-- `loop_status.json`、`AGENT_LOCKS.md`（iter-73 收尾 + 锁释放）
+**Codex（iter-73 discuss_context 后端通道 + iter-74 拆分 Phase 1-2 与乱码修复，已验证待 Boss 发货）**
+- `lan_mesh/chat_handler.py`、`lan_mesh/station_routes_chat.py`（iter-73 discuss_context 通道）
+- `lan_mesh/station_controller.py` + 新增 8 个 `lan_mesh/station_{lifecycle,selfheal,secretary,local_pm,pm_control,scheduler,sync,hosts}.py`（iter-74 拆分 Phase 1-2：3 块已搬入 / 5 块空壳；壳类 3253→2322 行）
+- `lan_mesh/agent_runtime.py`（iter-74 SSE 中文乱码修复：无 charset 时兜底 utf-8）
+- `tests/test_core.py`（TestIter73OptimizationDiscuss 3 例 + TestIter74SseUtf8Decoding 3 例，pytest 400 passed）
+- `scripts/sync_docs.py`（8 个新文件登记 MAPPING）、`docs/design/{02-station-core,04-execution-engine,06-interaction}/README.md
+- `AGENTS.md`（模块职责表补 mixin 两行）、`docs/reference/controller-split-plan.md`（状态改为 Phase 1-2 已执行）
+- `loop_status.json`、`AGENT_LOCKS.md`（收尾 + 锁释放）
 
 ## 四、下一轮排期建议（避免同文件竞争）
 
 | 任务 | 建议归属 | 冲突面 |
 |---|---|---|
-| 点亮优化讨论发送 UI（`optDiscussSend()` 改调 `POST /api/secretary/chat` 带 `discuss_context`，去掉「通道待接入」徽标，渲染秘书回复；后端已就绪） | **Quest** | `dashboard.html` 单文件，与 Codex 无冲突 |
-| `station_controller.py` 拆 8 mixin（见 `docs/reference/controller-split-plan.md` Phase 1-2） | **Codex 独占** | 需独占 `lan_mesh/station_*.py` 全窗口，期间 Quest 勿改 `docs/design/02-station-core` |
+| ✅ 点亮优化讨论发送 UI（iter-74 已完成: `optDiscussSend()` 调 `POST /api/secretary/chat` 带 `discuss_context`，WS 分流 + 历史过滤 + 503 提示，UI-060 通过） | ~~Quest~~ | ~~`dashboard.html` 单文件~~ |
+| ✅ `station_controller.py` 拆 8 mixin Phase 1-2（iter-74 已完成：组合接线 + SelfHeal/Hosts/Sync 三块 28 方法搬入，壳类 3253→2322 行） | ~~Codex~~ | ~~已释放~~ |
+| `station_controller.py` 拆分 Phase 3-5（PmControl/Scheduler → Secretary/LocalPM → Lifecycle；Lifecycle 最后搬且 `__init__` 需拆 `_init_*` 片段保持初始化顺序） | **Codex 独占** | 需独占 `lan_mesh/station_*.py` 全窗口，期间 Quest 勿改 `docs/design/02-station-core` |
 | 拆分后 repowiki / design 文档同步 | **Quest 承接** | 必须等 Codex 释放锁并推送后再启动 |
 | 真物理多机实压 F3.1/F3.3 | Codex | 需真实主机，与拆分互斥（勿同轮） |
 | 前端 Tab 与新端点字段对齐复查 | Quest | `webui/`、`dashboard.html` |

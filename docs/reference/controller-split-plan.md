@@ -2,7 +2,11 @@
 
 - 编写日期：2026-08-29
 - 编写人：Quest（前端/文档 Agent）
-- 状态：**提案稿**。本文不涉及任何代码改动，供后续迭代决策；执行前须重新确认
+- 状态：**Phase 1-2 已执行**（iter-74, 2026-09-01, Codex）。8 mixin 组合已接线，
+  SelfHeal / Hosts / Sync 三块方法体已搬入；Phase 3-5（PmControl / Scheduler /
+  Secretary / LocalPM / Lifecycle）与 Phase 6 文档收尾待后续迭代。落地记录见
+  `docs/design/02-station-core/README.md`「职责域拆分 (iter-74)」段。
+- 原始状态：提案稿（2026-08-29 Quest 编写，不含代码改动）；执行前须重新确认
   `loop_status.json` 无其他 Agent 占用 lan_mesh/ 文件。
 - 依据：`lan_mesh/station_controller.py` 现状（152,739 字节 / 3,253 行 /
   83 个顶层方法）+ AGENTS.md 模块职责表 + repowiki 知识库（架构设计/编码规范卡）。

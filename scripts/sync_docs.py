@@ -47,6 +47,15 @@ MAPPING = {
     # 02-station-core - Station 基础设施
     'lan_mesh/shadow_dev.py': '02-station-core',
     "lan_mesh/station_controller.py": "02-station-core",
+    # iter-74: StationController 职责域 mixin (拆分自 station_controller.py)
+    "lan_mesh/station_lifecycle.py": "02-station-core",
+    "lan_mesh/station_selfheal.py": "02-station-core",
+    "lan_mesh/station_secretary.py": "02-station-core",
+    "lan_mesh/station_local_pm.py": "02-station-core",
+    "lan_mesh/station_pm_control.py": "02-station-core",
+    "lan_mesh/station_scheduler.py": "02-station-core",
+    "lan_mesh/station_sync.py": "02-station-core",
+    "lan_mesh/station_hosts.py": "02-station-core",
     "lan_mesh/station_director.py": "02-station-core",
     "lan_mesh/station_api.py": "02-station-core",
     "lan_mesh/station_routes_common.py": "02-station-core",
