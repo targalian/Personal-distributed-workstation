@@ -14,6 +14,7 @@ import threading
 import time
 from pathlib import Path
 
+import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
