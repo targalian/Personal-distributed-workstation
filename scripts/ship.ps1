@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     解决「Codex 能改能验但提交不了」的权限断点。脚本代替人工完成:
-      1. 前置门禁: 编译 + 文档清单一致性 (FAIL 即中止, 不留半成品提交)
+      1. 前置门禁: 编译 + 未绑定引用扇扫 + 文档清单一致性 (FAIL 即中止, 不留半成品提交)
       2. 批 1 - Quest/共享: 文档、wiki、协作机制、配置示例
                 （期间置 LAN_MESH_WIKI_DRY_RUN=1，避免 post-commit 拉起的
                   Quest 与批 2 抢同一批 repowiki 脏文件）
@@ -22,6 +22,13 @@
 .PARAMETER NoPush
     只提交不推送（想先本地攒几轮时用）
 
+.PARAMETER DocsSubject
+    覆盖批 1（文档/wiki）的 commit subject。缺省时由 loop_status.json
+    的 current_phase 自动推导，避免写死过期迭代号。
+
+.PARAMETER CodeSubject
+    覆盖批 2（代码）的 commit subject。缺省时同样自动推导。
+
 .EXAMPLE
     powershell -File scripts/ship.ps1            # 逐批询问 y/n
     powershell -File scripts/ship.ps1 -DryRun    # 预演
@@ -30,7 +37,9 @@
 param(
     [switch]$Yes,
     [switch]$DryRun,
-    [switch]$NoPush
+    [switch]$NoPush,
+    [string]$DocsSubject,
+    [string]$CodeSubject
 )
 
 $ErrorActionPreference = "Stop"
@@ -101,6 +110,11 @@ $pyFiles = "['lan_mesh/pm_agent.py','lan_mesh/station_controller.py','lan_mesh/s
 & python -c "import py_compile; files=$pyFiles; [py_compile.compile(f, doraise=True) for f in files]; print('  编译检查  : PASS')"
 if ($LASTEXITCODE -ne 0) { throw "编译检查 FAIL — 修复后再发货" }
 
+& python "$root\scripts\check_unbound_names.py"
+if ($LASTEXITCODE -ne 0) {
+    throw "未绑定引用 FAIL — 多为 import 被误删, 会在运行时 NameError"
+}
+
 & python "$root\scripts\sync_docs.py" | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  文档清单  : FAIL" -ForegroundColor Red
@@ -155,6 +169,28 @@ function Invoke-Batch($title, $files, $message, $muteHook) {
     return $true
 }
 
+# 迭代号取自 loop_status.json，避免硬编码写死过期的 iter-NN
+$iter = "unknown"
+try {
+    $ls = Get-Content "$root\loop_status.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($ls.current_phase -match '^(iter-\d+)') {
+        $iter = $Matches[1]
+    } elseif ($ls.iteration_count) {
+        $iter = "iter-$($ls.iteration_count)"
+    }
+} catch {
+    Write-Host "  警告: 无法解析 loop_status.json，迭代号回退为 unknown" -ForegroundColor Yellow
+}
+
+if ($DocsSubject) { $msg1 = $DocsSubject } else { $msg1 = "chore(config): $iter 迭代状态与文档清单同步" }
+if ($CodeSubject) { $msg2 = $CodeSubject } else { $msg2 = "chore(station): $iter 代码变更同步" }
+
+Write-Host ""
+Write-Host "  迭代号: $iter (来自 loop_status.json current_phase)" -ForegroundColor DarkGray
+Write-Host "  批 1 subject: $msg1" -ForegroundColor DarkGray
+Write-Host "  批 2 subject: $msg2" -ForegroundColor DarkGray
+Write-Host "  如需更贴切的描述: -DocsSubject / -CodeSubject 覆盖" -ForegroundColor DarkGray
+
 if ($DryRun) {
     Write-Head "DryRun 预演"
     Write-Host "  批 1 (Quest/共享): $($questSet.Count) 个文件"
@@ -162,15 +198,16 @@ if ($DryRun) {
     Write-Host "  批 2 (Codex 代码): $($codexSet.Count) 个文件"
     $codexSet | ForEach-Object { Write-Host "      $_" }
     Write-Host ""
+    Write-Host "  批 1 subject: $msg1"
+    Write-Host "  批 2 subject: $msg2"
+    Write-Host ""
     Write-Host "  未做任何改动 (DryRun)。" -ForegroundColor Green
     exit 0
 }
 
 # 批 1 先行 + 静音 hook：避免 Quest 后台任务与批 2 抢 repowiki 脏文件
-$msg1 = "chore(config): iter-71 迭代状态与文档清单同步"
 Invoke-Batch "② 批 1 — Quest 文档 / wiki / 协作机制" $questSet $msg1 $true | Out-Null
 
-$msg2 = "feat(station): iter-71 影子开发 API + 常驻单队列守护"
 Invoke-Batch "③ 批 2 — Codex 代码修复" $codexSet $msg2 $false | Out-Null
 
 # ── 3. 推送 ──────────────────────────────────────────────────

@@ -52,12 +52,18 @@ echo [step] 3/5 Check dependencies...
 %PIP% show fastapi >nul 2>&1
 if errorlevel 1 (
     echo   Installing dependencies ^(--requires 1-2 min on first run--^)...
-    %PIP% install -r requirements.txt -q
+    echo   Using Tsinghua mirror for faster download in China
+    %PIP% install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
     if errorlevel 1 (
-        echo   [ERROR] Dependencies install failed
-        echo   Please run manually: .venv\Scripts\pip install -r requirements.txt
-        pause
-        exit /b 1
+        echo.
+        echo   [WARN] Mirror install failed, retrying with default PyPI...
+        %PIP% install -r requirements.txt
+        if errorlevel 1 (
+            echo   [ERROR] Dependencies install failed
+            echo   Please run manually: .venv\Scripts\pip install -r requirements.txt
+            pause
+            exit /b 1
+        )
     )
     echo   -^> Dependencies installed
 ) else (

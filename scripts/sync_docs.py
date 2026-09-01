@@ -149,6 +149,7 @@ MAPPING = {
     "scripts/sync_docs.py": "11-scripts-subprojects",
     "scripts/update_version.py": "11-scripts-subprojects",
     "scripts/dev_status.py": "11-scripts-subprojects",
+    "scripts/check_unbound_names.py": "11-scripts-subprojects",
     "scripts/ship.ps1": ("11-scripts-subprojects",
                          "★ 一键发货: 按 Agent 归属分批提交 + 调 sync_push 推送"),
     "scripts/sync_push.ps1": ("11-scripts-subprojects",
