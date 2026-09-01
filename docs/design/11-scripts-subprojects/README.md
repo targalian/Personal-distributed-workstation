@@ -46,6 +46,21 @@ commit/released_at 自动对齐 git HEAD (幂等); `--bump patch/minor/major`
 
 bat / ps1 / sh 三平台版本，激活 .venv 后 `python main.py station`。
 
+**iter-76 对齐增强 (三端功能一致)**:
+- Python 版本检查 (>=3.10, bat 新增)
+- pip 自动升级 + 清华镜像优先 + 官方 PyPI 回退 + 进度条显示
+- .env 文件加载 (bat 新增, main.py 已有兜底)
+- API Key 环境变量检测 (6 个 key 名, 缺失时提示)
+- Git Hooks 配置 (core.hooksPath → .githooks)
+- CLI Agent PATH 注入 (npm global + Node.js, 供 shadow_dev 使用)
+- 防火墙弹窗提示 (启动前打印, 避免用户困惑)
+
+## 变更记录
+
+| 日期 | 迭代 | 变更 |
+|------|------|------|
+| 2026-09-02 | iter-76 | start_workstation 三端对齐: bat 补齐版本检查/.env/API Key/Git Hooks/防火墙提示; ps1/sh 加镜像+进度条 |
+
 ## skills/ — 技能库资产
 
 当前三个技能:
