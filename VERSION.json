@@ -1,6 +1,6 @@
 {
   "version": "0.33.0",
-  "commit": "0dd18d3",
+  "commit": "637bcd9",
   "released_at": "2026-09-01",
   "note": "iter-72 工作站常驻优化: UI 面板/秘书交互 + SQLite 持久化/审批守护/影子执行/API/WS 闭环",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
