@@ -380,7 +380,7 @@ agent_runtime.execute()
 
 **依赖**: 无外部依赖（标准库 sqlite3）
 
-## station_controller.py 职责域拆分 (iter-74)
+## station_controller.py 职责域拆分 (iter-74/75)
 
 **动因**: 单文件 152KB / 3253 行 / 83 个顶层方法, 耦合八类互不相干职责 —
 review 困难、并行开发几乎必撞 git 冲突、新职责无家可归只能继续堆积。
@@ -396,29 +396,60 @@ Scheduler, Sync, Hosts)`。mixin 之间互不继承 (MRO 扁平, 深度 10),
 - 方法名与属性名一律不改, 路由层以闭包持有 controller 整体对象, 零感知
 - `StationState` / `STATIC_DIR` / `TEMPLATES_DIR` 仍在本模块, 不改 DB 结构、不删端点
 
-**Phase 1-2 落地范围** (渐进迁移, 每步可独立回滚):
+**Phase 1-5 落地范围** (渐进迁移, 每步可独立回滚; 已全部完成):
 
-| Mixin | 文件 | 状态 | 方法数 |
-|---|---|---|---|
-| SelfHeal | `station_selfheal.py` | **已搬入** | 9 |
-| Hosts | `station_hosts.py` | **已搬入** | 10 |
-| Sync | `station_sync.py` | **已搬入** | 9 |
-| Lifecycle / Secretary / LocalPm / PmControl / Scheduler | `station_{lifecycle,secretary,local_pm,pm_control,scheduler}.py` | 空壳待搬 (Phase 3-5) | 0 |
+| Mixin | 文件 | 阶段 | 方法数 | 行数 |
+|---|---|---|---|---|
+| SelfHeal | `station_selfheal.py` | Phase 1-2 | 9 | 264 |
+| Hosts | `station_hosts.py` | Phase 1-2 | 10 | 263 |
+| Sync | `station_sync.py` | Phase 1-2 | 9 | 531 |
+| PmControl | `station_pm_control.py` | Phase 3-5 | 5 | 261 |
+| Scheduler | `station_scheduler.py` | Phase 3-5 | 12 | 590 |
+| Secretary | `station_secretary.py` | Phase 3-5 | 10 | 394 |
+| LocalPm | `station_local_pm.py` | Phase 3-5 | 16 | 461 |
+| Lifecycle | `station_lifecycle.py` | Phase 3-5 | 10 | 509 |
 
-空壳 mixin 已进组合链但方法体仍在壳类内 — **类内定义优先于 mixin**,
-故行为零变化, 后续搬移只需剪切方法体, 无需再改类声明。
+壳类 `station_controller.py` 终态 **3253 → 246 行**, 仅保留模块 docstring、
+imports、mixin 组合声明、`StationState` 数据类与 `__init__`。
+81 个 mixin 方法 + 壳类 `__init__` = 82 个契约面方法, 与拆分前逐个对齐。
 
-**搬移时同步迁移的模块级依赖**: `shutil` / `collect_host_info` / `make_discovery_packet` / `BotChannel` / `DiscoveryPacket` / `HostInfo` / 心跳与修剪间隔常量随 Hosts 迁出,
-壳类同步剪除死 import。各 mixin 自带 `logger = get_logger("station")`, 日志前缀 `[Station]` 不变。
+**模块级常量迁移决策 (Phase 3-5)**: `WEB_DIR` / `TEMPLATES_DIR` /
+`STATIC_DIR` 定义随直接消费者 `_create_app` 迁入 `station_lifecycle.py`,
+壳类改为 `from .station_lifecycle import (WEB_DIR, TEMPLATES_DIR, STATIC_DIR)`
+re-export (带 `# noqa: F401`)。目的是保 `from lan_mesh.station_controller
+import STATIC_DIR` 这类现有引用 (tests 4 处) 不变, 同时避开反向循环导入。
+同时剪除壳类 13 个随方法搬出而失效的 import; 保留 `CloudSyncManager` /
+`Set` / `dataclass` / `field` (`StationState` 仍需)。
 
-**验证**: 方法可见集合与基线逐字一致 (82 个, 零缺失零重复);
-门禁违规集合与基线逐字一致 (7 处超长函数 + 6 处缺类型标注均为既有事实,
-提案 §8 明确不在本次拆分中重构); pytest 397 passed; 壳类 3253 → 2322 行。
+**搬迁施工要点 (踩坑记录)**:
+- 抽取方法起始行必须用 `min([node.lineno] + [d.lineno for d in
+  node.decorator_list])`。直接用 `node.lineno` 会漏掉装饰器行 ——
+  `_port_in_use` 的 `@staticmethod` 曾被留在原处导致 IndentationError。
+- **测试侧 `monkeypatch.setattr` 目标必须随方法同步迁移**。方法搬出后
+  其全局命名空间也随之改变, 对 `sc.http_post` 打 patch 不再生效。
+  本轮实际回归 12 例 (`TestIter65FederationForward` 3 +
+  `TestIter66ClusterScale` 9), 修为 `sc_sched` (11 处, 指向
+  `station_scheduler`) / `sc_pmctl` (1 处, 指向 `station_pm_control`)。
+  教训: 拆分前的引用普查不能只看 `import` 语句, 还要扫运行时反射
+  (`monkeypatch` / `patch` / `getattr` 字符串目标)。
+
+**运行时同步迁移的模块级依赖**: `shutil` / `collect_host_info` /
+`make_discovery_packet` / `BotChannel` / `DiscoveryPacket` / `HostInfo` 随 Hosts 迁移,
+各 mixin 自带 `logger = get_logger("station")`, 日志前缀 `[Station]` 不变。
+
+**验证**: 契约面与拆分前基线 (`4572536b5`) 逐个比对 —— 82 方法零缺失、
+2 个类属性 (`_AUTO_HEAL_ACTIONS` / `_AUTO_HEAL_WRITE_ACTIONS`) 保留、
+6 个模块级名 (`STATIC_DIR` `StationController` `StationState` `TEMPLATES_DIR`
+`WEB_DIR` `logger`) 全在; MRO 深度 10 且扁平;
+门禁违规集合与基线完全一致 (7 处超长函数 + 6 处缺类型标注均为基线既有,
+提案 §8 明确不在拆分中重构), 9 个模块 docstring 齐备;
+pytest **400 passed**; `scripts/sync_docs.py` PASS。
 
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-01 | iter-75 | StationController 职责域拆分 Phase 3-5 (收尾): PmControl/Scheduler/Secretary/LocalPm/Lifecycle 共 53 方法搬入 5 个 mixin, 壳类 3253→246 行 (仅剩 imports/组合声明/StationState/__init__); WEB_DIR/TEMPLATES_DIR/STATIC_DIR 迁入 station_lifecycle 并在壳类 re-export 保兼容; 修复 12 处测试 monkeypatch 目标随方法迁移 (sc_sched/sc_pmctl) 的真实回归; 契约面 82 方法零缺失、门禁违规集合与基线一致; pytest 400 passed |
 | 2026-09-01 | iter-74 | StationController 职责域拆分 Phase 1-2: 8 mixin 组合接线 (mixin 互不继承, MRO 扁平) + SelfHeal/Hosts/Sync 三块 28 方法搬入独立模块, 壳类 3253→2322 行; import 路径/方法名/属性名/端点零变化, 方法可见集合与门禁违规集合均与基线逐字一致; pytest 397 passed |
 | 2026-08-29 | iter-69 | F3.3 本机接管路径修复 (七节点实压 Bug L): `_start_local_pm_for_task` 自构 PM 用早期签名 (task=/runtime=) 必然 TypeError, 全 Worker 离线时接管失败任务滞留 pending; 改为复用 `_local_start_pm` 唯一入口 + 抽出 `_register_local_pm` 统一落库/映射/广播 (接力派发共用), 接管返回 bool 失败留 pending 由下轮扩容兜底; 专项 7/7 + 回归 380 passed |
 | 2026-08-29 | iter-68 | F3.1 扩容同轮批量清空 (30s/轮×N 积压滞后修复): _autoscale_check 单轮 while 连续派发 (每次派发后重查队列与空闲 Worker, 失败/未减即 break 防死循环) + _dispatch_next_task_to_worker 返回 bool; 五节点真机 14/14 (同轮清空耗时 18s vs 旧 120s+ 滞后) + 专项 16/16 + 回归 373 passed |

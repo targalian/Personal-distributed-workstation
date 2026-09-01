@@ -6239,6 +6239,7 @@ class TestIter65FederationForward:
                                                         monkeypatch):
         """委托转发: 对端 200 → 任务 forwarded + output_data 记录目标。"""
         import lan_mesh.station_controller as sc
+        import lan_mesh.station_scheduler as sc_sched
         from lan_mesh.protocol import Task
         from unittest.mock import MagicMock
 
@@ -6260,7 +6261,7 @@ class TestIter65FederationForward:
             def json(self):
                 return {"ok": True, "task_id": "task-peer"}
 
-        monkeypatch.setattr(sc, "http_post",
+        monkeypatch.setattr(sc_sched, "http_post",
                             lambda url, json=None, timeout=15: FakeResp())
         target = self._host("fed-sec", source="fed", role="secretary",
                             fed="net-a")
@@ -6277,6 +6278,7 @@ class TestIter65FederationForward:
                                                      monkeypatch):
         """委托转发: 对端异常 → 任务 failed 且错误信息落库。"""
         import lan_mesh.station_controller as sc
+        import lan_mesh.station_scheduler as sc_sched
         from lan_mesh.protocol import Task
         from unittest.mock import MagicMock
 
@@ -6291,7 +6293,7 @@ class TestIter65FederationForward:
 
         def boom(url, json=None, timeout=15):
             raise ConnectionError("peer down")
-        monkeypatch.setattr(sc, "http_post", boom)
+        monkeypatch.setattr(sc_sched, "http_post", boom)
         target = self._host("fed-sec", source="fed", role="secretary",
                             fed="net-a")
         assert sc.StationController._federation_forward_task(
@@ -6341,6 +6343,7 @@ class TestIter65FederationForward:
     def test_federation_forward_marks_relay_flag(self, tmp_path, monkeypatch):
         """iter-65 防环: 转发的任务数据带 _federation_relay 标记 (跳数上限 1)。"""
         import lan_mesh.station_controller as sc
+        import lan_mesh.station_scheduler as sc_sched
         from lan_mesh.protocol import Task
         from unittest.mock import MagicMock
 
@@ -6363,7 +6366,7 @@ class TestIter65FederationForward:
         def fake_post(url, json=None, timeout=15):
             sent.append(json)
             return FakeResp()
-        monkeypatch.setattr(sc, "http_post", fake_post)
+        monkeypatch.setattr(sc_sched, "http_post", fake_post)
         target = self._host("fed-sec", source="fed", role="secretary",
                             fed="net-a")
         assert sc.StationController._federation_forward_task(
@@ -6484,6 +6487,7 @@ class TestIter66ClusterScale:
                                                             monkeypatch):
         """扩容: 积压>=2 且有空闲 Worker → 派发并置 running (Bug C 回归)。"""
         import lan_mesh.station_controller as sc
+        import lan_mesh.station_scheduler as sc_sched
         from lan_mesh.protocol import Task
 
         db = self._make_db(tmp_path)
@@ -6507,7 +6511,7 @@ class TestIter66ClusterScale:
         def fake_post(url, json=None, timeout=10, headers=None):
             sent.append(json)
             return FakeResp()
-        monkeypatch.setattr(sc, "http_post", fake_post)
+        monkeypatch.setattr(sc_sched, "http_post", fake_post)
         monkeypatch.setattr("lan_mesh.host_info.pick_reachable_ip",
                             lambda ip: "127.0.0.1")
 
@@ -6530,6 +6534,7 @@ class TestIter66ClusterScale:
                                                      monkeypatch):
         """扩容: 单任务积压 (队列=1) 也派发 (Bug J — 水位门槛调度滞后)。"""
         import lan_mesh.station_controller as sc
+        import lan_mesh.station_scheduler as sc_sched
         from lan_mesh.protocol import Task
 
         db = self._make_db(tmp_path)
@@ -6549,7 +6554,7 @@ class TestIter66ClusterScale:
         def fake_post(url, json=None, timeout=10, headers=None):
             sent.append(json)
             return FakeResp()
-        monkeypatch.setattr(sc, "http_post", fake_post)
+        monkeypatch.setattr(sc_sched, "http_post", fake_post)
         monkeypatch.setattr("lan_mesh.host_info.pick_reachable_ip",
                             lambda ip: "127.0.0.1")
 
@@ -6582,6 +6587,7 @@ class TestIter66ClusterScale:
     def test_autoscale_skips_busy_worker(self, tmp_path, monkeypatch):
         """扩容: 唯一 Worker 忙碌 → 不派发 (忙过滤, 避免叠任务)。"""
         import lan_mesh.station_controller as sc
+        import lan_mesh.station_scheduler as sc_sched
         from lan_mesh.protocol import Task
 
         db = self._make_db(tmp_path)
@@ -6592,7 +6598,7 @@ class TestIter66ClusterScale:
             db, pm_map={"pm-busy": {"device_id": "w-1", "task_id": "t-old"}},
             busy_check=sc.StationController._is_worker_busy)
         called = []
-        monkeypatch.setattr(sc, "http_post",
+        monkeypatch.setattr(sc_sched, "http_post",
                             lambda *a, **k: called.append(1))
         sc.StationController._autoscale_check(fake)
         assert called == []
@@ -6602,6 +6608,7 @@ class TestIter66ClusterScale:
                                                        monkeypatch):
         """扩容: 有积压但无在线 Worker → 不派发 (Bug J 后水位不再是门槛)。"""
         import lan_mesh.station_controller as sc
+        import lan_mesh.station_scheduler as sc_sched
         from lan_mesh.protocol import Task
 
         db = self._make_db(tmp_path)
@@ -6609,7 +6616,7 @@ class TestIter66ClusterScale:
         # 不 upsert host → 无在线 Worker, 即使队列=1 也不派发
         fake = self._fake(db)
         called = []
-        monkeypatch.setattr(sc, "http_post",
+        monkeypatch.setattr(sc_sched, "http_post",
                             lambda *a, **k: called.append(1))
         sc.StationController._autoscale_check(fake)
         assert called == []
@@ -6618,6 +6625,7 @@ class TestIter66ClusterScale:
         """派发顺序: FIFO — 早提交任务先派发 (Bug D 回归,
         list_tasks 为 created_at DESC 时不可 LIFO 饥饿)。"""
         import lan_mesh.station_controller as sc
+        import lan_mesh.station_scheduler as sc_sched
         from lan_mesh.protocol import Task
 
         db = self._make_db(tmp_path)
@@ -6635,7 +6643,7 @@ class TestIter66ClusterScale:
 
             def json(self):
                 return {"ok": True, "pm_id": "pm-66-f"}
-        monkeypatch.setattr(sc, "http_post",
+        monkeypatch.setattr(sc_sched, "http_post",
                             lambda url, json=None, timeout=10,
                             headers=None: FakeResp())
         monkeypatch.setattr("lan_mesh.host_info.pick_reachable_ip",
@@ -6650,6 +6658,7 @@ class TestIter66ClusterScale:
     def test_dispatch_task_failure_keeps_pending(self, tmp_path, monkeypatch):
         """派发: Worker 不可达 → 返回 False, 任务保持 pending (可重试)。"""
         import lan_mesh.station_controller as sc
+        import lan_mesh.station_scheduler as sc_sched
         from lan_mesh.protocol import Task
 
         db = self._make_db(tmp_path)
@@ -6659,7 +6668,7 @@ class TestIter66ClusterScale:
 
         def boom(url, json=None, timeout=10):
             raise ConnectionError("peer down")
-        monkeypatch.setattr(sc, "http_post", boom)
+        monkeypatch.setattr(sc_sched, "http_post", boom)
         ok = sc.StationController._dispatch_task_to_worker(
             fake, task, self._worker("w-1"))
         assert ok is False
@@ -6779,6 +6788,7 @@ class TestIter66ClusterScale:
         """取消: 远程 PM 需带认证头 (Bug G), 成功后清理映射 (Bug H)。"""
         import lan_mesh.http_retry as hr
         import lan_mesh.station_controller as sc
+        import lan_mesh.station_pm_control as sc_pmctl
         from lan_mesh.protocol import Task
 
         db = self._make_db(tmp_path)
@@ -6802,7 +6812,7 @@ class TestIter66ClusterScale:
         def fake_post(url, json=None, timeout=10, headers=None, retries=3):
             sent.append({"url": url, "headers": headers, "retries": retries})
             return FakeResp()
-        monkeypatch.setattr(sc, "http_post", fake_post)
+        monkeypatch.setattr(sc_pmctl, "http_post", fake_post)
 
         result = sc.StationController.cancel_task(fake, "t-66-c")
         assert result.get("ok")
@@ -6842,6 +6852,7 @@ class TestIter66ClusterScale:
                                                   monkeypatch):
         """扩容: 同轮连续派发清空积压 (iter-68 — 30s/轮滞后修复)。"""
         import lan_mesh.station_controller as sc
+        import lan_mesh.station_scheduler as sc_sched
         from lan_mesh.protocol import Task
 
         db = self._make_db(tmp_path)
@@ -6868,7 +6879,7 @@ class TestIter66ClusterScale:
                 def json(self):
                     return {"ok": True, "pm_id": f"pm-68-{pm_counter['n']}"}
             return R()
-        monkeypatch.setattr(sc, "http_post", fake_post)
+        monkeypatch.setattr(sc_sched, "http_post", fake_post)
         monkeypatch.setattr("lan_mesh.host_info.pick_reachable_ip",
                             lambda ip: "127.0.0.1")
 
@@ -6885,6 +6896,7 @@ class TestIter66ClusterScale:
                                                       monkeypatch):
         """扩容: 派发失败立即停止本轮 (iter-68 防死循环)。"""
         import lan_mesh.station_controller as sc
+        import lan_mesh.station_scheduler as sc_sched
         from lan_mesh.protocol import Task
 
         db = self._make_db(tmp_path)
@@ -6904,7 +6916,7 @@ class TestIter66ClusterScale:
         def fake_post(url, json=None, timeout=10, headers=None):
             sent.append(json)
             return R()
-        monkeypatch.setattr(sc, "http_post", fake_post)
+        monkeypatch.setattr(sc_sched, "http_post", fake_post)
         monkeypatch.setattr("lan_mesh.host_info.pick_reachable_ip",
                             lambda ip: "127.0.0.1")
 
