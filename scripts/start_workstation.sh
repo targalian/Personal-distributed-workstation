@@ -90,12 +90,19 @@ if [ ! -f "requirements.txt" ]; then
     skip "requirements.txt not found"
 else
     if ! $VENV_PIP show fastapi &>/dev/null; then
-        echo -e "  ${YELLOW}Installing dependencies (may take 1-2 min on first run)...${NC}"
-        $VENV_PIP install -r requirements.txt -q
+        echo -e "  ${YELLOW}Installing dependencies (may take 1-3 min on first run)...${NC}"
+        # Upgrade pip first (new venv pip is often old)
+        $VENV_PIP install --upgrade pip -q -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn 2>/dev/null || true
+        echo -e "  ${DARK}[INFO] Trying Tsinghua mirror for faster download...${NC}"
+        $VENV_PIP install -r requirements.txt --progress-bar=on -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
         if [ $? -ne 0 ]; then
-            fail "Dependencies install failed"
-            echo "  Please run manually: .venv/bin/pip install -r requirements.txt"
-            exit 1
+            warn "Tsinghua mirror failed, retrying with default PyPI..."
+            $VENV_PIP install -r requirements.txt --progress-bar=on
+            if [ $? -ne 0 ]; then
+                fail "Dependencies install failed"
+                echo "  Please run manually: .venv/bin/pip install -r requirements.txt"
+                exit 1
+            fi
         fi
         ok "Dependencies installed"
     else
@@ -118,7 +125,7 @@ fi
 
 # Check API Key
 HAS_KEY=false
-for KEY_NAME in DEEPSEEK_API_KEY OPENAI_API_KEY ALIYUN_TOKENPLAN_API_KEY QWEN_API_KEY; do
+for KEY_NAME in DEEPSEEK_API_KEY OPENAI_API_KEY ALIYUN_TOKENPLAN_API_KEY ARK_API_KEY QWEN_API_KEY ANTHROPIC_API_KEY; do
     if [ -n "${!KEY_NAME:-}" ]; then
         HAS_KEY=true
         break
@@ -127,6 +134,17 @@ done
 if [ "$HAS_KEY" = false ]; then
     warn "No LLM API Key detected, secretary chat will not use LLM"
     echo -e "  ${DARK}Set: export DEEPSEEK_API_KEY='sk-xxx'${NC}"
+fi
+
+# ── Git Hooks ──
+if [ -d ".githooks" ]; then
+    if git config core.hooksPath .githooks 2>/dev/null; then
+        ok "Git hooks configured (.githooks)"
+    else
+        skip "git not found, hooks skipped"
+    fi
+else
+    skip ".githooks not found"
 fi
 
 # ── Step 5: Launch ──
@@ -142,6 +160,9 @@ if [ "$WITH_WORKER" = true ]; then
     echo -e "${GREEN} Local Worker: http://localhost:$WORKER_PORT (background)${NC}"
 fi
 echo -e "${GREEN}========================================${NC}"
+echo ""
+echo -e "${YELLOW}  [TIP] If a firewall prompt appears, allow port $PORT${NC}"
+echo -e "${YELLOW}        for LAN discovery and Web UI access.${NC}"
 echo ""
 
 # Build launch args

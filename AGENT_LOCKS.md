@@ -3,8 +3,8 @@
 多 Agent（Codex CLI / Qoder Quest）并行开发时的文件占用与交接看板。
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
-- 更新时间：2026-09-01
-- 当前迭代：`iter-75`（已完工：controller 拆分 Phase 3-5 收官，待 Boss 发货；Phase 6 repowiki 同步待 Quest 承接）
+- 更新时间：2026-09-02
+- 当前迭代：`iter-76`（已完工：start_workstation 三端脚本对齐，待 Boss 发货）
 
 ## 一、职责边界（长期约定）
 

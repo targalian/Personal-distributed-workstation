@@ -84,11 +84,19 @@ if (-not (Test-Path $reqFile)) {
         $needInstall = $true
     }
     if ($needInstall) {
-        Write-Host "  安装依赖 (首次启动可能需要 1-2 分钟)..." -ForegroundColor Yellow
-        & $venvPip install -r $reqFile -q 2>&1 | Out-Null
+        Write-Host "  安装依赖 (首次启动可能需要 1-3 分钟)..." -ForegroundColor Yellow
+        Write-Host "  [INFO] 尝试清华镜像加速下载..." -ForegroundColor DarkGray
+        # 先尝试升级 pip (新 venv 的 pip 通常很旧)
+        & $venvPip install --upgrade pip -q -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn 2>$null
+        # 使用镜像安装, 显示进度
+        & $venvPip install -r $reqFile --progress-bar=on -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "[ERROR] 依赖安装失败, 请手动运行: .venv\Scripts\pip install -r requirements.txt" -ForegroundColor Red
-            exit 1
+            Write-Warn "清华镜像失败, 回退官方 PyPI..."
+            & $venvPip install -r $reqFile --progress-bar=on
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "[ERROR] 依赖安装失败, 请手动运行: .venv\Scripts\pip install -r requirements.txt" -ForegroundColor Red
+                exit 1
+            }
         }
         Write-Ok "依赖安装完成"
     } else {
@@ -148,6 +156,9 @@ if ($WithWorker) {
     Write-Host " Local Worker: http://localhost:$WorkerPort (后台启动)" -ForegroundColor Green
 }
 Write-Host "========================================" -ForegroundColor Green
+Write-Host ""
+Write-Host "  [TIP] 如果 Windows 防火墙弹窗, 请点击“允许”" -ForegroundColor Yellow
+Write-Host "        以启用局域网发现和 Web UI 访问。" -ForegroundColor Yellow
 Write-Host ""
 
 # 构建 Station 启动参数
