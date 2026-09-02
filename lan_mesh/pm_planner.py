@@ -264,6 +264,11 @@ class PMPlanner:
         desc = task.get("description", task.get("name", ""))
         input_data = task.get("input_data", {})
 
+        if input_data.get("requirement"):
+            logger.info("[%s] 秘书已提供结构化 Brief, 跳过 PM 细化",
+                        self._pm_id[:8])
+            return task
+
         if len(desc) >= 20 or input_data:
             return task
 

@@ -12,6 +12,7 @@
 """
 import re
 import time
+import json
 from typing import Optional
 
 from .logger import get_logger
@@ -101,6 +102,81 @@ _ACTION_KEYWORDS = {
 }
 
 
+# ── 需求收集状态机 ──────────────────────────────────────────────
+
+_REQ_PHASE_INTAKE = "intake"
+_REQ_PHASE_SYNTHESIZE = "synthesize"
+_REQ_PHASE_GAP_FILL = "gap_fill"
+_REQ_PHASE_CONFIRM = "confirm"
+_REQ_PHASE_DISPATCHED = "dispatched"
+
+_REQ_INTAKE_KEYWORDS = (
+    "我想做一个", "我想开发", "我需要开发", "帮我规划一个项目",
+    "新项目想法", "项目需求", "需求收集", "开始一个新项目",
+    "规划项目", "帮我理清需求",
+)
+
+_REQ_FAST_EXIT_KEYWORDS = (
+    "够了", "开始吧", "直接做", "开始执行", "就这样",
+    "不用补充了", "可以了", "就按这个", "提交吧", "按最终提示词执行",
+    "按这个执行",
+)
+
+_REQ_CANCEL_KEYWORDS = (
+    "取消需求收集", "取消收集", "不收集了", "退出需求收集",
+)
+
+_REQ_FINAL_PROMPT_PREFIX = "提交任务:"
+
+REQ_CHECKLIST_TEMPLATES: dict[str, list[tuple]] = {
+    "development": [
+        ("background", "项目背景", True, "这个项目的背景是什么？要解决什么问题？"),
+        ("goal", "目标功能", True, "具体要实现哪些功能？核心目标是什么？"),
+        ("scope", "范围边界", True, "涉及哪些文件/模块？有哪些明确不做的？"),
+        ("tech_stack", "技术栈", False, "有无技术约束（语言/框架/风格）？"),
+        ("acceptance", "验收标准", True, "怎样算完成？验收标准是什么？"),
+        ("priority", "优先级", False, "这个任务的优先级如何（紧急/高/普通/低）？"),
+    ],
+    "code_review": [
+        ("background", "审查背景", True, "为什么要做这次审查？"),
+        ("scope", "审查范围", True, "审查哪些文件/目录/模块？"),
+        ("focus", "关注维度", True, "重点关注安全/性能/规范/架构中的哪些方面？"),
+        ("severity", "严重级别门槛", False, "什么级别的问题需要阻断？"),
+        ("priority", "优先级", False, "这个任务的优先级如何？"),
+    ],
+    "research": [
+        ("background", "调研背景", True, "为什么要做这个调研？"),
+        ("topic", "调研主题", True, "具体要调研什么？"),
+        ("output_format", "期望产出", False, "期望什么格式的产出（报告/对比表/清单）？"),
+        ("depth", "深度要求", False, "需要多深入的调研？"),
+        ("priority", "优先级", False, "这个任务的优先级如何？"),
+    ],
+    "documentation": [
+        ("background", "文档背景", True, "为什么要写这份文档？"),
+        ("doc_type", "文档类型", True, "是什么类型的文档（API/README/设计文档/用户手册）？"),
+        ("audience", "目标读者", True, "文档的目标读者是谁？"),
+        ("scope", "覆盖范围", True, "文档需要覆盖哪些内容？"),
+        ("priority", "优先级", False, "这个任务的优先级如何？"),
+    ],
+    "refactoring": [
+        ("background", "重构背景", True, "为什么要重构？当前有什么问题？"),
+        ("goal", "重构目标", True, "重构的目标是什么（可读性/性能/架构）？"),
+        ("scope", "重构范围", True, "涉及哪些文件/模块？"),
+        ("red_line", "红线约束", False, "有什么不能改的？"),
+        ("priority", "优先级", False, "这个任务的优先级如何？"),
+    ],
+    "general": [
+        ("background", "背景", True, "这个任务的背景是什么？"),
+        ("goal", "目标", True, "具体要达成什么目标？"),
+        ("scope", "范围", True, "涉及哪些文件/模块？"),
+        ("constraints", "约束", False, "有无技术约束或特殊要求？"),
+        ("priority", "优先级", False, "这个任务的优先级如何？"),
+    ],
+}
+
+_REQ_DEFAULT_CHECKLIST = REQ_CHECKLIST_TEMPLATES["general"]
+
+
 def _find_node_by_name(dag, name: str) -> str:
     """按节点名匹配子任务 ID (精确优先, 模糊包含兜底)。"""
     if not name:
@@ -166,7 +242,422 @@ class ChatHandler:
         # ── 优化7: 反向沟通跟踪 ──
         self._last_awaiting_pm: str = ""
 
+        # ── 需求收集状态机 ──
+        self._req_drafts: dict[str, dict] = {}
+        self._load_req_drafts()
+
+    # ── 需求收集状态机 ──────────────────────────────────────────────
+
+    def _load_req_drafts(self) -> None:
+        """从对话索引恢复未完成的需求收集草稿。"""
+        for meta in self._conv_index:
+            draft = meta.get("requirement_draft")
+            if draft and draft.get("phase") != _REQ_PHASE_DISPATCHED:
+                self._req_drafts[meta["id"]] = draft
+
+    def _save_req_draft(self, conv_id: str) -> None:
+        """把需求收集草稿写回对话索引。"""
+        draft = self._req_drafts.get(conv_id)
+        if not draft:
+            return
+        meta = self._get_conv_meta(conv_id)
+        if meta:
+            meta["requirement_draft"] = draft
+            self._save_conv_index()
+
+    def _get_or_init_req_draft(self, conv_id: str,
+                               task_type: str = "general") -> dict:
+        """获取或初始化需求收集草稿。"""
+        if conv_id not in self._req_drafts:
+            template = REQ_CHECKLIST_TEMPLATES.get(
+                task_type, _REQ_DEFAULT_CHECKLIST)
+            checklist = {
+                key: {
+                    "label": label,
+                    "value": "",
+                    "is_critical": critical,
+                    "filled": False,
+                }
+                for key, label, critical, _ in template
+            }
+            self._req_drafts[conv_id] = {
+                "phase": _REQ_PHASE_INTAKE,
+                "task_type": task_type,
+                "checklist": checklist,
+                "raw_messages": [],
+                "brief": "",
+                "rounds": 0,
+                "created_at": time.time(),
+            }
+            self._save_req_draft(conv_id)
+        return self._req_drafts[conv_id]
+
+    def _clear_req_draft(self, conv_id: str) -> None:
+        """清除需求收集草稿。"""
+        self._req_drafts.pop(conv_id, None)
+        meta = self._get_conv_meta(conv_id)
+        if meta:
+            meta.pop("requirement_draft", None)
+            self._save_conv_index()
+
+    def _infer_task_type_from_message(self, message: str) -> str:
+        """从消息推断任务类型。"""
+        try:
+            from .pm_planner import PMPlanner
+            return PMPlanner.infer_task_type("", message)
+        except Exception:
+            return "general"
+
+    def _detect_missing_items(self, draft: dict) -> list[dict]:
+        """检测仍未填充的关键项。"""
+        checklist = draft.get("checklist", {})
+        missing = []
+        for key, item in checklist.items():
+            if item.get("is_critical") and not item.get("filled"):
+                missing.append({
+                    "key": key,
+                    "label": item.get("label", key),
+                    "question": self._get_item_question(
+                        draft.get("task_type", "general"), key),
+                })
+        return missing
+
+    @staticmethod
+    def _get_item_question(task_type: str, item_key: str) -> str:
+        """从模板取某个字段的追问文案。"""
+        template = REQ_CHECKLIST_TEMPLATES.get(
+            task_type, _REQ_DEFAULT_CHECKLIST)
+        for key, _, _, question in template:
+            if key == item_key:
+                return question
+        return f"请补充 {item_key} 相关信息"
+
+    def _fill_checklist_from_message(self, draft: dict, message: str) -> None:
+        """用 LLM 从单条消息提取 checklist 字段。"""
+        checklist = draft.get("checklist", {})
+        if not checklist:
+            return
+        items_desc = "\n".join(
+            f"- {key}: {item.get('label', key)}"
+            for key, item in checklist.items()
+            if not item.get("filled")
+        )
+        prompt = (
+            "从以下用户消息中提取需求信息，填入结构化字段。"
+            "返回严格 JSON，key 为字段名，value 为提取到的内容"
+            "（空字符串表示未提及）。\n"
+            f"需要提取的字段：\n{items_desc}\n\n"
+            f"用户消息：{message}\n\n"
+            '返回格式：{"field1": "value1", "field2": ""}'
+        )
+        try:
+            resp = self.runtime._call_llm_with_routing(
+                prompt, {"_model_preference": "", "_fallback_models": []})
+            content = resp.get("content", "")
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            extracted = (
+                json.loads(content[start:end])
+                if start >= 0 and end > start else {}
+            )
+        except Exception:
+            extracted = {}
+        for key, value in extracted.items():
+            if (key in checklist and value
+                    and not checklist[key].get("filled")):
+                checklist[key]["value"] = str(value)
+                checklist[key]["filled"] = True
+
+    def _generate_brief(self, draft: dict) -> str:
+        """把 checklist 整理成结构化项目 Brief。"""
+        checklist = draft.get("checklist", {})
+        task_type = draft.get("task_type", "general")
+        type_label = {
+            "development": "开发", "code_review": "代码审查",
+            "research": "调研", "documentation": "文档",
+            "refactoring": "重构", "general": "通用",
+        }.get(task_type, task_type)
+        lines = [f"## 项目 Brief（{type_label}类）", ""]
+        for key, item in checklist.items():
+            marker = "[x]" if item.get("filled") else "[ ]"
+            value = item.get("value") or "未明确"
+            critical = " *" if item.get("is_critical") else ""
+            lines.append(
+                f"- {marker} {item.get('label', key)}{critical}: {value}")
+        missing = self._detect_missing_items(draft)
+        if missing:
+            lines.extend(["", "### 待补充关键项"])
+            for item in missing:
+                lines.append(
+                    f"- {item['label']}: {item['question']}")
+        brief = "\n".join(lines)
+        draft["brief"] = brief
+        return brief
+
+    def _build_final_prompt(self, draft: dict) -> str:
+        """生成可直接复制执行的最终提示词。"""
+        checklist = draft.get("checklist", {})
+        goal = ""
+        for key in ("goal", "topic", "doc_type"):
+            item = checklist.get(key, {})
+            if item.get("filled"):
+                goal = item.get("value", "")
+                break
+        if not goal:
+            goal = "新任务"
+        lines = [f"{_REQ_FINAL_PROMPT_PREFIX} {goal}"]
+        for key, item in checklist.items():
+            if key in ("goal", "topic", "doc_type"):
+                continue
+            value = item.get("value") or "未明确"
+            lines.append(f"【{item.get('label', key)}】{value}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _is_final_prompt(message: str) -> bool:
+        """判断消息是否是可执行的最终提示词。"""
+        return message.strip().startswith(_REQ_FINAL_PROMPT_PREFIX)
+
+    @staticmethod
+    def _is_cancel(message: str) -> bool:
+        """判断是否取消需求收集。"""
+        text = message.strip()
+        return any(keyword in text for keyword in _REQ_CANCEL_KEYWORDS)
+
+    def _apply_final_prompt(self, draft: dict, conv_id: str,
+                            message: str) -> None:
+        """把 Boss 修改后的最终提示词回填进草稿。"""
+        lines = [line.strip() for line in message.strip().split("\n")]
+        checklist = draft.get("checklist", {})
+        first = lines[0] if lines else ""
+        if first.startswith(_REQ_FINAL_PROMPT_PREFIX):
+            goal = first[len(_REQ_FINAL_PROMPT_PREFIX):].strip()
+            if goal:
+                for key in ("goal", "topic", "doc_type"):
+                    if key in checklist:
+                        checklist[key]["value"] = goal
+                        checklist[key]["filled"] = True
+                        break
+        for line in lines[1:]:
+            if not line.startswith("【"):
+                continue
+            end = line.find("】")
+            if end <= 1:
+                continue
+            label = line[1:end]
+            value = line[end + 1:].strip()
+            for item in checklist.values():
+                if item.get("label") == label:
+                    if value and value != "未明确":
+                        item["value"] = value
+                        item["filled"] = True
+                    break
+        self._generate_brief(draft)
+        self._save_req_draft(conv_id)
+
+    def _try_requirement_flow(self, message: str, conv_id: str,
+                              chat_history: list) -> str:
+        """尝试进入需求收集流程；空串表示不匹配。"""
+        draft = self._req_drafts.get(conv_id)
+        if draft and draft.get("phase") != _REQ_PHASE_DISPATCHED:
+            if self._is_cancel(message):
+                self._clear_req_draft(conv_id)
+                return "已取消本次需求收集。你可以直接说「提交任务: ...」或重新开始。"
+            if self._is_final_prompt(message):
+                self._apply_final_prompt(draft, conv_id, message)
+                return self._dispatch_from_draft(draft, conv_id)
+            is_fast_exit = any(
+                keyword in message for keyword in _REQ_FAST_EXIT_KEYWORDS)
+            return self._handle_active_draft(
+                draft, conv_id, message, chat_history, is_fast_exit)
+        if not draft and any(
+                keyword in message for keyword in _REQ_INTAKE_KEYWORDS):
+            task_type = self._infer_task_type_from_message(message)
+            draft = self._get_or_init_req_draft(conv_id, task_type)
+            draft["raw_messages"].append(message)
+            self._fill_checklist_from_message(draft, message)
+            draft["rounds"] = 1
+            self._save_req_draft(conv_id)
+            return self._build_intake_reply(draft)
+        return ""
+
+    def _handle_active_draft(self, draft: dict, conv_id: str,
+                             message: str, chat_history: list,
+                             is_fast_exit: bool) -> str:
+        """按草稿阶段路由消息。"""
+        if is_fast_exit:
+            return self._handle_fast_exit(draft, conv_id, message)
+        phase = draft.get("phase", _REQ_PHASE_INTAKE)
+        if phase == _REQ_PHASE_GAP_FILL:
+            return self._handle_gap_fill(draft, conv_id, message)
+        if phase == _REQ_PHASE_CONFIRM:
+            return self._handle_confirm(draft, conv_id, message)
+        return self._handle_intake(draft, conv_id, message)
+
+    def _handle_intake(self, draft: dict, conv_id: str,
+                       message: str) -> str:
+        """处理收集阶段：累积消息并填充 checklist。"""
+        draft["raw_messages"].append(message)
+        self._fill_checklist_from_message(draft, message)
+        draft["rounds"] += 1
+        self._save_req_draft(conv_id)
+        missing = self._detect_missing_items(draft)
+        if not missing or draft["rounds"] >= 3:
+            draft["phase"] = _REQ_PHASE_SYNTHESIZE
+            self._generate_brief(draft)
+            remaining = self._detect_missing_items(draft)
+            if remaining:
+                draft["phase"] = _REQ_PHASE_GAP_FILL
+                self._save_req_draft(conv_id)
+                return self._build_gap_fill_reply(draft, remaining)
+            draft["phase"] = _REQ_PHASE_CONFIRM
+            self._save_req_draft(conv_id)
+            return self._build_confirm_reply(draft)
+        return self._build_intake_reply(draft)
+
+    def _handle_gap_fill(self, draft: dict, conv_id: str,
+                         message: str) -> str:
+        """处理补缺阶段。"""
+        draft["raw_messages"].append(message)
+        self._fill_checklist_from_message(draft, message)
+        draft["rounds"] += 1
+        self._save_req_draft(conv_id)
+        missing = self._detect_missing_items(draft)
+        if not missing or draft["rounds"] >= 5:
+            draft["phase"] = _REQ_PHASE_CONFIRM
+            self._generate_brief(draft)
+            self._save_req_draft(conv_id)
+            return self._build_confirm_reply(draft)
+        return self._build_gap_fill_reply(draft, missing)
+
+    def _handle_confirm(self, draft: dict, conv_id: str,
+                        message: str) -> str:
+        """处理确认阶段：确认则派发，否则回到收集。"""
+        if self._is_confirmation(message):
+            return self._dispatch_from_draft(draft, conv_id)
+        draft["phase"] = _REQ_PHASE_INTAKE
+        return self._handle_intake(draft, conv_id, message)
+
+    def _handle_fast_exit(self, draft: dict, conv_id: str,
+                          message: str) -> str:
+        """处理快速退出：直接生成 Brief 并派发。"""
+        self._fill_checklist_from_message(draft, message)
+        self._generate_brief(draft)
+        self._save_req_draft(conv_id)
+        return self._dispatch_from_draft(draft, conv_id)
+
+    def _dispatch_from_draft(self, draft: dict, conv_id: str) -> str:
+        """从需求收集草稿创建任务并交给 PM Agent。"""
+        brief = self._generate_brief(draft)
+        checklist = draft.get("checklist", {})
+        goal = ""
+        for key in ("goal", "topic", "doc_type"):
+            item = checklist.get(key, {})
+            if item.get("filled"):
+                goal = item.get("value", "")
+                break
+        if not goal:
+            goal = "新任务"
+        priority_value = checklist.get("priority", {}).get("value", "")
+        priority = "normal"
+        if any(word in priority_value for word in ("紧急", "urgent", "立刻")):
+            priority = "urgent"
+        elif any(word in priority_value for word in ("优先", "重要", "high")):
+            priority = "high"
+        elif any(word in priority_value for word in ("不急", "低", "low")):
+            priority = "low"
+        try:
+            result = self.controller.submit_task_from_chat(
+                name=goal[:50], description=brief,
+                created_by="secretary", priority=priority,
+                input_data={"requirement": brief})
+        except Exception as exc:
+            print(f"[Chat] 需求收集派发失败: {exc}", flush=True)
+            return f"任务创建失败: {exc}"
+        if result.get("status") == "failed":
+            error = result.get("output_data", {}).get("error", "未知错误")
+            return f"任务创建失败: {error}"
+        task_id = result.get("task_id", "")
+        pm_id = str(result.get("pm_agent_id", ""))[:8]
+        self._clear_req_draft(conv_id)
+        priority_label = {
+            "low": "低", "normal": "普通",
+            "high": "高", "urgent": "紧急",
+        }.get(priority, priority)
+        return (
+            "✅ 需求收集完成，任务已创建并分配 PM Agent!\n"
+            f"- 任务ID: {task_id}\n"
+            f"- 名称: {goal[:50]}\n"
+            f"- 优先级: {priority_label}\n"
+            f"- PM Agent: {pm_id}\n\n"
+            f"--- 项目 Brief ---\n{brief}"
+        )
+
+    def _build_intake_reply(self, draft: dict) -> str:
+        """构建收集阶段回复。"""
+        checklist = draft.get("checklist", {})
+        filled = sum(1 for item in checklist.values() if item.get("filled"))
+        total = len(checklist)
+        missing = self._detect_missing_items(draft)
+        lines = [
+            f"📝 正在收集项目需求（第 {draft['rounds']} 轮，"
+            f"已覆盖 {filled}/{total} 项）",
+            "",
+        ]
+        if missing:
+            next_item = missing[0]
+            lines.append(f"接下来请补充：**{next_item['label']}**")
+            lines.append(next_item["question"])
+            lines.append("")
+            lines.append("（随时可以说「够了」直接提交，或「取消需求收集」退出）")
+        else:
+            lines.append("关键信息已收集完整，正在生成项目 Brief...")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_gap_fill_reply(draft: dict, missing: list[dict]) -> str:
+        """构建补缺阶段回复。"""
+        lines = ["📋 项目 Brief 已初步生成，但以下关键项仍缺失：", ""]
+        for item in missing:
+            lines.append(f"- **{item['label']}**: {item['question']}")
+        lines.extend(["", "请补充以上信息，或说「够了」直接开始执行。"])
+        return "\n".join(lines)
+
+    def _build_confirm_reply(self, draft: dict) -> str:
+        """构建确认阶段回复，附最终可执行提示词。"""
+        brief = draft.get("brief", "")
+        final_prompt = self._build_final_prompt(draft)
+        return (
+            "📋 项目 Brief 已生成，请确认：\n\n"
+            f"{brief}\n\n"
+            "---\n"
+            "**最终执行提示词**（可直接复制，或回复「按最终提示词执行」）：\n\n"
+            f"```\n{final_prompt}\n```\n\n"
+            "确认无误请回复「开始」或「确认」，需要修改请直接说明。"
+        )
+
     # ── 公开接口 ──────────────────────────────────────────────────
+
+    def _handle_requirement_flow(
+            self, message: str, cid: str, chat_history: list,
+            discuss_context: Optional[dict],
+            pm_thread_id: str) -> Optional[dict]:
+        """尝试用需求收集状态机处理消息；未命中返回 None。"""
+        if discuss_context or pm_thread_id:
+            return None
+        if not hasattr(self, "_req_drafts"):
+            self._req_drafts = {}
+        req_reply = self._try_requirement_flow(message, cid, chat_history)
+        if not req_reply:
+            return None
+        now = self._save_chat_turn(
+            cid, message, req_reply, "requirement_flow")
+        return {
+            "reply": req_reply,
+            "action_taken": "requirement_flow",
+            "timestamp": now,
+            "conv_id": cid,
+        }
 
     def chat(self, message: str, conv_id: str = "", history: Optional[list] = None,
              pm_thread_id: str = "", discuss_context: Optional[dict] = None) -> dict:
@@ -203,6 +694,11 @@ class ChatHandler:
         # 获取对话历史
         chat_history = history if history is not None else self._conversations.get(cid, [])
 
+        req_result = self._handle_requirement_flow(
+            message, cid, chat_history, discuss_context, pm_thread_id)
+        if req_result is not None:
+            return req_result
+
         # 1. 构建状态上下文
         status_context = self._build_status_context()
 
@@ -214,12 +710,22 @@ class ChatHandler:
             if discussion_context:
                 system_prompt = f"{system_prompt}\n\n{discussion_context}"
 
+        # 2.5 BUG-031: 先判定意图再生成回复 — 让 LLM 知道后台到底会不会
+        # 执行动作, 避免「动作未触发却回复正在处理」的静默失败 (见
+        # _build_action_guard 说明)。讨论模式不参与命令检测。
+        pending_action = ("" if discuss_context else
+                          self._detect_action_with_context(
+                              message, chat_history))
+        guard = self._build_action_guard(pending_action, discuss_context)
+        if guard:
+            system_prompt = f"{system_prompt}\n\n{guard}"
+
         # 3. 拼接对话历史 + 用户消息
         prompt = self._build_prompt(message, chat_history)
 
         reply_text = self._call_chat_llm(message, prompt, system_prompt)
         reply_text, action_taken = self._apply_chat_action(
-            message, reply_text, discuss_context)
+            message, reply_text, discuss_context, pending_action)
         now = self._save_chat_turn(cid, message, reply_text, action_taken)
         return {"reply": reply_text, "action_taken": action_taken,
                 "timestamp": now, "conv_id": cid}
@@ -251,19 +757,89 @@ class ChatHandler:
         })
         return resp.get("content", "[LLM 调用失败]")
 
+    def _build_action_guard(self, pending_action: str,
+                            discuss_context: Optional[dict]) -> str:
+        """BUG-031: 按「后台是否真会执行动作」注入约束, 防静默失败。
+
+        起因: 角色卡要求 Boss 下达操作指令时回复「系统正在处理您的指令」,
+        但该规则未区分动作是否真被识别。关键词未命中时后台什么都不做,
+        LLM 却照常承诺处理中, Boss 便在等一个从未开始的操作 (实测: 股票
+        自动交易系统项目对话, action_taken 全程为空, projects 表无记录)。
+        故把判定结果显式告知 LLM: 命中则可确认, 未命中必须引导补关键词。
+        """
+        if discuss_context:
+            return ""
+        if pending_action:
+            return (
+                "# 本轮后台动作判定\n"
+                f"系统已识别到操作意图 `{pending_action}`, 后台将在你回复后"
+                "真实执行, 结果以「📋 操作结果」追加。你可以回复确认收到, "
+                "但仍不得声称自己完成了操作。"
+            )
+        return (
+            "# 本轮后台动作判定 (重要)\n"
+            "系统**未**识别到任何操作意图, 本轮后台不会执行任何动作。\n"
+            "因此绝对禁止回复「系统正在处理」「正在创建」「已提交」这类"
+            "暗示后台有动作的措辞, 也不要提及「📋 操作结果」。\n"
+            "若 Boss 显然想执行操作 (如创建项目/提交任务), 你必须明确告知"
+            "本轮未触发, 并给出可直接复制的指令原文, 例如:\n"
+            "「创建项目: <项目名>, 本地地址 <路径>」\n"
+            "「提交任务: <任务描述>」\n"
+            "说明必须包含触发关键词 (如「创建项目」「提交任务」) 才会执行。"
+        )
+
     def _apply_chat_action(self, message: str, reply_text: str,
-                           discuss_context: Optional[dict]) -> tuple[str, str]:
-        """执行普通消息命令; 讨论模式仅标记 opt_discuss。"""
+                           discuss_context: Optional[dict],
+                           pending_action: str = "") -> tuple[str, str]:
+        """执行普通消息命令; 讨论模式仅标记 opt_discuss。
+
+        pending_action 由 chat() 预先判定并已注入 prompt; 省略时回退到
+        即时检测, 保持旧调用方 (含测试) 的向后兼容。
+        """
         if discuss_context:
             print("[Chat] 优化讨论消息已跳过命令检测", flush=True)
             return reply_text, "opt_discuss"
-        action = self._detect_action(message)
+        action = pending_action or self._detect_action_with_context(
+            message)
         if not action:
-            return reply_text, ""
+            return self._append_no_action_notice(message, reply_text), ""
         action_result = self._execute_action(action, message)
         if action_result:
             return f"{reply_text}\n\n📋 **操作结果**: {action_result}", action
         return reply_text, ""
+
+    def _append_no_action_notice(self, message: str,
+                                 reply_text: str) -> str:
+        """BUG-031 兜底: LLM 仍谎称后台在处理时, 追加显式澄清。
+
+        prompt 约束不是硬保证 (模型可能不听), 故在无动作这条路径上做
+        文本兜底: 命中承诺类措辞就追加提示, 让失败可见而非静默。
+        """
+        if not reply_text:
+            return reply_text
+        claims = ("正在处理", "正在创建", "正在提交", "已提交", "已创建",
+                  "已下发", "已经在处理", "系统处理中", "操作结果")
+        if not any(c in reply_text for c in claims):
+            return reply_text
+        hint = self._guess_intent_hint(message)
+        print("[Chat] 检测到无动作却承诺执行, 已追加澄清提示", flush=True)
+        return (
+            f"{reply_text}\n\n"
+            "⚠️ **系统提示**: 本轮未识别到可执行指令, 后台**没有**执行任何"
+            f"操作。上面关于处理中的说法不成立。{hint}"
+        )
+
+    @staticmethod
+    def _guess_intent_hint(message: str) -> str:
+        """按用户措辞猜可能想做什么, 给出带触发词的指令样例。"""
+        if any(k in message for k in ("项目", "仓库", "分支", "repo")):
+            return ("如需创建项目, 请发送含关键词的指令, 例如:\n"
+                    "「创建项目: <项目名>, 本地地址 <路径>」")
+        if any(k in message for k in ("任务", "开发", "实现", "做")):
+            return ("如需提交任务, 请发送含关键词的指令, 例如:\n"
+                    "「提交任务: <任务描述>」")
+        return ("如需执行操作, 请在指令中包含触发关键词, "
+                "例如「创建项目」「提交任务」「查看任务」。")
 
     def _save_chat_turn(self, cid: str, message: str, reply_text: str,
                         action_taken: str) -> float:
@@ -984,6 +1560,76 @@ class ChatHandler:
             if keyword in message or keyword in msg_lower:
                 return action
         return ""
+
+    def _detect_action_with_context(self, message: str,
+                                    history: Optional[list] = None) -> str:
+        """BUG-031: 关键词未命中时, 尝试从上一轮秘书建议继承意图。
+
+        场景: Boss 多轮澄清需求后只回「是/可以/够了」, 字面无关键词,
+        旧逻辑直接判定无意图 → 后台静默不执行。此处仅在同时满足
+        「本轮是纯确认」且「上一轮秘书明确给出过带触发词的指令样例」
+        时才继承, 避免把秘书解释性提到的词误当指令。
+        """
+        direct = self._detect_action(message)
+        if direct:
+            return direct
+        if not self._is_confirmation(message):
+            return ""
+        suggested = self._last_suggested_action(history)
+        if suggested:
+            print(f"[Chat] 确认类回复继承上轮建议意图: {suggested}", flush=True)
+        return suggested
+
+    @staticmethod
+    def _is_confirmation(message: str) -> bool:
+        """判断是否为纯确认 (短句且以肯定词起头/构成)。"""
+        text = (message or "").strip().strip("。.!！,，~ ")
+        if not text or len(text) > 30:
+            return False
+        words = ("是", "对", "好", "可以", "行", "嗯", "OK", "ok", "Ok",
+                 "确认", "没问题", "足够", "够了", "同意", "继续", "开始",
+                 "麻烦你", "就这样", "如上", "以上")
+        return any(w in text for w in words)
+
+    def _last_suggested_action(self, history: Optional[list]) -> str:
+        """取上一轮秘书回复中「指令样例」所指向的动作。
+
+        只认样例块内的触发词 (「」引号或 > 引用内), 不认散文里的提及,
+        以免秘书解释能力范围时被误判为指令。
+        """
+        msgs = history if history is not None else self._conversations.get(
+            self._active_conv_id, [])
+        for msg in reversed(msgs[-4:]):
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content", "") or ""
+            for seg in self._extract_quoted(content):
+                for keyword, action in _ACTION_KEYWORDS.items():
+                    if keyword in seg:
+                        return action
+            return ""
+        return ""
+
+    @staticmethod
+    def _extract_quoted(content: str) -> list:
+        """抽出回复中的指令样例片段 (「」/『』包裹或 > 引用行)。"""
+        segs = []
+        for left, right in (("「", "」"), ("『", "』")):
+            start = 0
+            while True:
+                i = content.find(left, start)
+                if i < 0:
+                    break
+                j = content.find(right, i + 1)
+                if j < 0:
+                    break
+                segs.append(content[i + 1:j])
+                start = j + 1
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith(">"):
+                segs.append(stripped.lstrip("> ").strip())
+        return segs
 
     def _execute_action(self, action: str, message: str) -> str:
         """执行检测到的操作。

@@ -7369,3 +7369,377 @@ class TestIter74SseUtf8Decoding:
         """纯 ASCII 内容行为不变 (兜底不引入回归)。"""
         result = self._run(monkeypatch, "text/event-stream", "hello")
         assert result["content"] == "hello"
+class TestIter77SecretaryActionGuard:
+    """iter-77 BUG-031: 秘书「动作未触发却承诺处理中」的静默失败修复。
+
+    真实事故: Boss 多轮澄清股票自动交易系统需求后回「是, 以上信息应该
+    也已经足够了」, 秘书回「系统正在处理您的项目创建指令」, 但关键词
+    未命中 → 后台零动作, projects 表无记录, action_taken 全程为空。
+    """
+
+    @staticmethod
+    def _handler(tmp_path, runtime):
+        from lan_mesh.chat_handler import ChatHandler
+        from lan_mesh.database import Database
+
+        class _Controller:
+            _default_model = ""
+            model_router = None
+            workstation_optimizer = None
+            project_manager = None
+            db = Database(str(tmp_path / "guard.db"))
+
+        handler = ChatHandler.__new__(ChatHandler)
+        handler.runtime = runtime
+        handler.controller = _Controller()
+        handler._conversations = {"c1": []}
+        handler._conv_index = [{"id": "c1", "title": "默认对话"}]
+        handler._active_conv_id = "c1"
+        handler._max_history = 50
+        return handler
+
+    @staticmethod
+    def _patch(monkeypatch):
+        from lan_mesh.chat_handler import ChatHandler
+        monkeypatch.setattr(ChatHandler, "_build_status_context",
+                            lambda self: "状态")
+        monkeypatch.setattr(ChatHandler, "_save_message_to_file",
+                            lambda self, cid, msg: None)
+        monkeypatch.setattr(ChatHandler, "_save_to_db",
+                            lambda self, *args, **kwargs: None)
+        monkeypatch.setattr(ChatHandler, "_auto_title",
+                            lambda self, cid, msg: None)
+        monkeypatch.setattr(ChatHandler, "_touch_conv",
+                            lambda self, cid: None)
+
+    class _Runtime:
+        def __init__(self, reply):
+            self.reply = reply
+            self.opts = None
+
+        def _call_llm_with_routing(self, prompt, opts):
+            self.opts = opts
+            return {"content": self.reply}
+
+    def test_guard_tells_llm_no_action_will_run(self, tmp_path, monkeypatch):
+        """无意图时 system prompt 必须显式告知后台不会执行。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime("好的")
+        handler = self._handler(tmp_path, runtime)
+
+        handler.chat("是, 以上信息应该也已经足够了", conv_id="c1")
+
+        sp = runtime.opts["_system_prompt"]
+        assert "未" in sp and "识别到" in sp
+        assert "创建项目" in sp
+
+    def test_no_action_but_llm_claims_processing_gets_notice(
+            self, tmp_path, monkeypatch):
+        """兜底: LLM 谎称处理中时追加澄清, 让失败可见 (核心回归)。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime("收到, 系统正在处理您的项目创建指令。")
+        handler = self._handler(tmp_path, runtime)
+
+        result = handler.chat("是, 以上信息应该也已经足够了", conv_id="c1")
+
+        assert result["action_taken"] == ""
+        assert "系统提示" in result["reply"]
+        assert "没有" in result["reply"]
+        assert "创建项目" in result["reply"]
+
+    def test_plain_reply_without_claims_untouched(self, tmp_path, monkeypatch):
+        """未承诺执行的普通回复不应被加尾巴 (避免噪声)。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime("你好, 我是秘书。")
+        handler = self._handler(tmp_path, runtime)
+
+        result = handler.chat("你好", conv_id="c1")
+
+        assert result["reply"] == "你好, 我是秘书。"
+        assert "系统提示" not in result["reply"]
+
+    def test_confirmation_inherits_quoted_suggestion(self, tmp_path,
+                                                     monkeypatch):
+        """确认类回复继承上轮秘书样例里的意图 (本次事故的正解路径)。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime("收到")
+        handler = self._handler(tmp_path, runtime)
+        handler._conversations["c1"] = [
+            {"role": "user", "content": "该项目为股票自动交易系统"},
+            {"role": "assistant",
+             "content": "您可以下达指令, 例如:\n"
+                        "「创建项目: 股票自动交易系统, 本地地址 E:\\x」"},
+        ]
+
+        action = handler._detect_action_with_context(
+            "是, 以上信息应该也已经足够了",
+            handler._conversations["c1"])
+
+        assert action == "create_project"
+
+    def test_prose_mention_does_not_trigger_inheritance(self, tmp_path,
+                                                        monkeypatch):
+        """秘书散文里提到「创建项目」不算样例, 不得误触发。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime("收到")
+        handler = self._handler(tmp_path, runtime)
+        handler._conversations["c1"] = [
+            {"role": "assistant",
+             "content": "我的能力包括创建项目和提交任务, 你想做什么?"},
+        ]
+
+        action = handler._detect_action_with_context(
+            "是的", handler._conversations["c1"])
+
+        assert action == ""
+
+    def test_long_message_is_not_confirmation(self, tmp_path, monkeypatch):
+        """长描述即便含「是」也不算确认, 避免继承污染。"""
+        self._patch(monkeypatch)
+        handler = self._handler(tmp_path, self._Runtime("x"))
+        long_msg = ("该项目为股票自动交易系统, 核心逻辑是不同选股逻辑的"
+                    "组合, 有三个开发方向需要讨论")
+
+        assert handler._is_confirmation(long_msg) is False
+        assert handler._is_confirmation("是") is True
+        assert handler._is_confirmation("可以") is True
+
+    def test_detected_intent_still_executes_and_marks_action(
+            self, tmp_path, monkeypatch):
+        """带关键词时照旧真实执行并标记 action (防修复引入回归)。"""
+        from lan_mesh.chat_handler import ChatHandler
+        self._patch(monkeypatch)
+        runtime = self._Runtime("收到, 系统正在处理您的指令")
+        handler = self._handler(tmp_path, runtime)
+        monkeypatch.setattr(ChatHandler, "_execute_action",
+                            lambda self, action, message: "✅ 项目已创建!")
+
+        result = handler.chat("创建项目: 股票自动交易系统", conv_id="c1")
+
+        assert result["action_taken"] == "create_project"
+        assert "操作结果" in result["reply"]
+        assert "系统提示" not in result["reply"]
+        assert "已识别到操作意图" in runtime.opts["_system_prompt"]
+
+    def test_discuss_mode_unaffected_by_guard(self, tmp_path, monkeypatch):
+        """讨论模式仍为纯对话, 不注入动作护栏 (iter-73 契约不破)。"""
+        from lan_mesh.chat_handler import ChatHandler
+        self._patch(monkeypatch)
+        runtime = self._Runtime("收到, 正在处理")
+        handler = self._handler(tmp_path, runtime)
+        monkeypatch.setattr(ChatHandler, "_build_discussion_context",
+                            lambda self, ctx: "讨论上下文")
+
+        result = handler.chat("帮我写一个补丁", conv_id="c1",
+                              discuss_context={"topic": "opt-1"})
+
+        assert result["action_taken"] == "opt_discuss"
+        assert "系统提示" not in result["reply"]
+        assert "本轮后台动作判定" not in runtime.opts["_system_prompt"]
+
+
+class TestRequirementGathering:
+    """iter-78: 秘书需求收集状态机。"""
+
+    class _Runtime:
+        def __init__(self, responses=None):
+            self.responses = list(responses or [])
+            self.calls = []
+
+        def _call_llm_with_routing(self, prompt, opts):
+            self.calls.append(prompt)
+            if self.responses:
+                return {"content": self.responses.pop(0)}
+            return {"content": "{}"}
+
+    @staticmethod
+    def _make_handler(tmp_path, runtime):
+        from lan_mesh.chat_handler import ChatHandler
+
+        class _Controller:
+            def __init__(self):
+                self.submitted = []
+
+            def submit_task_from_chat(self, **kwargs):
+                self.submitted.append(kwargs)
+                return {
+                    "status": "running",
+                    "task_id": "task-req-001",
+                    "pm_agent_id": "pm-req-001",
+                }
+
+        handler = ChatHandler.__new__(ChatHandler)
+        handler.runtime = runtime
+        handler.controller = _Controller()
+        handler._db = None
+        handler._shared_folder = None
+        handler._max_history = 50
+        handler._conv_index = [{
+            "id": "c1", "title": "默认对话", "pm_threads": [],
+            "created_at": 1, "updated_at": 1,
+        }]
+        handler._conversations = {"c1": []}
+        handler._active_conv_id = "c1"
+        handler._pm_thread_messages = {}
+        handler._last_awaiting_pm = ""
+        handler._req_drafts = {}
+        return handler
+
+    @staticmethod
+    def _patch(monkeypatch):
+        from lan_mesh.chat_handler import ChatHandler
+        monkeypatch.setattr(ChatHandler, "_save_chat_turn",
+                            lambda self, *args, **kwargs: 1.0)
+        monkeypatch.setattr(ChatHandler, "_save_req_draft",
+                            lambda self, conv_id: None)
+        monkeypatch.setattr(ChatHandler, "_save_conv_index",
+                            lambda self: None)
+        monkeypatch.setattr(ChatHandler, "_build_status_context",
+                            lambda self: "状态")
+        monkeypatch.setattr(ChatHandler, "_build_system_prompt",
+                            lambda self, context: "秘书 prompt")
+
+    def _filled_draft(self, handler, task_type="development"):
+        from lan_mesh.chat_handler import _REQ_PHASE_CONFIRM
+        draft = handler._get_or_init_req_draft("c1", task_type)
+        for key in ("background", "goal", "scope", "acceptance"):
+            draft["checklist"][key]["value"] = f"{key} value"
+            draft["checklist"][key]["filled"] = True
+        draft["checklist"]["priority"]["value"] = "high"
+        draft["checklist"]["priority"]["filled"] = True
+        draft["phase"] = _REQ_PHASE_CONFIRM
+        handler._generate_brief(draft)
+        return draft
+
+    def test_intake_keyword_creates_draft_and_asks_next_item(
+            self, tmp_path, monkeypatch):
+        """命中收集关键词时进入 INTAKE，并追问下一个缺失项。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime([
+            '{"background": "做一个计算器", "goal": "CLI 计算器"}',
+        ])
+        handler = self._make_handler(tmp_path, runtime)
+
+        result = handler.chat("我想开发一个计算器", conv_id="c1")
+
+        assert result["action_taken"] == "requirement_flow"
+        assert "c1" in handler._req_drafts
+        assert handler._req_drafts["c1"]["phase"] == "intake"
+        assert "范围边界" in result["reply"]
+
+    def test_confirm_dispatches_with_structured_requirement(
+            self, tmp_path, monkeypatch):
+        """确认后派发任务，并把 Brief 原样写入 input_data.requirement。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime()
+        handler = self._make_handler(tmp_path, runtime)
+        draft = self._filled_draft(handler)
+
+        result = handler.chat("确认", conv_id="c1")
+
+        assert result["action_taken"] == "requirement_flow"
+        assert "task-req-001" in result["reply"]
+        assert len(handler.controller.submitted) == 1
+        submitted = handler.controller.submitted[0]
+        assert submitted["input_data"]["requirement"] == draft["brief"]
+        assert "c1" not in handler._req_drafts
+
+    def test_final_prompt_modification_is_applied_before_dispatch(
+            self, tmp_path, monkeypatch):
+        """Boss 修改最终提示词后，修改内容必须进入派发 Brief。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime()
+        handler = self._make_handler(tmp_path, runtime)
+        self._filled_draft(handler)
+        prompt = handler._build_final_prompt(
+            handler._req_drafts["c1"])
+        prompt = prompt.replace("【范围边界】scope value",
+                                "【范围边界】只做 CLI，不做 Web 界面")
+
+        result = handler.chat(prompt, conv_id="c1")
+
+        assert result["action_taken"] == "requirement_flow"
+        submitted = handler.controller.submitted[0]
+        assert "只做 CLI，不做 Web 界面" in submitted["description"]
+        assert "只做 CLI，不做 Web 界面" in (
+            submitted["input_data"]["requirement"])
+
+    def test_cancel_clears_draft_without_dispatch(
+            self, tmp_path, monkeypatch):
+        """取消需求收集只清草稿，不创建任务。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime()
+        handler = self._make_handler(tmp_path, runtime)
+        handler._get_or_init_req_draft("c1", "development")
+
+        result = handler.chat("取消需求收集", conv_id="c1")
+
+        assert result["action_taken"] == "requirement_flow"
+        assert "已取消" in result["reply"]
+        assert "c1" not in handler._req_drafts
+        assert handler.controller.submitted == []
+
+    def test_direct_submit_task_is_not_hijacked(
+            self, tmp_path, monkeypatch):
+        """显式「提交任务:」仍走原即时提交路径，不被收集流程拦截。"""
+        from lan_mesh.chat_handler import ChatHandler
+        self._patch(monkeypatch)
+        runtime = self._Runtime()
+        handler = self._make_handler(tmp_path, runtime)
+        monkeypatch.setattr(
+            ChatHandler, "_call_chat_llm",
+            lambda self, message, prompt, system_prompt: "收到")
+        monkeypatch.setattr(
+            ChatHandler, "_execute_action",
+            lambda self, action, message: "✅ 已提交")
+
+        result = handler.chat("提交任务: 直接做 A", conv_id="c1")
+
+        assert result["action_taken"] == "submit_task"
+        assert "c1" not in handler._req_drafts
+        assert handler.controller.submitted == []
+
+    def test_fast_exit_dispatches_current_draft(
+            self, tmp_path, monkeypatch):
+        """「够了」快速退出时也必须携带结构化 Brief。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime()
+        handler = self._make_handler(tmp_path, runtime)
+        self._filled_draft(handler)
+
+        result = handler.chat("够了", conv_id="c1")
+
+        assert result["action_taken"] == "requirement_flow"
+        assert handler.controller.submitted
+        assert "requirement" in handler.controller.submitted[0]["input_data"]
+
+    def test_pm_skips_refine_when_requirement_exists(self):
+        """PM 收到 secretary Brief 后不再重复追问。"""
+        from lan_mesh.pm_planner import PMPlanner
+        from lan_mesh.pm_state import PMState
+
+        class _Runtime:
+            def __init__(self):
+                self.calls = []
+
+            def _call_llm_with_routing(self, *args, **kwargs):
+                self.calls.append(args)
+                return {"content": "{}"}
+
+        class _Agent:
+            secretary_url = ""
+            pm_id = "pm-test"
+
+        runtime = _Runtime()
+        planner = PMPlanner(
+            "pm-test", runtime, PMState(), _Agent())
+        task = {
+            "name": "test",
+            "description": "short",
+            "input_data": {"requirement": "x" * 150},
+        }
+
+        result = planner.refine_requirements(task)
+
+        assert result == task
+        assert runtime.calls == []

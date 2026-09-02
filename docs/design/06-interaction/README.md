@@ -79,10 +79,81 @@ normal 优先级, 💰 图标) — 任务提交时预估超预算 (tight/insuffi
 **设计**: 三角色（Secretary/PM/Worker）的 identity / mission / sections
 集中定义于此，各模块仅引用；**人格调整只改一处**。
 
+## 秘书动作护栏 (BUG-031, iter-77)
+
+**事故**: Boss 多轮澄清股票自动交易系统需求后回「是, 以上信息
+应该也已经足够了」, 秘书答「系统正在处理您的项目创建指令」,
+但后台零动作 —— `projects` 表无记录, `chat_history.action_taken`
+全库只有 `''` 与 `opt_discuss`, 从未出现 `create_project`。
+Boss 在等一个从未开始的操作。
+
+**三重根因** (叠加才造成静默失败):
+1. `_detect_action` 是纯字面子串匹配, `create_project` 仅认
+   「创建项目/新建项目/建立项目」。确认类追问必然漏判。
+2. 角色卡 `role_cards.SECRETARY_CARD` 无条件要求「回复收到, 系统
+   正在处理您的指令」—— 未区分动作是否真被识别, LLM 照做。
+3. `chat()` 先调 LLM 再检测意图, LLM 无从得知后台会不会执行。
+
+**修复** (三层, 均经反向验证):
+| 层 | 手法 |
+|---|---|
+| 时序 | `_detect_action` 提到 LLM 调用之前, 结果经 `_build_action_guard` 注入 system prompt |
+| 提示词 | 命中则允许确认; 未命中则明令禁止「正在处理」并要求给出带触发词的指令样例 |
+| 兔底 | `_append_no_action_notice` — prompt 约束不是硬保证, LLM 仍谎称时追加⚠️系统提示 |
+| 意图继承 | `_detect_action_with_context` — 仅「本轮是纯确认」且「上轮秘书给过引号样例」时继承 |
+
+**为何继承取引号样例而非整段回复**: 本例可继承信号在 assistant
+建议里 (`id=116` 含「创建项目: ...」样例), 不在 user 消息里。
+但若直接扫整段 assistant 文本, 秘书解释能力边界时提到的
+「创建项目」也会误触发, 故只认 `「」`/`『』` 包裹或 `>`
+引用行内的片段 (`_extract_quoted`), 并限 30 字以内确认句。
+
+**测试**: `TestIter77SecretaryActionGuard` 8 例 — 护栏注入/兔底追加/
+普通回复不动/引号继承/散文不继承/长句非确认/命中时照旧执行/
+讨论模式不受影响。反向验证: 护栏不注入、去兔底、去继承
+三种改法均即刻 FAIL。
+
+## 秘书需求收集状态机 (iter-78)
+
+**目标**: Boss 提出项目/任务想法后, 秘书先通过多轮对话收集结构化需求,
+生成项目 Brief 与可执行最终提示词, 确认后再提交给 PM Agent。显式
+`提交任务:` 指令不被拦截, 仍走原即时提交路径。
+
+**状态机**:
+`INTAKE (收集) → SYNTHESIZE (总结) → GAP_FILL (补缺) → CONFIRM (确认) → DISPATCH (提交)`
+
+- 命中 `_REQ_INTAKE_KEYWORDS` (如「我想开发」「帮我规划一个项目」) 时创建草稿
+- `INTAKE` 阶段按 checklist 逐项追问; 关键项齐全或 3 轮后进入总结
+- `GAP_FILL` 阶段针对缺失关键项追问; 补齐或 5 轮后进入确认
+- `CONFIRM` 阶段展示 Brief 与最终提示词; 确认则派发, 修改则回到 `INTAKE`
+- 「够了」「开始吧」「按最终提示词执行」等快速退出词直接派发
+- 「取消需求收集」只清草稿, 不创建任务
+
+**最终提示词**: `_build_final_prompt` 生成
+`提交任务: <目标>` 开头的自包含指令, 后跟 `【项目背景】`
+等结构化字段。Boss 可直接复制粘贴, 也可回复「按最终提示词执行」;
+若粘贴修改后的最终提示词, `_apply_final_prompt` 会把修改回填草稿
+再派发, 不会丢失 Boss 的改动。
+
+**持久化**: 草稿写入 `conv_index` 的
+`meta["requirement_draft"]`, 重启后由 `_load_req_drafts` 恢复;
+派发成功后 `_clear_req_draft` 清除, 避免残留活跃草稿。
+
+**派发链路**: `_dispatch_from_draft` 调
+`submit_task_from_chat(..., input_data={{"requirement": brief}})`。
+Brief 在任务创建前就写入 `input_data`, 避免「先派发再补写」的竞态;
+PM `refine_requirements` 检测到 `requirement` 后跳过重复追问。
+
+**测试**: `TestRequirementGathering` 7 例 — 收集关键词建草稿/
+确认派发并携带 Brief/最终提示词修改回填/取消不派发/显式提交不被拦截/
+快速退出仍带 Brief/PM 收到 Brief 不再追问。pytest 415 passed。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-02 | iter-78 | 秘书需求收集状态机: INTAKE/SYNTHESIZE/GAP_FILL/CONFIRM/DISPATCH + checklist 模板 + 草稿持久化 + 最终提示词生成与修改回填 + 取消路径; submit_task_from_chat 支持 input_data, Brief 在创建前入库; PM 收到 requirement 后跳过重复追问; 专项 7 例; pytest 415 passed |
+| 2026-09-02 | iter-77 | BUG-031 秘书静默失败修复: 意图检测提到 LLM 调用前 + _build_action_guard 把「后台是否会执行」注入 prompt; _append_no_action_notice 兔底追加清晰提示; _detect_action_with_context 仅对纯确认句继承上轮引号样例意图; 角色卡那条无条件「回复正在处理」改为以意图已识别为前提; 专项 8 例 + 三处反向验证; pytest 408 passed |
 | 2026-08-27 | iter-44 | 新增 error_burst 事件模板与优先级 (错误突发告警, 与错误追踪闭环联动) |
 | 2026-08-27 | iter-45 | bot_gateway 两处错误追踪埋点 (推送重试耗尽/秘书对话链异常, 异常隔离) |
 | 2026-08-28 | iter-51 | chat_handler 自然语言 DAG 编辑意图 (F4.3): 图编辑关键词组 + _action_edit_task_graph (任务定位/LLM 指令解析/TaskDAG 应用/落盘, 防幻觉真实执行) |

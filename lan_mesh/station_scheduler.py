@@ -24,7 +24,8 @@ class StationSchedulerMixin:
 
     def submit_task_from_chat(self, name: str, description: str, created_by: str = "secretary",
                               priority: str = "normal",
-                              fed_relay: bool = False) -> dict:
+                              fed_relay: bool = False,
+                              input_data: dict | None = None) -> dict:
         """从秘书对话直接提交任务并分配 PM Agent。
 
         与 station_api.submit_task() 逻辑一致, 但同步执行。
@@ -45,9 +46,11 @@ class StationSchedulerMixin:
             created_by=created_by,
             status="pending",
         )
-        # 优化13: 记录优先级到 input_data
+        # 优化13: 记录优先级到 input_data; 需求收集流程可顺带携带结构化 Brief
         task.input_data = task.input_data or {}
         task.input_data["_priority"] = priority
+        if input_data:
+            task.input_data.update(input_data)
         # iter-65: 联邦防环标记落盘 (审计可见)
         if fed_relay:
             task.input_data["_federation_relay"] = True
