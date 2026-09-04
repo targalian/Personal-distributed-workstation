@@ -3,8 +3,8 @@
 多 Agent（Codex CLI / Qoder Quest）并行开发时的文件占用与交接看板。
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
-- 更新时间：2026-09-02
-- 当前迭代：`iter-78`（Codex：秘书需求收集状态机；连同 iter-77 BUG-031、Quest iter-76 脚本对齐与 iter-75 遗留一并待 Boss 发货）
+- 更新时间：2026-09-03
+- 当前迭代：`iter-80`（Codex：创建对话失败修复，已验证待 Boss 发货；连同 iter-79 一并待发货）
 
 ## 一、职责边界（长期约定）
 
@@ -35,34 +35,26 @@
 `scripts/sync_push.ps1` 要求工作区干净，因此下列改动必须**分两次提交**、
 按归属各自提交，不要互相 `git add .`：
 
-**Quest（iter-73 优化讨论窗口 UI + iter-74 发送通道点亮，已验证待 Boss 发货）**
-- `lan_mesh/web/templates/dashboard.html`（opt-panel 两段式 + 优化讨论窗口 + 💬 话题切换 + iter-74 发送通道点亮: optDiscussSend 调真实端点 / WS chat_reply 分流 / loadChatHistory 过滤 opt_discuss 历史防串台 / 503 提示）
-- `docs/design/09-frontend/README.md`（iter-73/74 段落 + 变更记录）
-- `test_bug/test_checklist.csv`（UI-059 + UI-060，检测通过）
-- `loop_status.json`（iter-74 `[Quest]` 段落）
+**Quest（无待推送改动）**
 
-**Codex（iter-75 收官 + iter-77 BUG-031 + iter-78 需求收集，已验证待 Boss 发货）**
-- `lan_mesh/station_controller.py`（壳类终态 246 行：docstring / imports / mixin 组合声明 / StationState / __init__；WEB_DIR、TEMPLATES_DIR、STATIC_DIR 改为从 station_lifecycle re-export）
-- `lan_mesh/station_{pm_control,scheduler,secretary,local_pm,lifecycle}.py`（Phase 3-5：53 方法搬入，分别 5/12/10/16/10）
-- `tests/test_core.py`（12 处 monkeypatch 目标随方法迁移：11 处 `sc_sched` + 1 处 `sc_pmctl`；pytest 400 passed）
-- `docs/design/02-station-core/README.md`（节标题 iter-74/75、8 mixin 完整落地表、常量迁移与 monkeypatch 踩坑两节、变更记录）
-- `docs/reference/controller-split-plan.md`（状态 → Phase 1-5 已执行完毕，仅剩 Phase 6；属 Quest 目录，已仅改状态行）
-- `AGENTS.md`（模块职责表：壳类描述 + 8 mixin 按职责合并为两行）
-- `loop_status.json`、`AGENT_LOCKS.md`（iter-75 收尾 + 锁释放）
-- `lan_mesh/chat_handler.py`（iter-77 BUG-031：意图检测提到 LLM 调用之前 + _build_action_guard / _append_no_action_notice / _detect_action_with_context）
-- `lan_mesh/role_cards.py`（那条无条件「回复正在处理」改为以「意图已识别」为前提 — 幻觉源头）
-- `lan_mesh/station_lifecycle.py`（iter-75 遗留 Blocker：补回误删的 import uvicorn（否则 python main.py station 直接 NameError））
-- `scripts/check_unbound_names.py`（新增：静态扫未绑定全局名，补 py_compile 盲区；已接入 ship.ps1 门禁）
-- `scripts/ship.ps1`（迭代号改从 loop_status.json 推导 + -DocsSubject/-CodeSubject（原先硬编码 iter-71））
-- `scripts/sync_docs.py`（登记新脚本；MAPPING 用 tuple 会被 find_unmapped 漏认，.py 项应用字符串形式）
-- `tests/test_core.py`（TestIter77SecretaryActionGuard 8 例；pytest 408 passed）
-- `docs/design/06-interaction/README.md`（秘书动作护栏（BUG-031）节 + 变更记录）
-- `lan_mesh/chat_handler.py`（iter-78 需求收集状态机：INTAKE/SYNTHESIZE/GAP_FILL/CONFIRM/DISPATCH + checklist 模板 + 草稿持久化 + 最终提示词生成/修改回填 + 取消路径）
-- `lan_mesh/station_scheduler.py`（submit_task_from_chat 新增 input_data 参数，Brief 在任务创建前入库（修掉原方案的竞态））
-- `lan_mesh/pm_planner.py`（refine_requirements 检测到 input_data.requirement 后跳过重复追问）
-- `tests/test_core.py`（TestRequirementGathering 7 例；连同 iter-77 专项共 415 passed）
-- `docs/design/06-interaction/README.md`（需求收集状态机节 + 变更记录）
-- `loop_status.json、AGENT_LOCKS.md`（iter-78 收尾与锁释放）
+**Codex（iter-79 LLM 意图分类兜底 + iter-80 创建对话失败修复，已验证待 Boss 发货）**
+- `lan_mesh/chat_handler.py`（关键词/继承未命中且过 `_looks_like_command` 成本闸门时做一次 LLM 意图分类，结果必须落在 `_ACTION_DESCRIPTIONS` 白名单，非 JSON/越权/异常一律回退无动作；`_resolve_chat_model_pref` 抽取主回复与分类共用的模型偏好解析）
+- `tests/test_core.py`（TestIter79LlmIntentClassifier 6 例：口语指令分类并执行/闲聊零分类成本/none 不执行/非 JSON 忽略/白名单拦越权/关键词快路径不进分类器；pytest 421 passed）
+- `docs/design/06-interaction/README.md`（LLM 意图分类兜底（iter-79）节 + 变更记录）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-79 收尾与锁释放）
+- `lan_mesh/station_secretary.py`（iter-80: activate_secretary 新增 E4 仲裁预检, 已有优先 Secretary 直接返回 ok:false + conflict + secretary_url; _find_existing_secretary_host 过滤 self/offline/fed）
+- `lan_mesh/web/templates/dashboard.html`（iter-80: 监听 secretary_yielded 立即降级 UI + toast 对端接管; createConversation 检查 response.ok 并展示 detail/message）
+- `tests/test_core.py`（TestSecretaryConflict 新增 2 例: 优先 Secretary 拒绝手动激活并返回地址 / 在线 Secretary 过滤; 全量 423 passed）
+- `docs/design/02-station-core/README.md`（E4 手动激活预检说明 + iter-80 变更记录）
+- `docs/design/06-interaction/README.md`（创建对话失败与让位同步（iter-80）节 + 变更记录）
+- `test_bug/test_checklist.csv`（UI-061 登记: 后端链路已验证, 浏览器待检测）
+- `test_bug/reports/2026-09-03.md`（03:01 自动日报, 记录同一现象下的接口失败, 保留为 Boss 观察证据）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-80 收尾与锁释放）
+
+> 2026-09-03 更新: iter-75 收官 / iter-76 脚本对齐 / iter-77 BUG-031 /
+> iter-78 需求收集 已由 Boss 经 ship.ps1 发货（a15bec5 + 60ce2b9 +
+> 78db2d2，本地与远端齐平）。本轮 Codex 与 Boss 发货并发：iter-79 改动
+> 全部发生在发货提交之后，未被卷入，为干净增量。
 
 ## 四、下一轮排期建议（避免同文件竞争）
 
@@ -70,7 +62,8 @@
 |---|---|---|
 | ✅ 秘书需求收集状态机（iter-78 已完成：多轮收集 → Brief → 最终提示词 → 确认/快速退出派发，7 例专项） | ~~Codex~~ | ~~已释放~~ |
 | ✅ BUG-031 秘书静默失败（iter-77 已完成：三层护栏 + 意图继承，8 例专项 + 三处反向验证） | ~~Codex~~ | ~~已释放~~ |
-| 意图识别升级：69 个关键词仍是纯字面匹配，建议评估 LLM 意图分类（「帮我建个项目」仍漏判） | Codex | `chat_handler.py`，需权衡延迟与成本 |
+| ✅ 意图识别升级（iter-79 已完成：关键词快路径 → 确认继承 → LLM 分类兜底，成本闸门 + 白名单防幻觉，6 例专项） | ~~Codex~~ | ~~已释放~~ |
+| ✅ 创建对话失败修复（iter-80 已完成：激活前 E4 预检 + secretary_yielded 前端同步 + 503 detail 展示，2 例专项 + 隔离实例端到端复现） | ~~Codex~~ | ~~已释放~~ |
 | ✅ 点亮优化讨论发送 UI（iter-74 已完成: `optDiscussSend()` 调 `POST /api/secretary/chat` 带 `discuss_context`，WS 分流 + 历史过滤 + 503 提示，UI-060 通过） | ~~Quest~~ | ~~`dashboard.html` 单文件~~ |
 | ✅ `station_controller.py` 拆 8 mixin Phase 1-2（iter-74 已完成：组合接线 + SelfHeal/Hosts/Sync 三块 28 方法搬入，壳类 3253→2322 行） | ~~Codex~~ | ~~已释放~~ |
 | ✅ `station_controller.py` 拆分 Phase 3-5（iter-75 已完成：53 方法入 5 mixin，壳类 3253→246 行；修复 12 处测试 monkeypatch 目标迁移） | ~~Codex~~ | ~~已释放~~ |
