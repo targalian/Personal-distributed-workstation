@@ -90,7 +90,10 @@
 **E4 冲突仲裁**: 选举时机错开致双 Secretary 时按 `device_id` 字典序
 确定性让位（较大者降级为 Station，双端对称规则保证收敛）; 发现包
 携带真实角色（`packet.role`），修复对端永远无法经 UDP 感知 Secretary
-身份的问题。
+身份的问题。手动激活前执行同一仲裁预检：本网段已存在 `device_id`
+更小的在线 Secretary 时直接返回 `ok:false + conflict + secretary_url`，
+避免「先提示激活成功、2 秒后让位」的竞态；运行期让位继续复用
+`_yield_secretary_to` 并广播 `secretary_yielded`。
 
 **E5 Secretary Failover**: 选举只在启动时进行，Secretary 宕机后无人
 接管。`_prune_loop` 每轮清理后调用 `_secretary_failover_check()`：
@@ -449,6 +452,7 @@ pytest **400 passed**; `scripts/sync_docs.py` PASS。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-03 | iter-80 | 创建对话失败修复: 手动激活新增 E4 仲裁预检 (已有优先 Secretary 直接返回 conflict+secretary_url, 不再先成功后让位); dashboard 监听 secretary_yielded 立即降级 UI; 新建对话接口非 2xx 时展示后端 detail; 专项 2 例 + 全量 423 passed |
 | 2026-09-01 | iter-75 | StationController 职责域拆分 Phase 3-5 (收尾): PmControl/Scheduler/Secretary/LocalPm/Lifecycle 共 53 方法搬入 5 个 mixin, 壳类 3253→246 行 (仅剩 imports/组合声明/StationState/__init__); WEB_DIR/TEMPLATES_DIR/STATIC_DIR 迁入 station_lifecycle 并在壳类 re-export 保兼容; 修复 12 处测试 monkeypatch 目标随方法迁移 (sc_sched/sc_pmctl) 的真实回归; 契约面 82 方法零缺失、门禁违规集合与基线一致; pytest 400 passed |
 | 2026-09-01 | iter-74 | StationController 职责域拆分 Phase 1-2: 8 mixin 组合接线 (mixin 互不继承, MRO 扁平) + SelfHeal/Hosts/Sync 三块 28 方法搬入独立模块, 壳类 3253→2322 行; import 路径/方法名/属性名/端点零变化, 方法可见集合与门禁违规集合均与基线逐字一致; pytest 397 passed |
 | 2026-08-29 | iter-69 | F3.3 本机接管路径修复 (七节点实压 Bug L): `_start_local_pm_for_task` 自构 PM 用早期签名 (task=/runtime=) 必然 TypeError, 全 Worker 离线时接管失败任务滞留 pending; 改为复用 `_local_start_pm` 唯一入口 + 抽出 `_register_local_pm` 统一落库/映射/广播 (接力派发共用), 接管返回 bool 失败留 pending 由下轮扩容兜底; 专项 7/7 + 回归 380 passed |

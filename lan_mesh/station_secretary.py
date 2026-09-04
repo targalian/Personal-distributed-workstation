@@ -65,6 +65,23 @@ class StationSecretaryMixin:
         if self.secretary_active:
             return {"ok": True, "message": "Secretary 已激活", "already_active": True}
 
+        peer = self._find_existing_secretary_host()
+        if peer and peer.device_id < self.state.device_id:
+            peer_name = peer.device_name or peer.device_id[:8]
+            peer_url = f"http://{peer.ip}:{peer.api_port}"
+            logger.warning(
+                "[E4] 手动激活被拒绝: %s (%s) 仲裁优先, 本站保持 Station 模式",
+                peer_name, peer_url)
+            return {
+                "ok": False,
+                "message": (
+                    f"Secretary 冲突: {peer_name} 仲裁优先, "
+                    "本站保持 Station 模式; 请使用当前 Secretary"
+                ),
+                "conflict": True,
+                "secretary_url": peer_url,
+            }
+
         from .project import ProjectManager
         from .model_router import ModelRouter
         from .mcp_gateway import MCPGateway
@@ -341,6 +358,17 @@ class StationSecretaryMixin:
                     and getattr(h, 'online', False)):
                 return getattr(h, 'device_name', h.device_id[:8])
         return ""
+
+    def _find_existing_secretary_host(self):
+        """返回本网段当前在线 Secretary 主机, 无则返回 None。"""
+        hosts = self.db.list_hosts(source="lan")
+        candidates = [
+            h for h in hosts
+            if (getattr(h, 'device_id', '') != self.state.device_id
+                and getattr(h, 'role', '') == 'secretary'
+                and getattr(h, 'online', False))
+        ]
+        return min(candidates, key=lambda h: h.device_id) if candidates else None
 
     # ── E5: Secretary Failover ─────────────────────────────────
 

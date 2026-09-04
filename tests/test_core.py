@@ -1200,6 +1200,49 @@ class TestSecretaryConflict:
         StationController._yield_secretary_to(f, "peer", "10.0.0.4", 80)
         assert calls["deactivate"] == 1 and f.secretary_active is False
 
+    def test_activate_rejects_when_existing_secretary_has_priority(self):
+        """手动激活前先做仲裁预检, 避免先报成功再让位。"""
+        from types import SimpleNamespace
+        from lan_mesh.station_controller import StationController
+
+        peer = SimpleNamespace(
+            device_id="aaa-peer", device_name="peer-secretary",
+            role="secretary", online=True, ip="10.0.0.2", api_port=45470)
+
+        class Fake:
+            secretary_active = False
+            state = SimpleNamespace(device_id="zzz-self")
+            db = SimpleNamespace(list_hosts=lambda source="lan": [peer])
+
+        Fake._find_existing_secretary_host = (
+            StationController._find_existing_secretary_host)
+        result = StationController.activate_secretary(Fake())
+
+        assert result["ok"] is False
+        assert result["conflict"] is True
+        assert result["secretary_url"] == "http://10.0.0.2:45470"
+        assert "peer-secretary" in result["message"]
+
+    def test_find_existing_secretary_host_filters_self_and_offline(self):
+        """只返回本网段在线且非本机的 Secretary, 防误仲裁。"""
+        from types import SimpleNamespace
+        from lan_mesh.station_controller import StationController
+
+        peers = [
+            SimpleNamespace(device_id="self", role="secretary", online=True),
+            SimpleNamespace(device_id="offline", role="secretary", online=False),
+            SimpleNamespace(device_id="worker", role="worker", online=True),
+            SimpleNamespace(device_id="zzz-secretary", role="secretary",
+                            online=True),
+            SimpleNamespace(device_id="peer", role="secretary", online=True),
+        ]
+
+        class Fake:
+            state = SimpleNamespace(device_id="self")
+            db = SimpleNamespace(list_hosts=lambda source="lan": peers)
+
+        assert StationController._find_existing_secretary_host(Fake()).device_id == "peer"
+
 
 class TestRoleFreeAlign:
     """F1 角色无关自动对齐 — config_ts 仲裁、池数仲裁、自动升级安全边界。"""
@@ -7743,3 +7786,157 @@ class TestRequirementGathering:
 
         assert result == task
         assert runtime.calls == []
+
+
+class TestIter79LlmIntentClassifier:
+    """iter-79: 关键词未命中时的 LLM 意图分类兜底。
+
+    背景: 69 个关键词是纯字面匹配, 「帮我建个项目」这类口语化指令
+    必然漏判 → 后台静默不执行。本轮在关键词快路径之后加 LLM 分类
+    兜底: 只对疑似指令的消息发起分类调用 (成本闸门), 结果必须落在
+    动作白名单内才生效 (防幻觉), 失败一律回退无动作。
+    """
+
+    class _Runtime:
+        def __init__(self, replies=None):
+            self.replies = list(replies or [])
+            self.calls = []
+
+        def _call_llm_with_routing(self, prompt, opts):
+            self.calls.append({"prompt": prompt, "opts": opts})
+            content = self.replies.pop(0) if self.replies else "收到"
+            return {"content": content}
+
+    @staticmethod
+    def _handler(tmp_path, runtime):
+        from lan_mesh.chat_handler import ChatHandler
+        from lan_mesh.database import Database
+
+        class _Controller:
+            _default_model = ""
+            model_router = None
+            workstation_optimizer = None
+            project_manager = None
+            db = Database(str(tmp_path / "classify.db"))
+
+        handler = ChatHandler.__new__(ChatHandler)
+        handler.runtime = runtime
+        handler.controller = _Controller()
+        handler._conversations = {"c1": []}
+        handler._conv_index = [{"id": "c1", "title": "默认对话"}]
+        handler._active_conv_id = "c1"
+        handler._max_history = 50
+        return handler
+
+    @staticmethod
+    def _patch(monkeypatch):
+        from lan_mesh.chat_handler import ChatHandler
+        monkeypatch.setattr(ChatHandler, "_build_status_context",
+                            lambda self: "状态")
+        monkeypatch.setattr(ChatHandler, "_build_system_prompt",
+                            lambda self, context: "秘书 prompt")
+        monkeypatch.setattr(ChatHandler, "_save_message_to_file",
+                            lambda self, cid, msg: None)
+        monkeypatch.setattr(ChatHandler, "_save_to_db",
+                            lambda self, *args, **kwargs: None)
+        monkeypatch.setattr(ChatHandler, "_auto_title",
+                            lambda self, cid, msg: None)
+        monkeypatch.setattr(ChatHandler, "_touch_conv",
+                            lambda self, cid: None)
+
+    def test_colloquial_request_classified_and_executed(
+            self, tmp_path, monkeypatch):
+        """「帮我建个项目」经分类命中 create_project 并真实执行。"""
+        from lan_mesh.chat_handler import ChatHandler
+        self._patch(monkeypatch)
+        runtime = self._Runtime([
+            '{"action": "create_project", "reason": "要求建项目"}',
+            "收到, 正在为您创建项目。",
+        ])
+        handler = self._handler(tmp_path, runtime)
+        handler._conversations["c1"] = [
+            {"role": "user", "content": "我们聊一个股票分析工具"},
+            {"role": "assistant", "content": "好的, 请继续描述。"},
+        ]
+        monkeypatch.setattr(ChatHandler, "_execute_action",
+                            lambda self, action, message: "✅ 项目已创建")
+
+        result = handler.chat("帮我建个项目", conv_id="c1")
+
+        assert result["action_taken"] == "create_project"
+        assert "操作结果" in result["reply"]
+        assert len(runtime.calls) == 2
+        classifier_prompt = runtime.calls[0]["prompt"]
+        assert "create_project" in classifier_prompt
+        assert "股票分析工具" in classifier_prompt
+        main_system_prompt = runtime.calls[1]["opts"]["_system_prompt"]
+        assert "已识别到操作意图" in main_system_prompt
+
+    def test_plain_chat_never_pays_classifier_call(
+            self, tmp_path, monkeypatch):
+        """闲聊不过闸门: 只有主回复一次调用, 无分类成本。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime(["你好, 我是秘书。"])
+        handler = self._handler(tmp_path, runtime)
+
+        result = handler.chat("今天心情不错", conv_id="c1")
+
+        assert result["action_taken"] == ""
+        assert len(runtime.calls) == 1
+
+    def test_classifier_none_means_no_action(self, tmp_path, monkeypatch):
+        """分类器明确输出 none: 不执行动作, 不追加操作结果。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime([
+            '{"action": "none", "reason": "只是求建议"}',
+            "给你几点建议...",
+        ])
+        handler = self._handler(tmp_path, runtime)
+
+        result = handler.chat("给我一点投资建议", conv_id="c1")
+
+        assert result["action_taken"] == ""
+        assert "操作结果" not in result["reply"]
+
+    def test_invalid_classifier_output_is_ignored(
+            self, tmp_path, monkeypatch):
+        """分类器输出非 JSON 时按无意图处理, 不虚报执行。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime(["我认为你想创建项目", "好的"])
+        handler = self._handler(tmp_path, runtime)
+
+        result = handler.chat("帮我建个项目", conv_id="c1")
+
+        assert result["action_taken"] == ""
+        assert "操作结果" not in result["reply"]
+
+    def test_classifier_whitelist_blocks_unknown_action(
+            self, tmp_path, monkeypatch):
+        """分类器返回白名单外动作时拒绝执行 (防幻觉越权)。"""
+        from lan_mesh.chat_handler import ChatHandler
+        self._patch(monkeypatch)
+        runtime = self._Runtime([
+            '{"action": "delete_database", "reason": "危险动作"}',
+            "收到",
+        ])
+        handler = self._handler(tmp_path, runtime)
+        monkeypatch.setattr(ChatHandler, "_execute_action",
+                            lambda self, action, message: "不应执行")
+
+        result = handler.chat("帮我把这个任务清理一下", conv_id="c1")
+
+        assert result["action_taken"] == ""
+
+    def test_keyword_fast_path_skips_classifier(self, tmp_path, monkeypatch):
+        """关键词命中时不发起分类调用, 保持零成本快路径。"""
+        from lan_mesh.chat_handler import ChatHandler
+        self._patch(monkeypatch)
+        runtime = self._Runtime(["收到"])
+        handler = self._handler(tmp_path, runtime)
+        monkeypatch.setattr(ChatHandler, "_execute_action",
+                            lambda self, action, message: "✅ 项目已创建")
+
+        result = handler.chat("创建项目: 股票交易系统", conv_id="c1")
+
+        assert result["action_taken"] == "create_project"
+        assert len(runtime.calls) == 1

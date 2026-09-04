@@ -1047,6 +1047,11 @@ function connectWS(){
     if(msg.type==='project_created'||msg.type==='project_updated'||msg.type==='project_archived')refreshProjects();
     if(msg.type==='secretary_activated'){secretaryActive=true;updateSecretaryUI();document.getElementById('role-badge').textContent='Station + Secretary';document.getElementById('role-badge').style.color='var(--green)';document.getElementById('role-badge').style.borderColor='var(--green)';}
     if(msg.type==='secretary_deactivated'){secretaryActive=false;updateSecretaryUI();document.getElementById('role-badge').textContent='Station';document.getElementById('role-badge').style.color='';document.getElementById('role-badge').style.borderColor='';}
+    if(msg.type==='secretary_yielded'){
+      secretaryActive=false;updateSecretaryUI();
+      const peer=msg.data&&msg.data.peer?` (已由 ${msg.data.peer} 接管)`:'';
+      showToast('Secretary 冲突仲裁: 本站已让位'+peer,'err');
+    }
     if(msg.type==='secretary_assigned'||msg.type==='secretary_revoked')refreshStation();
     if(msg.type==='skill_assigned'||msg.type==='skill_revoked'||msg.type==='skills_scanned')refreshSkills();
     // iter-61: 安装/卸载 Toast 由本地操作函数弹出, WS 事件仅静默刷新 (防双重 Toast)
@@ -2643,6 +2648,7 @@ async function createConversation(){
   try{
     const r=await apiFetch('/api/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})});
     const conv=await r.json();
+    if(!r.ok){showToast('创建失败:'+(conv.detail||conv.message||`HTTP ${r.status}`),'err');return;}
     if(conv.id){
       await loadConversations();
       switchConversation(conv.id);

@@ -148,10 +148,59 @@ PM `refine_requirements` 检测到 `requirement` 后跳过重复追问。
 确认派发并携带 Brief/最终提示词修改回填/取消不派发/显式提交不被拦截/
 快速退出仍带 Brief/PM 收到 Brief 不再追问。pytest 415 passed。
 
+## LLM 意图分类兜底 (iter-79)
+
+**问题**: 69 个 `_ACTION_KEYWORDS` 是纯字面子串匹配, 口语化指令
+（如「帮我建个项目」）必然漏判 → 关键词与确认继承都未命中 →
+后台静默不执行, 只能靠 BUG-031 的「未识别」护栏兜底提示。
+
+**方案**: 在 `chat()` 的意图判定链路上加第三层兜底 —
+关键词快路径 (零成本) → 确认句继承上轮样例 →
+`_classify_action_llm` LLM 意图分类。分类结果必须落在
+`_ACTION_DESCRIPTIONS` 动作白名单内才生效, 输出非 JSON、
+动作越权或调用异常一律回退无意图, 维持「宁可明说不执行,
+不可虚报已执行」底线。
+
+**成本闸门**: `_looks_like_command` 用动词/领域名词信号 +
+200 字长度上限做廉价预筛, 纯闲聊不产生任何额外模型调用;
+命中关键词的消息也直接走快路径, 不进分类器。分类 prompt
+只含动作白名单与最近 4 轮上下文 (消解「那就建吧」类指代)。
+
+**架构约束**: 分类发生在主回复 LLM 调用之前, 结果经
+`_build_action_guard` 注入 system prompt (命中则告知后台将真实
+执行), 因此 BUG-031 的时序与护栏语义完全保留; 分类器只负责
+「是否执行」, 不改变执行器与操作结果展示链路。
+
+**测试**: `TestIter79LlmIntentClassifier` 6 例 — 口语指令分类并执行/
+闲聊零分类成本/分类 none 不执行/非 JSON 输出忽略/白名单拦越权/
+关键词快路径不进分类器。pytest 421 passed (415 基线 + 6 新增)。
+
+## 创建对话失败与让位同步 (iter-80)
+
+**现象**: Boss 手动激活 Secretary 后点击「新建对话」失败。端到端
+复现链路为：激活接口先返回成功；约 2 秒后发现本网段已有 `device_id`
+更小的 Secretary，E4 仲裁将本机降级；`POST /api/conversations` 因此
+返回 503。此前 dashboard 未监听 `secretary_yielded` 事件，界面仍显示
+Secretary 可用；同时 `createConversation()` 不检查 `response.ok`，
+后端 `detail` 被吞掉，只表现为创建失败。
+
+**修复**: 激活前执行 E4 仲裁预检，已有优先 Secretary 时直接返回
+`ok:false + conflict + secretary_url`，不再经历「成功→让位」竞态；
+dashboard 监听 `secretary_yielded`，立即执行 `updateSecretaryUI()`
+隐藏 Secretary 功能并 toast 提示对端接管；新建对话接口非 2xx 时
+解析并展示 `detail/message`，503 语义可见。
+
+**测试**: `TestSecretaryConflict` 新增 2 例 — 优先 Secretary 拒绝手动
+激活并返回地址、在线 Secretary 过滤 self/offline/fed；全量 pytest
+423 passed。真实隔离 Station 端到端复现验证：手动激活返回
+`ok:false` 与 `http://192.168.1.206:45470`，后续创建对话 503。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-03 | iter-80 | 创建对话失败修复: 激活前 E4 仲裁预检 + secretary_yielded 前端同步 + conversation 非响应状态 detail 展示; 专项 2 例 + 全量 423 passed |
+| 2026-09-03 | iter-79 | LLM 意图分类兜底: 关键词未命中且过成本闸门时做一次意图分类, 白名单校验防越权, 失败回退无动作; _looks_like_command 动词/名词/长度预筛让闲聊零额外成本; 分类在主回复前完成, BUG-031 护栏时序不变; 专项 6 例; pytest 421 passed |
 | 2026-09-02 | iter-78 | 秘书需求收集状态机: INTAKE/SYNTHESIZE/GAP_FILL/CONFIRM/DISPATCH + checklist 模板 + 草稿持久化 + 最终提示词生成与修改回填 + 取消路径; submit_task_from_chat 支持 input_data, Brief 在创建前入库; PM 收到 requirement 后跳过重复追问; 专项 7 例; pytest 415 passed |
 | 2026-09-02 | iter-77 | BUG-031 秘书静默失败修复: 意图检测提到 LLM 调用前 + _build_action_guard 把「后台是否会执行」注入 prompt; _append_no_action_notice 兔底追加清晰提示; _detect_action_with_context 仅对纯确认句继承上轮引号样例意图; 角色卡那条无条件「回复正在处理」改为以意图已识别为前提; 专项 8 例 + 三处反向验证; pytest 408 passed |
 | 2026-08-27 | iter-44 | 新增 error_burst 事件模板与优先级 (错误突发告警, 与错误追踪闭环联动) |

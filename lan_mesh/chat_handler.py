@@ -101,6 +101,47 @@ _ACTION_KEYWORDS = {
     "建立项目": "create_project",
 }
 
+_ACTION_DESCRIPTIONS = {
+    "submit_task": "提交/创建/下发新任务, 或让秘书做/写/开发/搭建/设计某物",
+    "create_project": "创建/新建/建立项目",
+    "edit_task_graph": "编辑任务 DAG 图、增删步骤或调整依赖",
+    "workstation_optimization": "优化工作站、处理瓶颈或答复优化决策",
+    "activate_secretary": "启动/激活秘书",
+    "deactivate_secretary": "停止/停用秘书",
+    "query_status": "查询工作站整体状态",
+    "query_progress": "查询任务或项目进度",
+    "query_hosts": "查询主机列表",
+    "query_tasks": "查询任务列表",
+    "cancel_task": "取消/终止任务",
+    "pause_task": "暂停任务",
+    "respond_to_pm": "回复/告知 PM 决策或意见",
+    "accept_delivery": "验收通过交付物",
+    "reject_delivery": "退回/打回交付物要求重做",
+}
+
+# LLM 意图分类兜底的触发信号 (iter-79): 命中任一才值得花一次分类
+# 调用。纯闲聊/长描述维持零额外成本; 「做一个/写一个」等高频表达已由
+# 关键词快路径覆盖, 这里只需兜住「帮我建个项目」这类口语化变体。
+_CLASSIFIER_VERB_SIGNALS = (
+    "建", "弄", "搞", "查", "删", "停", "关闭", "执行", "生成",
+    "启动", "激活", "取消", "暂停", "提交", "下发", "分配", "验收",
+    "退回", "打回", "回复", "告知", "告诉", "优化",
+    "create", "submit", "cancel", "pause", "optimize",
+)
+_CLASSIFIER_NOUN_SIGNALS = (
+    "项目", "任务", "图", "步骤", "依赖", "主机", "状态", "进度",
+    "秘书", "PM", "交付", "瓶颈", "project", "task", "status", "host",
+)
+_CLASSIFIER_MAX_MESSAGE_LEN = 200
+
+_CLASSIFIER_SYSTEM_PROMPT = (
+    "你是 LAN Mesh 秘书的意图分类器。只输出一个 JSON 对象, 格式 "
+    '{"action": "<动作名>", "reason": "<12字内理由>"}, 不要输出任何'
+    "其他文字。action 必须严格取自候选列表, 无法确定时用 none。"
+    "用户只是在提问、闲聊、讨论或求解释时必须输出 none; "
+    "只有明确要求执行某项操作时才输出对应动作。"
+)
+
 
 # ── 需求收集状态机 ──────────────────────────────────────────────
 
@@ -716,6 +757,10 @@ class ChatHandler:
         pending_action = ("" if discuss_context else
                           self._detect_action_with_context(
                               message, chat_history))
+        # iter-79: 关键词与上下文继承都未命中时, 疑似指令交给 LLM 分类
+        if not pending_action and not discuss_context:
+            pending_action = self._classify_action_llm(
+                message, chat_history)
         guard = self._build_action_guard(pending_action, discuss_context)
         if guard:
             system_prompt = f"{system_prompt}\n\n{guard}"
@@ -733,6 +778,16 @@ class ChatHandler:
     def _call_chat_llm(self, message: str, prompt: str,
                        system_prompt: str) -> str:
         """调用秘书 LLM, 优先默认模型并保留降级链。"""
+        model_pref, fallback_models = self._resolve_chat_model_pref(message)
+        resp = self.runtime._call_llm_with_routing(prompt, {
+            "_model_preference": model_pref,
+            "_fallback_models": fallback_models,
+            "_system_prompt": system_prompt,
+        })
+        return resp.get("content", "[LLM 调用失败]")
+
+    def _resolve_chat_model_pref(self, message: str) -> tuple[str, list]:
+        """解析对话链路的首选模型与降级链 (回复与意图分类共用)。"""
         model_pref = ""
         fallback_models = []
         default_model = getattr(self.controller, "_default_model", "")
@@ -750,12 +805,7 @@ class ChatHandler:
                 fallback_models = routing.fallback_chain
             except Exception:
                 pass
-        resp = self.runtime._call_llm_with_routing(prompt, {
-            "_model_preference": model_pref,
-            "_fallback_models": fallback_models,
-            "_system_prompt": system_prompt,
-        })
-        return resp.get("content", "[LLM 调用失败]")
+        return model_pref, fallback_models
 
     def _build_action_guard(self, pending_action: str,
                             discuss_context: Optional[dict]) -> str:
@@ -1630,6 +1680,94 @@ class ChatHandler:
             if stripped.startswith(">"):
                 segs.append(stripped.lstrip("> ").strip())
         return segs
+
+    @staticmethod
+    def _looks_like_command(message: str) -> bool:
+        """廉价预筛: 只让疑似指令的消息进入 LLM 意图分类。
+
+        中文字词信号按子串匹配; ASCII 信号按整词匹配, 避免
+        「example」里的 pm 之类误触发。未过闸门的消息不产生任何
+        额外模型调用, 这是延迟与成本的主要护栏。
+        """
+        text = (message or "").strip()
+        if not text or len(text) > _CLASSIFIER_MAX_MESSAGE_LEN:
+            return False
+        lowered = text.lower()
+        for signal in _CLASSIFIER_VERB_SIGNALS + _CLASSIFIER_NOUN_SIGNALS:
+            if signal.isascii():
+                if re.search(rf"\b{re.escape(signal)}\b", lowered):
+                    return True
+            elif signal in text:
+                return True
+        return False
+
+    def _build_classifier_prompt(self, message: str,
+                                  history: Optional[list]) -> str:
+        """构建意图分类 prompt: 动作白名单 + 少量近况上下文。"""
+        lines = ["候选动作:"]
+        for name, desc in _ACTION_DESCRIPTIONS.items():
+            lines.append(f"- {name}: {desc}")
+        lines.append("- none: 非以上任何操作 (提问/闲聊/讨论)")
+        lines.append("")
+        lines.append("近期对话 (仅用于消解指代, 最后一行是本轮消息):")
+        msgs = history if history is not None else []
+        for msg in msgs[-4:]:
+            role = "Boss" if msg.get("role") == "user" else "秘书"
+            content = (msg.get("content", "") or "")[:80]
+            lines.append(f"{role}: {content}")
+        lines.append(f"Boss: {message}")
+        lines.append("")
+        lines.append('只输出 JSON, 例如 {"action": "create_project", '
+                     '"reason": "要求建项目"}')
+        return "\n".join(lines)
+
+    @staticmethod
+    def _parse_classifier_json(content: str) -> str:
+        """从分类回复中提取白名单动作; 解析失败或越权一律返回空。"""
+        text = (content or "").strip()
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start < 0 or end <= start:
+            return ""
+        try:
+            data = json.loads(text[start:end])
+        except Exception:
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        action = data.get("action", "")
+        if isinstance(action, str) and action in _ACTION_DESCRIPTIONS:
+            return action
+        return ""
+
+    def _classify_action_llm(self, message: str,
+                             history: Optional[list] = None) -> str:
+        """LLM 意图分类兜底 (iter-79)。
+
+        关键词与上下文继承都未命中时, 对「帮我建个项目」这类口语化
+        指令做一次意图分类。结果必须落在动作白名单内才生效; 分类
+        失败或输出越权动作一律视为无意图, 维持 BUG-031 的「宁可
+        明说不执行, 不可虚报已执行」底线。
+        """
+        if not self._looks_like_command(message):
+            return ""
+        prompt = self._build_classifier_prompt(message, history)
+        model_pref, fallback_models = self._resolve_chat_model_pref(message)
+        try:
+            resp = self.runtime._call_llm_with_routing(prompt, {
+                "_model_preference": model_pref,
+                "_fallback_models": fallback_models,
+                "_system_prompt": _CLASSIFIER_SYSTEM_PROMPT,
+            })
+        except Exception as exc:
+            print(f"[Chat] LLM 意图分类调用失败, 回退无动作: {exc}",
+                  flush=True)
+            return ""
+        action = self._parse_classifier_json(resp.get("content", ""))
+        if action:
+            print(f"[Chat] LLM 意图分类命中: {message[:20]} -> {action}",
+                  flush=True)
+        return action
 
     def _execute_action(self, action: str, message: str) -> str:
         """执行检测到的操作。
