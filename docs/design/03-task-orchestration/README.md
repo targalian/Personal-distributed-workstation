@@ -52,9 +52,20 @@ StationController.get_task_graph_data）; `PUT /api/tasks/{id}/graph` 编辑端�
 - **pm_agent.py**: 门面/协调器，统一持有三子模块并对外暴露接口
 - **pm_planner.py**: 加载 multi-agent-architect skill → 模板匹配（F2.4）
   或 LLM 规划 → 多轮细化（F2.3）；简单任务直接执行
+- **结构化项目上下文 (iter-81)**: `input_data` 支持
+  `project_path` / `repo_url` / `execution_mode=planning_only`;
+  模板规划时不再把目标项目折叠为 `.`, planning-only 会裁掉
+  「代码实现 / 单元测试」并降级为 single 模式。
 - **pm_dispatcher.py**: 获取可用 work_station 列表 → 创建团队与子 Agent →
   **依赖感知调度**（depends_on 满足才分发）→ 构建子 Agent 定制 prompt →
   本地执行回退
+- **本机地址规范化 (iter-81)**: `get_available_stations()` 过滤非本机
+  `169.254.*` 链路本地地址；本机命中时强制 `ip=127.0.0.1` 并排在首位,
+  避免 PM 远程分发自己失败后再回退本地。
+- **子任务可见性 (iter-83)**: 远程团队创建完成后立即 `sync_subtasks()`;
+  本地回退执行也登记临时 subagent (`busy`) 并在执行前同步,
+  `_build_subtask_status()` 因而非依赖完成后才会离开 `running`;
+  子任务开始写 `subtask_started` 任务流事件, 结果注入后再次同步任务面板。
 - **pm_monitor.py**: progress_loop 轮询 + 主动上报接收 → 超时检测 →
   **失败接管三级策略**（同站重试 → 换站重试 → PM 本地接管）→
   质量验证（F2.5 生成-验证器）→ 结果聚合 → 升级上报
@@ -94,6 +105,8 @@ task_id/pm_id)、交付链异常 (`_deliver` 后, 交付丢失风险)、记忆�
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-06 | iter-83 | PM 子任务可观测性修复: 本地回退登记临时 subagent 并在执行前同步 running, 远程团队创建后统一同步, 子任务开始/结果写任务流与任务面板; 专项 35 passed |
+| 2026-09-05 | iter-81 | 真项目联测修复: 需求派发携带 project_path/repo_url/planning_only, 高优先级映射修正, PM 模板裁剪越界执行子任务, 本机链路本地地址规范化为 127.0.0.1 |
 | 2026-08-27 | iter-45 | pm_agent 三处错误追踪埋点 (任务级失败/交付链/记忆沉淀链, 异常隔离) |
 | 2026-08-28 | iter-51 | F4.3 自然语言 DAG 编辑: PUT /api/tasks/{id}/graph 编辑端点恢复 (重接 DB 路径, 仅 pending 可编辑 + 环检测) + GET 端点复用 get_task_graph_data + 秘书自然语言编辑意图 |
 | 2026-08-16 | iter-30 补 | orchestrator 收敛裁定: 降级工具库 + stub 兼容, 3 个死端点下线, graph 端点改 DB 重建 |

@@ -195,10 +195,41 @@ dashboard 监听 `secretary_yielded`，立即执行 `updateSecretaryUI()`
 423 passed。真实隔离 Station 端到端复现验证：手动激活返回
 `ok:false` 与 `http://192.168.1.206:45470`，后续创建对话 503。
 
+## 需求派发结构化上下文 (iter-81)
+
+**问题**: 真项目联测中, Boss 已在需求描述里给出
+`E:\ingobj\stock_player` 与远端仓库, 但需求收集派发只传
+`requirement` 字符串, PM 模板把项目路径折叠为 `.`; 同时 Brief
+写「高」优先级却落库为 `normal`。
+
+**修复**: `_dispatch_from_draft()` 从原始消息与 checklist 提取
+`project_path`、`repo_url`, 识别「只做规划 / 不直接修改」为
+`execution_mode=planning_only`; 优先级关键词补齐「高」。
+PM 规划消费这些结构化字段, planning-only 任务不再生成代码实现
+与单元测试子任务。
+
+**测试**: `TestRequirementGathering` 新增 1 例, 覆盖项目路径、
+仓库、planning-only 与高优先级派发。
+
+## 秘书聊天线程池隔离 (iter-82)
+
+**问题**: `/api/secretary/chat` 是 async 路由, 但直接同步调用
+`chat_handler.chat()`。LLM、意图分类与需求提取耗时期间会阻塞
+FastAPI 事件循环, 导致其他 API (含认证端点) 同时超时。
+
+**修复**: 路由通过 `run_in_threadpool()` 调用 `chat_handler.chat()`,
+请求与响应结构保持不变; 长耗时聊天不再阻塞事件循环。该修复不改变
+HTTP 同步等待语义, 客户端仍需自行设置足够超时时间。
+
+**测试**: `TestIter73OptimizationDiscuss` 扩展路由回归 — 校验
+`chat()` 在非请求线程执行且 `discuss_context` 原样透传。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-05 | iter-82 | 秘书聊天线程池隔离: async 路由改用 run_in_threadpool 调用 ChatHandler, 避免同步 LLM 阻塞事件循环; 专项 3 passed |
+| 2026-09-05 | iter-81 | 需求派发结构化上下文: 提取 project_path/repo_url/planning_only, 高优先级映射修正; 专项 29 passed |
 | 2026-09-03 | iter-80 | 创建对话失败修复: 激活前 E4 仲裁预检 + secretary_yielded 前端同步 + conversation 非响应状态 detail 展示; 专项 2 例 + 全量 423 passed |
 | 2026-09-03 | iter-79 | LLM 意图分类兜底: 关键词未命中且过成本闸门时做一次意图分类, 白名单校验防越权, 失败回退无动作; _looks_like_command 动词/名词/长度预筛让闲聊零额外成本; 分类在主回复前完成, BUG-031 护栏时序不变; 专项 6 例; pytest 421 passed |
 | 2026-09-02 | iter-78 | 秘书需求收集状态机: INTAKE/SYNTHESIZE/GAP_FILL/CONFIRM/DISPATCH + checklist 模板 + 草稿持久化 + 最终提示词生成与修改回填 + 取消路径; submit_task_from_chat 支持 input_data, Brief 在创建前入库; PM 收到 requirement 后跳过重复追问; 专项 7 例; pytest 415 passed |

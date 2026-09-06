@@ -582,7 +582,8 @@ class AgentRuntime:
         - 输出截断保护
         """
         command = input_data.get("command", input_data.get("requirement", ""))
-        timeout = min(input_data.get("timeout", 30), 120)  # 最大 120s
+        from .tool_registry import normalize_tool_timeout
+        timeout = normalize_tool_timeout(input_data.get("timeout", 30))
 
         # 安全检查: 禁止危险命令
         cmd_lower = command.lower().strip()
@@ -610,7 +611,12 @@ class AgentRuntime:
                 "returncode": result.returncode,
             }
         except subprocess.TimeoutExpired:
-            return {"stdout": "", "stderr": f"命令超时 ({timeout}s)", "returncode": -1}
+            return {
+                "stdout": "",
+                "stderr": f"命令超时 ({timeout}s)",
+                "returncode": -1,
+                "timed_out": True,
+            }
 
     def _handle_file_ops(self, input_data: dict) -> dict:
         """文件读写操作 (沙箱限制)。
@@ -719,6 +725,7 @@ class AgentRuntime:
             f"- 工作目录: {cwd}\n"
             "- 禁止: 不要执行进度上报/curl/HTTP POST 到任何 progress-report 端点, 框架会自动处理\n"
             "- 禁止: 不要浪费轮次做网络请求上报状态, 专注于任务本身\n"
+            "- 工具返回 timed_out=true 时不要原样重试, 应缩小范围或直接说明超时原因\n"
         )
 
         # 对话历史

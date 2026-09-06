@@ -358,6 +358,7 @@ class ProjectManagerAgent:
         except Exception:
             pass
         self._monitor.receive_progress_report(report)
+        self.sync_subtasks()
         # iter-53: 子任务结果注入后快照 (断点3, 高频但轻量)
         self._persist_snapshot("executing")
 

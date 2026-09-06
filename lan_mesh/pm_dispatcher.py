@@ -158,6 +158,7 @@ class PMDispatcher:
         st.teams[team_id] = team
         self._agent.report_team(team)
         self._agent.report_status("monitoring", team_structure=team)
+        self._agent.sync_subtasks()
 
     # ── 分发子任务 ────────────────────────────────────────────────
 
@@ -273,7 +274,20 @@ class PMDispatcher:
             if resp and resp.status_code == 200:
                 data = resp.json()
                 hosts = data.get("hosts", [])
-                return [h for h in hosts if h.get("online") and h.get("api_port")]
+                stations = [
+                    dict(h) for h in hosts
+                    if h.get("online") and h.get("api_port")
+                    and (
+                        h.get("device_id") == self._device_id
+                        or not str(h.get("ip", "")).startswith("169.254.")
+                    )
+                ]
+                for station in stations:
+                    if station.get("device_id") == self._device_id:
+                        station["ip"] = "127.0.0.1"
+                stations.sort(
+                    key=lambda h: 0 if h.get("device_id") == self._device_id else 1)
+                return stations
         except Exception as e:
             logger.error("[%s] 获取 work_station 列表失败: %s", self._pm_id[:8], e)
         return []
@@ -338,10 +352,25 @@ class PMDispatcher:
         修复: 执行完成后注入 Monitor 进度追踪, 触发依赖链分发和结果聚合。
         """
         sub_name = sub.get("name", "")
+        member_id = f"local-{uuid.uuid4().hex[:10]}"
         sub_desc = sub.get("description", sub_name)
         input_data = dict(task.get("input_data", {}))
         if not input_data.get("requirement") and not input_data.get("description"):
             input_data["requirement"] = sub_desc
+        with self._state.lock:
+            self._state.dispatched.add(sub_name)
+            self._state.subagents[member_id] = {
+                "member_id": member_id,
+                "team_id": "",
+                "agent_id": member_id,
+                "agent_name": sub_name,
+                "role": "worker",
+                "skills": [sub.get("skill", "")],
+                "current_task": sub_name,
+                "status": "busy",
+                "progress": 0.0,
+            }
+            self._state.task_agent[sub_name] = {"agent_id": member_id}
         subtask = {
             "subtask_id": str(uuid.uuid4()),
             "parent_task_id": task.get("task_id", ""),
@@ -355,6 +384,8 @@ class PMDispatcher:
 
         logger.info("[%s] 本地执行子任务: %s (skill=%s)",
                    self._pm_id[:8], sub_name, sub.get("skill", ""))
+        self._record_subtask_start(sub_name)
+        self._agent.sync_subtasks()
         result = self._runtime.execute(subtask)
         status = "completed" if result.get("status") == "completed" else "failed"
         output = result.get("output", {})
@@ -364,7 +395,7 @@ class PMDispatcher:
             task_name=sub_name,
             status=status,
             output_data=output if isinstance(output, dict) else {"result": str(output)},
-            agent_id=f"local-{self._pm_id[:8]}",
+            agent_id=member_id,
         )
 
         self._agent.report_progress(
@@ -454,3 +485,13 @@ class PMDispatcher:
         """F1.3: 记录子任务开始时间。"""
         with self._state.lock:
             self._state.subtask_start_times[task_name] = time.time()
+        try:
+            from . import runtime_trace
+            runtime_trace.trace_task_event(
+                (self._state.task or {}).get("task_id", ""),
+                "subtask_started",
+                detail=task_name,
+                pm_id=self._pm_id,
+            )
+        except Exception:
+            pass

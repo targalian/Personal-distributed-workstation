@@ -101,8 +101,19 @@ class PMPlanner:
                     "doc_type": task.get("input_data", {}).get("doc_type", "API"),
                 }
                 plan = apply_template(matched, variables)
+                if task.get("input_data", {}).get("execution_mode") == "planning_only":
+                    plan["decomposition"] = [
+                        sub for sub in plan.get("decomposition", [])
+                        if sub.get("name") not in ("代码实现", "单元测试")
+                    ]
+                    plan["pattern"] = "single"
+                    plan["team_size"] = 1
+                    plan["reasoning"] = (
+                        f"{plan.get('reasoning', '')} | planning_only: "
+                        "本轮只保留规划/审计子任务"
+                    ).strip()
                 logger.info("[%s] 模板命中: %s (score=%d)",
-                           self._pm_id[:8], matched.get("name", ""), matched.get("match_score", 0))
+                            self._pm_id[:8], matched.get("name", ""), matched.get("match_score", 0))
                 return plan
         except Exception as e:
             logger.debug("[%s] 模板匹配异常, 回退 LLM: %s", self._pm_id[:8], e)

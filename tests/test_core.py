@@ -1606,6 +1606,34 @@ class TestPMPlanner:
         plan = p.analyze_with_skill({"name": "t", "description": "x", "input_data": {}})
         assert plan.get("from_template") is True
 
+    def test_analyze_template_planning_only_removes_execution(self, monkeypatch):
+        import lan_mesh.task_templates as tt
+        monkeypatch.setattr(
+            tt, "match_template",
+            lambda desc: {"name": "feature_development", "match_score": 3})
+        monkeypatch.setattr(
+            tt, "apply_template",
+            lambda tpl, variables: {
+                "pattern": "orchestrator",
+                "team_size": 3,
+                "reasoning": "模板命中",
+                "decomposition": [
+                    {"name": "需求分析", "skill": "react_agent", "depends_on": []},
+                    {"name": "代码实现", "skill": "react_agent", "depends_on": ["需求分析"]},
+                    {"name": "单元测试", "skill": "react_agent", "depends_on": ["代码实现"]},
+                ],
+            })
+        p = self._planner()
+        task = {"name": "t", "description": "开发", "input_data": {
+            "execution_mode": "planning_only"}}
+
+        plan = p.analyze_with_skill(task)
+
+        assert [sub["name"] for sub in plan["decomposition"]] == ["需求分析"]
+        assert plan["pattern"] == "single"
+        assert plan["team_size"] == 1
+        assert "planning_only" in plan["reasoning"]
+
     def test_analyze_llm_json_parse_failure_falls_back_single(self, monkeypatch):
         import lan_mesh.task_templates as tt
         monkeypatch.setattr(tt, "match_template", lambda desc: None)
@@ -1940,6 +1968,31 @@ class TestPMDispatcher:
         stations = disp.get_available_stations()
         assert [s["device_id"] for s in stations] == ["h1"]
 
+    def test_get_available_stations_normalizes_local_link_local(
+            self, monkeypatch):
+        import lan_mesh.pm_dispatcher as pd
+
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return {"hosts": [
+                    {"device_id": "other-link", "online": True,
+                     "api_port": 45470, "ip": "169.254.10.20"},
+                    {"device_id": "self-1", "online": True,
+                     "api_port": 45470, "ip": "169.254.154.255"},
+                    {"device_id": "other-1", "online": True,
+                     "api_port": 45470, "ip": "192.168.1.10"},
+                ]}
+
+        monkeypatch.setattr(pd, "http_get", lambda *a, **k: Resp())
+        disp = self._dispatcher()
+        stations = disp.get_available_stations()
+
+        assert [s["device_id"] for s in stations] == ["self-1", "other-1"]
+        assert stations[0]["ip"] == "127.0.0.1"
+        assert stations[1]["ip"] == "192.168.1.10"
+
     def test_get_available_stations_returns_empty_on_error(self, monkeypatch):
         import lan_mesh.pm_dispatcher as pd
         monkeypatch.setattr(pd, "http_get",
@@ -1947,6 +2000,77 @@ class TestPMDispatcher:
                                 ConnectionError("down")))
         disp = self._dispatcher()
         assert disp.get_available_stations() == []
+
+    def test_local_execution_updates_subtask_status_before_runtime(self):
+        """本地回退执行期间任务面板必须看到 running 而非 pending。"""
+        from lan_mesh.pm_state import PMState
+
+        class Runtime:
+            def __init__(self, state):
+                self.state = state
+                self.observed = None
+
+            def execute(self, subtask):
+                with self.state.lock:
+                    self.observed = [
+                        dict(member) for member in self.state.subagents.values()]
+                return {"status": "completed", "output": {"result": "ok"}}
+
+        state = PMState()
+        state.task = {"task_id": "task-local-status"}
+        disp = self._dispatcher(state=state)
+        disp._runtime = Runtime(state)
+        sub = {"name": "A", "skill": "react_agent",
+               "description": "审计"}
+
+        disp.execute_subtask_locally(state.task, sub)
+
+        assert "A" in state.dispatched
+        assert state.subtask_start_times["A"] > 0
+        assert disp._runtime.observed[0]["current_task"] == "A"
+        assert disp._runtime.observed[0]["status"] == "busy"
+        assert any(c[0] == "sync_subtasks" for c in disp._agent.calls)
+        assert any(c[0] == "receive_subtask_result" for c in disp._agent.calls)
+
+    def test_receive_subtask_result_syncs_task_panel(self):
+        """子任务结果注入 Monitor 后立即同步任务面板。"""
+        from lan_mesh.pm_agent import ProjectManagerAgent
+        from lan_mesh.pm_state import PMState
+
+        class Monitor:
+            def __init__(self, state):
+                self.state = state
+
+            def receive_progress_report(self, report):
+                with self.state.lock:
+                    for member in self.state.subagents.values():
+                        if member.get("current_task") == report["task_name"]:
+                            member["status"] = report["status"]
+                    if report["status"] == "completed":
+                        self.state.subtask_outputs[report["task_name"]] = (
+                            report["output"])
+
+        state = PMState()
+        state.task = {"task_id": "task-result-sync"}
+        state.subagents["m1"] = {
+            "member_id": "m1", "agent_id": "m1", "current_task": "A",
+            "status": "busy",
+        }
+        agent = ProjectManagerAgent.__new__(ProjectManagerAgent)
+        agent._state = state
+        agent._monitor = Monitor(state)
+        agent._task_id = "task-result-sync"
+        agent.pm_id = "pm-result-sync"
+        agent.sync_calls = []
+        agent.sync_subtasks = lambda: agent.sync_calls.append(True)
+        agent._persist_snapshot = lambda phase: None
+
+        agent.receive_subtask_result(
+            "A", "completed", {"result": "done"}, agent_id="m1")
+
+        assert state.subtask_outputs["A"] == {"result": "done"}
+        assert state.subagents["m1"]["status"] == "completed"
+        assert agent.sync_calls == [True]
 
     def test_try_dispatch_pending_injects_dependency_outputs(self):
         from lan_mesh.pm_state import PMState
@@ -6889,6 +7013,22 @@ class TestIter66ClusterScale:
         assert "pm-l1" not in fake._pm_worker_map
         assert db.get_task("t-66-l").status == "cancelled"
 
+    def test_local_cancel_releases_pm_agent(self):
+        """本机取消后释放运行时引用, /health 不再误报 active。"""
+        from types import SimpleNamespace
+        import lan_mesh.station_controller as sc
+
+        class Fake:
+            _local_pm_agent = SimpleNamespace(
+                pm_id="pm-cancel-local", cancel=lambda: None)
+
+        fake = Fake()
+
+        result = sc.StationController._local_cancel_pm(fake)
+
+        assert result == {"ok": True, "pm_id": "pm-cancel-local"}
+        assert fake._local_pm_agent is None
+
     # ── iter-68 扩容批量清空 ───────────────────────────
 
     def test_autoscale_clears_backlog_in_one_pass(self, tmp_path,
@@ -7256,13 +7396,17 @@ class TestIter73OptimizationDiscuss:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from lan_mesh.station_routes_chat import build_chat_routes
+        import threading
 
         class _RouteHandler:
             def __init__(self):
                 self.context = None
+                self.thread_id = None
 
             def chat(self, message, conv_id="", history=None,
                      pm_thread_id="", discuss_context=None):
+                import threading
+                self.thread_id = threading.get_ident()
                 self.context = discuss_context
                 return {"reply": "ok", "action_taken": "opt_discuss",
                         "timestamp": 1, "conv_id": conv_id}
@@ -7285,6 +7429,7 @@ class TestIter73OptimizationDiscuss:
         })
         assert response.status_code == 200
         assert _RouteController.chat_handler.context == {"topic": "__all__"}
+        assert _RouteController.chat_handler.thread_id != threading.get_ident()
 
     def test_discussion_context_overview_and_item(self, tmp_path, monkeypatch):
         """__all__ 注入总览; 指定 ID 注入详情, 缺失时退化为总览。"""
@@ -7687,6 +7832,34 @@ class TestRequirementGathering:
         assert submitted["input_data"]["requirement"] == draft["brief"]
         assert "c1" not in handler._req_drafts
 
+    def test_dispatch_extracts_project_context_and_high_priority(
+            self, tmp_path, monkeypatch):
+        """项目路径、仓库与 planning-only 边界必须结构化传递。"""
+        self._patch(monkeypatch)
+        runtime = self._Runtime()
+        handler = self._make_handler(tmp_path, runtime)
+        draft = self._filled_draft(handler)
+        draft["checklist"]["background"]["value"] = (
+            "股票自动交易系统。本地地址为：E:\\ingobj\\stock_player；"
+            "仓库为：https://gitee.com/zhu-longzhuo/shrimp-quantification")
+        draft["checklist"]["acceptance"]["value"] = (
+            "只做规划与任务拆解，不直接修改业务代码")
+        draft["checklist"]["priority"]["value"] = "高"
+        draft["raw_messages"].append(
+            "本地地址为：E:\\ingobj\\stock_player；"
+            "仓库为：https://gitee.com/zhu-longzhuo/shrimp-quantification")
+
+        result = handler.chat("确认", conv_id="c1")
+
+        assert result["action_taken"] == "requirement_flow"
+        submitted = handler.controller.submitted[0]
+        assert submitted["priority"] == "high"
+        assert submitted["input_data"]["project_path"] == (
+            "E:\\ingobj\\stock_player")
+        assert submitted["input_data"]["repo_url"] == (
+            "https://gitee.com/zhu-longzhuo/shrimp-quantification")
+        assert submitted["input_data"]["execution_mode"] == "planning_only"
+
     def test_final_prompt_modification_is_applied_before_dispatch(
             self, tmp_path, monkeypatch):
         """Boss 修改最终提示词后，修改内容必须进入派发 Brief。"""
@@ -7940,3 +8113,98 @@ class TestIter79LlmIntentClassifier:
 
         assert result["action_taken"] == "create_project"
         assert len(runtime.calls) == 1
+
+
+class TestIter85ToolTimeoutGuard:
+    """iter-85: ReAct 工具超时统一限幅与超时结果标记。"""
+
+    def test_normalize_tool_timeout_bounds(self):
+        from lan_mesh.tool_registry import normalize_tool_timeout
+
+        assert normalize_tool_timeout("999") == 120
+        assert normalize_tool_timeout(-5) == 1
+        assert normalize_tool_timeout("bad") == 30
+        assert normalize_tool_timeout(None) == 30
+
+    def test_registry_shell_timeout_is_capped_and_flagged(
+            self, monkeypatch):
+        import json
+        import lan_mesh.tool_registry as tool_registry
+
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            seen["timeout"] = kwargs["timeout"]
+            raise tool_registry.subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+        monkeypatch.setattr(tool_registry.subprocess, "run", fake_run)
+        registry = tool_registry.ToolRegistry()
+
+        result = registry.call_tool(
+            "shell_exec", {"command": "ping -t 127.0.0.1", "timeout": 999})
+
+        assert seen["timeout"] == 120
+        assert result["isError"] is True
+        payload = json.loads(result["content"][0]["text"])
+        assert payload["timed_out"] is True
+        assert "120s" in payload["stderr"]
+
+    def test_http_request_timeout_is_capped_and_flagged(
+            self, monkeypatch):
+        import requests
+        from lan_mesh.tool_registry import _tool_http_request
+
+        seen = {}
+
+        def fake_request(method, url, headers=None, data=None, timeout=None):
+            seen["timeout"] = timeout
+            raise requests.Timeout("connect timeout")
+
+        monkeypatch.setattr(requests, "request", fake_request)
+
+        result = _tool_http_request(
+            {"url": "http://example.invalid", "timeout": "999"})
+
+        assert seen["timeout"] == 120
+        assert result["timed_out"] is True
+        assert "120s" in result["error"]
+
+    def test_run_code_timeout_is_normalized(self, monkeypatch):
+        import lan_mesh.sandbox as sandbox_module
+        from lan_mesh.tool_registry import _tool_run_code
+
+        seen = {}
+
+        def fake_execute(code, language=None, timeout=None):
+            seen["timeout"] = timeout
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                status="completed", stdout="", stderr="",
+                to_dict=lambda: {"status": "completed", "stdout": "", "stderr": ""},
+            )
+
+        monkeypatch.setattr(sandbox_module.sandbox, "execute", fake_execute)
+
+        result = _tool_run_code({"code": "print(1)", "timeout": -10})
+
+        assert seen["timeout"] == 1
+        assert result["status"] == "completed"
+
+    def test_agent_runtime_shell_uses_shared_bound(self, monkeypatch, tmp_path):
+        import lan_mesh.agent_runtime as agent_runtime
+
+        runtime = agent_runtime.AgentRuntime("agent-85", str(tmp_path))
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            seen["timeout"] = kwargs["timeout"]
+            raise agent_runtime.subprocess.TimeoutExpired(
+                command, kwargs["timeout"])
+
+        monkeypatch.setattr(agent_runtime.subprocess, "run", fake_run)
+
+        result = runtime._handle_shell_exec(
+            {"command": "ping -t 127.0.0.1", "timeout": 999})
+
+        assert seen["timeout"] == 120
+        assert result["timed_out"] is True

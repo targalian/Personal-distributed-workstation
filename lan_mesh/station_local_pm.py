@@ -199,8 +199,11 @@ class StationLocalPmMixin:
     def _local_cancel_pm(self) -> dict:
         if not self._local_pm_agent:
             return {"ok": False, "message": "PM Agent 未运行"}
-        self._local_pm_agent.cancel()
-        return {"ok": True, "pm_id": self._local_pm_agent.pm_id}
+        agent = self._local_pm_agent
+        agent.cancel()
+        self._local_pm_agent = None
+        logger.info("本机 PM Agent 已取消并释放: %s", agent.pm_id)
+        return {"ok": True, "pm_id": agent.pm_id}
 
     def _local_pause_pm(self) -> dict:
         if not self._local_pm_agent:

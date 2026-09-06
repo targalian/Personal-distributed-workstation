@@ -603,15 +603,18 @@ class ChatHandler:
         priority = "normal"
         if any(word in priority_value for word in ("紧急", "urgent", "立刻")):
             priority = "urgent"
-        elif any(word in priority_value for word in ("优先", "重要", "high")):
+        elif any(word in priority_value for word in ("优先", "重要", "high", "高")):
             priority = "high"
         elif any(word in priority_value for word in ("不急", "低", "low")):
             priority = "low"
+        input_data = {"requirement": brief}
+        project_context = self._extract_project_context(draft)
+        input_data.update(project_context)
         try:
             result = self.controller.submit_task_from_chat(
                 name=goal[:50], description=brief,
                 created_by="secretary", priority=priority,
-                input_data={"requirement": brief})
+                input_data=input_data)
         except Exception as exc:
             print(f"[Chat] 需求收集派发失败: {exc}", flush=True)
             return f"任务创建失败: {exc}"
@@ -633,6 +636,35 @@ class ChatHandler:
             f"- PM Agent: {pm_id}\n\n"
             f"--- 项目 Brief ---\n{brief}"
         )
+
+    @staticmethod
+    def _extract_project_context(draft: dict) -> dict:
+        """从需求文本中提取项目路径、仓库与执行模式。"""
+        texts = list(draft.get("raw_messages", []))
+        for item in draft.get("checklist", {}).values():
+            texts.append(str(item.get("value", "")))
+        text = "\n".join(texts)
+        result = {}
+        local_match = re.search(
+            r"(?:本地地址|本地路径|项目路径)\s*(?:为|是)?[:：]?\s*([A-Za-z]:\\[^\s，。；;]+)",
+            text,
+        )
+        if not local_match:
+            local_match = re.search(
+                r"([A-Za-z]:\\[^\s，。；;]+)", text)
+        if local_match:
+            result["project_path"] = local_match.group(1).rstrip("\\.,;，。")
+        repo_match = re.search(
+            r"(?:远端仓库|仓库|repo(?:sitory)?)\s*(?:地址)?(?:为|是)?[:：]?\s*(https?://[^\s，。；;]+)",
+            text,
+        )
+        if not repo_match:
+            repo_match = re.search(r"(https?://[^\s，。；;]+)", text)
+        if repo_match:
+            result["repo_url"] = repo_match.group(1).rstrip("\\.,;，。")
+        if any(marker in text for marker in ("只做规划", "规划与任务拆解", "不直接修改")):
+            result["execution_mode"] = "planning_only"
+        return result
 
     def _build_intake_reply(self, draft: dict) -> str:
         """构建收集阶段回复。"""

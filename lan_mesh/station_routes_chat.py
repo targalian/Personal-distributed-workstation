@@ -8,6 +8,7 @@ Secretary 激活后可用:
   - Bot 统一消息入口 (优化15, Webhook 模式)
 """
 from fastapi import APIRouter, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from .logger import get_logger
 from .station_routes_common import _broadcast, check_secretary
@@ -38,9 +39,13 @@ def build_chat_routes(controller) -> APIRouter:
         history = payload.get("history")
         raw_context = payload.get("discuss_context")
         discuss_context = raw_context if isinstance(raw_context, dict) else None
-        result = chat_handler.chat(
-            message, conv_id=conv_id, history=history,
-            discuss_context=discuss_context)
+        result = await run_in_threadpool(
+            chat_handler.chat,
+            message,
+            conv_id=conv_id,
+            history=history,
+            discuss_context=discuss_context,
+        )
         await _broadcast(state, "chat_reply", result)
         return result
 

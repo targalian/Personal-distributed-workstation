@@ -90,6 +90,12 @@ Worker 注入 AgentRuntime.custom_system_prompt。
 http_request）+ YAML 插件 + 运行时动态注册 + 执行调度。每个工具含
 name/description/input_schema/handler。
 
+**超时护栏 (iter-85)**: `normalize_tool_timeout()` 统一把 shell_exec /
+http_request / run_code 的 timeout 规范到 1-120s（默认 30s，非法值回退默认）；
+AgentRuntime 专用 shell_exec 同步使用该规范。超时返回 `timed_out=true`，
+`ToolRegistry.call_tool()` 将其映射为 `isError=true`；ReAct system prompt
+要求超时后不要原样重试，应缩小范围或明确说明超时原因。
+
 ## mcp_client.py + mcp_gateway.py — MCP 体系
 
 - **mcp_client.py**: JSON-RPC 2.0 客户端，支持 stdio（本地子进程）与
@@ -171,6 +177,7 @@ planner/dispatcher/monitor 的共享引用有效 (resume 关键约束)
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-06 | iter-85 | 工具超时统一限幅: ToolRegistry shell/http/run_code 与 AgentRuntime shell 共用 1-120s 规范, 超时结果带 timed_out 并映射 isError, ReAct 提示禁止原样重试; 专项 5 passed |
 | 2026-09-01 | iter-74 | SSE 流式中文乱码修复 (Boss 报告, Quest 定位): requests 对 text/event-stream 无 charset 响应按 ISO-8859-1 解码致 UTF-8 中文逐字节拆成乱码; 改为响应头未声明 charset 时兜底 resp.encoding='utf-8' (显式声明仍尊重); 全库唯一流式调用点, 影响秘书/PM/Worker 全部中文回复; 新增 3 例回归 (移除修复即 FAIL), pytest 400 passed |
 | 2026-08-29 | iter-61 | F5.3 插件系统: skill_market 第三方技能市场 (浏览/白名单安装/卸载) + skills 表 origin 列 (迁移 v8) + 安全护栏 (体积/ID/内置冲突/安全默认仅 station) + dashboard 技能库 Tab 市场 UI |
 | 2026-08-29 | iter-55 | 多机实测加固 (补强#3): PROVIDER_CONFIG 补 volcengine-ark 置首位; _get_default_model 补齐定义; _ensure_env_loaded 重写 (ARK key + 部分 key 不再提前 return + dotenv 缺失手动解析); main.py dotenv 兜底 |

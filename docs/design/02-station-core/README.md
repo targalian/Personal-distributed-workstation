@@ -124,6 +124,9 @@ Secretary 超时离线且网络无其他在线 Secretary 时，由 `device_id`
 - `_local_resume_pm(task_id)`: 重建 PM Agent 并从快照续跑 — 校验本机
   PM 未运行/chat_runtime 就绪/快照存在后重建, `resume_from_snapshot`
   失败回滚; 任务状态回到 running
+- `_local_cancel_pm()`: 调用 PM `cancel()` 后释放 `_local_pm_agent`
+  引用 (iter-84), 避免 `/health` 的 `local_pm=active` 与
+  `active_pms=1` 在取消后残留
 - `_recover_stale_tasks()`: activate_secretary 末尾恢复扫描 — stale
   状态 (running/monitoring/planning/executing/awaiting_input/paused)
   有快照自动续跑, 无快照标记 interrupted
@@ -452,6 +455,7 @@ pytest **400 passed**; `scripts/sync_docs.py` PASS。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-06 | iter-84 | 本机任务取消后释放 _local_pm_agent 引用, /health 的 local_pm/active_pms 不再残留 active; 专项 17 passed |
 | 2026-09-03 | iter-80 | 创建对话失败修复: 手动激活新增 E4 仲裁预检 (已有优先 Secretary 直接返回 conflict+secretary_url, 不再先成功后让位); dashboard 监听 secretary_yielded 立即降级 UI; 新建对话接口非 2xx 时展示后端 detail; 专项 2 例 + 全量 423 passed |
 | 2026-09-01 | iter-75 | StationController 职责域拆分 Phase 3-5 (收尾): PmControl/Scheduler/Secretary/LocalPm/Lifecycle 共 53 方法搬入 5 个 mixin, 壳类 3253→246 行 (仅剩 imports/组合声明/StationState/__init__); WEB_DIR/TEMPLATES_DIR/STATIC_DIR 迁入 station_lifecycle 并在壳类 re-export 保兼容; 修复 12 处测试 monkeypatch 目标随方法迁移 (sc_sched/sc_pmctl) 的真实回归; 契约面 82 方法零缺失、门禁违规集合与基线一致; pytest 400 passed |
 | 2026-09-01 | iter-74 | StationController 职责域拆分 Phase 1-2: 8 mixin 组合接线 (mixin 互不继承, MRO 扁平) + SelfHeal/Hosts/Sync 三块 28 方法搬入独立模块, 壳类 3253→2322 行; import 路径/方法名/属性名/端点零变化, 方法可见集合与门禁违规集合均与基线逐字一致; pytest 397 passed |

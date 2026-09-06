@@ -26,6 +26,18 @@ from .logger import get_logger
 
 logger = get_logger("tool_registry")
 
+TOOL_TIMEOUT_DEFAULT = 30
+TOOL_TIMEOUT_MAX = 120
+
+
+def normalize_tool_timeout(value: Any = TOOL_TIMEOUT_DEFAULT) -> int:
+    """Normalize a tool timeout to the 1-120 second safety range."""
+    try:
+        timeout = int(value)
+    except (TypeError, ValueError):
+        timeout = TOOL_TIMEOUT_DEFAULT
+    return max(1, min(timeout, TOOL_TIMEOUT_MAX))
+
 
 # ── 工具执行处理器 ──────────────────────────────────────────────
 
@@ -51,7 +63,7 @@ def _tool_file_write(params: dict) -> dict:
 def _tool_shell_exec(params: dict) -> dict:
     """执行 Shell 命令。"""
     command = params.get("command", "")
-    timeout = params.get("timeout", 30)
+    timeout = normalize_tool_timeout(params.get("timeout", TOOL_TIMEOUT_DEFAULT))
     cwd = params.get("cwd")
     try:
         result = subprocess.run(
@@ -64,7 +76,12 @@ def _tool_shell_exec(params: dict) -> dict:
             "returncode": result.returncode,
         }
     except subprocess.TimeoutExpired:
-        return {"stdout": "", "stderr": f"命令超时 ({timeout}s)", "returncode": -1}
+        return {
+            "stdout": "",
+            "stderr": f"命令超时 ({timeout}s)",
+            "returncode": -1,
+            "timed_out": True,
+        }
 
 
 def _tool_http_request(params: dict) -> dict:
@@ -74,11 +91,21 @@ def _tool_http_request(params: dict) -> dict:
     method = params.get("method", "GET").upper()
     headers = params.get("headers", {})
     body = params.get("body", "")
-    timeout = params.get("timeout", 30)
+    timeout = normalize_tool_timeout(params.get("timeout", TOOL_TIMEOUT_DEFAULT))
 
-    resp = req.request(
-        method, url, headers=headers, data=body if body else None, timeout=timeout
-    )
+    try:
+        resp = req.request(
+            method, url, headers=headers, data=body if body else None,
+            timeout=timeout,
+        )
+    except req.Timeout:
+        return {
+            "status_code": 0,
+            "headers": {},
+            "body": "",
+            "error": f"HTTP 请求超时 ({timeout}s)",
+            "timed_out": True,
+        }
     return {
         "status_code": resp.status_code,
         "headers": dict(resp.headers),
@@ -117,7 +144,7 @@ def _tool_run_code(params: dict) -> dict:
     from .sandbox import sandbox
     code = params.get("code", "")
     language = params.get("language", "python")
-    timeout = params.get("timeout", 30)
+    timeout = normalize_tool_timeout(params.get("timeout", TOOL_TIMEOUT_DEFAULT))
     packages = params.get("packages", [])
 
     if packages and language == "python":
@@ -310,12 +337,13 @@ class ToolRegistry:
         try:
             result = entry["handler"](params)
             import json
+            is_error = bool(isinstance(result, dict) and result.get("timed_out"))
             return {
                 "content": [{
                     "type": "text",
                     "text": json.dumps(result, ensure_ascii=False, default=str),
                 }],
-                "isError": False,
+                "isError": is_error,
                 "result": result,
             }
         except Exception as e:
