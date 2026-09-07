@@ -59,6 +59,9 @@ secrets.yaml
 # Browser 验证截图目录
 temp_resault/
 
+# UI 真机验证临时实例 (隔离 config/共享目录/Playwright 脚本)
+.tmp_ui*
+
 # Tauri 自动生成 (可选保留，按需取消注释)
 # src-tauri/gen/schemas/
 resources.yaml
