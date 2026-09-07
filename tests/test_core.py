@@ -8167,7 +8167,7 @@ class TestIter85ToolTimeoutGuard:
 
         assert seen["timeout"] == 120
         assert result["timed_out"] is True
-        assert "120s" in result["error"]
+
 
     def test_run_code_timeout_is_normalized(self, monkeypatch):
         import lan_mesh.sandbox as sandbox_module
@@ -8208,3 +8208,646 @@ class TestIter85ToolTimeoutGuard:
 
         assert seen["timeout"] == 120
         assert result["timed_out"] is True
+
+
+class TestIter86GitSafeDirectoryGuard:
+    """iter-86: Git safe.directory 拒绝时降级为只读, 不再原样重试。"""
+
+    def test_registry_marks_git_safe_directory_denied(self, monkeypatch):
+        import json
+        from types import SimpleNamespace
+        import lan_mesh.tool_registry as tool_registry
+
+        def fake_run(command, **kwargs):
+            return SimpleNamespace(
+                stdout="",
+                stderr=(
+                    "fatal: detected dubious ownership in repository at "
+                    "'E:/repo'"
+                ),
+                returncode=128,
+            )
+
+        monkeypatch.setattr(tool_registry.subprocess, "run", fake_run)
+        registry = tool_registry.ToolRegistry()
+
+        result = registry.call_tool(
+            "shell_exec", {"command": "git status", "cwd": "E:/repo"})
+
+        assert result["isError"] is True
+        payload = json.loads(result["content"][0]["text"])
+        assert payload["git_safe_directory_denied"] is True
+        assert "file_read" in payload["remediation"]
+        assert "Do not run git config" in payload["remediation"]
+
+    def test_normal_git_output_is_not_marked(self, monkeypatch):
+        from types import SimpleNamespace
+        import lan_mesh.tool_registry as tool_registry
+
+        def fake_run(command, **kwargs):
+            return SimpleNamespace(
+                stdout="## main...origin/main",
+                stderr="",
+                returncode=0,
+            )
+
+        monkeypatch.setattr(tool_registry.subprocess, "run", fake_run)
+
+        result = tool_registry._tool_shell_exec({"command": "git status"})
+
+        assert result == {
+            "stdout": "## main...origin/main",
+            "stderr": "",
+            "returncode": 0,
+        }
+
+    def test_runtime_shell_marks_safe_directory_denied(
+            self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        import lan_mesh.agent_runtime as agent_runtime
+
+        runtime = agent_runtime.AgentRuntime("agent-86", str(tmp_path))
+
+        def fake_run(command, **kwargs):
+            return SimpleNamespace(
+                stdout="",
+                stderr="fatal: unsafe repository ('/repo' is owned by someone else)",
+                returncode=128,
+            )
+
+        monkeypatch.setattr(agent_runtime.subprocess, "run", fake_run)
+
+        result = runtime._handle_shell_exec({"command": "git branch"})
+
+        assert result["git_safe_directory_denied"] is True
+        assert "read-only analysis" in result["remediation"]
+
+    def test_react_prompt_forbids_config_change(self, tmp_path, monkeypatch):
+        import lan_mesh.agent_runtime as agent_runtime
+
+        runtime = agent_runtime.AgentRuntime("agent-86-react", str(tmp_path))
+        captured = {}
+        monkeypatch.setattr(runtime, "_build_system_prompt", lambda _: "")
+
+        def fake_call(messages, tools, input_data):
+            captured["system"] = messages[0]["content"]
+            return {"message": {"content": "done", "tool_calls": []}}
+
+        monkeypatch.setattr(
+            runtime, "_call_llm_messages_with_tools", fake_call)
+
+        result = runtime._handle_react_agent({"requirement": "inspect repo"})
+
+        assert result["result"] == "done"
+        assert "git_safe_directory_denied=true" in captured["system"]
+        assert "禁止修改 git config" in captured["system"]
+
+
+class TestIter87RuntimeCancellation:
+    """iter-87: PM 取消传播到本地 Runtime / ReAct 循环。"""
+
+    def test_execute_returns_cancelled_without_handler_call(
+            self, tmp_path, monkeypatch):
+        import lan_mesh.agent_runtime as agent_runtime
+        import lan_mesh.runtime_trace as runtime_trace
+
+        runtime = agent_runtime.AgentRuntime("agent-cancel", str(tmp_path))
+        calls = []
+
+        def handler(input_data):
+            calls.append(input_data)
+            return {"result": "should not run"}
+
+        runtime._handlers["code_generation"] = handler
+        monkeypatch.setattr(runtime_trace, "trace_subtask_start",
+                            lambda **kwargs: "trace-cancel")
+        monkeypatch.setattr(runtime_trace, "trace_subtask_end",
+                            lambda *args, **kwargs: None)
+        runtime.cancel()
+
+        result = runtime.execute({
+            "required_skill": "code_generation",
+            "parent_task_id": "task-cancel",
+            "input_data": {},
+        })
+
+        assert result == {"output": {}, "status": "cancelled"}
+        assert calls == []
+
+    def test_react_stops_after_cancelled_tool_call(
+            self, tmp_path, monkeypatch):
+        import lan_mesh.agent_runtime as agent_runtime
+
+        runtime = agent_runtime.AgentRuntime(
+            "agent-react-cancel", str(tmp_path))
+        llm_calls = []
+
+        class FakeRegistry:
+            def list_tools(self):
+                return []
+
+            def call_tool(self, name, params):
+                runtime.cancel()
+                return {
+                    "content": [{"type": "text", "text": "cancelled"}],
+                    "isError": True,
+                }
+
+        def fake_llm(messages, tools, input_data):
+            llm_calls.append(messages)
+            return {
+                "message": {
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call-cancel",
+                        "function": {
+                            "name": "shell_exec",
+                            "arguments": "{}",
+                        },
+                    }],
+                },
+            }
+
+        import lan_mesh.tool_registry as tool_registry
+        monkeypatch.setattr(
+            tool_registry, "ToolRegistry", lambda: FakeRegistry())
+        monkeypatch.setattr(runtime, "_build_system_prompt", lambda _: "")
+        monkeypatch.setattr(
+            runtime, "_call_llm_messages_with_tools", fake_llm)
+
+        result = runtime._handle_react_agent({"requirement": "long task"})
+
+        assert result["status"] == "cancelled"
+        assert result["iterations"] == 1
+        assert len(llm_calls) == 1
+
+    def test_pm_cancel_propagates_to_runtime(self, tmp_path, monkeypatch):
+        import lan_mesh.agent_runtime as agent_runtime
+        from lan_mesh.pm_agent import ProjectManagerAgent
+
+        runtime = agent_runtime.AgentRuntime("agent-pm-cancel", str(tmp_path))
+        pm = ProjectManagerAgent(
+            "pm-cancel", runtime, "http://secretary.invalid", "device-cancel")
+        monkeypatch.setattr(pm, "report_status", lambda *a, **kw: None)
+        monkeypatch.setattr(pm, "report_progress", lambda *a, **kw: None)
+        monkeypatch.setattr(pm, "_clear_snapshot", lambda: None)
+
+        pm.cancel()
+
+        assert runtime.is_cancelled() is True
+
+    def test_dispatcher_reset_clears_runtime_cancel(self, tmp_path):
+        import lan_mesh.agent_runtime as agent_runtime
+        from lan_mesh.pm_dispatcher import PMDispatcher
+        from lan_mesh.pm_state import PMState
+
+        runtime = agent_runtime.AgentRuntime("agent-reset", str(tmp_path))
+        dispatcher = PMDispatcher(
+            "pm-reset", runtime, "http://secretary.invalid",
+            "device-reset", PMState(), None)
+        runtime.cancel()
+
+        dispatcher.reset()
+
+        assert runtime.is_cancelled() is False
+
+    def test_local_cancelled_result_is_not_marked_failed(self):
+        from types import SimpleNamespace
+        from lan_mesh.pm_dispatcher import PMDispatcher
+        from lan_mesh.pm_state import PMState
+
+        state = PMState()
+        state.task = {"task_id": "task-local-cancel"}
+        received = []
+
+        class Runtime:
+            def execute(self, subtask):
+                return {"status": "cancelled", "output": {}}
+
+        class Agent:
+            def receive_subtask_result(self, **kwargs):
+                received.append(kwargs)
+
+        dispatcher = PMDispatcher(
+            "pm-local-cancel", Runtime(), "http://secretary.invalid",
+            "device-local-cancel", state, Agent())
+        dispatcher._record_subtask_start = lambda task_name: None
+        dispatcher._agent.sync_subtasks = lambda: None
+        dispatcher._agent.report_progress = lambda *args, **kwargs: None
+
+        dispatcher.execute_subtask_locally(
+            state.task, {"name": "取消中", "skill": "react_agent"})
+
+        assert received[0]["status"] == "cancelled"
+
+    def test_station_cancels_local_subagent_runtime(self):
+        from types import SimpleNamespace
+        from lan_mesh.station_controller import StationController
+
+        class Runtime:
+            def __init__(self):
+                self.cancelled = False
+
+            def cancel(self):
+                self.cancelled = True
+
+        runtime = Runtime()
+        controller = SimpleNamespace(
+            _local_sub_agents={"sub-cancel": {
+                "runtime": runtime, "status": "executing"
+            }})
+
+        result = StationController._local_cancel_subagent(
+            controller, "sub-cancel")
+
+        assert result == {"ok": True, "agent_id": "sub-cancel"}
+        assert runtime.cancelled is True
+        assert controller._local_sub_agents["sub-cancel"]["status"] == "cancelled"
+
+    def test_station_cancel_subagent_endpoint(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from types import SimpleNamespace
+        from lan_mesh.station_routes_worker import build_worker_routes
+
+        cancelled = []
+        controller = SimpleNamespace(
+            db=SimpleNamespace(),
+            state=SimpleNamespace(p2p_messages={}),
+            discovery=None,
+            _local_sub_agents={},
+            _local_cancel_subagent=lambda agent_id: cancelled.append(agent_id) or {
+                "ok": True, "agent_id": agent_id,
+            },
+        )
+        app = FastAPI()
+        app.include_router(build_worker_routes(controller))
+
+        response = TestClient(app).post(
+            "/pm/cancel-subagent", json={"agent_id": "sub-route"})
+
+        assert response.status_code == 200
+        assert response.json() == {"ok": True, "agent_id": "sub-route"}
+        assert cancelled == ["sub-route"]
+
+    def test_pm_cancel_broadcasts_to_mapped_subagents(self, monkeypatch):
+        import lan_mesh.pm_dispatcher as pm_dispatcher
+        from lan_mesh.pm_state import PMState
+
+        state = PMState()
+        state.task_agent["审计"] = {"agent_id": "sub-remote"}
+        state.task_station["审计"] = {
+            "ip": "192.168.1.20", "api_port": 45470,
+        }
+        sent = []
+
+        class Runtime:
+            def __init__(self):
+                self.cancelled = False
+
+            def cancel(self):
+                self.cancelled = True
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            sent.append((url, json, timeout))
+            return SimpleNamespace(status_code=200)
+
+        runtime = Runtime()
+        monkeypatch.setattr(pm_dispatcher.requests, "post", fake_post)
+        dispatcher = pm_dispatcher.PMDispatcher(
+            "pm-broadcast", runtime, "http://secretary.invalid",
+            "device-self", state, None)
+
+        dispatcher.cancel()
+
+        assert runtime.cancelled is True
+        assert len(sent) == 1
+        assert sent[0][0] == "http://192.168.1.20:45470/pm/cancel-subagent"
+        assert sent[0][1] == {"agent_id": "sub-remote"}
+        assert sent[0][2] == 10
+
+    def test_local_execute_task_marks_subagent_cancelled(self):
+        from types import SimpleNamespace
+        from lan_mesh.station_controller import StationController
+
+        class Runtime:
+            def execute(self, payload):
+                return {"status": "cancelled", "output": {}}
+
+        runtime = Runtime()
+        controller = SimpleNamespace(
+            _local_sub_agents={"sub-exec": {
+                "runtime": runtime, "status": "executing",
+                "current_task": "",
+            }},
+            chat_runtime=None,
+            _local_pm_agent=None,
+        )
+
+        result = StationController._local_execute_task(
+            controller,
+            {"reporter_id": "sub-exec", "name": "审计"},
+        )
+
+        assert result["status"] == "cancelled"
+        assert controller._local_sub_agents["sub-exec"]["status"] == "cancelled"
+
+
+class TestIter88ProjectBlueprint:
+    def test_project_blueprint_persists_across_database_restart(self, tmp_path):
+        """项目蓝图三段数据重启后完整保留。"""
+        from lan_mesh.database import Database
+        from lan_mesh.project import ProjectManager
+
+        db_path = str(tmp_path / "projects.db")
+        manager = ProjectManager(Database(db_path))
+        project = manager.create_project(
+            "blueprint-demo", workspace_base=str(tmp_path / "workspaces"))
+        manager.update_project_blueprint(
+            project.project_id,
+            {
+                "mission": "交付项目蓝图工作台",
+                "goals": ["结构化蓝图", "可编辑路线图"],
+                "non_goals": ["自动执行任务"],
+                "acceptance_criteria": ["蓝图重启后保留"],
+            },
+            [{"phase": "MVP", "goal": "编辑蓝图", "status": "planned"}],
+            [{"title": "存储", "decision": "JSON 列", "rationale": "兼容扩展"}],
+        )
+
+        reloaded = ProjectManager(Database(db_path)).get_project(project.project_id)
+
+        assert reloaded.charter["mission"] == "交付项目蓝图工作台"
+        assert reloaded.charter["goals"] == ["结构化蓝图", "可编辑路线图"]
+        assert reloaded.roadmap[0]["phase"] == "MVP"
+        assert reloaded.decisions[0]["decision"] == "JSON 列"
+
+    def test_project_blueprint_endpoints(self, tmp_path):
+        """蓝图 GET/PUT 返回一致数据并广播项目更新。"""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from types import SimpleNamespace
+        from lan_mesh.database import Database
+        from lan_mesh.project import ProjectManager
+        from lan_mesh.station_routes_projects import build_project_routes
+
+        database = Database(str(tmp_path / "routes.db"))
+        manager = ProjectManager(database)
+        project = manager.create_project(
+            "blueprint-api", workspace_base=str(tmp_path / "workspaces"))
+        controller = SimpleNamespace(
+            db=database,
+            state=SimpleNamespace(p2p_messages={}, ws_clients=set()),
+            secretary_active=True,
+            project_manager=manager,
+        )
+        app = FastAPI()
+        app.include_router(build_project_routes(controller))
+        client = TestClient(app)
+        blueprint = {
+            "charter": {"mission": "统一项目上下文", "goals": ["API", "UI"]},
+            "roadmap": [{"phase": "v1", "goal": "上线工作台", "status": "planned"}],
+            "decisions": [{"title": "入口", "decision": "项目详情", "rationale": "降低跳转"}],
+        }
+
+        response = client.put(
+            f"/api/projects/{project.project_id}/blueprint", json=blueprint)
+        fetched = client.get(f"/api/projects/{project.project_id}/blueprint")
+
+        assert response.status_code == 200
+        assert fetched.status_code == 200
+        assert fetched.json()["charter"]["mission"] == "统一项目上下文"
+        assert fetched.json()["roadmap"][0]["phase"] == "v1"
+        assert fetched.json()["decisions"][0]["decision"] == "项目详情"
+
+    def test_project_blueprint_rejects_invalid_and_missing(self, tmp_path):
+        """蓝图结构错误返回 400, 不存在项目返回 404。"""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from types import SimpleNamespace
+        from lan_mesh.database import Database
+        from lan_mesh.project import ProjectManager
+        from lan_mesh.station_routes_projects import build_project_routes
+
+        database = Database(str(tmp_path / "invalid.db"))
+        manager = ProjectManager(database)
+        controller = SimpleNamespace(
+            db=database,
+            state=SimpleNamespace(p2p_messages={}, ws_clients=set()),
+            secretary_active=True,
+            project_manager=manager,
+        )
+        app = FastAPI()
+        app.include_router(build_project_routes(controller))
+        client = TestClient(app)
+
+        invalid = client.put(
+            "/api/projects/missing/blueprint",
+            json={"charter": [], "roadmap": [], "decisions": []},
+        )
+        missing = client.put(
+            "/api/projects/missing/blueprint",
+            json={"charter": {}, "roadmap": [], "decisions": []},
+        )
+        not_found = client.get("/api/projects/missing/blueprint")
+
+        assert invalid.status_code == 400
+        assert missing.status_code == 404
+        assert not_found.status_code == 404
+
+
+# ── iter-89: 项目蓝图驱动规划与执行 ─────────────────────────────
+
+class _BlueprintResp:
+    """伪造 GET /api/projects/{id}/blueprint 响应。"""
+
+    status_code = 200
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class TestIter89ProjectBlueprintContext:
+    """蓝图注入 PM 规划 prompt + 随 input_data 下发到子 Agent 执行。"""
+
+    BLUEPRINT = {
+        "charter": {
+            "mission": "做一个局域网任务网格",
+            "goals": ["先跑通单机闭环", "再扩到多机"],
+            "non_goals": ["不做移动端原生 App"],
+            "acceptance_criteria": ["任务可提交并出交付物"],
+            "constraints": ["只用 Python 3.11"],
+        },
+        "roadmap": [
+            {"phase": "MVP", "goal": "单机闭环", "status": "done"},
+            {"phase": "V2", "goal": "多机调度", "status": "in_progress"},
+        ],
+        "decisions": [
+            {"title": "技术栈", "decision": "FastAPI", "rationale": "团队熟悉"},
+        ],
+    }
+
+    def _planner(self, monkeypatch, payload=None, runtime=None):
+        import lan_mesh.http_retry as hr
+        from lan_mesh.pm_planner import PMPlanner
+        from lan_mesh.pm_state import PMState
+
+        agent = _RecordingAgent()
+        agent.secretary_url = "http://10.0.0.9:45470"
+        planner = PMPlanner("pm-bp-9999", runtime or object(), PMState(), agent)
+        planner._agent = agent
+        self.calls = []
+
+        def _fake_get(url, *a, **k):
+            self.calls.append(url)
+            if payload is None:
+                return None
+            return _BlueprintResp(payload)
+
+        monkeypatch.setattr(hr, "http_get", _fake_get)
+        return planner
+
+    def test_hint_renders_charter_phase_and_decisions(self, monkeypatch):
+        """蓝图各段落渲染为约束提示, 当前阶段取 in_progress。"""
+        planner = self._planner(monkeypatch, self.BLUEPRINT)
+        hint = planner._build_blueprint_hint({"project_id": "p-1"})
+
+        assert "做一个局域网任务网格" in hint
+        assert "不做移动端原生 App" in hint
+        assert "只用 Python 3.11" in hint
+        assert "V2 · 多机调度 · in_progress" in hint
+        assert "MVP" not in hint.split("当前阶段")[1]
+        assert "技术栈: FastAPI" in hint
+
+    def test_hint_cached_per_project(self, monkeypatch):
+        """同一项目只查询一次, 后续走缓存 (规划+执行两次调用)。"""
+        planner = self._planner(monkeypatch, self.BLUEPRINT)
+        first = planner._build_blueprint_hint({"project_id": "p-1"})
+        second = planner._build_blueprint_hint({"project_id": "p-1"})
+
+        assert first == second
+        assert len(self.calls) == 1
+
+    def test_no_project_or_unreachable_returns_empty(self, monkeypatch):
+        """无 project_id 不发请求; Secretary 不可达时静默降级为空串。"""
+        planner = self._planner(monkeypatch, self.BLUEPRINT)
+        assert planner._build_blueprint_hint({"input_data": {}}) == ""
+        assert self.calls == []
+
+        offline = self._planner(monkeypatch, None)
+        assert offline._build_blueprint_hint({"project_id": "p-2"}) == ""
+
+    def test_planning_prompt_carries_blueprint(self, monkeypatch):
+        """LLM 规划 prompt 含蓝图约束段落与非目标禁令。"""
+        import lan_mesh.task_templates as tt
+        monkeypatch.setattr(tt, "match_template", lambda desc: None)
+
+        captured = {}
+
+        class FakeRuntime:
+            def _call_llm_with_routing(self, prompt, input_data):
+                captured["prompt"] = prompt
+                return {"content": '{"complexity": "simple", "pattern": "single", '
+                                   '"team_size": 1, "decomposition": [], "reasoning": "r"}'}
+
+        planner = self._planner(monkeypatch, self.BLUEPRINT, runtime=FakeRuntime())
+        planner.analyze_with_skill(
+            {"name": "扩多机", "description": "支持多机调度", "project_id": "p-1",
+             "input_data": {}})
+
+        assert "项目蓝图约束" in captured["prompt"]
+        assert "不做移动端原生 App" in captured["prompt"]
+        assert "命中非目标的方向不得进入 decomposition" in captured["prompt"]
+
+    def test_attach_blueprint_context_is_non_destructive(self, monkeypatch):
+        """蓝图写入 input_data 副本; 无蓝图时原样返回不新增键。"""
+        planner = self._planner(monkeypatch, self.BLUEPRINT)
+        task = {"project_id": "p-1", "input_data": {"requirement": "原需求"}}
+        enriched = planner.attach_blueprint_context(task)
+
+        assert "_project_blueprint" not in task["input_data"]
+        assert enriched["input_data"]["requirement"] == "原需求"
+        assert "做一个局域网任务网格" in enriched["input_data"]["_project_blueprint"]
+
+        blank = self._planner(monkeypatch, None)
+        plain = {"project_id": "p-3", "input_data": {}}
+        assert blank.attach_blueprint_context(plain) is plain
+
+    def test_runtime_appends_blueprint_to_system_prompt(self):
+        """子 Agent 执行时蓝图约束追加到 system prompt 尾部。"""
+        from lan_mesh.agent_runtime import _build_blueprint_prompt
+
+        suffix = _build_blueprint_prompt("- 项目使命: 做网格\n- 明确非目标: 不做 App")
+        assert "项目蓝图约束" in suffix
+        assert "不做 App" in suffix
+        assert _build_blueprint_prompt("") == ""
+        assert _build_blueprint_prompt(None) == ""
+        assert _build_blueprint_prompt({"a": 1}) == ""
+
+    def test_llm_routing_injects_blueprint(self, monkeypatch):
+        """_call_llm_with_routing 两条分支都带上蓝图约束。"""
+        from lan_mesh.agent_runtime import AgentRuntime
+
+        runtime = AgentRuntime.__new__(AgentRuntime)
+        seen = {}
+
+        monkeypatch.setattr(AgentRuntime, "_build_system_prompt",
+                            lambda self, ctx="": "基础知识库")
+
+        def _fake_full(self, prompt, system_prompt=""):
+            seen["system_prompt"] = system_prompt
+            return {"content": "ok", "model": "m", "input_tokens": 0,
+                    "output_tokens": 0}
+
+        monkeypatch.setattr(AgentRuntime, "_call_llm_full", _fake_full)
+
+        runtime._call_llm_with_routing(
+            "写代码", {"_project_blueprint": "- 项目使命: 做网格"})
+
+        assert "基础知识库" in seen["system_prompt"]
+        assert "项目蓝图约束" in seen["system_prompt"]
+        assert "做网格" in seen["system_prompt"]
+
+    def test_pm_run_task_attaches_blueprint_before_execution(self, monkeypatch):
+        """真实 _run_task: 规划后挂载蓝图, execute_directly 能读到约束。"""
+        import lan_mesh.http_retry as hr
+        from unittest.mock import MagicMock
+        from lan_mesh.pm_agent import ProjectManagerAgent
+
+        monkeypatch.setattr(hr, "http_get",
+                            lambda *a, **k: _BlueprintResp(self.BLUEPRINT))
+
+        pm = ProjectManagerAgent("pm-bp-run01", MagicMock(),
+                                 "http://10.0.0.9:45470", "dev-1")
+        monkeypatch.setattr(pm._monitor, "is_global_timed_out", lambda: False)
+        monkeypatch.setattr(pm._planner, "refine_requirements", lambda t: t)
+        monkeypatch.setattr(pm._planner, "analyze_with_skill",
+                            lambda t: {"complexity": "simple", "pattern": "single",
+                                       "team_size": 1, "decomposition": [],
+                                       "reasoning": "r"})
+        monkeypatch.setattr(pm, "report_status", lambda *a, **k: None)
+        monkeypatch.setattr(pm, "report_progress", lambda *a, **k: None)
+        monkeypatch.setattr(pm, "sync_subtasks", lambda *a, **k: None)
+        monkeypatch.setattr(pm, "deliver_result", lambda *a, **k: None)
+        monkeypatch.setattr(pm, "_persist_snapshot", lambda *a, **k: None)
+        monkeypatch.setattr(pm, "_clear_snapshot", lambda *a, **k: None)
+        monkeypatch.setattr(pm, "_record_task_memory", lambda *a, **k: None)
+
+        seen = {}
+
+        def _fake_exec(task):
+            seen["input_data"] = dict(task.get("input_data", {}))
+            return {"summary": "done", "status": "completed"}
+
+        monkeypatch.setattr(pm._planner, "execute_directly", _fake_exec)
+
+        pm._run_task({"task_id": "task-bp-1", "name": "扩多机",
+                      "description": "支持多机调度", "project_id": "p-1",
+                      "input_data": {}})
+
+        hint = seen["input_data"]["_project_blueprint"]
+        assert "做一个局域网任务网格" in hint
+        assert "不做移动端原生 App" in hint

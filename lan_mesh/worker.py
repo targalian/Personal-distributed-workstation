@@ -481,6 +481,19 @@ class WorkerAgent:
         logger.info("子 Agent 已创建: %s (%s)", agent_id, agent_name)
         return {"agent_id": agent_id, "agent_name": agent_name}
 
+    def cancel_subagent(self, agent_id: str) -> dict:
+        """Request cooperative cancellation for a sub-agent runtime."""
+        info = self.state.sub_agents.get(agent_id)
+        if not info:
+            return {"ok": False, "message": f"子 Agent {agent_id} 不存在"}
+        runtime = info.get("runtime")
+        cancel_runtime = getattr(runtime, "cancel", None)
+        if callable(cancel_runtime):
+            cancel_runtime()
+        info["status"] = "cancelled"
+        logger.info("子 Agent 已请求取消: %s", agent_id)
+        return {"ok": True, "agent_id": agent_id}
+
     def forward_progress_report(self, report: dict) -> dict:
         """将子 Agent 的进度报告转发给 PM Agent。
 

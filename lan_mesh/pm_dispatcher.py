@@ -44,6 +44,45 @@ class PMDispatcher:
         self._state = state
         self._agent = agent
 
+    def cancel(self) -> None:
+        """Propagate PM cancellation to the local runtime."""
+        cancel_runtime = getattr(self._runtime, "cancel", None)
+        if callable(cancel_runtime):
+            cancel_runtime()
+
+        self._cancel_subagents()
+
+    def _cancel_subagents(self) -> None:
+        """Broadcast cancellation to dispatched sub-agents."""
+        with self._state.lock:
+            targets = []
+            for sub_name, agent_info in self._state.task_agent.items():
+                station = self._state.task_station.get(sub_name)
+                agent_id = agent_info.get("agent_id", "")
+                ip = station.get("ip", "") if station else ""
+                port = station.get("api_port", 0) if station else 0
+                if ip and port and agent_id:
+                    targets.append((ip, port, agent_id))
+
+        for ip, port, agent_id in set(targets):
+            try:
+                requests.post(
+                    f"http://{ip}:{port}/pm/cancel-subagent",
+                    json={"agent_id": agent_id},
+                    headers=auth_headers(),
+                    timeout=10,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[%s] 取消子 Agent %s 失败: %s",
+                    self._pm_id[:8], agent_id, exc)
+
+    def reset(self) -> None:
+        """Clear runtime cancellation before a new PM task starts."""
+        reset_runtime = getattr(self._runtime, "reset_cancellation", None)
+        if callable(reset_runtime):
+            reset_runtime()
+
     # ── 团队创建与分发 ────────────────────────────────────────────
 
     def create_team_and_dispatch(self, task: dict, plan: dict):
@@ -387,7 +426,9 @@ class PMDispatcher:
         self._record_subtask_start(sub_name)
         self._agent.sync_subtasks()
         result = self._runtime.execute(subtask)
-        status = "completed" if result.get("status") == "completed" else "failed"
+        status = result.get("status", "failed")
+        if status not in ("completed", "cancelled"):
+            status = "failed"
         output = result.get("output", {})
 
         # 注入 Monitor 进度追踪 (触发依赖链分发 + 结果聚合)

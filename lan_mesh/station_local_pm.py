@@ -255,6 +255,19 @@ class StationLocalPmMixin:
         logger.info("本机子 Agent 已创建: %s (%s)", agent_id, agent_name)
         return {"agent_id": agent_id, "agent_name": agent_name}
 
+    def _local_cancel_subagent(self, agent_id: str) -> dict:
+        """Cancel a local sub-agent without discarding its registration."""
+        info = self._local_sub_agents.get(agent_id)
+        if not info:
+            return {"ok": False, "message": f"子 Agent {agent_id} 不存在"}
+        runtime = info.get("runtime")
+        cancel_runtime = getattr(runtime, "cancel", None)
+        if callable(cancel_runtime):
+            cancel_runtime()
+        info["status"] = "cancelled"
+        logger.info("本机子 Agent 已请求取消: %s", agent_id)
+        return {"ok": True, "agent_id": agent_id}
+
     def _local_forward_progress(self, report: dict) -> dict:
         if not self._local_pm_agent:
             return {"ok": False, "message": "PM Agent 未运行"}
@@ -289,7 +302,9 @@ class StationLocalPmMixin:
             result = {"output": {}, "status": "failed", "error": str(e)}
         finally:
             if sub_info:
-                sub_info["status"] = "idle"
+                sub_info["status"] = (
+                    "cancelled" if result.get("status") == "cancelled" else "idle"
+                )
 
         # 执行完成后向 PM 上报
         if self._local_pm_agent and self._local_pm_agent.running:

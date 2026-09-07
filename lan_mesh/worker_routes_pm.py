@@ -111,6 +111,16 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
             raise HTTPException(status_code=400, detail="缺少 agent_name")
         return role_manager.create_subagent(agent_name, skills, task_desc, system_prompt, preferred_id)
 
+    @router.post("/pm/cancel-subagent")
+    async def cancel_subagent(payload: dict):
+        """请求协作式取消指定子 Agent。"""
+        if not role_manager:
+            raise HTTPException(status_code=503, detail="角色管理未初始化")
+        agent_id = payload.get("agent_id", "")
+        if not agent_id:
+            raise HTTPException(status_code=400, detail="缺少 agent_id")
+        return role_manager.cancel_subagent(agent_id)
+
     @router.post("/pm/progress-report")
     async def pm_progress_report(payload: dict):
         """子 Agent 向 PM 上报进度 (Worker 转发给 PM Agent)。

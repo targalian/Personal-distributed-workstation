@@ -13,6 +13,7 @@ import uuid as _uuid
 import requests as http_requests
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from .http_retry import auth_headers
 from .logger import get_logger
@@ -85,7 +86,7 @@ def build_worker_routes(controller) -> APIRouter:
 
     @router.post("/role/cancel-pm")
     async def local_cancel_pm():
-        return controller._local_cancel_pm()
+        return await run_in_threadpool(controller._local_cancel_pm)
 
     @router.post("/role/pause-pm")
     async def local_pause_pm():
@@ -108,6 +109,13 @@ def build_worker_routes(controller) -> APIRouter:
             system_prompt=payload.get("system_prompt", ""),
             preferred_agent_id=payload.get("preferred_agent_id", ""),
         )
+
+    @router.post("/pm/cancel-subagent")
+    async def local_cancel_subagent(payload: dict):
+        agent_id = payload.get("agent_id", "")
+        if not agent_id:
+            raise HTTPException(status_code=400, detail="缺少 agent_id")
+        return controller._local_cancel_subagent(agent_id)
 
     @router.post("/pm/progress-report")
     async def local_progress_report(payload: dict):

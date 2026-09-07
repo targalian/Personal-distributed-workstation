@@ -21,7 +21,7 @@ logger = get_logger("database")
 # 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
 # 迁移函数签名: (conn: sqlite3.Connection) -> None
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -261,6 +261,21 @@ def _migration_v11(conn: sqlite3.Connection):
     """)
 
 
+def _migration_v12(conn: sqlite3.Connection):
+    """Migration v12: project blueprint workbench fields (iter-88)."""
+    for col, default in [
+        ("charter", "'{}'"),
+        ("roadmap", "'[]'"),
+        ("decisions", "'[]'"),
+    ]:
+        try:
+            conn.execute(
+                f"ALTER TABLE projects ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}"
+            )
+        except sqlite3.OperationalError:
+            pass
+
+
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
     2: _migration_v2,
@@ -273,6 +288,7 @@ _MIGRATIONS: dict[int, callable] = {
     9: _migration_v9,
     10: _migration_v10,
     11: _migration_v11,
+    12: _migration_v12,
 }
 
 
@@ -428,6 +444,9 @@ class Database:
                 allowed_models    TEXT NOT NULL DEFAULT '[]',
                 routing_strategy  TEXT NOT NULL DEFAULT 'balanced',
                 status            TEXT NOT NULL DEFAULT 'active',
+                charter           TEXT NOT NULL DEFAULT '{}',
+                roadmap           TEXT NOT NULL DEFAULT '[]',
+                decisions         TEXT NOT NULL DEFAULT '[]',
                 created_at        REAL NOT NULL DEFAULT 0,
                 updated_at        REAL NOT NULL DEFAULT 0
             );
@@ -1238,8 +1257,9 @@ class Database:
             INSERT INTO projects (
                 project_id, name, description, workspace_path,
                 budget_limit_usd, budget_used_usd, allowed_models,
-                routing_strategy, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                routing_strategy, status, charter, roadmap, decisions,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(project_id) DO UPDATE SET
                 name=excluded.name, description=excluded.description,
                 workspace_path=excluded.workspace_path,
@@ -1247,13 +1267,17 @@ class Database:
                 budget_used_usd=excluded.budget_used_usd,
                 allowed_models=excluded.allowed_models,
                 routing_strategy=excluded.routing_strategy,
-                status=excluded.status, updated_at=excluded.updated_at
+                status=excluded.status, charter=excluded.charter,
+                roadmap=excluded.roadmap, decisions=excluded.decisions,
+                updated_at=excluded.updated_at
         """, (
             project.project_id, project.name, project.description,
             project.workspace_path,
             project.budget_limit_usd, project.budget_used_usd,
             json.dumps(project.allowed_models),
             project.routing_strategy, project.status,
+            json.dumps(project.charter), json.dumps(project.roadmap),
+            json.dumps(project.decisions),
             project.created_at, project.updated_at,
         ))
         conn.commit()
@@ -1312,6 +1336,24 @@ class Database:
     def _row_to_project(self, row):
         """将数据库行转换为 Project 对象。"""
         from .protocol import Project
+        try:
+            charter = json.loads(row["charter"])
+        except (KeyError, TypeError, json.JSONDecodeError):
+            charter = {}
+        if not isinstance(charter, dict):
+            charter = {}
+        try:
+            roadmap = json.loads(row["roadmap"])
+        except (KeyError, TypeError, json.JSONDecodeError):
+            roadmap = []
+        if not isinstance(roadmap, list):
+            roadmap = []
+        try:
+            decisions = json.loads(row["decisions"])
+        except (KeyError, TypeError, json.JSONDecodeError):
+            decisions = []
+        if not isinstance(decisions, list):
+            decisions = []
         return Project(
             project_id=row["project_id"],
             name=row["name"],
@@ -1322,6 +1364,9 @@ class Database:
             allowed_models=json.loads(row["allowed_models"]),
             routing_strategy=row["routing_strategy"],
             status=row["status"],
+            charter=charter,
+            roadmap=roadmap,
+            decisions=decisions,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

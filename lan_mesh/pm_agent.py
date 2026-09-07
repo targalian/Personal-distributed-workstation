@@ -56,6 +56,7 @@ class ProjectManagerAgent:
 
     def start_task(self, task: dict):
         """接管任务，开始规划与执行 (异步)。"""
+        self._dispatcher.reset()
         self._running = True
 
         # 加载 multi-agent-architect skill
@@ -252,6 +253,8 @@ class ProjectManagerAgent:
             # 阶段 1: 规划
             self.report_status("planning")
             plan = self._planner.analyze_with_skill(task)
+            # iter-89: 蓝图约束随 input_data 下发, 覆盖远程/本地全部执行路径
+            task = self._planner.attach_blueprint_context(task)
             logger.info("[%s] 规划完成: 模式=%s, 子任务=%d",
                        self.pm_id[:8], plan.get('pattern', 'single'),
                        len(plan.get('decomposition', [])))
@@ -399,6 +402,7 @@ class ProjectManagerAgent:
     def cancel(self):
         st = self._state
         self._running = False
+        self._dispatcher.cancel()
         st.clarification_event.set()
         st.clarification_response = {"response": "", "choice": "", "cancelled": True}
         self.report_status("cancelled")

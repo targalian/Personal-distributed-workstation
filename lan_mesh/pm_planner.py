@@ -7,6 +7,7 @@ PM 规划器 — 任务分析与分解
 3. 多轮任务细化 (F2.3)
 4. 简单任务直接执行
 5. 任务类型推断 (供外部使用)
+6. 项目蓝图约束注入 (iter-89)
 """
 import json
 import uuid
@@ -18,6 +19,65 @@ from .pm_state import PMState
 from .role_cards import PM_CARD
 
 logger = get_logger("pm.planner")
+
+
+# ── iter-89: 项目蓝图渲染辅助 ─────────────────────────────────────
+
+_BLUEPRINT_MAX_ITEMS = 5
+_BLUEPRINT_MAX_LEN = 160
+
+
+def _blueprint_items(value) -> list:
+    """把蓝图列表字段规整为去空/截断后的字符串列表。"""
+    if not isinstance(value, list):
+        return []
+    items = []
+    for raw in value[:_BLUEPRINT_MAX_ITEMS]:
+        text = str(raw).strip()
+        if text:
+            items.append(text[:_BLUEPRINT_MAX_LEN])
+    return items
+
+
+def _current_roadmap_phase(roadmap) -> str:
+    """选出路线图中的当前阶段: 优先 in_progress, 其次首个未完成阶段。"""
+    if not isinstance(roadmap, list):
+        return ""
+    candidates = [r for r in roadmap if isinstance(r, dict)]
+    active = next(
+        (r for r in candidates
+         if str(r.get("status", "")).strip().lower() in ("in_progress", "doing", "active")),
+        None,
+    )
+    if active is None:
+        active = next(
+            (r for r in candidates
+             if str(r.get("status", "")).strip().lower() not in ("done", "completed")),
+            None,
+        )
+    if active is None:
+        return ""
+    parts = [str(active.get(f, "")).strip() for f in ("phase", "goal", "status")]
+    return " · ".join(p for p in parts if p)[:_BLUEPRINT_MAX_LEN]
+
+
+def _recent_decisions(decisions) -> list:
+    """取最近若干条决策记录, 渲染为「标题: 结论」。"""
+    if not isinstance(decisions, list):
+        return []
+    out = []
+    for item in decisions[-3:]:
+        if not isinstance(item, dict):
+            text = str(item).strip()
+            if text:
+                out.append(text[:_BLUEPRINT_MAX_LEN])
+            continue
+        title = str(item.get("title", "")).strip()
+        decision = str(item.get("decision", "")).strip()
+        text = f"{title}: {decision}" if title and decision else (title or decision)
+        if text:
+            out.append(text[:_BLUEPRINT_MAX_LEN])
+    return out
 
 
 class PMPlanner:
@@ -36,6 +96,7 @@ class PMPlanner:
         self._state = state
         self._agent = agent
         self._skill_content = ""
+        self._blueprint_cache: dict = {}   # iter-89: project_id → 蓝图提示
 
     # ── 技能加载 ──────────────────────────────────────────────────
 
@@ -125,6 +186,8 @@ class PMPlanner:
             f"\n## 历史任务经验 (同类任务, 来自 task_memory 表)\n{memory_hint}\n"
             if memory_hint else ""
         )
+        # iter-89: 注入项目蓝图约束 (使命/目标/非目标/验收标准/当前阶段)
+        blueprint_section = self._build_blueprint_section(task)
         prompt = f"""{PM_CARD['identity']}请分析以下任务并给出架构决策。
 
 ## 任务信息
@@ -134,7 +197,7 @@ class PMPlanner:
 
 ## 决策框架 (multi-agent-architect skill)
 {self._skill_content[:8000]}
-{memory_section}
+{memory_section}{blueprint_section}
 ## 输出要求
 请严格输出 JSON 格式 (不要 markdown 代码块):
 {{
@@ -232,6 +295,98 @@ class PMPlanner:
             return hint
         except Exception as e:
             logger.debug("[%s] 任务记忆查询失败: %s", self._pm_id[:8], e)
+            return ""
+
+    # ── iter-89: 项目蓝图约束注入 ─────────────────────────────────
+
+    def _build_blueprint_section(self, task: dict) -> str:
+        """把项目蓝图渲染为 LLM 规划提示片段 (无蓝图时返回空串)。"""
+        hint = self._build_blueprint_hint(task)
+        if not hint:
+            return ""
+        return (
+            "\n## 项目蓝图约束 (来自项目蓝图工作台, 规划时必须遵守)\n"
+            f"{hint}\n"
+            "- 子任务必须服务于上述目标与验收标准; 命中非目标的方向不得进入 decomposition。\n"
+            "- reasoning 中说明本次分解如何对齐当前阶段目标。\n"
+        )
+
+    def attach_blueprint_context(self, task: dict) -> dict:
+        """把项目蓝图约束写入 task.input_data, 供子 Agent 执行时消费。
+
+        规划后调用一次即可: 后续本地执行 / 远程分发都从 ``input_data``
+        继承 ``_project_blueprint``, 无蓝图时原样返回, 不新增键。
+
+        Args:
+            task: PM 当前任务字典
+
+        Returns:
+            带 ``_project_blueprint`` 的任务副本 (无蓝图时为原对象)
+        """
+        hint = self._build_blueprint_hint(task)
+        if not hint:
+            return task
+        enriched = dict(task)
+        input_data = dict(enriched.get("input_data", {}) or {})
+        input_data["_project_blueprint"] = hint
+        enriched["input_data"] = input_data
+        return enriched
+
+    def _fetch_project_blueprint(self, project_id: str) -> dict:
+        """向 Secretary 拉取项目蓝图, 失败返回空 dict (不影响规划主流程)。"""
+        agent = getattr(self, "_agent", None)
+        secretary_url = getattr(agent, "secretary_url", "")
+        if not project_id or not secretary_url:
+            return {}
+        from .http_retry import http_get
+        resp = http_get(
+            f"{secretary_url}/api/projects/{project_id}/blueprint",
+            timeout=5, retries=1)
+        if resp is None or resp.status_code != 200:
+            return {}
+        data = resp.json()
+        return data if isinstance(data, dict) else {}
+
+    def _build_blueprint_hint(self, task: dict) -> str:
+        """查询项目蓝图并生成约束提示 (使命/目标/非目标/验收标准/当前阶段)。"""
+        try:
+            project_id = (task.get("project_id")
+                          or task.get("input_data", {}).get("project_id", ""))
+            if project_id in self._blueprint_cache:
+                return self._blueprint_cache[project_id]
+            data = self._fetch_project_blueprint(project_id)
+            if not data:
+                return ""
+            charter = data.get("charter") or {}
+            if not isinstance(charter, dict):
+                charter = {}
+            lines = []
+            mission = str(charter.get("mission", "")).strip()
+            if mission:
+                lines.append(f"- 项目使命: {mission}")
+            for label, key in (("项目目标", "goals"),
+                               ("明确非目标 (禁止展开)", "non_goals"),
+                               ("验收标准", "acceptance_criteria"),
+                               ("硬约束", "constraints")):
+                items = _blueprint_items(charter.get(key))
+                if items:
+                    lines.append(f"- {label}: " + "; ".join(items))
+            phase = _current_roadmap_phase(data.get("roadmap"))
+            if phase:
+                lines.append(f"- 当前阶段: {phase}")
+            decisions = _recent_decisions(data.get("decisions"))
+            if decisions:
+                lines.append("- 已定决策 (不要推翻): " + "; ".join(decisions))
+            if not lines:
+                self._blueprint_cache[project_id] = ""
+                return ""
+            hint = "\n".join(lines)
+            self._blueprint_cache[project_id] = hint
+            logger.info("[%s] 项目蓝图约束注入 (project=%s, %d 条)",
+                        self._pm_id[:8], str(project_id)[:8], len(lines))
+            return hint
+        except Exception as e:
+            logger.debug("[%s] 项目蓝图查询失败: %s", self._pm_id[:8], e)
             return ""
 
     # ── 简单任务直接执行 ──────────────────────────────────────────

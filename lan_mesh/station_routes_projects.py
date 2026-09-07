@@ -37,6 +37,9 @@ def build_project_routes(controller) -> APIRouter:
             allowed_models=payload.get("allowed_models", []),
             routing_strategy=payload.get("routing_strategy", "balanced"),
             workspace_base=payload.get("workspace_base", ""),
+            charter=payload.get("charter", {}),
+            roadmap=payload.get("roadmap", []),
+            decisions=payload.get("decisions", []),
         )
         await _broadcast(state, "project_created", project.to_dict())
         return project.to_dict()
@@ -75,6 +78,51 @@ def build_project_routes(controller) -> APIRouter:
             raise HTTPException(status_code=404, detail="项目不存在")
         await _broadcast(state, "project_updated", project.to_dict())
         return project.to_dict()
+
+    @router.get("/api/projects/{project_id}/blueprint")
+    async def get_project_blueprint(project_id: str):
+        check_secretary(controller)
+        project = controller.project_manager.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        return {
+            "project_id": project.project_id,
+            "name": project.name,
+            "charter": project.charter,
+            "roadmap": project.roadmap,
+            "decisions": project.decisions,
+            "updated_at": project.updated_at,
+        }
+
+    @router.put("/api/projects/{project_id}/blueprint")
+    async def update_project_blueprint(project_id: str, payload: dict):
+        check_secretary(controller)
+        charter = payload.get("charter", {})
+        roadmap = payload.get("roadmap", [])
+        decisions = payload.get("decisions", [])
+        try:
+            project = controller.project_manager.update_project_blueprint(
+                project_id, charter, roadmap, decisions)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if not project:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        print(f"[Station] 项目蓝图已更新: {project_id}")
+        await _broadcast(state, "project_blueprint_updated", {
+            "project_id": project.project_id,
+            "charter": project.charter,
+            "roadmap": project.roadmap,
+            "decisions": project.decisions,
+            "updated_at": project.updated_at,
+        })
+        return {
+            "project_id": project.project_id,
+            "name": project.name,
+            "charter": project.charter,
+            "roadmap": project.roadmap,
+            "decisions": project.decisions,
+            "updated_at": project.updated_at,
+        }
 
     @router.delete("/api/projects/{project_id}")
     async def archive_project(project_id: str):

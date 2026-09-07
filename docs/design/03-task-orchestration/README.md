@@ -52,6 +52,13 @@ StationController.get_task_graph_data）; `PUT /api/tasks/{id}/graph` 编辑端�
 - **pm_agent.py**: 门面/协调器，统一持有三子模块并对外暴露接口
 - **pm_planner.py**: 加载 multi-agent-architect skill → 模板匹配（F2.4）
   或 LLM 规划 → 多轮细化（F2.3）；简单任务直接执行
+- **项目蓝图驱动规划 (iter-89)**: 规划前按 `task.project_id` 拉取
+  `GET /api/projects/{id}/blueprint`, 渲染使命/目标/非目标/验收标准/硬约束/
+  当前阶段/近期决策为约束段落注入 LLM 规划 prompt（明令非目标不得进入
+  `decomposition`）；结果按 project_id 缓存, 一次任务只查一次。
+  `attach_blueprint_context()` 在规划后把同一提示写入
+  `input_data._project_blueprint`, 使本地执行与远程分发共用同一份约束。
+  Secretary 不可达 / 无 project_id / 蓝图为空时静默返回空串, 不影响规划主流程。
 - **结构化项目上下文 (iter-81)**: `input_data` 支持
   `project_path` / `repo_url` / `execution_mode=planning_only`;
   模板规划时不再把目标项目折叠为 `.`, planning-only 会裁掉
@@ -96,6 +103,10 @@ task_id/pm_id)、交付链异常 (`_deliver` 后, 交付丢失风险)、记忆�
 **设计要点**:
 - 每个项目: 独立工作空间目录、独立预算配额、允许模型白名单、
   路由策略（cost_first / quality_first / balanced）
+- 项目蓝图 (iter-88): `charter` (使命/目标/非目标/验收标准/约束)、
+  `roadmap` (阶段路线图) 与 `decisions` (决策日志) 作为三段 JSON
+  落 SQLite projects 表 (迁移 v12)，重启后保留；`update_project_blueprint`
+  统一校验三类结构并复用项目更新时间戳
 - 超支自动暂停项目并切换经济模型
 - 消费记录基于 model_resources 的用量日志折算
 
@@ -105,6 +116,8 @@ task_id/pm_id)、交付链异常 (`_deliver` 后, 交付丢失风险)、记忆�
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-07 | iter-89 | 项目蓝图驱动规划: PMPlanner 拉取蓝图并注入 LLM 规划 prompt (非目标禁令 + 当前阶段), 按 project_id 缓存, `attach_blueprint_context` 随 input_data 下发至执行链路; 专项 8 passed |
+| 2026-09-07 | iter-88 | 项目蓝图工作台: DB v12 持久化 charter/roadmap/decisions + ProjectManager 蓝图更新 + GET/PUT /api/projects/{id}/blueprint + dashboard 结构化编辑; 专项 3 passed |
 | 2026-09-06 | iter-83 | PM 子任务可观测性修复: 本地回退登记临时 subagent 并在执行前同步 running, 远程团队创建后统一同步, 子任务开始/结果写任务流与任务面板; 专项 35 passed |
 | 2026-09-05 | iter-81 | 真项目联测修复: 需求派发携带 project_path/repo_url/planning_only, 高优先级映射修正, PM 模板裁剪越界执行子任务, 本机链路本地地址规范化为 127.0.0.1 |
 | 2026-08-27 | iter-45 | pm_agent 三处错误追踪埋点 (任务级失败/交付链/记忆沉淀链, 异常隔离) |

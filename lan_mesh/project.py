@@ -86,6 +86,9 @@ class ProjectManager:
         allowed_models: list = None,
         routing_strategy: str = "balanced",
         workspace_base: str = "",
+        charter: dict = None,
+        roadmap: list = None,
+        decisions: list = None,
     ) -> Project:
         """创建新项目。
 
@@ -118,6 +121,9 @@ class ProjectManager:
             allowed_models=allowed_models or [],
             routing_strategy=routing_strategy,
             status=ProjectStatus.ACTIVE,
+            charter=charter or {},
+            roadmap=roadmap or [],
+            decisions=decisions or [],
             created_at=now,
             updated_at=now,
         )
@@ -142,6 +148,9 @@ class ProjectManager:
         allowed_models: list = None,
         routing_strategy: str = None,
         status: str = None,
+        charter: dict = None,
+        roadmap: list = None,
+        decisions: list = None,
     ) -> Optional[Project]:
         """更新项目字段 (仅更新非 None 的字段)。"""
         project = self.db.get_project(project_id)
@@ -160,10 +169,37 @@ class ProjectManager:
             project.routing_strategy = routing_strategy
         if status is not None:
             project.status = status
+        if charter is not None:
+            project.charter = charter
+        if roadmap is not None:
+            project.roadmap = roadmap
+        if decisions is not None:
+            project.decisions = decisions
 
         project.updated_at = time.time()
         self.db.upsert_project(project)
         return project
+
+    def update_project_blueprint(
+        self,
+        project_id: str,
+        charter: dict,
+        roadmap: list,
+        decisions: list,
+    ) -> Optional[Project]:
+        """更新项目蓝图工作台数据并持久化。"""
+        if not isinstance(charter, dict):
+            raise ValueError("charter 必须是对象")
+        if not isinstance(roadmap, list):
+            raise ValueError("roadmap 必须是数组")
+        if not isinstance(decisions, list):
+            raise ValueError("decisions 必须是数组")
+        return self.update_project(
+            project_id,
+            charter=charter,
+            roadmap=roadmap,
+            decisions=decisions,
+        )
 
     def archive_project(self, project_id: str) -> bool:
         """归档项目 (软删除)。"""

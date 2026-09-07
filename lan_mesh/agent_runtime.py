@@ -420,6 +420,27 @@ def get_preferred_cli_agent() -> Optional[str]:
     return None
 
 
+def _build_blueprint_prompt(blueprint_hint) -> str:
+    """iter-89: 把 PM 下发的项目蓝图约束渲染为 system prompt 尾缀。
+
+    Args:
+        blueprint_hint: PM 注入的蓝图提示文本, 非字符串或空值一律忽略。
+
+    Returns:
+        可直接拼接到 system prompt 尾部的片段; 无蓝图时返回空串。
+    """
+    if not isinstance(blueprint_hint, str):
+        return ""
+    hint = blueprint_hint.strip()
+    if not hint:
+        return ""
+    return (
+        "\n\n## 项目蓝图约束 (来自项目蓝图工作台, 必须遵守)\n"
+        f"{hint[:1200]}\n"
+        "产出必须服务于上述目标与验收标准, 不得展开被列为非目标的方向。"
+    )
+
+
 class AgentRuntime:
     """Worker 端 Agent 运行时。
 
@@ -431,6 +452,7 @@ class AgentRuntime:
         self.agent_id = agent_id
         self.shared_folder = shared_folder_path
         self._custom_system_prompt = custom_system_prompt  # PM 注入的定制 prompt
+        self._cancel_event = threading.Event()
         # 优化3: 当前执行的技能类型 (供选择性加载)
         # 用线程局部变量: 并行分发场景下多个线程共享同一 runtime, 实例属性会互相覆盖
         self._local = threading.local()
@@ -446,6 +468,18 @@ class AgentRuntime:
             "react_agent": self._handle_react_agent,  # F2.1: 工具循环 Agent
             "cli_agent": self._handle_cli_agent,      # CLI Agent (Claude Code/Codex/Aider)
         }
+
+    def cancel(self) -> None:
+        """Request cooperative cancellation for the current runtime task."""
+        self._cancel_event.set()
+
+    def reset_cancellation(self) -> None:
+        """Clear cancellation state before starting a new runtime task."""
+        self._cancel_event.clear()
+
+    def is_cancelled(self) -> bool:
+        """Return whether cancellation has been requested."""
+        return self._cancel_event.is_set()
 
     def execute(self, subtask: dict) -> dict:
         """执行子任务,返回结果字典。
@@ -483,6 +517,11 @@ class AgentRuntime:
                 "error": f"未知的技能类型: {skill}",
             }
 
+        if self._cancel_event.is_set():
+            runtime_trace.trace_subtask_end(
+                trace_id, skill, "cancelled", 0, task_id=task_id)
+            return {"output": {}, "status": "cancelled"}
+
         # 优化3: 记录当前技能类型, 供 _build_system_prompt 选择性加载 (线程局部, 防并行覆盖)
         self._local.current_skill = skill
 
@@ -503,6 +542,11 @@ class AgentRuntime:
 
         try:
             result = handler(input_data)
+            if isinstance(result, dict) and result.get("status") == "cancelled":
+                elapsed_ms = (_time.time() - exec_start) * 1000
+                runtime_trace.trace_subtask_end(
+                    trace_id, skill, "cancelled", elapsed_ms, task_id=task_id)
+                return {"output": result, "status": "cancelled"}
             # 提取 LLM 调用的 token 用量 (如果 handler 返回了 usage)
             usage = {}
             if isinstance(result, dict) and "usage" in result:
@@ -582,7 +626,9 @@ class AgentRuntime:
         - 输出截断保护
         """
         command = input_data.get("command", input_data.get("requirement", ""))
-        from .tool_registry import normalize_tool_timeout
+        from .tool_registry import (
+            mark_git_safe_directory_denied, normalize_tool_timeout,
+        )
         timeout = normalize_tool_timeout(input_data.get("timeout", 30))
 
         # 安全检查: 禁止危险命令
@@ -605,11 +651,11 @@ class AgentRuntime:
             )
             stdout = result.stdout[:MAX_OUTPUT_LENGTH]
             stderr = result.stderr[:MAX_OUTPUT_LENGTH]
-            return {
+            return mark_git_safe_directory_denied({
                 "stdout": stdout,
                 "stderr": stderr,
                 "returncode": result.returncode,
-            }
+            })
         except subprocess.TimeoutExpired:
             return {
                 "stdout": "",
@@ -726,7 +772,11 @@ class AgentRuntime:
             "- 禁止: 不要执行进度上报/curl/HTTP POST 到任何 progress-report 端点, 框架会自动处理\n"
             "- 禁止: 不要浪费轮次做网络请求上报状态, 专注于任务本身\n"
             "- 工具返回 timed_out=true 时不要原样重试, 应缩小范围或直接说明超时原因\n"
+            "- git_safe_directory_denied=true 时禁止修改 git config 或重试 Git 命令, 改用 file_read/dir_list 只读分析\n"
         )
+        # iter-89: ReAct 自建 prompt, 需单独追加项目蓝图约束
+        system_prompt += _build_blueprint_prompt(
+            input_data.get("_project_blueprint", ""))
 
         # 对话历史
         messages = [
@@ -739,6 +789,14 @@ class AgentRuntime:
         steps_log = []
 
         for iteration in range(max_iterations):
+            if self._cancel_event.is_set():
+                return {
+                    "result": "任务已取消",
+                    "iterations": iteration,
+                    "steps": steps_log,
+                    "status": "cancelled",
+                }
+
             # 调用 LLM (with tools)
             resp = self._call_llm_messages_with_tools(
                 messages, tools_schema, input_data
@@ -801,6 +859,14 @@ class AgentRuntime:
                     "tool_call_id": tc["id"],
                     "content": result_text,
                 })
+
+                if self._cancel_event.is_set():
+                    return {
+                        "result": "任务已取消",
+                        "iterations": iteration + 1,
+                        "steps": steps_log,
+                        "status": "cancelled",
+                    }
 
         # 达到最大轮次
         logger.warning("[ReAct] 达到最大轮次 (%d), 强制结束", max_iterations)
@@ -1202,6 +1268,9 @@ class AgentRuntime:
         fallbacks = input_data.get("_fallback_models", [])
         # 优先使用外部注入的 system prompt (如 ChatHandler 注入的秘书 prompt)
         external_system_prompt = input_data.get("_system_prompt", "")
+        # iter-89: PM 下发的项目蓝图约束, 追加到 system prompt 尾部
+        blueprint_suffix = _build_blueprint_prompt(
+            input_data.get("_project_blueprint", ""))
 
         if model_pref:
             # 构建完整重试链: [preferred] + fallbacks
@@ -1215,6 +1284,7 @@ class AgentRuntime:
                 system_prompt = self._build_system_prompt(
                     input_data.get("description", input_data.get("requirement", ""))
                 )
+            system_prompt = f"{system_prompt}{blueprint_suffix}"
 
             for model_id in chain:
                 provider_cfg = self._resolve_provider(model_id)
@@ -1265,6 +1335,7 @@ class AgentRuntime:
             system_prompt = self._build_system_prompt(
                 input_data.get("description", input_data.get("requirement", ""))
             )
+        system_prompt = f"{system_prompt}{blueprint_suffix}"
         return self._call_llm_full(prompt, system_prompt=system_prompt)
 
     def _resolve_provider(self, model_id: str) -> Optional[dict]:

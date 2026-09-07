@@ -398,6 +398,9 @@ class Project:
     allowed_models: list = field(default_factory=list)   # 允许使用的模型 ID 列表 (空=全部允许)
     routing_strategy: str = "balanced"    # cost_first | quality_first | balanced
     status: str = "active"                # active | suspended | archived
+    charter: dict = field(default_factory=dict)          # 项目蓝图/目标/非目标/验收标准
+    roadmap: list = field(default_factory=list)          # 阶段路线图任务
+    decisions: list = field(default_factory=list)        # Boss 决策日志
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 

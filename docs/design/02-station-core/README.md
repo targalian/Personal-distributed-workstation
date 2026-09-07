@@ -195,6 +195,9 @@ WebSocket 通道。
 - Secretary 路由（`secretary_active` 为真才可用，否则 503）: 任务/Agent/
   项目/MCP 工具/模型路由/聊天；守卫统一走 common 的
   `check_secretary(controller)`
+- 项目蓝图 (iter-88): `GET/PUT /api/projects/{id}/blueprint`，PUT 校验
+  charter 必须为对象、roadmap/decisions 必须为数组，成功后广播
+  `project_blueprint_updated`；不存在项目仍返回 404
 - `/ws`: WebSocket 实时推送（event_bus sink 装配于 station_api.py）
 - `/ws/worker`: M5-2 Worker 事件直推通道 — 认证启用时握手前校验
   query 参数 token（mesh_token 恒定时间比较，不通过直接拒绝）；
@@ -455,6 +458,7 @@ pytest **400 passed**; `scripts/sync_docs.py` PASS。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-07 | iter-88 | 项目蓝图专项 API: GET/PUT /api/projects/{id}/blueprint, 类型校验 + project_blueprint_updated WS 广播; DB 迁移 v12 |
 | 2026-09-06 | iter-84 | 本机任务取消后释放 _local_pm_agent 引用, /health 的 local_pm/active_pms 不再残留 active; 专项 17 passed |
 | 2026-09-03 | iter-80 | 创建对话失败修复: 手动激活新增 E4 仲裁预检 (已有优先 Secretary 直接返回 conflict+secretary_url, 不再先成功后让位); dashboard 监听 secretary_yielded 立即降级 UI; 新建对话接口非 2xx 时展示后端 detail; 专项 2 例 + 全量 423 passed |
 | 2026-09-01 | iter-75 | StationController 职责域拆分 Phase 3-5 (收尾): PmControl/Scheduler/Secretary/LocalPm/Lifecycle 共 53 方法搬入 5 个 mixin, 壳类 3253→246 行 (仅剩 imports/组合声明/StationState/__init__); WEB_DIR/TEMPLATES_DIR/STATIC_DIR 迁入 station_lifecycle 并在壳类 re-export 保兼容; 修复 12 处测试 monkeypatch 目标随方法迁移 (sc_sched/sc_pmctl) 的真实回归; 契约面 82 方法零缺失、门禁违规集合与基线一致; pytest 400 passed |

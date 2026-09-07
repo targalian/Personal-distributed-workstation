@@ -28,6 +28,11 @@ logger = get_logger("tool_registry")
 
 TOOL_TIMEOUT_DEFAULT = 30
 TOOL_TIMEOUT_MAX = 120
+GIT_SAFE_DIRECTORY_MESSAGES = (
+    "detected dubious ownership in repository",
+    "unsafe repository",
+    "safe.directory",
+)
 
 
 def normalize_tool_timeout(value: Any = TOOL_TIMEOUT_DEFAULT) -> int:
@@ -37,6 +42,20 @@ def normalize_tool_timeout(value: Any = TOOL_TIMEOUT_DEFAULT) -> int:
     except (TypeError, ValueError):
         timeout = TOOL_TIMEOUT_DEFAULT
     return max(1, min(timeout, TOOL_TIMEOUT_MAX))
+
+
+def mark_git_safe_directory_denied(result: dict) -> dict:
+    """Mark Git safe.directory rejection as a non-retryable read-only boundary."""
+    output = f"{result.get('stdout', '')}\n{result.get('stderr', '')}".lower()
+    if not any(message in output for message in GIT_SAFE_DIRECTORY_MESSAGES):
+        return result
+    result["git_safe_directory_denied"] = True
+    result["remediation"] = (
+        "Git rejected this repository for safe.directory reasons. Do not run "
+        "git config or retry the same Git command; use file_read and dir_list "
+        "for read-only analysis."
+    )
+    return result
 
 
 # ── 工具执行处理器 ──────────────────────────────────────────────
@@ -70,11 +89,11 @@ def _tool_shell_exec(params: dict) -> dict:
             command, shell=True, capture_output=True, text=True,
             timeout=timeout, cwd=cwd,
         )
-        return {
+        return mark_git_safe_directory_denied({
             "stdout": result.stdout,
             "stderr": result.stderr,
             "returncode": result.returncode,
-        }
+        })
     except subprocess.TimeoutExpired:
         return {
             "stdout": "",
@@ -337,7 +356,9 @@ class ToolRegistry:
         try:
             result = entry["handler"](params)
             import json
-            is_error = bool(isinstance(result, dict) and result.get("timed_out"))
+            is_error = bool(isinstance(result, dict) and (
+                result.get("timed_out") or result.get("git_safe_directory_denied")
+            ))
             return {
                 "content": [{
                     "type": "text",

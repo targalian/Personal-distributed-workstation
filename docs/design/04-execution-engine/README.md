@@ -37,6 +37,12 @@ shell_exec、file_ops、monitoring、rag_search（预留）。
 
 **关键设计**: `custom_system_prompt` 注入点 —— PM 分发的定制 prompt 在此覆盖
 默认人设；LLM API Key 经环境变量/资源池配置获取（S1/S3 密钥同步的受益方）。
+
+**项目蓝图约束注入** (iter-89): PM 规划后把蓝图提示写入 `input_data.
+_project_blueprint`, `_build_blueprint_prompt()` 将其渲染为 system prompt
+尾缀 —— `_call_llm_with_routing` 两条分支 (路由链 / 无路由回退) 与
+`_handle_react_agent` 自建 prompt 处各追加一次, 非字符串/空值一律忽略,
+截断上限 1200 字符; 无蓝图项目行为与旧版完全一致。
 **错误追踪埋点** (iter-45, F1.4 数据源): `_call_llm_with_routing` 降级链耗尽时
 capture 到 module=`llm` (context 携带失败链), 异常隔离不影响降级返回。
 
@@ -95,6 +101,20 @@ http_request / run_code 的 timeout 规范到 1-120s（默认 30s，非法值回
 AgentRuntime 专用 shell_exec 同步使用该规范。超时返回 `timed_out=true`，
 `ToolRegistry.call_tool()` 将其映射为 `isError=true`；ReAct system prompt
 要求超时后不要原样重试，应缩小范围或明确说明超时原因。
+
+**Git 安全边界 (iter-86)**: shell_exec 输出命中 Git `safe.directory` /
+`dubious ownership` / `unsafe repository` 时，返回
+`git_safe_directory_denied=true` 与 remediation，并映射 `isError=true`；
+ReAct prompt 明确禁止修改 git config 或原样重试 Git 命令，要求改用
+file_read / dir_list 做只读分析。项目约定「不修改 git config」由此保持不变。
+
+**本地取消传播 (iter-87)**: `AgentRuntime` 持有协作式取消 Event。PM
+`start_task()` 先 reset，`cancel()` 经 `PMDispatcher.cancel()` 调用
+`AgentRuntime.cancel()`，并按 `task_agent/task_station` 映射向已分发子 Agent
+所在 Station/Worker 调用 `POST /pm/cancel-subagent`。Runtime 在 `execute()`
+入口短路，ReAct 在每轮开始与工具调用后检查取消并返回 `status=cancelled`；
+本地回退与本机子 Agent 执行均保持 `cancelled` 状态，不再误标为 `failed`。
+`/role/cancel-pm` 进入线程池执行，避免同进程取消请求阻塞事件循环。
 
 ## mcp_client.py + mcp_gateway.py — MCP 体系
 
@@ -177,6 +197,9 @@ planner/dispatcher/monitor 的共享引用有效 (resume 关键约束)
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-07 | iter-89 | 项目蓝图驱动执行: PM 下发 `_project_blueprint`, `_build_blueprint_prompt` 渲染为 system prompt 尾缀并覆盖路由链/无路由回退/ReAct 三条构建路径; 专项 8 passed |
+| 2026-09-07 | iter-87 | 本地子任务取消传播: AgentRuntime 协作式取消 Event, PM cancel 经 dispatcher 传播并广播 /pm/cancel-subagent, execute/ReAct 轮询间隙短路, 本地回退与本机子 Agent 保持 cancelled, cancel-pm 路由线程池隔离; 专项 9 passed |
+| 2026-09-06 | iter-86 | Git safe.directory 只读降级: shell 输出识别 dubious ownership/unsafe repository, 标记 git_safe_directory_denied + remediation 并映射 isError; ReAct 禁止改 git config/原样重试, 引导 file_read/dir_list 只读分析; 专项 4 passed |
 | 2026-09-06 | iter-85 | 工具超时统一限幅: ToolRegistry shell/http/run_code 与 AgentRuntime shell 共用 1-120s 规范, 超时结果带 timed_out 并映射 isError, ReAct 提示禁止原样重试; 专项 5 passed |
 | 2026-09-01 | iter-74 | SSE 流式中文乱码修复 (Boss 报告, Quest 定位): requests 对 text/event-stream 无 charset 响应按 ISO-8859-1 解码致 UTF-8 中文逐字节拆成乱码; 改为响应头未声明 charset 时兜底 resp.encoding='utf-8' (显式声明仍尊重); 全库唯一流式调用点, 影响秘书/PM/Worker 全部中文回复; 新增 3 例回归 (移除修复即 FAIL), pytest 400 passed |
 | 2026-08-29 | iter-61 | F5.3 插件系统: skill_market 第三方技能市场 (浏览/白名单安装/卸载) + skills 表 origin 列 (迁移 v8) + 安全护栏 (体积/ID/内置冲突/安全默认仅 station) + dashboard 技能库 Tab 市场 UI |
