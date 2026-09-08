@@ -1,0 +1,421 @@
+{
+  "schema": "lan_mesh.task_graph/v1",
+  "project": {
+    "name": "shrimp-quantification (股票自动交易系统)",
+    "local_path": "E:\\ingobj\\stock_player",
+    "repo": "https://gitee.com/zhu-longzhuo/shrimp-quantification",
+    "source": "C:\\Users\\WindowShopper\\Desktop\\项目描述.txt",
+    "owner": "Boss",
+    "handoff_by": "Codex (as Boss proxy)",
+    "created_at": "2026-09-09"
+  },
+  "legend": {
+    "node.kind": [
+      "gate",
+      "epic",
+      "story",
+      "spike",
+      "infra"
+    ],
+    "node.status": [
+      "blocked",
+      "ready",
+      "pending",
+      "running",
+      "done"
+    ],
+    "node.owner": [
+      "Boss",
+      "Secretary",
+      "PM",
+      "Codex",
+      "Quest",
+      "RL-Dev"
+    ],
+    "edge.type": [
+      "depends_on",
+      "informs",
+      "blocks"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "G0",
+      "kind": "gate",
+      "name": "需求澄清闸门 (秘书收集 → Boss 确认)",
+      "owner": "Secretary",
+      "status": "ready",
+      "x": 60,
+      "y": 200,
+      "detail": "项目描述明说三方向细节模糊、要求提问不得揣测。走秘书需求收集状态机 (iter-78) 多轮收集 → Brief → Boss 确认。未过闸门不得开工。",
+      "exit_criteria": [
+        "12 项待确认问题全部有明确答复",
+        "方向优先级排定",
+        "首个里程碑范围冻结"
+      ]
+    },
+    {
+      "id": "N1",
+      "kind": "infra",
+      "name": "项目基线接管 (git 安全目录 + 分支 + 现状盘点)",
+      "owner": "Codex",
+      "status": "ready",
+      "x": 60,
+      "y": 380,
+      "detail": "stock_player 当前 git 报 unsafe repository (owner 不同), 且根目录散落 70+ 文件/csv/db/screenshot。需登记 safe.directory、建开发分支、产出现状盘点。",
+      "exit_criteria": [
+        "git 可读取分支与日志",
+        "按方向建分支",
+        "PROJECT_ANALYSIS 更新为可信现状"
+      ]
+    },
+    {
+      "id": "N2",
+      "kind": "infra",
+      "name": "工作站侧接入 (项目登记 + 蓝图 + 预算)",
+      "owner": "Codex",
+      "status": "ready",
+      "x": 60,
+      "y": 540,
+      "detail": "在 Station 建 project 记录, 写 charter/roadmap/decisions 蓝图 (驱动 iter-89 规划与 iter-90 验收自检), 设预算与路由策略。",
+      "exit_criteria": [
+        "/api/projects 有正式项目",
+        "blueprint 三段非空",
+        "预算与 allowed_models 已设"
+      ]
+    },
+    {
+      "id": "D1",
+      "kind": "epic",
+      "name": "方向1 平台化 (面向大众, 生成 exe + 回测)",
+      "owner": "PM",
+      "status": "blocked",
+      "x": 420,
+      "y": 90,
+      "detail": "按需求生成 选股/买卖/持仓 逻辑组合 → 产出自动交易 exe; 平台提供回测。",
+      "open_questions": [
+        "面向大众=公网 SaaS 还是本地分发?",
+        "exe 内是否含券商密钥, 合规边界?",
+        "回测数据源与成本谁承担?"
+      ]
+    },
+    {
+      "id": "D1-1",
+      "kind": "story",
+      "name": "策略组合 DSL / 配置模型抽象",
+      "owner": "PM",
+      "status": "blocked",
+      "x": 700,
+      "y": 40
+    },
+    {
+      "id": "D1-2",
+      "kind": "story",
+      "name": "回测引擎服务化 (复用 regime_backtest/run_batch_backtest)",
+      "owner": "PM",
+      "status": "blocked",
+      "x": 700,
+      "y": 120
+    },
+    {
+      "id": "D1-3",
+      "kind": "story",
+      "name": "exe 打包流水线 (策略配置 → 可分发客户端)",
+      "owner": "PM",
+      "status": "blocked",
+      "x": 700,
+      "y": 200
+    },
+    {
+      "id": "D2",
+      "kind": "epic",
+      "name": "方向2 智能化 (强化学习选组合)",
+      "owner": "RL-Dev",
+      "status": "blocked",
+      "x": 420,
+      "y": 330,
+      "detail": "与其他开发人员用 RL 学出 依大盘/行情/模板 切换 选股/买卖/持仓 组合的策略。",
+      "open_questions": [
+        "RL 训练算力在哪跑 (本机/云/局域网其他主机)?",
+        "奖励函数口径: 绝对收益/夏普/回撤约束?",
+        "与外部开发者的代码协作与数据边界?"
+      ]
+    },
+    {
+      "id": "D2-1",
+      "kind": "spike",
+      "name": "环境与奖励定义 spike (先可复现再谈收益)",
+      "owner": "RL-Dev",
+      "status": "blocked",
+      "x": 700,
+      "y": 290
+    },
+    {
+      "id": "D2-2",
+      "kind": "story",
+      "name": "行情/大盘状态特征与 regime 标注管线",
+      "owner": "PM",
+      "status": "blocked",
+      "x": 700,
+      "y": 370
+    },
+    {
+      "id": "D3",
+      "kind": "epic",
+      "name": "方向3 基础功能迭代 (统计/速度/合入 1 与 2)",
+      "owner": "PM",
+      "status": "blocked",
+      "x": 420,
+      "y": 560,
+      "detail": "初版各项基础功能已能跑; 持续优化统计与性能, 成果回流方向 1/2。建议作为首个动手方向 (风险最低、可验证)。",
+      "open_questions": [
+        "当前最痛的性能瓶颈是哪一步 (下载/入库/回测)?",
+        "统计口径要对齐哪个基准?"
+      ]
+    },
+    {
+      "id": "D3-1",
+      "kind": "story",
+      "name": "根目录治理与模块分层 (70+ 散文件, _test_em*.py 清理)",
+      "owner": "PM",
+      "status": "blocked",
+      "x": 700,
+      "y": 500
+    },
+    {
+      "id": "D3-2",
+      "kind": "story",
+      "name": "数据管线加速 (download/daily_update/入库 profiling)",
+      "owner": "PM",
+      "status": "blocked",
+      "x": 700,
+      "y": 580
+    },
+    {
+      "id": "D3-3",
+      "kind": "story",
+      "name": "统计指标体系与回归基准 (stock_metrics/indicators)",
+      "owner": "PM",
+      "status": "blocked",
+      "x": 700,
+      "y": 660
+    },
+    {
+      "id": "C1",
+      "kind": "infra",
+      "name": "Codex↔秘书/PM 通道 (scripts/boss_channel.py)",
+      "owner": "Codex",
+      "status": "done",
+      "x": 60,
+      "y": 60,
+      "detail": "本轮已交付: health/projects/blueprint/chat/tasks/task/graph/pm/progress/reply/watch/diag 共 12 子命令, mesh token 自动加载, 错误分类提示 (401/503/409)。",
+      "exit_criteria": [
+        "health 与 diag 实测通 (已过)",
+        "chat 可向秘书投递 (待 G0 时实测)"
+      ]
+    },
+    {
+      "id": "C2",
+      "kind": "infra",
+      "name": "监管闭环 (diag 巡检 + 停滞对账 + bug 回流)",
+      "owner": "Codex",
+      "status": "running",
+      "x": 60,
+      "y": -100,
+      "detail": "diag 首次运行即抓到 BUG-032 (停滞告警 100 条中 99 条为幽灵任务) 与 errors 端点路径错; 前者已修 (DB 对账), 后者已在通道内改用 /api/errors/recent。",
+      "exit_criteria": [
+        "停滞告警只报 DB 真实在跑任务",
+        "diag 可作为每轮监管入口"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "C1",
+      "target": "C2",
+      "type": "depends_on"
+    },
+    {
+      "source": "C1",
+      "target": "G0",
+      "type": "informs",
+      "note": "通道是 Boss 与秘书交接的载体"
+    },
+    {
+      "source": "G0",
+      "target": "N2",
+      "type": "depends_on",
+      "note": "蓝图内容来自澄清结论"
+    },
+    {
+      "source": "N1",
+      "target": "N2",
+      "type": "depends_on"
+    },
+    {
+      "source": "G0",
+      "target": "D1",
+      "type": "blocks"
+    },
+    {
+      "source": "G0",
+      "target": "D2",
+      "type": "blocks"
+    },
+    {
+      "source": "G0",
+      "target": "D3",
+      "type": "blocks"
+    },
+    {
+      "source": "N2",
+      "target": "D3",
+      "type": "depends_on"
+    },
+    {
+      "source": "D1",
+      "target": "D1-1",
+      "type": "depends_on"
+    },
+    {
+      "source": "D1",
+      "target": "D1-2",
+      "type": "depends_on"
+    },
+    {
+      "source": "D1",
+      "target": "D1-3",
+      "type": "depends_on"
+    },
+    {
+      "source": "D1-1",
+      "target": "D1-3",
+      "type": "depends_on"
+    },
+    {
+      "source": "D1-2",
+      "target": "D1-3",
+      "type": "informs"
+    },
+    {
+      "source": "D2",
+      "target": "D2-1",
+      "type": "depends_on"
+    },
+    {
+      "source": "D2",
+      "target": "D2-2",
+      "type": "depends_on"
+    },
+    {
+      "source": "D2-2",
+      "target": "D2-1",
+      "type": "informs"
+    },
+    {
+      "source": "D3",
+      "target": "D3-1",
+      "type": "depends_on"
+    },
+    {
+      "source": "D3",
+      "target": "D3-2",
+      "type": "depends_on"
+    },
+    {
+      "source": "D3",
+      "target": "D3-3",
+      "type": "depends_on"
+    },
+    {
+      "source": "D3-1",
+      "target": "D1-1",
+      "type": "informs",
+      "note": "分层后才好抽 DSL"
+    },
+    {
+      "source": "D3-3",
+      "target": "D2-1",
+      "type": "informs",
+      "note": "指标口径决定奖励函数"
+    },
+    {
+      "source": "D3-2",
+      "target": "D1-2",
+      "type": "informs",
+      "note": "数据管线提速直接抬回测吞吐"
+    }
+  ],
+  "critical_path": [
+    "C1",
+    "G0",
+    "N1",
+    "N2",
+    "D3",
+    "D3-1",
+    "D1-1",
+    "D1-3"
+  ],
+  "open_questions_for_boss": [
+    {
+      "id": "Q1",
+      "topic": "方向优先级",
+      "q": "三个方向先做哪个? 我的建议是方向3 (基础迭代) 先行 — 风险最低、能立刻产出可验证收益, 且它的产物 (分层/指标/提速) 是方向1和2的地基。"
+    },
+    {
+      "id": "Q2",
+      "topic": "方向1 分发形态",
+      "q": "「面向大众的平台」是公网 SaaS, 还是本地/内网分发的工具? 这决定要不要做账号体系、合规与风控。"
+    },
+    {
+      "id": "Q3",
+      "topic": "方向1 密钥边界",
+      "q": "产出的 exe 里是否需要携带券商账号/密钥? 若是, 密钥存储与免责边界需要先定。"
+    },
+    {
+      "id": "Q4",
+      "topic": "方向2 算力与协作",
+      "q": "RL 训练在哪跑 (本机 / 局域网其他主机 / 云)? 与外部开发人员如何协作 (同仓分支 / 独立仓 / 只交模型)?"
+    },
+    {
+      "id": "Q5",
+      "topic": "方向2 目标函数",
+      "q": "「维持一定收益」的验收口径是什么 — 年化? 夏普? 最大回撤上限? 需要可量化才能进验收自检。"
+    },
+    {
+      "id": "Q6",
+      "topic": "方向3 痛点",
+      "q": "当前最痛的是哪一环 (行情下载 / 入库 / 回测速度 / 统计口径)? 有没有实测数字?"
+    },
+    {
+      "id": "Q7",
+      "topic": "分支策略",
+      "q": "描述里说「希望对应分支后开始开发」— 是每方向一条长期分支 (feat/platform, feat/rl, feat/base), 还是单 develop 分支按 PR 推进?"
+    },
+    {
+      "id": "Q8",
+      "topic": "现状可信度",
+      "q": "根目录有 70+ 散文件 (含 _test_em1~8.py、多个 screenshot、stock.db/sim_trading.db)。哪些是有效资产, 哪些可清理? 是否允许我做结构治理?"
+    },
+    {
+      "id": "Q9",
+      "topic": "实盘边界",
+      "q": "自动交易是否已接真实资金? 开发期间能否碰实盘账号, 还是一律走 sim_engine/虚拟组合?"
+    },
+    {
+      "id": "Q10",
+      "topic": "数据源",
+      "q": "行情数据源 (东财/北向等) 是否有配额或付费限制? 回测所需历史深度是多少年?"
+    },
+    {
+      "id": "Q11",
+      "topic": "预算",
+      "q": "这个项目给多少 LLM 预算上限 (usd), 以及允许用哪些模型? 用于 Station 项目预算与路由策略。"
+    },
+    {
+      "id": "Q12",
+      "topic": "首个里程碑",
+      "q": "希望第一个可交付里程碑是什么形态 (一份提速报告 / 一次干净重构 / 一个能跑的回测 API)? 渐进式的第一步定多大?"
+    }
+  ]
+}
