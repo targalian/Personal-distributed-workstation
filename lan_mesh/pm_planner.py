@@ -8,6 +8,7 @@ PM 规划器 — 任务分析与分解
 4. 简单任务直接执行
 5. 任务类型推断 (供外部使用)
 6. 项目蓝图约束注入 (iter-89)
+7. 交付前蓝图验收自检 (iter-90)
 """
 import json
 import uuid
@@ -78,6 +79,79 @@ def _recent_decisions(decisions) -> list:
         if text:
             out.append(text[:_BLUEPRINT_MAX_LEN])
     return out
+
+
+# ── iter-90: 交付物验收自检辅助 ───────────────────────
+
+_ACCEPTANCE_MAX_CRITERIA = 6
+_ACCEPTANCE_MAX_DELIVERABLE = 4000
+_ACCEPTANCE_MAX_EVIDENCE = 200
+
+
+def _build_acceptance_prompt(task_name: str, criteria: list, deliverable: str) -> str:
+    """iter-90: 渲染「交付物 vs 蓝图验收标准」逐条自检 prompt。"""
+    numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(criteria, start=1))
+    body = deliverable[:_ACCEPTANCE_MAX_DELIVERABLE]
+    return f"""你是项目验收审查员。请判断交付物是否满足项目蓝图的验收标准。
+
+## 任务
+{task_name}
+
+## 验收标准 (逐条判断, 顺序与编号必须保持一致)
+{numbered}
+
+## 交付物内容
+{body}
+
+## 输出要求
+严格输出 JSON (不要 markdown 代码块), results 的条目数与顺序必须与验收标准一致:
+{{
+  "results": [
+    {{"index": 1, "met": true, "evidence": "交付物中支撑该结论的具体依据或缺口"}}
+  ],
+  "summary": "一句话总体结论"
+}}
+
+判断规则:
+- 只依据交付物内容判断, 不得臆测未写出的内容; 无法确认一律 met=false。
+- evidence 必须指向交付物中的具体片段或明确说明缺什么, 不许空话。
+"""
+
+
+def _parse_acceptance_review(content: str, criteria: list) -> dict:
+    """iter-90: 解析自检 JSON 为结论字典; 解析失败返回空 dict (静默降级)。"""
+    text = str(content or "").strip()
+    if "```" in text:
+        text = "\n".join(
+            line for line in text.split("\n") if not line.strip().startswith("```"))
+    try:
+        data = json.loads(text.strip())
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    results = data.get("results")
+    if not isinstance(results, list) or not results:
+        return {}
+    checks = []
+    for criterion, item in zip(criteria, results):
+        if not isinstance(item, dict):
+            continue
+        checks.append({
+            "criterion": criterion,
+            "met": bool(item.get("met")),
+            "evidence": str(item.get("evidence", "")).strip()[:_ACCEPTANCE_MAX_EVIDENCE],
+        })
+    if not checks:
+        return {}
+    unmet = [c["criterion"] for c in checks if not c["met"]]
+    return {
+        "checks": checks,
+        "unmet": unmet,
+        "verdict": "risk" if unmet else "pass",
+        "summary": str(data.get("summary", "")).strip()[:_ACCEPTANCE_MAX_EVIDENCE],
+        "reviewed": len(checks),
+    }
 
 
 class PMPlanner:
@@ -388,6 +462,63 @@ class PMPlanner:
         except Exception as e:
             logger.debug("[%s] 项目蓝图查询失败: %s", self._pm_id[:8], e)
             return ""
+
+    # ── iter-90: 交付前蓝图验收自检 ─────────────────────
+
+    def _blueprint_acceptance_criteria(self, task: dict) -> list:
+        """取项目蓝图的验收标准列表 (无项目/无蓝图/查询失败均为空)。"""
+        try:
+            project_id = (task.get("project_id")
+                          or task.get("input_data", {}).get("project_id", ""))
+            if not project_id:
+                return []
+            data = self._fetch_project_blueprint(project_id)
+            charter = data.get("charter") if isinstance(data, dict) else None
+            if not isinstance(charter, dict):
+                return []
+            return _blueprint_items(
+                charter.get("acceptance_criteria"))[:_ACCEPTANCE_MAX_CRITERIA]
+        except Exception as e:
+            logger.debug("[%s] 验收标准查询失败: %s", self._pm_id[:8], e)
+            return []
+
+    def review_against_blueprint(self, task: dict, deliverable: str) -> dict:
+        """iter-90: 交付前按蓝图验收标准逐条自检。
+
+        Args:
+            task: PM 当前任务字典 (需带 ``project_id``)
+            deliverable: 待交付的聚合内容
+
+        Returns:
+            ``{"checks": [...], "unmet": [...], "verdict": "pass|risk",
+            "summary": str, "reviewed": int}``; 无验收标准、交付物为空
+            或 LLM 不可用时返回空 dict (不阱碍交付主流程)。
+        """
+        text = str(deliverable or "").strip()
+        if not text:
+            return {}
+        criteria = self._blueprint_acceptance_criteria(task)
+        if not criteria:
+            return {}
+        prompt = _build_acceptance_prompt(
+            task.get("name", ""), criteria, text)
+        try:
+            resp = self._runtime._call_llm_with_routing(
+                prompt,
+                {"_model_preference": "", "_fallback_models": [],
+                 "description": "交付物验收自检"},
+            )
+        except Exception as e:
+            logger.debug("[%s] 验收自检 LLM 调用失败: %s", self._pm_id[:8], e)
+            return {}
+        review = _parse_acceptance_review(resp.get("content", ""), criteria)
+        if not review:
+            logger.debug("[%s] 验收自检结果无法解析, 跳过", self._pm_id[:8])
+            return {}
+        logger.info("[%s] 蓝图验收自检: %s (%d/%d 条达成)",
+                    self._pm_id[:8], review["verdict"],
+                    review["reviewed"] - len(review["unmet"]), review["reviewed"])
+        return review
 
     # ── 简单任务直接执行 ──────────────────────────────────────────
 

@@ -479,6 +479,38 @@ _STALL_ALERT_EVENT = {1: "task_stall_alert_low", 2: "task_stall_alert",
                       3: "task_stall_alert_high"}
 
 
+# DB 任务终态: 到达其一即不应再告警 (JSONL 缺终态事件时的兜底判据)
+_TASK_TERMINAL_STATUS = frozenset({"completed", "failed", "cancelled",
+                                   "delivered", "archived"})
+
+
+def _stall_db_filter(task_ids: set) -> set:
+    """返回应被抑制告警的 task_id 集合 (DB 已终态 + DB 中不存在的幽灵)。
+
+    iter-92 (BUG-032): 停滞检测原先纯靠 trace.jsonl 聚合, 只认 JSONL 里的
+    终态阶段事件。历史/测试任务在 DB 早已 cancelled/completed, 或整条任务
+    记录已被删除 (测试清理), 但 JSONL 仍留着 submitted 事件 → 被判为
+    "停滞 10000 分钟" 长期刷屏 (实测 100 条告警里 99 条是幽灵)。
+    此处与 DB 对账: 查不到任务 = 幽灵, DB 已终态 = 收尾, 两者都抑制。
+    DB 未注入时返回空集 (退化为旧行为, 不阻断)。
+    """
+    if _db_ref is None or not task_ids:
+        return set()
+    suppressed = set()
+    for tid in task_ids:
+        try:
+            task = _db_ref.get_task(tid)
+        except Exception as e:
+            logger.debug("[Trace] 停滞 DB 对账失败 %s: %s", tid, e)
+            continue
+        if task is None:
+            suppressed.add(tid)
+            continue
+        if getattr(task, "status", "") in _TASK_TERMINAL_STATUS:
+            suppressed.add(tid)
+    return suppressed
+
+
 def _stall_level(idle_ms: float, stall_ms: float) -> int:
     """停滞档位: 空闲达阈值 1 倍→Lv1, 2 倍→Lv2, 4 倍→Lv3。"""
     if stall_ms <= 0:
@@ -526,6 +558,13 @@ def check_stall_alerts(now: float = None) -> list[dict]:
                 })
         except Exception as e:
             logger.debug("[Trace] 停滞检查聚合失败: %s", e)
+    # iter-92 (BUG-032): 与 DB 对账, 剔除已终态任务与幽灵任务 (JSONL 残留)
+    suppressed = _stall_db_filter({a["task_id"] for a in alerts})
+    if suppressed:
+        alerts = [a for a in alerts if a["task_id"] not in suppressed]
+        for tid in suppressed:
+            _stall_state.pop(tid, None)
+        logger.debug("[Trace] 停滞告警按 DB 对账抑制 %d 条", len(suppressed))
     _stall_active = alerts
     stalled_ids = {a["task_id"] for a in alerts}
     # 恢复清理: 不再停滞的任务清除档位, 允许再次停滞时重新告警

@@ -8851,3 +8851,241 @@ class TestIter89ProjectBlueprintContext:
         hint = seen["input_data"]["_project_blueprint"]
         assert "做一个局域网任务网格" in hint
         assert "不做移动端原生 App" in hint
+
+# ── iter-90: 交付前蓝图验收自检 ────────────────────────────
+
+class TestIter90BlueprintAcceptance:
+    """交付前按项目蓝图验收标准自检 + 交付链路持久化。"""
+
+    BLUEPRINT = {
+        "charter": {
+            "mission": "做一个局域网任务网格",
+            "goals": ["先跑通单机闭环"],
+            "non_goals": ["不做移动端原生 App"],
+            "acceptance_criteria": ["任务可提交并出交付物",
+                                    "交付物包含验收结论"],
+            "constraints": ["只用 Python 3.11"],
+        },
+        "roadmap": [{"phase": "V2", "goal": "多机调度", "status": "in_progress"}],
+        "decisions": [],
+    }
+
+    def test_parse_acceptance_review(self):
+        """自检 JSON 解析: 逐条对齐、风险提取、坏输出降级。"""
+        from lan_mesh.pm_planner import _parse_acceptance_review
+
+        criteria = ["标准一", "标准二"]
+        payload = """```json
+{"results": [{"met": true, "evidence": "ok"}, {"met": false, "evidence": "missing"}],
+ "summary": "一条未达成"}
+```"""
+        review = _parse_acceptance_review(payload, criteria)
+
+        assert review["verdict"] == "risk"
+        assert review["unmet"] == ["标准二"]
+        assert review["reviewed"] == 2
+        assert review["checks"][1]["met"] is False
+        assert _parse_acceptance_review("not json", criteria) == {}
+        assert _parse_acceptance_review("{}", criteria) == {}
+
+    def test_review_against_blueprint(self, monkeypatch):
+        """交付前自检: prompt 含验收标准, 结论保留未达成项。"""
+        import lan_mesh.http_retry as hr
+        from lan_mesh.pm_planner import PMPlanner
+        from lan_mesh.pm_state import PMState
+
+        captured = {}
+
+        class FakeRuntime:
+            def _call_llm_with_routing(self, prompt, input_data):
+                captured["prompt"] = prompt
+                captured["description"] = input_data["description"]
+                return {"content": '{"results": [{"met": true, "evidence": "e1"}, '
+                                   '{"met": false, "evidence": "e2"}], "summary": "risk"}'}
+
+        agent = _RecordingAgent()
+        agent.secretary_url = "http://10.0.0.9:45470"
+        planner = PMPlanner("pm-acc-90", FakeRuntime(), PMState(), agent)
+        monkeypatch.setattr(hr, "http_get",
+                            lambda *a, **k: _BlueprintResp(self.BLUEPRINT))
+
+        review = planner.review_against_blueprint(
+            {"project_id": "p-acc", "name": "验收"},
+            "任务已提交, 交付物完整。但未写验收结论。")
+
+        assert "任务可提交并出交付物" in captured["prompt"]
+        assert "交付物包含验收结论" in captured["prompt"]
+        assert captured["description"] == "交付物验收自检"
+        assert review["verdict"] == "risk"
+        assert review["unmet"] == ["交付物包含验收结论"]
+
+    def test_review_skips_without_criteria(self, monkeypatch):
+        """无验收标准/无交付物时零成本降级, 不调 LLM。"""
+        from types import SimpleNamespace
+        from lan_mesh.pm_planner import PMPlanner
+        from lan_mesh.pm_state import PMState
+
+        class NoLlm:
+            def _call_llm_with_routing(self, *a, **k):
+                raise AssertionError("should not call llm")
+
+        planner = PMPlanner("pm-acc-skip", NoLlm(), PMState(), _RecordingAgent())
+        assert planner.review_against_blueprint({"project_id": "p-x"}, "") == {}
+
+        blank = {"charter": {"acceptance_criteria": []}}
+        planner2 = PMPlanner("pm-acc-blank", NoLlm(), PMState(),
+                             SimpleNamespace(secretary_url="http://10.0.0.9"))
+        import lan_mesh.http_retry as hr
+        monkeypatch.setattr(hr, "http_get",
+                            lambda *a, **k: _BlueprintResp(blank))
+        assert planner2.review_against_blueprint({"project_id": "p-y"}, "ok") == {}
+
+    def test_deliver_result_attaches_review(self, monkeypatch):
+        """deliver_result 把自检结果挂到上报 payload。"""
+        import lan_mesh.pm_agent as pa
+        from lan_mesh.pm_agent import ProjectManagerAgent
+
+        pm = ProjectManagerAgent(
+            "pm-deliver90", object(), "http://10.0.0.9:45470", "dev-1")
+        pm._state.task = {"task_id": "task-acc", "name": "acc"}
+        review = {"checks": [{"criterion": "c", "met": False, "evidence": "e"}],
+                  "unmet": ["c"], "verdict": "risk", "summary": "s", "reviewed": 1}
+        monkeypatch.setattr(pm._planner, "review_against_blueprint",
+                            lambda task, deliverable: review)
+        monkeypatch.setattr(pm, "_distribute_artifacts", lambda *a, **k: None)
+        monkeypatch.setattr(pm, "_record_task_memory", lambda *a, **k: None)
+
+        captured = {}
+
+        class Resp:
+            status_code = 200
+
+        monkeypatch.setattr(pa, "http_post",
+                            lambda url, **k: captured.update(
+                                {"url": url, "json": k.get("json")}) or Resp())
+
+        pm.deliver_result("acc", "desc", "deliverable", [])
+
+        assert captured["url"] == "http://10.0.0.9:45470/api/pm/pm-deliver90/deliver"
+        assert captured["json"]["acceptance_review"] == review
+
+    def test_delivery_route_persists_acceptance_review(self, tmp_path):
+        """Secretary 落库自检结果并随 WS 广播。"""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from types import SimpleNamespace
+        from lan_mesh.database import Database
+        from lan_mesh.protocol import Task
+        from lan_mesh.station_routes_tasks import build_task_routes
+
+        database = Database(str(tmp_path / "acc.db"))
+        task = Task(task_id="task-route-acc", name="acc", status="completed")
+        database.save_task(task)
+        controller = SimpleNamespace(
+            db=database,
+            state=SimpleNamespace(p2p_messages={}, ws_clients=set()),
+            secretary_active=True,
+            discovery=SimpleNamespace(find_device=lambda *a, **k: None),
+            bot_gateway=SimpleNamespace(notify=lambda *a, **k: None),
+        )
+        app = FastAPI()
+        app.include_router(build_task_routes(controller))
+        client = TestClient(app)
+        review = {"verdict": "risk", "unmet": ["c"], "reviewed": 1,
+                  "checks": [{"criterion": "c", "met": False, "evidence": "e"}]}
+
+        response = client.post("/api/pm/pm-route-acc/deliver", json={
+            "task_id": task.task_id, "task_name": "acc", "deliverable": "d",
+            "summary": "s", "subtask_stats": {"total": 1, "completed": 1,
+                                              "failed": 0},
+            "acceptance_review": review,
+        })
+        stored = database.get_task(task.task_id).output_data["_delivery"]
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+        assert stored["acceptance_review"] == review
+
+
+class TestIter92StallDbReconcile:
+    """iter-92 (BUG-032): 停滞告警与 DB 对账 — 幽灵/终态任务不再刷屏。"""
+
+    def _fake_flow(self, monkeypatch, task_ids):
+        from lan_mesh import runtime_trace as rt
+
+        rows = [{"task_id": tid, "stalled": True, "idle_ms": 60 * 60 * 1000,
+                 "last_stage": "submitted", "last_label": "任务提交"}
+                for tid in task_ids]
+        monkeypatch.setattr(rt, "task_flow_overview",
+                            lambda **kwargs: rows)
+        rt._stall_state.clear()
+        return rt
+
+    def test_ghost_task_not_in_db_is_suppressed(self, monkeypatch, tmp_path):
+        """JSONL 残留但 DB 已无记录的幽灵任务不产生告警。"""
+        from lan_mesh.database import Database
+
+        rt = self._fake_flow(monkeypatch, ["task-ghost"])
+        database = Database(str(tmp_path / "stall_ghost.db"))
+        monkeypatch.setattr(rt, "_db_ref", database)
+
+        pushed = rt.check_stall_alerts()
+
+        assert pushed == []
+        assert rt.active_stall_alerts() == []
+
+    def test_db_terminal_task_is_suppressed(self, monkeypatch, tmp_path):
+        """DB 中已 cancelled 的任务即便 JSONL 无终态事件也不告警。"""
+        from lan_mesh.database import Database
+        from lan_mesh.protocol import Task
+
+        rt = self._fake_flow(monkeypatch, ["task-done"])
+        database = Database(str(tmp_path / "stall_done.db"))
+        database.save_task(Task(task_id="task-done", name="t",
+                                status="cancelled"))
+        monkeypatch.setattr(rt, "_db_ref", database)
+
+        pushed = rt.check_stall_alerts()
+
+        assert pushed == []
+
+    def test_live_task_still_alerts(self, monkeypatch, tmp_path):
+        """DB 中仍在 running 的任务照常告警 (不被修复误伤)。"""
+        from lan_mesh.database import Database
+        from lan_mesh.protocol import Task
+
+        rt = self._fake_flow(monkeypatch, ["task-live"])
+        database = Database(str(tmp_path / "stall_live.db"))
+        database.save_task(Task(task_id="task-live", name="t",
+                                status="running"))
+        monkeypatch.setattr(rt, "_db_ref", database)
+
+        pushed = rt.check_stall_alerts()
+
+        assert [a["task_id"] for a in pushed] == ["task-live"]
+
+    def test_mixed_batch_keeps_only_live(self, monkeypatch, tmp_path):
+        """混合批次: 99 幽灵 + 1 真任务 → 只报 1 条 (复现实测比例)。"""
+        from lan_mesh.database import Database
+        from lan_mesh.protocol import Task
+
+        ids = [f"task-ghost-{i}" for i in range(99)] + ["task-real"]
+        rt = self._fake_flow(monkeypatch, ids)
+        database = Database(str(tmp_path / "stall_mix.db"))
+        database.save_task(Task(task_id="task-real", name="t",
+                                status="running"))
+        monkeypatch.setattr(rt, "_db_ref", database)
+
+        pushed = rt.check_stall_alerts()
+
+        assert [a["task_id"] for a in pushed] == ["task-real"]
+        assert len(rt.active_stall_alerts()) == 1
+
+    def test_no_db_falls_back_to_old_behavior(self, monkeypatch):
+        """DB 未注入时退化为旧行为 (不阻断告警链路)。"""
+        rt = self._fake_flow(monkeypatch, ["task-nodb"])
+        monkeypatch.setattr(rt, "_db_ref", None)
+
+        pushed = rt.check_stall_alerts()
+
+        assert [a["task_id"] for a in pushed] == ["task-nodb"]

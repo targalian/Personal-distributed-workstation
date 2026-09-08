@@ -9,6 +9,7 @@
 |---|---|
 | .qoder/skills/ | Qoder 技能库 (docs-sync / code-review / repowiki-update 等) |
 | quicklan-main/ | 独立子项目: Tauri + React 桌面文件共享应用 |
+| scripts/boss_channel.py | Boss 通道 — Codex 对接秘书 (Secretary) 与 PM Agent 的命令行客户端。 |
 | scripts/check_unbound_names.py | 静态扫描 lan_mesh/ 中「被引用但从未绑定」的全局名。 |
 | scripts/dev_status.py | Loop Engineering - 全局开发态势看板 (只读, 人在回路外时的唯一观察入口)。 |
 | scripts/ship.ps1 | ★ 一键发货: 按 Agent 归属分批提交 + 调 sync_push 推送 |
@@ -42,6 +43,36 @@ commit/released_at 自动对齐 git HEAD (幂等); `--bump patch/minor/major`
   `git checkout en; git merge master` 补做
 - gitee 推送偶发网络中断 → 原样重试即可
 
+## scripts/boss_channel.py — Codex ↔ 秘书/PM 通道
+
+**动因**: Codex CLI 需以 Boss 身份向秘书交接需求、确认项目蓝图, 并监管 PM
+执行与排查 bug。此前只能手写 `Invoke-RestMethod`, token / 编码 / 错误处理
+每次重来, 且 401/503 语义要靠猜。本脚本把 Station HTTP API 封成稳定子命令,
+供 Codex 与人共用。
+
+**信任根**: `--token` > `LAN_MESH_TOKEN` > `~/.lan_mesh/mesh_token`
+(mesh token 持有人 = boss)。
+
+| 子命令 | 端点 | 用途 |
+|---|---|---|
+| `health` | `GET /health` | 探活与组件状态 (白名单, 免 token) |
+| `diag` | health + tasks + pm + stall-alerts + errors | 一次性体检 (监管入口) |
+| `projects` | `GET /api/projects` | 项目列表 (折叠冗长字段) |
+| `blueprint <id> [--set-file]` | `GET/PUT /api/projects/{id}/blueprint` | 读/整体写蓝图 |
+| `chat <msg> [--conv]` | `POST /api/secretary/chat` | 向秘书投递指令 (默认 180s 超时) |
+| `tasks [--status]` / `task <id>` | `GET /api/tasks[/{id}]` | 任务列表 / 详情含 `acceptance_review` |
+| `graph <id> [--put-file]` | `GET/PUT /api/tasks/{id}/graph` | 读/回写 DAG 图 |
+| `pm [<id>]` / `progress <id>` | `GET /api/pm[/{id}]`, `/progress` | PM 状态与进度流水 |
+| `reply <pm_id> <content>` | `POST /api/pm/{id}/inject-input` | 向 awaiting_input 的 PM 注入回复 |
+| `watch [--interval]` | 轮询 `GET /api/tasks` | 状态变化时打印一行 (长任务监管) |
+
+**设计约束**: 所有网络异常收敛为 `(0, {"error": ...})` 不抛出; 输出统一
+UTF-8 JSON 便于 Codex 解析; 401/503/409 附带成因提示 (token 失效 /
+Secretary 未激活 / PM 非等待态)。
+
+**首次运行即抓到两个真问题**: BUG-032 (停滞告警 100 条中 99 条幽灵, 已修)
+与 `diag` 内错用 `/api/runtime/errors` (实际为 `/api/errors/recent`, 已改)。
+
 ## scripts/start_workstation.* — 一键启动
 
 bat / ps1 / sh 三平台版本，激活 .venv 后 `python main.py station`。
@@ -59,6 +90,7 @@ bat / ps1 / sh 三平台版本，激活 .venv 后 `python main.py station`。
 
 | 日期 | 迭代 | 变更 |
 |------|------|------|
+| 2026-09-09 | iter-92 | 新增 `scripts/boss_channel.py`: Codex ↔ 秘书/PM 通道 12 子命令 (health/diag/projects/blueprint/chat/tasks/task/graph/pm/progress/reply/watch), mesh token 自动加载 + 错误分类提示; `sync_docs.py` MAPPING 登记该脚本 |
 | 2026-09-02 | iter-76 | start_workstation 三端对齐: bat 补齐版本检查/.env/API Key/Git Hooks/防火墙提示; ps1/sh 加镜像+进度条 |
 
 ## skills/ — 技能库资产

@@ -356,6 +356,26 @@ agent_runtime.execute()
 - `trace_llm_call()`: 嵌入 `_call_openai_compatible` (流式, chat)、`_call_openai_with_tools` (ReAct, tools)、`_handle_cli_agent` (CLI Agent)
 - `set_db(db)`: station_api.py 装配时注入 Database 引用 (避免循环导入)
 
+**停滞告警 DB 对账 (iter-92, BUG-032)**:
+
+停滞判定原先纯靠 `trace.jsonl` 聚合, 只认 JSONL 内的终态阶段事件
+(`pm:completed/failed/cancelled`、`delivered`)。历史与测试任务在 DB 早已
+`cancelled/completed`、或整条记录已被清理, 但 JSONL 仍留着 `submitted`
+事件 → 被判成「停滞 10000+ 分钟」长期刷屏。实测 `/api/runtime/task-stall-alerts`
+返回 100 条告警, 其中 99 条的 task_id 在 DB `tasks` 表已不存在。
+
+`check_stall_alerts()` 聚合后新增 `_stall_db_filter()` 与 DB 对账:
+
+| 判据 | 处理 |
+|---|---|
+| DB 查不到该 task_id | 幽灵记录 → 抑制告警, 清除档位 |
+| DB 状态属 `_TASK_TERMINAL_STATUS` (completed/failed/cancelled/delivered/archived) | 已收尾 → 抑制告警 |
+| DB 状态为 pending/running 等非终态 | 照常告警 (修复不误伤真实停滞) |
+| `_db_ref` 未注入 | 返回空集, 退化为旧行为 (不阻断链路) |
+
+真实数据离线复现: 修复前 100 条 → 对账抑制 100 条 → 实际告警 0 条
+(与 `/health` 的 `active_tasks=0` 一致)。
+
 **查询端点** (station_routes_basic.py, 始终可用):
 | 端点 | 数据源 | 用途 |
 |---|---|---|
@@ -458,6 +478,7 @@ pytest **400 passed**; `scripts/sync_docs.py` PASS。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-09 | iter-92 | BUG-032 停滞告警幽灵刷屏修复: `check_stall_alerts` 聚合后与 DB 对账 (`_stall_db_filter`), 抑制 DB 已终态与查不到记录的任务; 真实数据实测 100 条 → 0 条, 非终态任务照常告警; 专项 5 例 + 变异验证 3 处致红 |
 | 2026-09-07 | iter-88 | 项目蓝图专项 API: GET/PUT /api/projects/{id}/blueprint, 类型校验 + project_blueprint_updated WS 广播; DB 迁移 v12 |
 | 2026-09-06 | iter-84 | 本机任务取消后释放 _local_pm_agent 引用, /health 的 local_pm/active_pms 不再残留 active; 专项 17 passed |
 | 2026-09-03 | iter-80 | 创建对话失败修复: 手动激活新增 E4 仲裁预检 (已有优先 Secretary 直接返回 conflict+secretary_url, 不再先成功后让位); dashboard 监听 secretary_yielded 立即降级 UI; 新建对话接口非 2xx 时展示后端 detail; 专项 2 例 + 全量 423 passed |

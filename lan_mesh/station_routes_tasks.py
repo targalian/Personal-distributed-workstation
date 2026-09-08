@@ -484,6 +484,7 @@ def build_task_routes(controller) -> APIRouter:
         deliverable = payload.get("deliverable", "")
         summary = payload.get("summary", "")
         subtask_stats = payload.get("subtask_stats", {})
+        acceptance_review = payload.get("acceptance_review", {})
 
         # 存储交付物到 DB (追加到 task output_data)
         if task_id:
@@ -498,6 +499,7 @@ def build_task_routes(controller) -> APIRouter:
                     "subtask_stats": subtask_stats,
                     "delivered_at": payload.get("delivered_at", time.time()),
                     "accepted": None,  # 等待 Boss 验收
+                    "acceptance_review": acceptance_review,  # iter-90: 蓝图验收自检
                 }
                 db.save_task(task)
 
@@ -508,6 +510,7 @@ def build_task_routes(controller) -> APIRouter:
             "task_name": task_name,
             "summary": summary,
             "subtask_stats": subtask_stats,
+            "acceptance_review": acceptance_review,
         })
 
         # Bot 推送

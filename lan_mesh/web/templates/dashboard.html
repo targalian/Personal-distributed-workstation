@@ -163,8 +163,8 @@
     .toolbar input{width:100%}
     .toolbar input[style*="width:300px"]{width:100%}
     /* 底部导航栏 */
-    .mobile-nav{display:flex;position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);z-index:100;padding:4px 0 calc(4px + env(safe-area-inset-bottom))}
-    .mobile-nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 2px;font-size:10px;color:var(--dim);cursor:pointer;transition:all .15s}
+    .mobile-nav{display:flex;position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);z-index:100;padding:4px 0 calc(4px + env(safe-area-inset-bottom));overflow-x:auto}
+    .mobile-nav-item{flex:1 0 auto;min-width:52px;white-space:nowrap;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 2px;font-size:10px;color:var(--dim);cursor:pointer;transition:all .15s}
     .mobile-nav-item.active{color:var(--accent)}
     .mobile-nav-item .nav-icon{font-size:18px}
     /* 表格横向滚动 */
@@ -432,6 +432,7 @@
   <div class="tab" data-tab="bot">📱 手机通道</div>
   <div class="tab" data-tab="p2p">📡 主机通讯</div>
   <div class="tab" data-tab="runtime">📈 运行时性能</div>
+  <div class="tab" data-tab="shadowdev">🕶️ 影子开发</div>
   <!-- iter-56: React SPA 入口 (补强#4 F5.1: 任务列表 + DAG 可视化编辑器) -->
   <div class="tab" style="margin-left:auto" onclick="window.open('/spa/','_blank')">⚛️ SPA 新版</div>
 </div>
@@ -448,6 +449,7 @@
   <div class="mobile-nav-item" data-tab="bot"><span class="nav-icon">📱</span><span>手机</span></div>
   <div class="mobile-nav-item" data-tab="p2p"><span class="nav-icon">📡</span><span>通讯</span></div>
   <div class="mobile-nav-item" data-tab="runtime"><span class="nav-icon">📈</span><span>性能</span></div>
+  <div class="mobile-nav-item" data-tab="shadowdev"><span class="nav-icon">🕶️</span><span>影子</span></div>
 </div>
 
 <!-- 面板: 秘书对话 (多项目对话) -->
@@ -870,6 +872,12 @@
   <div id="runtime-trace-list"><div class="empty"><p>暂无数据</p></div></div>
   <div class="stitle">📋 任务流总览 (最近任务)</div>
   <div id="taskflow-list" style="overflow-x:auto"><div class="empty"><p>加载中...</p></div></div>
+  <div class="stitle">🚨 停滞告警 (主动守护)</div>
+  <div class="toolbar" style="padding:0 0 10px">
+    <span id="stall-watch-info" style="font-size:12px;color:var(--dim)">加载中...</span>
+    <button class="btn" style="margin-left:auto" onclick="checkStallNow(this)">🔔 立即巡检</button>
+  </div>
+  <div id="stall-alert-list"><div class="empty"><p>加载中...</p></div></div>
   <div class="stitle">🧠 任务记忆 (F4.1 历史经验)</div>
   <div id="task-memory-panel"><div class="empty"><p>加载中...</p></div></div>
   <div class="stitle">❗ 错误追踪 (F1.4 异常聚合)</div>
@@ -880,6 +888,35 @@
     <button class="btn primary" onclick="queryTaskFlow()">🔍 查询瀑布</button>
   </div>
   <div id="taskflow-box"><div class="empty"><div class="icon">🔍</div><p>输入 task_id 查看任务全链路时间线</p><p class="hint">可在调用明细表的任务列复制 task_id</p></div></div>
+</div>
+
+<!-- 面板: 影子开发 (iter-70/71 安全自举, UI-064) -->
+<div class="panel" id="panel-shadowdev">
+  <div class="toolbar">
+    <button class="btn primary" onclick="refreshShadowDev()">🔄 刷新</button>
+    <span style="margin-left:auto;font-size:13px;color:var(--dim)">影子副本在仓库外独立运行, 产出仅 diff + 报告, 主仓库不被改动</span>
+  </div>
+  <div class="stitle">🛡️ 守护状态</div>
+  <div id="shadow-guardian"><div class="empty"><p>加载中...</p></div></div>
+  <div class="stitle">📝 提交影子任务</div>
+  <div style="display:flex;flex-direction:column;gap:10px;padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;margin-bottom:16px">
+    <textarea id="shadow-task" rows="3" placeholder="描述开发任务 (1~4000 字符), 例如: 修复 XX 模块的 YY 缺陷并跑通回归测试" style="width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:13px;resize:vertical"></textarea>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <select id="shadow-backend" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:13px">
+        <option value="">auto (默认)</option>
+        <option value="claude">claude</option>
+        <option value="codex">codex</option>
+        <option value="aider">aider</option>
+      </select>
+      <span style="font-size:13px;color:var(--dim)">超时</span>
+      <input type="number" id="shadow-timeout" value="1800" min="30" max="1800" step="30" style="width:110px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:13px">
+      <span style="font-size:13px;color:var(--dim)">秒 (30~1800)</span>
+      <button class="btn primary" style="margin-left:auto" onclick="submitShadowRun(this)">🚀 提交到队列</button>
+    </div>
+    <div style="font-size:12px;color:var(--dim)">守护串行执行, 同一时间只跑一个, 其余排队; 409=队列冲突, 503=守护未初始化</div>
+  </div>
+  <div class="stitle">📜 队列与历史</div>
+  <div id="shadow-run-list" style="overflow-x:auto"><div class="empty"><p>加载中...</p></div></div>
 </div>
 
 <!-- 通用详情弹窗 -->
@@ -1023,6 +1060,7 @@ function switchTab(tab){
   if(tab==='p2p')refreshP2PHosts();
   if(tab==='chat')loadConversations();
   if(tab==='runtime')refreshRuntime();
+  if(tab==='shadowdev')refreshShadowDev();
 }
 document.querySelectorAll('.tab').forEach(t=>{
   t.addEventListener('click',()=>switchTab(t.dataset.tab));
@@ -1040,7 +1078,7 @@ function connectWS(){
     const msg=JSON.parse(e.data);
     if(msg.type==='hosts'||msg.type==='heartbeat'||msg.type==='host_registered')refreshHosts();
     if(msg.type==='task_submitted'||msg.type==='task_updated'||msg.type==='task_deleted')refreshTasks();
-    if(msg.type==='task_delivered'){showToast(`📦 任务「${msg.data.task_name||''}」已交付，等待验收`,'ok');refreshTasks();}
+    if(msg.type==='task_delivered'){const r=msg.data.acceptance_review||{};showToast(`📦 任务「${msg.data.task_name||''}」已交付，等待验收${r.verdict==='risk'?` · ⚠️ 验收自检 ${r.reviewed-(r.unmet||[]).length}/${r.reviewed}`:''}`,'ok');refreshTasks();}
     if(msg.type==='task_cancelled'){showToast(`🚫 任务已取消: ${msg.data.message||''}`,'info');refreshTasks();refreshPMAgents();}
     if(msg.type==='task_paused'){showToast(`⏸️ 任务已暂停: ${msg.data.message||''}`,'info');refreshTasks();}
     if(msg.type==='agent_registered')refreshAgents();
@@ -1093,6 +1131,10 @@ function refreshAllState(){
   checkSecretaryState();refreshPMAgents();loadPMThreads();renderWsOverview();
   loadVersionBadge();
   loadOptData(); // 工作站优化队列 (后端未实现时自动回退本地 mock)
+  // iter-91 F7: WS 重连后按当前停留 Tab 补刷懒加载面板 (runtime/shadowdev)
+  const act=document.querySelector('.panel.active');
+  if(act&&act.id==='panel-runtime')refreshRuntime();
+  if(act&&act.id==='panel-shadowdev')refreshShadowDev();
 }
 function onStationEvent(evt){
   // M5: 事件总线分发 — 资源面板实时刷新 (替代轮询/手动刷新)
@@ -1114,12 +1156,18 @@ function onStationEvent(evt){
     // iter-41: 任务停滞主动告警 — toast + 总览表实时刷新 (无需手动切 Tab)
     const lv=(evt.data&&evt.data.max_level)||0;
     const ids=(evt.data&&evt.data.tasks)||[];
-    showToast(`⚠️ ${evt.data.count||0} 个任务可能停滞${ids.length?': '+ids.join(', '):''}`,lv>=3?'err':'info');
+    // iter-91 F4: 手动巡检后 4s 窗口内抑制重复 toast (按钮已给反馈), 列表照常刷新
+    if(!(window._stallManualTs&&Date.now()-window._stallManualTs<4000)){
+      showToast(`⚠️ ${evt.data.count||0} 个任务可能停滞${ids.length?': '+ids.join(', '):''}`,lv>=3?'err':'info');
+    }
     if(typeof loadTaskFlowList==='function'){loadTaskFlowList();}
+    if(typeof loadStallAlerts==='function'){loadStallAlerts();}
   }
   if(t==='error_captured'){
     // iter-44: 新错误捕获 — 面板实时刷新 (仅当前在运行时 Tab 时避免无谓请求)
-    if(typeof loadErrors==='function'&&document.getElementById('error-panel')){loadErrors();}
+    // iter-91 F3: 守卫修正 — #error-panel 系静态 HTML 恒存在, 原判据永真失效;
+    // 改为仅当前停留在运行时 Tab 时才刷新, 与注释意图一致
+    if(typeof loadErrors==='function'){const pr=document.getElementById('panel-runtime');if(pr&&pr.classList.contains('active'))loadErrors();}
   }
   if(t==='error_burst'){
     // iter-44: 错误突发告警 — toast 提醒 + 面板刷新
@@ -1246,9 +1294,11 @@ function renderTasks(){
     const canResubmit=t.status==='interrupted'||t.status==='failed'||t.status==='cancelled';
     const actionBtns=(canCancel?`<button class="btn sm" style="background:#e5a33c;color:#fff;border:none" onclick="event.stopPropagation();pauseTask('${t.task_id}','${escJs(t.name||'')}')">&#10074;&#10074; 暂停</button><button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="event.stopPropagation();cancelTask('${t.task_id}','${escJs(t.name||'')}')">&#9724; 取消</button>`:'')+(canResubmit?`<button class="btn sm primary" onclick="event.stopPropagation();resubmitTask('${t.task_id}')">🔄 重新提交</button>`:'');
     const hasDelivery=t.output_data&&t.output_data._delivery;
+    const review=hasDelivery?t.output_data._delivery.acceptance_review||{}:{};
+    const reviewBadge=review.verdict==='pass'?`<span class="badge" style="background:var(--green);color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">验收自检通过</span>`:review.verdict==='risk'?`<span class="badge" style="background:#e5533c;color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">验收自检未全过</span>`:'';
     const deliveryBadge=hasDelivery?`<span class="badge" style="background:${t.output_data._delivery.accepted===true?'var(--green)':t.output_data._delivery.accepted===false?'#e5533c':'var(--yellow)'};color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">${t.output_data._delivery.accepted===true?'✅ 已验收':t.output_data._delivery.accepted===false?'❌ 已退回':'📦 待验收'}</span>`:'';
     return `<div class="card task-card" onclick="toggleTaskExpand(this)">
-      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span>${fwdBadge}${deliveryBadge}</div></div>
+      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span>${fwdBadge}${deliveryBadge}${reviewBadge}</div></div>
       <div class="card-meta">${esc(t.description||'-')}<br>📊 ${done}/${sc} 子任务 (${pct}%) ${projName?'| 📁 '+esc(projName):''}${pmInfo}${costBadge}</div>
       <div class="pbar"><div class="pfill ${pct>=100?'low':'mid'}" style="width:${pct}%"></div></div>
       <div class="task-expand">${subRows||'<div class="subtask-row" style="color:var(--dim)">无子任务</div>'}
@@ -1334,10 +1384,13 @@ function showDelivery(taskId){
   const t=allTasks.find(x=>x.task_id===taskId);if(!t||!t.output_data||!t.output_data._delivery)return;
   const d=t.output_data._delivery;
   const stats=d.subtask_stats||{};
+  const rev=d.acceptance_review||{};
+  const revHtml=rev&&rev.checks?`<div class="modal-sec"><h3>验收自检</h3><p>结论: ${rev.verdict==='pass'?'<span style="color:var(--green)">✅ 全部达成</span>':rev.verdict==='risk'?'<span style="color:#e5533c">⚠️ 有未达成项</span>':'<span style="color:var(--dim)">未知</span>'} · ${rev.reviewed||0} 条${rev.summary?' · '+esc(rev.summary):''}</p><div style="max-height:180px;overflow:auto;font-size:13px">${(rev.checks||[]).map(c=>`<p style="margin:4px 0">- ${c.met?'✅':'❌'} ${esc(c.criterion||'')}${c.evidence?' — '+esc(c.evidence):''}</p>`).join('')}</div></div>`:'';
   const statusHtml=d.accepted===true?'<span style="color:var(--green)">✅ 已验收</span>':d.accepted===false?'<span style="color:#e5533c">❌ 已退回'+(d.reject_reason?' — '+esc(d.reject_reason):'')+'</span>':'<span style="color:var(--yellow)">📦 待验收</span>';
   document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>📦 交付物 — ${esc(t.name||'')}</h2>
   <p style="color:var(--dim);font-size:13px">状态: ${statusHtml} · 交付时间: ${d.delivered_at?fmtTime(d.delivered_at):'-'}</p>
   <div class="modal-sec"><h3>摘要</h3><p style="font-size:14px;white-space:pre-wrap">${esc(d.summary||'无摘要')}</p></div>
+  ${revHtml}
   <div class="modal-sec"><h3>子任务统计</h3><p>总计: ${stats.total||0} · 完成: <span style="color:var(--green)">${stats.completed||0}</span> · 失败: <span style="color:#e5533c">${stats.failed||0}</span></p></div>
   <div class="modal-sec"><h3>完整交付内容</h3><pre style="max-height:400px;overflow:auto;white-space:pre-wrap;font-size:13px;background:var(--bg);padding:12px;border-radius:8px;border:1px solid var(--border)">${esc(d.deliverable||'无内容')}</pre></div>
   <div style="margin-top:18px;display:flex;gap:10px;justify-content:flex-end">
@@ -3739,6 +3792,7 @@ async function refreshRuntime(){
     document.getElementById('runtime-stat-cards').innerHTML='<div class="empty" style="grid-column:1/-1"><p>加载失败: '+esc(e.message)+'</p></div>';
   }
   loadTaskFlowList();
+  loadStallAlerts();
   loadTaskMemory();
   loadErrors();
 }
@@ -3765,7 +3819,7 @@ function renderTaskFlowList(tasks, stallMinutes){
     '<span style="color:#ffa94d;font-weight:700">🔄 进行中</span>');
   box.innerHTML=banner+`<table class="fleet-table"><thead><tr><th>任务</th><th>最新阶段</th><th>状态</th><th>阶段数</th><th>总耗时</th><th>末活动</th><th>操作</th></tr></thead><tbody>`+
     tasks.map(t=>`<tr>
-      <td><span style="cursor:pointer;color:var(--accent)" title="点击复制: ${esc(t.task_id)}" onclick="copyTaskId('${esc(t.task_id)}')">${esc(t.task_id)}</span></td>
+      <td><span style="cursor:pointer;color:var(--accent)" title="点击复制: ${esc(t.task_id)}" onclick="copyTaskId('${escJs(t.task_id)}')">${esc(t.task_id)}</span></td>
       <td><span style="background:rgba(91,140,255,.12);color:var(--accent);padding:2px 10px;border-radius:12px;font-size:12px;font-weight:700">${esc(t.last_label||t.last_stage)}</span></td>
       <td>${statusCell(t)}</td>
       <td>${t.stage_count}</td>
@@ -3777,6 +3831,181 @@ function renderTaskFlowList(tasks, stallMinutes){
 function jumpTaskFlow(tid){
   document.getElementById('taskflow-id').value=tid;
   queryTaskFlow();
+}
+// UI-065: 任务停滞告警面板 (iter-41 主动守护, 后端已就绪)
+async function loadStallAlerts(){
+  const box=document.getElementById('stall-alert-list');
+  if(!box)return;
+  const info=document.getElementById('stall-watch-info');
+  try{
+    const r=await apiFetch('/api/runtime/task-stall-alerts');
+    if(!r.ok){
+      box.innerHTML='<div class="empty"><p>加载失败: '+r.status+'</p></div>';
+      if(info)info.textContent='加载失败';
+      return;
+    }
+    renderStallAlerts(await r.json());
+  }catch(e){
+    console.error('停滞告警加载失败:',e);
+    box.innerHTML='<div class="empty"><p>加载失败: '+esc(e.message)+'</p></div>';
+    if(info)info.textContent='加载失败';
+  }
+}
+function renderStallAlerts(d){
+  const box=document.getElementById('stall-alert-list');
+  const info=document.getElementById('stall-watch-info');
+  if(info)info.textContent=(d.watching?'🟢 守护运行中':'🔴 守护未运行')+' · 巡检间隔 '+(d.interval??'—')+'s · 停滞阈值 '+(d.stall_minutes??'—')+' 分钟';
+  const alerts=d.alerts||[];
+  if(!alerts.length){box.innerHTML='<div class="empty"><p>✅ 当前无停滞告警</p><p class="hint">任务超过阈值分钟无阶段事件且未到终态时在此列出, WS 实时推送 + 手动巡检双通道</p></div>';return;}
+  const lvStyle=l=>l>=3?'color:#ff6b6b;font-weight:700':(l>=2?'color:#ffa94d;font-weight:700':'color:var(--dim)');
+  box.innerHTML=`<table class="fleet-table"><thead><tr><th>任务</th><th>级别</th><th>最新阶段</th><th>空闲时长</th><th>说明</th></tr></thead><tbody>`+
+    alerts.map(a=>`<tr>
+      <td><span style="cursor:pointer;color:var(--accent)" title="点击复制: ${esc(a.task_id)}" onclick="copyTaskId('${escJs(a.task_id)}')">${esc(a.task_id)}</span></td>
+      <td style="${lvStyle(a.level)}">L${Number(a.level)||0}</td>
+      <td><span style="background:rgba(91,140,255,.12);color:var(--accent);padding:2px 10px;border-radius:12px;font-size:12px;font-weight:700">${esc(a.last_label||a.last_stage||'—')}</span></td>
+      <td>${_rtFmtMs((a.idle_min||0)*60000)}</td>
+      <td style="max-width:340px;font-size:12px">${esc(a.message||'')}</td>
+    </tr>`).join('')+`</tbody></table>`;
+}
+async function checkStallNow(btn){
+  const orig=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='⏳ 巡检中...';}
+  try{
+    const r=await apiFetch('/api/runtime/task-stall-alerts/check',{method:'POST'});
+    if(!r.ok){const d=await r.json().catch(()=>({}));showToast('巡检失败: '+(d.detail||r.status),'err');return;}
+    const d=await r.json();
+    window._stallManualTs=Date.now(); // iter-91 F4: 4s 内抑制 WS task_stall_alert 重复 toast
+    const n=(d.pushed||[]).length;
+    showToast(n?('🔔 巡检完成, 新推送 '+n+' 条停滞告警'):'✅ 巡检完成, 未发现新增停滞','ok');
+    await loadStallAlerts();
+  }catch(e){showToast('巡检失败: '+e.message,'err');}
+  finally{if(btn){btn.disabled=false;btn.textContent=orig;}}
+}
+// UI-064: 影子开发面板 (iter-70/71 安全自举, 后端已就绪)
+function _shadowStatusBadge(s){
+  const m={queued:['⏳ 排队中','var(--dim)'],running:['⚙️ 执行中','var(--accent)'],READY_FOR_REVIEW:['✅ 待审','var(--green)'],GATES_FAILED:['⚠️ 门禁未过','#ffa94d'],AGENT_FAILED:['❌ Agent 失败','#ff6b6b'],ERROR:['💥 执行异常','#ff6b6b'],REPORT_ERROR:['❓ 报告异常','#ff6b6b']};
+  const pair=m[s]||['❓ '+esc(s),'var(--dim)']; // iter-91 F2: 未知状态转义防 report.json 被篡改注入
+  return `<span style="color:${pair[1]};font-weight:700;white-space:nowrap">${pair[0]}</span>`;
+}
+function _shadowIsoTs(v){
+  if(!v)return '—';
+  const d=new Date(v);
+  return isNaN(d)?esc(v):d.toLocaleString();
+}
+function _shadowDur(r){
+  if(!r.started_at)return '—';
+  const a=new Date(r.started_at).getTime();
+  if(isNaN(a))return '—';
+  const b=r.finished_at?new Date(r.finished_at).getTime():Date.now();
+  const ms=Math.max(0,(isNaN(b)?Date.now():b)-a);
+  return ms>=60000?(ms/60000).toFixed(1)+' 分钟':Math.round(ms/1000)+' 秒';
+}
+async function refreshShadowDev(){
+  const listBox=document.getElementById('shadow-run-list');
+  const guardBox=document.getElementById('shadow-guardian');
+  try{
+    const r=await apiFetch('/api/shadow-dev/runs');
+    if(!r.ok){
+      if(r.status===503){renderShadowDegraded();return;}
+      guardBox.innerHTML='<div class="empty"><p>加载失败: '+r.status+'</p></div>';
+      listBox.innerHTML='<div class="empty"><p>加载失败: '+r.status+'</p></div>';
+      return;
+    }
+    const d=await r.json();
+    renderShadowGuardian(d.guardian||{});
+    renderShadowRuns(d.runs||[]);
+  }catch(e){
+    console.error('影子开发加载失败:',e);
+    guardBox.innerHTML='<div class="empty"><p>加载失败: '+esc(e.message)+'</p></div>';
+    listBox.innerHTML='<div class="empty"><p>加载失败: '+esc(e.message)+'</p></div>';
+  }
+}
+function renderShadowDegraded(){
+  document.getElementById('shadow-guardian').innerHTML='<div class="empty"><div class="icon">🛡️</div><p>守护未启动</p><p class="hint">Station 未初始化影子开发守护 (503), 提交与队列不可用</p></div>';
+  document.getElementById('shadow-run-list').innerHTML='<div class="empty"><p>守护未启动, 队列不可用</p></div>';
+}
+function renderShadowGuardian(g){
+  const box=document.getElementById('shadow-guardian');
+  const chip=(t,c)=>`<span style="background:rgba(91,140,255,.1);border:1px solid var(--border);border-radius:16px;padding:4px 12px;font-size:12px${c?';color:'+c:''}">${t}</span>`;
+  const chips=[
+    chip(g.running!==false?'🟢 守护线程运行中':'🔴 守护线程已停止'),
+    chip(g.busy?'⚙️ 正在执行':'💤 空闲'),
+    chip('队列 '+(g.queued||0))
+  ];
+  if(g.stopping)chips.push(chip('⏹️ 停止中','#ff6b6b'));
+  box.innerHTML='<div style="display:flex;gap:8px;flex-wrap:wrap;padding:4px 0 10px">'+chips.join('')+'</div>';
+}
+function renderShadowRuns(runs){
+  const box=document.getElementById('shadow-run-list');
+  if(!runs.length){box.innerHTML='<div class="empty"><div class="icon">🕶️</div><p>暂无影子运行记录</p><p class="hint">提交开发任务后由常驻守护在仓库外副本串行执行, 产出 diff 与门禁报告, 主仓库不被改动</p></div>';return;}
+  box.innerHTML=`<table class="fleet-table"><thead><tr><th>Run ID</th><th>任务</th><th>后端</th><th>状态</th><th>耗时</th><th>创建时间</th><th>操作</th></tr></thead><tbody>`+
+    runs.map(x=>`<tr>
+      <td><span style="cursor:pointer;color:var(--accent)" title="点击复制: ${esc(x.run_id)}" onclick="copyTaskId('${escJs(x.run_id)}')">${esc((x.run_id||'').slice(0,15))}</span></td>
+      <td style="max-width:280px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(x.task||'')}">${esc((x.task||'').slice(0,60))}</td>
+      <td><code style="font-size:12px">${esc(x.backend||'auto')}</code></td>
+      <td>${_shadowStatusBadge(x.status)}</td>
+      <td>${_shadowDur(x)}</td>
+      <td style="white-space:nowrap;font-size:12px">${_shadowIsoTs(x.created_at||x.started_at)}</td>
+      <td><button class="btn" style="padding:2px 10px;font-size:12px" onclick="openShadowDetail('${escJs(x.run_id)}')">详情</button></td>
+    </tr>`).join('')+`</tbody></table>`;
+}
+async function openShadowDetail(runId){
+  const md=document.getElementById('modal');
+  md.innerHTML='<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🕶️ 影子运行报告</h2><p style="color:var(--dim);font-size:13px">加载中...</p>';
+  document.getElementById('overlay').classList.add('show');
+  try{
+    const r=await apiFetch('/api/shadow-dev/runs/'+encodeURIComponent(runId));
+    if(!r.ok){md.innerHTML='<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🕶️ 影子运行报告</h2><p style="color:var(--dim)">加载失败: '+(r.status===404?'运行不存在':r.status)+'</p>';return;}
+    renderShadowDetail(await r.json());
+  }catch(e){
+    md.innerHTML='<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🕶️ 影子运行报告</h2><p style="color:var(--dim)">加载失败: '+esc(e.message)+'</p>';
+  }
+}
+function renderShadowDetail(x){
+  const md=document.getElementById('modal');
+  const gates=x.gates||{};
+  const gateRows=Object.keys(gates).length?
+    Object.entries(gates).map(([k,g])=>`<div class="kv-grid" style="grid-template-columns:120px 70px 1fr"><span class="k">${esc(k)}</span><span class="v" style="color:${g.pass?'var(--green)':'#ff6b6b'}">${g.pass?'PASS':'FAIL'}</span><span class="v" style="font-size:12px">${esc(g.detail||'')}</span></div>`).join(''):'<p style="color:var(--dim)">无门禁数据</p>';
+  const diff=x.diff||{};
+  const findings=diff.secret_findings||[];
+  const diffSec=diff.diff_file?`<div class="modal-sec"><h3>📦 Diff 产出</h3><div class="kv-grid"><span class="k">文件</span><span class="v">${esc(diff.diff_file)}</span><span class="k">大小</span><span class="v">${diff.bytes||0} 字节</span></div>${diff.stat?`<pre style="max-height:160px;overflow:auto;font-size:12px;margin-top:8px">${esc(diff.stat)}</pre>`:''}${findings.length?`<p style="color:#ff6b6b;font-size:12px;margin-top:8px">⚠️ 疑似明文密钥 ${findings.length} 处</p>`:''}</div>`:'';
+  const agent=x.agent||{};
+  const agentSec=Object.keys(agent).length?`<div class="modal-sec"><h3>🤖 Agent 执行</h3><div class="kv-grid"><span class="k">后端</span><span class="v">${esc(agent.backend||'—')}</span><span class="k">耗时</span><span class="v">${agent.elapsed_secs!=null?agent.elapsed_secs+'s':'—'}</span><span class="k">退出码</span><span class="v">${agent.returncode??'—'}</span>${agent.error?`<span class="k">错误</span><span class="v" style="color:#ff6b6b">${esc(agent.error)}</span>`:''}</div></div>`:'';
+  md.innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span>
+    <h2>🕶️ 影子运行 — ${esc((x.run_id||'').slice(0,15))}</h2>
+    <p style="color:var(--dim);font-size:13px">${_shadowStatusBadge(x.status)} · 创建 ${_shadowIsoTs(x.created_at)} · 开始 ${_shadowIsoTs(x.started_at)} · 结束 ${_shadowIsoTs(x.finished_at)}</p>
+    <div class="modal-sec"><h3>任务描述</h3><p style="font-size:14px;white-space:pre-wrap">${esc(x.task||'—')}</p></div>
+    <div class="modal-sec"><h3>基础信息</h3><div class="kv-grid"><span class="k">后端</span><span class="v">${esc(x.backend||'auto')}</span><span class="k">超时</span><span class="v">${x.timeout??'—'}s</span><span class="k">副本</span><span class="v" style="font-size:12px">${esc(x.shadow_path||'—')}</span></div></div>
+    <div class="modal-sec"><h3>🚧 门禁</h3>${gateRows}</div>
+    ${agentSec}
+    ${diffSec}
+    ${x.error?`<div class="modal-sec"><h3>异常</h3><p style="color:#ff6b6b;font-size:13px;white-space:pre-wrap">${esc(x.error)}</p></div>`:''}
+    <div style="margin-top:18px;display:flex;gap:10px;justify-content:flex-end"><button class="btn sm" onclick="closeOverlayForce()">关闭</button></div>`;
+}
+async function submitShadowRun(btn){
+  const taskEl=document.getElementById('shadow-task');
+  const task=(taskEl.value||'').trim();
+  if(!task){showToast('任务描述不能为空','err');taskEl.focus();return;}
+  if(task.length>4000){showToast('任务描述超过 4000 字符上限','err');return;}
+  const backend=document.getElementById('shadow-backend').value||'';
+  let timeout=parseInt(document.getElementById('shadow-timeout').value||'1800',10);
+  if(isNaN(timeout))timeout=1800;
+  timeout=Math.max(30,Math.min(timeout,1800));
+  const orig=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='⏳ 提交中...';}
+  try{
+    const r=await apiFetch('/api/shadow-dev/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task:task,backend:backend,timeout:timeout})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){
+      if(r.status===503){renderShadowDegraded();showToast('提交失败: 守护未启动','err');return;}
+      showToast('提交失败: '+(d.detail||(r.status===409?'队列冲突':r.status===422?'参数非法':r.status)),'err');
+      return;
+    }
+    showToast('✅ 影子任务已提交: '+String(d.run_id||'').slice(0,15),'ok');
+    taskEl.value='';
+    await refreshShadowDev();
+  }catch(e){showToast('提交失败: '+e.message,'err');}
+  finally{if(btn){btn.disabled=false;btn.textContent=orig;}}
 }
 // iter-42: 任务记忆面板 (F4.1 历史经验可视化)
 async function loadTaskMemory(){
@@ -3930,7 +4159,7 @@ function renderRuntimeCalls(calls){
       <td>${_rtFmtMs(c.ttft_ms)}</td>
       <td>${_rtFmtMs(c.total_ms)}</td>
       <td>${_rtStatusBadge(c.status)}</td>
-      <td>${c.task_id?`<span style="cursor:pointer;color:var(--accent)" title="点击复制: ${esc(c.task_id)}" onclick="copyTaskId('${esc(c.task_id)}')">${esc((c.task_id).slice(0,8))}</span>`:'—'}</td>
+      <td>${c.task_id?`<span style="cursor:pointer;color:var(--accent)" title="点击复制: ${esc(c.task_id)}" onclick="copyTaskId('${escJs(c.task_id)}')">${esc((c.task_id).slice(0,8))}</span>`:'—'}</td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(c.error||'')}">${esc(c.error||'')}</td>
     </tr>`).join('')+`</tbody></table>`;
 }

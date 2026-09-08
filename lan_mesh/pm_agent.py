@@ -530,7 +530,7 @@ class ProjectManagerAgent:
 
     def deliver_result(self, task_name: str, task_desc: str,
                        aggregated: str, subtask_results: list):
-        """优化9: 交付闭环 — 上报 Secretary + 产物分发 + 任务记忆。"""
+        """优化9: 交付闭环 — 蓝图自检 + 上报 Secretary + 产物分发 + 任务记忆。"""
         summary = aggregated[:500] if len(aggregated) > 500 else aggregated
         completed_count = sum(1 for r in subtask_results if r.get("status") == "completed")
         total_count = len(subtask_results)
@@ -549,6 +549,10 @@ class ProjectManagerAgent:
             },
             "delivered_at": time.time(),
         }
+        # iter-90: 交付前按项目蓝图验收标准自检 (无蓝图/异常时静默跳过)
+        review = self._review_delivery(aggregated)
+        if review:
+            delivery["acceptance_review"] = review
 
         # P3: 任务流追踪 — 交付阶段点 (异常静默)
         try:
@@ -581,6 +585,22 @@ class ProjectManagerAgent:
 
         self._distribute_artifacts(task_name, aggregated)
         self._record_task_memory(task_name, task_desc, subtask_results)
+
+    def _review_delivery(self, aggregated: str) -> dict:
+        """iter-90: 委派 Planner 做蓝图验收自检, 异常一律降级为空。"""
+        try:
+            review = self._planner.review_against_blueprint(
+                self._state.task or {}, aggregated)
+        except Exception as e:
+            logger.debug("[%s] 蓝图验收自检异常: %s", self.pm_id[:8], e)
+            return {}
+        if not isinstance(review, dict) or not review:
+            return {}
+        if review.get("unmet"):
+            logger.warning("[%s] 交付物未满足 %d 条验收标准: %s",
+                           self.pm_id[:8], len(review["unmet"]),
+                           "; ".join(review["unmet"])[:200])
+        return review
 
     def _distribute_artifacts(self, task_name: str, content: str):
         """F3.2: 产物写入共享目录。"""

@@ -2396,9 +2396,16 @@ class ChatHandler:
         task.status = "completed"
         self.controller.db.save_task(task)
 
+        review = delivery.get("acceptance_review") or {}
+        review_note = ""
+        if review.get("verdict") == "pass":
+            review_note = "\n🛡️ 验收自检: 全部达成。"
+        elif review.get("verdict") == "risk":
+            unmet = "\n".join(f"- {item}" for item in review.get("unmet", [])[:5])
+            review_note = f"\n⚠️ 验收自检有未达成项:\n{unmet}"
         return (
-            f"✅ 已验收任务「{task.name}」的交付物。\n"
-            f"任务状态已更新为 completed。"
+            f"✅ 已验收任务「{task.name}」的交付物。"
+            f"\n任务状态已更新为 completed。{review_note}"
         )
 
     def _action_reject_delivery(self, message: str) -> str:

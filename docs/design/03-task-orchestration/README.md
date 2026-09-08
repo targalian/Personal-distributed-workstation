@@ -59,6 +59,12 @@ StationController.get_task_graph_data）; `PUT /api/tasks/{id}/graph` 编辑端�
   `attach_blueprint_context()` 在规划后把同一提示写入
   `input_data._project_blueprint`, 使本地执行与远程分发共用同一份约束。
   Secretary 不可达 / 无 project_id / 蓝图为空时静默返回空串, 不影响规划主流程。
+- **交付前蓝图验收自检 (iter-90)**: `deliver_result()` 上报前委浃
+  `PMPlanner.review_against_blueprint()` 依据蓝图 `acceptance_criteria`
+  逐条判断交付物, 结论 (`verdict`/`checks`/`unmet`)
+  随 delivery 上报到 Secretary 并落到
+  `output_data._delivery.acceptance_review`; 无验收标准、交付物为空、
+  LLM 异常或结果无法解析时一律静默跳过, 不阻塞交付。
 - **结构化项目上下文 (iter-81)**: `input_data` 支持
   `project_path` / `repo_url` / `execution_mode=planning_only`;
   模板规划时不再把目标项目折叠为 `.`, planning-only 会裁掉
@@ -116,6 +122,7 @@ task_id/pm_id)、交付链异常 (`_deliver` 后, 交付丢失风险)、记忆�
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-08 | iter-90 | 交付前蓝图验收自检: PM 交付前按验收标准逐条审查交付物, 结论随 delivery 落库与广播; 异常静默降级不阻塞交付; 专项 5 passed |
 | 2026-09-07 | iter-89 | 项目蓝图驱动规划: PMPlanner 拉取蓝图并注入 LLM 规划 prompt (非目标禁令 + 当前阶段), 按 project_id 缓存, `attach_blueprint_context` 随 input_data 下发至执行链路; 专项 8 passed |
 | 2026-09-07 | iter-88 | 项目蓝图工作台: DB v12 持久化 charter/roadmap/decisions + ProjectManager 蓝图更新 + GET/PUT /api/projects/{id}/blueprint + dashboard 结构化编辑; 专项 3 passed |
 | 2026-09-06 | iter-83 | PM 子任务可观测性修复: 本地回退登记临时 subagent 并在执行前同步 running, 远程团队创建后统一同步, 子任务开始/结果写任务流与任务面板; 专项 35 passed |
