@@ -158,14 +158,63 @@ if exist ".githooks" (
 )
 
 REM -- CLI Agent PATH (npm global + Node.js, 供 shadow_dev 等使用) --
-set NPM_GLOBAL=%APPDATA%\npm
-if exist "%NPM_GLOBAL%" (
-    echo %PATH% | findstr /i "%NPM_GLOBAL%" >nul 2>&1
-    if errorlevel 1 set "PATH=%NPM_GLOBAL%;%PATH%"
+REM 注意: 不能用 echo %%PATH%% | findstr, PATH 含括号会炸 if 块.
+REM 直接无条件追加 (重复无害).
+set "NPM_GLOBAL=%APPDATA%\npm"
+if exist "%NPM_GLOBAL%" set "PATH=%NPM_GLOBAL%;%PATH%"
+if exist "C:\Program Files\nodejs" set "PATH=C:\Program Files\nodejs;%PATH%"
+
+REM -- CLI Agent 安装 (claude / aider / codex) --
+echo [step] Install CLI Agents...
+
+REM claude (npm global)
+claude --version >nul 2>&1
+if errorlevel 1 (
+    if exist "%NPM_GLOBAL%\node_modules\@anthropic-ai\claude-code" (
+        echo   -^> claude installed ^(skip^)
+    ) else (
+        echo   Installing claude-code...
+        call npm install -g @anthropic-ai/claude-code --silent >nul 2>&1
+        if not errorlevel 1 (
+            echo   -^> claude installed
+        ) else (
+            echo   [WARN] claude install failed: npm install -g @anthropic-ai/claude-code
+        )
+    )
+) else (
+    echo   -^> claude installed ^(skip^)
 )
-if exist "C:\Program Files\nodejs" (
-    echo %PATH% | findstr /i "nodejs" >nul 2>&1
-    if errorlevel 1 set "PATH=C:\Program Files\nodejs;%PATH%"
+
+REM aider (venv pip)
+.venv\Scripts\aider --version >nul 2>&1
+if errorlevel 1 (
+    echo   Installing aider-chat...
+    %PIP% install aider-chat -q >nul 2>&1
+    if not errorlevel 1 (
+        echo   -^> aider installed
+    ) else (
+        echo   [WARN] aider install failed: .venv\Scripts\pip install aider-chat
+    )
+) else (
+    echo   -^> aider installed ^(skip^)
+)
+
+REM codex (npm global)
+codex --version >nul 2>&1
+if errorlevel 1 (
+    if exist "%NPM_GLOBAL%\node_modules\@openai\codex" (
+        echo   -^> codex installed ^(skip^)
+    ) else (
+        echo   Installing codex...
+        call npm install -g @openai/codex --silent >nul 2>&1
+        if not errorlevel 1 (
+            echo   -^> codex installed
+        ) else (
+            echo   [WARN] codex install failed: npm install -g @openai/codex
+        )
+    )
+) else (
+    echo   -^> codex installed ^(skip^)
 )
 
 REM -- Step 6: Launch --

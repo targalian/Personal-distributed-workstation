@@ -143,6 +143,73 @@ if (Test-Path $hooksDir) {
     Write-Skip ".githooks 目录不存在, 跳过"
 }
 
+# ── Step 5.5: CLI Agent 安装 (claude / aider / codex) ──
+Write-Step "Install CLI Agents..."
+
+# claude (npm global)
+$claudeInstalled = $false
+try {
+    $null = & claude --version 2>$null
+    if ($LASTEXITCODE -eq 0) { $claudeInstalled = $true }
+} catch {}
+if (-not $claudeInstalled) {
+    $claudeDir = Join-Path $env:APPDATA "npm\node_modules\@anthropic-ai\claude-code"
+    if (Test-Path $claudeDir) {
+        Write-Skip "claude installed"
+    } else {
+        Write-Host "  Installing claude-code..." -ForegroundColor Yellow
+        & npm install -g @anthropic-ai/claude-code --silent 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "claude installed"
+        } else {
+            Write-Warn "claude install failed: npm install -g @anthropic-ai/claude-code"
+        }
+    }
+} else {
+    Write-Skip "claude installed"
+}
+
+# aider (venv pip)
+$aiderInstalled = $false
+try {
+    $null = & $venvPython -m aider --version 2>$null
+    if ($LASTEXITCODE -eq 0) { $aiderInstalled = $true }
+} catch {}
+if (-not $aiderInstalled) {
+    Write-Host "  Installing aider-chat..." -ForegroundColor Yellow
+    & $venvPip install aider-chat -q 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "aider installed"
+    } else {
+        Write-Warn "aider install failed: pip install aider-chat"
+    }
+} else {
+    Write-Skip "aider installed"
+}
+
+# codex (npm global)
+$codexInstalled = $false
+try {
+    $null = & codex --version 2>$null
+    if ($LASTEXITCODE -eq 0) { $codexInstalled = $true }
+} catch {}
+if (-not $codexInstalled) {
+    $codexDir = Join-Path $env:APPDATA "npm\node_modules\@openai\codex"
+    if (Test-Path $codexDir) {
+        Write-Skip "codex installed"
+    } else {
+        Write-Host "  Installing codex..." -ForegroundColor Yellow
+        & npm install -g @openai/codex --silent 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "codex installed"
+        } else {
+            Write-Warn "codex install failed: npm install -g @openai/codex"
+        }
+    }
+} else {
+    Write-Skip "codex installed"
+}
+
 # ── Step 6: 启动 ──
 Write-Step "6/6 启动 Station Director..."
 Write-Host ""
@@ -178,3 +245,4 @@ if ($WithWorker) {
 
 # 前台启动 Station Director
 & $python @stationArgs
+
