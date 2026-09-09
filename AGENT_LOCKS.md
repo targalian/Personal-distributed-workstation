@@ -4,7 +4,7 @@
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
 - 更新时间：2026-09-09
-- 当前迭代：`iter-94`（Codex：BUG-034 跨站子任务结果回传 + 子任务超时计时器修复，已验证待 Boss 发货；iter-91 Quest UI 审计 + iter-92 Boss 通道 + iter-93 项目绑定同批待发）
+- 当前迭代：`iter-95`（Codex：交付结论回流蓝图闭环 + 秘书角色卡定位修正，已验证待 Boss 发货；iter-91/92/93/94 同批待发）
 
 ## 一、职责边界（长期约定）
 
@@ -36,6 +36,15 @@
 按归属各自提交，不要互相 `git add .`：
 
 **Quest（无待推送改动）**
+
+**Codex（iter-95 蓝图回流闭环 + 秘书角色卡定位修正，已验证待 Boss 发货）**
+- `lan_mesh/project.py`（新增 `record_delivery_to_blueprint`：把 PM 交付结论回流到蓝图当前路线图阶段——pass 且无 unmet 则推进为 `review`，有 unmet 则保持状态并记录缺口清单；只动 `deliveries` 不改 Boss 手填的 phase/goal/branch；同阶段保留最近 5 条防膨胀。新增模块级 `_current_phase_index`，选取口径与 `pm_planner._current_roadmap_phase` 严格一致——口径漂移会让结论写错阶段，已固化为变异用例 M4）
+- `lan_mesh/station_routes_tasks.py`（`receive_pm_delivery` 交付入库后调用新增的 `_reflow_blueprint` 桥梁函数，由 `task.project_id` 定位项目；广播增补 `blueprint_updated`；任何异常只记日志绝不阻断交付入库）
+- `lan_mesh/role_cards.py`（**Boss 定调后修正**：移除「(如股票交易、编程开发等)」整类拒答——拒答**交易策略**幻觉与开发**交易系统**并不冲突，后者是业务软件项目管理属秘书本职；新增「负责管理项目、不充当领域专家」与「产出物是项目蓝图」两条；「回复必须简洁明了」放宽为「简洁为默认，但蓝图/需求/验收标准/阶段计划须完整输出」，修掉 iter-93 实测拆解计划被压到 605 字的问题；能力范围新增第 7 项）
+- `tests/test_core.py`（`TestIter95BlueprintReflow` 7 例：pass 推进阶段 / unmet 保持并记缺口 / 回流阶段与 PM 读取口径一致 / 无蓝图静默跳过 / 交付记录封顶 5 条 / helper 由 task 串到 project 且异常不抛 / 角色卡定位断言。另给 BUG-034 那轮的角色卡断言补了原文全串校验——原断言存在「部分替换仍过关」的漏洞）
+- `docs/design/03-task-orchestration/README.md`（蓝图回流闭环节 + iter-95 变更记录）
+- `docs/design/06-interaction/README.md`（秘书角色定位修正节，含协作模式链路图 + iter-95 变更记录）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-95 收尾）
 
 **Codex（iter-94 BUG-034 跨站子任务结果回传，已验证待 Boss 发货）**
 - `lan_mesh/station_local_pm.py`（**根因 2**：`_local_execute_task` 原先无条件把结果注入本机 PM，完全不看 `payload.pm_id` → 远程 PM 分发到本机的子任务，结果被注入错误 PM 或直接丢弃，原始 PM 只能耗到全局超时；新增 `_report_subtask_result` 按 `pm_id` 路由，跨站则 POST `secretary_url + /pm/progress-report` 回传原始 PM）
