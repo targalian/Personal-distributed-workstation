@@ -180,6 +180,7 @@ TASK_STAGE_LABELS: dict[str, str] = {
     "pm:paused": "任务暂停",
     "subtask_started": "子任务开始",
     "subtask_result": "子任务结果",
+    "subtask_retry": "子任务重试",
     "delivered": "交付上报",
 }
 

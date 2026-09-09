@@ -182,8 +182,8 @@ class PMDispatcher:
                                     self._pm_id[:8], sub_name, sub.get('depends_on'))
 
                 if not sub.get("depends_on"):
-                    self._record_subtask_start(sub_name)
                     # 非阻塞分发: 独立子任务并行执行
+                    # (BUG-034: _record_subtask_start 已内置于 dispatch_subtask)
                     t = threading.Thread(
                         target=self.dispatch_subtask,
                         args=(station, agent_info, task, sub),
@@ -213,6 +213,9 @@ class PMDispatcher:
         port = station.get("api_port", 0)
         sub_name = sub.get("name", "")
 
+        # BUG-034: 每次分发都重新注册开始时间, 确保重试也有超时保护
+        self._record_subtask_start(sub_name)
+
         input_data = dict(task.get("input_data", {}))
         if plan:
             dispatch_ctx = build_dispatch_context(task, sub, plan, self._pm_id)
@@ -232,6 +235,7 @@ class PMDispatcher:
                     "fallback_models": [],
                     "pm_id": self._pm_id,
                     "reporter_id": agent_info.get("agent_id", ""),
+                    "secretary_url": self._secretary_url,
                 },
                 headers=auth_headers(),
                 timeout=15,  # 新端点已异步, 应立即返回
@@ -297,7 +301,6 @@ class PMDispatcher:
             input_data["_dependency_outputs"] = dep_outputs
             task["input_data"] = input_data
 
-            self._record_subtask_start(sub_name)
             logger.info("[%s] 依赖就绪, 分发待执行子任务 '%s'", self._pm_id[:8], sub_name)
             self.dispatch_subtask(station, agent_info, task, sub, plan=st.plan)
 

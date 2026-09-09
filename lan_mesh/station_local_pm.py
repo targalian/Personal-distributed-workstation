@@ -8,6 +8,9 @@ PM Agent 在 Secretary 进程内直接运行 (而非派发到远端 Worker)。_l
 import threading
 import time
 
+import requests
+
+from .http_retry import auth_headers
 from .logger import get_logger
 
 logger = get_logger("station")
@@ -307,18 +310,74 @@ class StationLocalPmMixin:
                 )
 
         # 执行完成后向 PM 上报
-        if self._local_pm_agent and self._local_pm_agent.running:
-            task_name = payload.get("name", "")
-            status = result.get("status", "failed")
-            output_data = result.get("output", {})
-            self._local_pm_agent.receive_subtask_result(
-                task_name=task_name,
-                status=status,
-                output_data=output_data,
-                agent_id=reporter_id,
-            )
+        task_name = payload.get("name", "")
+        status = result.get("status", "failed")
+        output_data = result.get("output", {})
+        self._report_subtask_result(payload, task_name, status,
+                                    output_data, reporter_id)
 
         return result
+
+    def _report_subtask_result(self, payload: dict, task_name: str, status: str,
+                               output_data, reporter_id: str) -> None:
+        """回报子任务结果, 跨站任务回传到原始 PM 所在 Secretary。
+
+        BUG-034: 原实现无条件调用本机 PM 的 receive_subtask_result。当子任务
+        由远程 PM 分发到本机执行时, 结果被错误注入本机 PM (或在本机无 PM 时
+        直接丢弃), 原始 PM 永远等不到回调, 只能耗到全局超时失败。
+        """
+        originating_pm_id = str(payload.get("pm_id", "") or "")
+        local_pm_id = ""
+        if self._local_pm_agent:
+            local_pm_id = str(getattr(self._local_pm_agent, "pm_id", "") or "")
+
+        normalized = (output_data if isinstance(output_data, dict)
+                      else {"result": str(output_data)})
+
+        # 同一 PM (或无 pm_id 的旧版调用): 直接本地注入
+        if not originating_pm_id or originating_pm_id == local_pm_id:
+            if self._local_pm_agent and self._local_pm_agent.running:
+                self._local_pm_agent.receive_subtask_result(
+                    task_name=task_name,
+                    status=status,
+                    output_data=output_data,
+                    agent_id=reporter_id,
+                )
+            else:
+                logger.warning("[Station] 子任务 '%s' 完成但本机无运行中 PM, 结果无处上报",
+                               task_name)
+            return
+
+        # 跨站: 回传原始 PM 的 Secretary
+        secretary_url = str(payload.get("secretary_url", "") or "")
+        if not secretary_url:
+            logger.error("[Station] 跨站子任务 '%s' 缺少 secretary_url, 结果无法回传 PM %s",
+                         task_name, originating_pm_id[:8])
+            return
+
+        report = {
+            "reporter_id": reporter_id,
+            "task_name": task_name,
+            "status": status,
+            "progress": 1.0 if status == "completed" else 0.0,
+            "output": normalized,
+            "message": f"跨站子任务 {task_name} {status}",
+        }
+        try:
+            resp = requests.post(
+                f"{secretary_url}/pm/progress-report",
+                json=report,
+                headers=auth_headers(),
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                logger.info("[Station] 跨站子任务 '%s' 结果已回传 PM %s (%s)",
+                            task_name, originating_pm_id[:8], status)
+            else:
+                logger.error("[Station] 跨站子任务 '%s' 结果回传失败: HTTP %s",
+                             task_name, resp.status_code)
+        except Exception as e:
+            logger.error("[Station] 跨站子任务 '%s' 结果回传异常: %s", task_name, e)
 
     def _start_local_pm_for_task(self, task_id: str) -> bool:
         """F3.3: 本机启动 PM Agent 接管指定任务。

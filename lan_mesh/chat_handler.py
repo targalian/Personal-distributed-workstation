@@ -1895,11 +1895,14 @@ class ChatHandler:
         elif any(kw in msg_lower for kw in ["不急", "低优先", "low", "有空"]):
             priority = "low"
 
+        # iter-93 (BUG-033): 解析项目归属, 让蓝图驱动与验收自检对该任务生效
+        project_id = self._resolve_project_from_message(message)
         result = self.controller.submit_task_from_chat(
             name=name,
             description=description,
             created_by="secretary",
             priority=priority,
+            project_id=project_id,
         )
 
         # 优化14: 查询任务记忆, 提供历史参考
@@ -1918,6 +1921,7 @@ class ChatHandler:
                 f"- 名称: {name}\n"
                 f"- 优先级: {priority_label}\n"
                 f"- PM Agent: {pm_id}\n"
+                f"- 项目: {project_id[:8] if project_id else '(未绑定)'}\n"
                 f"- 状态: 运行中"
             )
             if memory_hint:
@@ -2020,6 +2024,42 @@ class ChatHandler:
             f"- 优先级: {item.get('priority', '')}\n"
             f"- 状态: {status_label}"
         )
+
+    def _resolve_project_from_message(self, message: str) -> str:
+        """iter-93 (BUG-033): 从 Boss 消息中解析任务应归属的项目 ID。
+
+        对话派发的任务此前恒无 project_id, 导致蓝图驱动规划 (iter-89) 与
+        交付前验收自检 (iter-90) 双双失效 — 两者都靠 task.project_id 回查
+        项目 charter, 拿不到就静默降级成"无蓝图"。
+
+        匹配顺序 (命中即返回, 全部未命中返回空串保持旧行为):
+          1. 完整 project_id (uuid) 直接出现在消息中;
+          2. project_id 前 8 位短码 (Boss 惯用写法, 如 "项目 821230b9");
+          3. 活跃项目名称包含于消息中 (取最长匹配, 避免短名误命中)。
+        """
+        manager = getattr(self.controller, "project_manager", None)
+        if manager is None or not message:
+            return ""
+        try:
+            projects = manager.list_projects(status="active")
+        except Exception as exc:
+            print(f"[Chat] 项目解析失败: {exc}")
+            return ""
+        best_name_match = ""
+        best_name_len = 0
+        for project in projects:
+            pid = getattr(project, "project_id", "")
+            if not pid:
+                continue
+            if pid in message:
+                return pid
+            if len(pid) >= 8 and pid[:8] in message:
+                return pid
+            name = (getattr(project, "name", "") or "").strip()
+            if len(name) >= 4 and name in message and len(name) > best_name_len:
+                best_name_match = pid
+                best_name_len = len(name)
+        return best_name_match
 
     def _action_create_project(self, message: str) -> str:
         """从对话创建项目 (BUG-026: 秘书幻觉修复配套)。"""

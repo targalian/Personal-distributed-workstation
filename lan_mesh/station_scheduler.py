@@ -25,7 +25,8 @@ class StationSchedulerMixin:
     def submit_task_from_chat(self, name: str, description: str, created_by: str = "secretary",
                               priority: str = "normal",
                               fed_relay: bool = False,
-                              input_data: dict | None = None) -> dict:
+                              input_data: dict | None = None,
+                              project_id: str = "") -> dict:
         """从秘书对话直接提交任务并分配 PM Agent。
 
         与 station_api.submit_task() 逻辑一致, 但同步执行。
@@ -36,6 +37,10 @@ class StationSchedulerMixin:
             fed_relay: iter-65 联邦防环 — 本任务已是跨网段委托任务
                 (对端转来), 本侧选站再命中联邦主机时不再回传,
                 直接失败终止 (防 A↔B 互相委托死循环)
+            project_id: iter-93 (BUG-033) 项目归属 — 对话派发的任务此前
+                恒为空, 导致蓝图驱动规划 (iter-89) 与交付前验收自检
+                (iter-90) 对该任务全部失效 (两者均以 task.project_id
+                回查项目 charter)。空字符串保持旧行为 (无项目任务)。
         """
         from .protocol import Task, PMAgent
 
@@ -44,6 +49,7 @@ class StationSchedulerMixin:
             name=name,
             description=description,
             created_by=created_by,
+            project_id=project_id,
             status="pending",
         )
         # 优化13: 记录优先级到 input_data; 需求收集流程可顺带携带结构化 Brief
@@ -58,7 +64,7 @@ class StationSchedulerMixin:
         try:
             from .budget_advisor import build_task_cost_estimate
             cost_est = build_task_cost_estimate(
-                name, description, self.db, project_id="",
+                name, description, self.db, project_id=project_id,
                 project_manager=self.project_manager)
             task.input_data["_cost_estimate"] = cost_est
             fit = cost_est.get("budget_fit", {})
@@ -78,7 +84,8 @@ class StationSchedulerMixin:
         except Exception:
             pass  # 预估失败不影响任务提交
         self.db.save_task(task)
-        logger.info("对话提交任务: %s (%s) 优先级=%s", task.task_id, name, priority)
+        logger.info("对话提交任务: %s (%s) 优先级=%s 项目=%s",
+                    task.task_id, name, priority, project_id or "(无)")
         # WS 广播: 通知前端任务面板刷新
         self._queue_ws_broadcast("task_submitted", task.to_dict())
         # P3: 任务流追踪 — 提交阶段点 (异常静默)

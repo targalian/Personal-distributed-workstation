@@ -7493,7 +7493,7 @@ class TestIter73OptimizationDiscuss:
         monkeypatch.setattr(ChatHandler, "_touch_conv",
                             lambda self, cid: None)
         handler.controller.submit_task_from_chat = (
-            lambda name, description, created_by, priority:
+            lambda **kwargs:
             {"status": "running", "task_id": "task-73"})
 
         result = handler.chat("帮我写一个补丁", conv_id="c1")
@@ -8543,6 +8543,9 @@ class TestIter87RuntimeCancellation:
             chat_runtime=None,
             _local_pm_agent=None,
         )
+        controller._report_subtask_result = (
+            lambda *a, **kw: StationController._report_subtask_result(
+                controller, *a, **kw))
 
         result = StationController._local_execute_task(
             controller,
@@ -9089,3 +9092,272 @@ class TestIter92StallDbReconcile:
         pushed = rt.check_stall_alerts()
 
         assert [a["task_id"] for a in pushed] == ["task-nodb"]
+
+
+class TestIter93TaskProjectBinding:
+    """iter-93 (BUG-033): 对话派发的任务必须能绑定项目。"""
+
+    class _Project:
+        def __init__(self, pid, name):
+            self.project_id = pid
+            self.name = name
+
+    def _handler_with_projects(self, projects):
+        from types import SimpleNamespace
+        from lan_mesh.chat_handler import ChatHandler
+
+        handler = ChatHandler.__new__(ChatHandler)
+        handler.controller = SimpleNamespace(
+            project_manager=SimpleNamespace(
+                list_projects=lambda status=None: projects))
+        return handler
+
+    def test_resolve_by_full_uuid(self):
+        """消息中出现完整 project_id 时精确命中。"""
+        pid = "821230b9-79d6-4004-a96d-2688e58a3016"
+        handler = self._handler_with_projects([self._Project(pid, "股票项目")])
+
+        assert handler._resolve_project_from_message(
+            f"按项目 {pid} 的蓝图执行") == pid
+
+    def test_resolve_by_short_code(self):
+        """Boss 惯用的 8 位短码写法也应命中。"""
+        pid = "821230b9-79d6-4004-a96d-2688e58a3016"
+        handler = self._handler_with_projects([self._Project(pid, "股票项目")])
+
+        assert handler._resolve_project_from_message("按项目 821230b9 蓝图执行") == pid
+
+    def test_resolve_by_name_longest_match(self):
+        """按名称匹配时取最长匹配, 避免短名误命中。"""
+        short = self._Project("pid-short", "股票")
+        long = self._Project("pid-long", "股票自动交易系统")
+        handler = self._handler_with_projects([short, long])
+
+        assert handler._resolve_project_from_message(
+            "在股票自动交易系统里加个任务") == "pid-long"
+
+    def test_no_match_returns_empty(self):
+        """无任何线索时返回空串 (保持旧行为, 不误绑)。"""
+        handler = self._handler_with_projects(
+            [self._Project("pid-a", "股票自动交易系统")])
+
+        assert handler._resolve_project_from_message("随便做点什么") == ""
+
+    def test_manager_missing_is_tolerated(self):
+        """project_manager 不可用时不抛异常。"""
+        from types import SimpleNamespace
+        from lan_mesh.chat_handler import ChatHandler
+
+        handler = ChatHandler.__new__(ChatHandler)
+        handler.controller = SimpleNamespace(project_manager=None)
+
+        assert handler._resolve_project_from_message("项目 821230b9") == ""
+
+    def test_submit_action_passes_project_id(self, monkeypatch):
+        """_action_submit_task 必须把解析到的 project_id 传给 controller。"""
+        from types import SimpleNamespace
+        from lan_mesh.chat_handler import ChatHandler
+
+        handler = ChatHandler.__new__(ChatHandler)
+        captured = {}
+        handler.controller = SimpleNamespace(
+            submit_task_from_chat=lambda **kwargs: captured.update(kwargs) or {
+                "status": "running", "task_id": "task-1",
+                "pm_agent_id": "pm-abcdef12"},
+        )
+        monkeypatch.setattr(
+            ChatHandler, "_parse_task_from_message",
+            lambda self, msg: {"name": "数据更新", "description": "补齐增量数据"})
+        monkeypatch.setattr(ChatHandler, "_get_task_memory_hint",
+                            lambda self, name, desc: "")
+        monkeypatch.setattr(ChatHandler, "_resolve_project_from_message",
+                            lambda self, msg: "pid-42")
+
+        reply = handler._action_submit_task("创建任务: 数据更新")
+
+        assert captured["project_id"] == "pid-42"
+        assert "pid-42"[:8] in reply
+
+    def test_scheduler_persists_project_id(self, tmp_path, monkeypatch):
+        """submit_task_from_chat 必须把 project_id 落到 Task 记录。"""
+        from types import SimpleNamespace
+        from lan_mesh import station_scheduler as ss
+        from lan_mesh.database import Database
+
+        database = Database(str(tmp_path / "bind.db"))
+        controller = SimpleNamespace(
+            db=database,
+            state=SimpleNamespace(device_id="dev-self"),
+            project_manager=None,
+            bot_gateway=SimpleNamespace(notify=lambda *a, **k: None),
+            _queue_ws_broadcast=lambda *a, **k: None,
+        )
+
+        result = ss.StationSchedulerMixin.submit_task_from_chat(
+            controller, name="M1", description="数据更新系统",
+            project_id="pid-99")
+
+        stored = database.get_task(result["task_id"])
+        assert stored.project_id == "pid-99"
+
+
+class TestIter94CrossStationSubtaskCallback:
+    """BUG-034: 跨站子任务结果回传 + 超时计时器清理 + 进度去重。"""
+
+    def _make_state(self):
+        from lan_mesh.pm_state import PMState
+        return PMState()
+
+    def test_cross_station_result_posts_to_originating_secretary(self):
+        """跨站子任务(payload.pm_id != 本机 PM)结果回传原始 Secretary。"""
+        from types import SimpleNamespace
+        from lan_mesh.station_controller import StationController
+        import lan_mesh.station_local_pm as slp
+
+        posted = {}
+
+        class FakeResp:
+            status_code = 200
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            posted["url"] = url
+            posted["json"] = json
+            return FakeResp()
+
+        local_pm = SimpleNamespace(pm_id="pm-LOCAL", running=True,
+                                   receive_subtask_result=lambda **kw: posted.setdefault("local", kw))
+        controller = SimpleNamespace(_local_pm_agent=local_pm)
+
+        orig_post = slp.requests.post
+        slp.requests.post = fake_post
+        try:
+            StationController._report_subtask_result(
+                controller,
+                {"pm_id": "pm-REMOTE", "secretary_url": "http://10.0.0.9:45470"},
+                "代码实现", "completed", {"code": "ok"}, "sub-1",
+            )
+        finally:
+            slp.requests.post = orig_post
+
+        # 必须回传远端, 且绝不注入本机 PM
+        assert posted["url"] == "http://10.0.0.9:45470/pm/progress-report"
+        assert posted["json"]["task_name"] == "代码实现"
+        assert posted["json"]["status"] == "completed"
+        assert posted["json"]["progress"] == 1.0
+        assert "local" not in posted
+
+    def test_same_pm_result_injected_locally(self):
+        """同一 PM 的子任务仍走本机注入, 不发 HTTP。"""
+        from types import SimpleNamespace
+        from lan_mesh.station_controller import StationController
+        import lan_mesh.station_local_pm as slp
+
+        received = {}
+        local_pm = SimpleNamespace(
+            pm_id="pm-LOCAL", running=True,
+            receive_subtask_result=lambda **kw: received.update(kw))
+        controller = SimpleNamespace(_local_pm_agent=local_pm)
+
+        def boom(*a, **kw):
+            raise AssertionError("同 PM 不应发起 HTTP 回传")
+
+        orig_post = slp.requests.post
+        slp.requests.post = boom
+        try:
+            StationController._report_subtask_result(
+                controller, {"pm_id": "pm-LOCAL"},
+                "需求分析", "completed", {"doc": "x"}, "sub-2",
+            )
+        finally:
+            slp.requests.post = orig_post
+
+        assert received["task_name"] == "需求分析"
+        assert received["status"] == "completed"
+
+    def test_missing_secretary_url_does_not_inject_wrong_pm(self):
+        """跨站但缺 secretary_url 时不得误注入本机 PM。"""
+        from types import SimpleNamespace
+        from lan_mesh.station_controller import StationController
+
+        received = {}
+        local_pm = SimpleNamespace(
+            pm_id="pm-LOCAL", running=True,
+            receive_subtask_result=lambda **kw: received.update(kw))
+        controller = SimpleNamespace(_local_pm_agent=local_pm)
+
+        StationController._report_subtask_result(
+            controller, {"pm_id": "pm-REMOTE"},
+            "单元测试", "completed", {}, "sub-3",
+        )
+        assert received == {}
+
+    def test_completed_subtask_clears_start_time(self):
+        """完成的子任务必须移出 subtask_start_times, 否则会被误判超时。"""
+        import time
+        from types import SimpleNamespace
+        from lan_mesh.pm_monitor import PMMonitor
+
+        st = self._make_state()
+        st.plan = {"decomposition": [{"name": "需求分析", "skill": "analysis"}]}
+        st.task = {"task_id": "task-x"}
+        st.subtask_start_times["需求分析"] = time.time()
+        st.subagents["m1"] = {"agent_id": "sub-1", "current_task": "需求分析",
+                              "status": "busy", "progress": 0.0}
+
+        agent = SimpleNamespace(sync_subtasks=lambda: None,
+                                report_progress=lambda *a, **kw: None)
+        dispatcher = SimpleNamespace(try_dispatch_pending=lambda: None)
+        monitor = PMMonitor("pm-1", None, "http://127.0.0.1:1", st, agent, dispatcher)
+        monitor._verify_output_quality = lambda name, out: None
+
+        monitor.receive_progress_report({
+            "reporter_id": "sub-1", "task_name": "需求分析",
+            "status": "completed", "progress": 1.0, "output": {"r": "done"},
+        })
+
+        assert "需求分析" not in st.subtask_start_times
+
+    def test_retry_reregisters_start_time(self):
+        """重试分发必须重新注册开始时间, 否则重试无超时保护。"""
+        import time
+        from types import SimpleNamespace
+        from lan_mesh.pm_dispatcher import PMDispatcher
+
+        st = self._make_state()
+        st.task = {"task_id": "task-x", "input_data": {}}
+        agent = SimpleNamespace(receive_subtask_result=lambda **kw: None)
+        d = PMDispatcher("pm-1", None, "http://127.0.0.1:1", "dev-1", st, agent)
+
+        # 屏蔽本地回退 (它自己也会注册计时器, 会掩盖缺陷)
+        d.execute_subtask_locally = lambda task, sub: None
+
+        st.subtask_start_times.clear()
+        d.dispatch_subtask({"ip": "", "api_port": 0},
+                           {"agent_id": "sub-1"}, st.task,
+                           {"name": "代码实现", "skill": "code_generation"})
+        assert "代码实现" in st.subtask_start_times
+
+        # 重试(再次分发)必须刷新时间戳, 而不是沿用首次的值
+        first = st.subtask_start_times["代码实现"]
+        st.subtask_start_times["代码实现"] = first - 10000.0
+        d.dispatch_subtask({"ip": "", "api_port": 0},
+                           {"agent_id": "sub-1"}, st.task,
+                           {"name": "代码实现", "skill": "code_generation"})
+        assert st.subtask_start_times["代码实现"] > first - 10000.0
+
+    def test_progress_dedup_skips_unchanged(self):
+        """进度未变化时不重复上报 (防刷屏)。"""
+        from types import SimpleNamespace
+        from lan_mesh.pm_monitor import PMMonitor
+
+        st = self._make_state()
+        calls = []
+        agent = SimpleNamespace(
+            running=True, sync_subtasks=lambda: None,
+            report_progress=lambda *a, **kw: calls.append(a))
+        dispatcher = SimpleNamespace(try_dispatch_pending=lambda: None)
+        monitor = PMMonitor("pm-1", None, "http://127.0.0.1:1", st, agent, dispatcher)
+
+        # 初始去重游标应为"未上报"
+        assert monitor._last_reported_progress == -1.0
+        assert monitor._last_reported_completed == -1

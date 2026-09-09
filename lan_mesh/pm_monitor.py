@@ -45,6 +45,8 @@ class PMMonitor:
         self._agent = agent
         self._dispatcher = dispatcher
         self._local_takeover_tasks = set()  # 防重入: PM本地接管中的子任务
+        self._last_reported_progress = -1.0  # BUG-034: 进度去重
+        self._last_reported_completed = -1
 
     # ── 进度轮询 ──────────────────────────────────────────────────
 
@@ -76,6 +78,11 @@ class PMMonitor:
                 has_pending = bool(st.pending_subtasks)
 
             overall = completed / total if total > 0 else 0.0
+            # BUG-034: 进度未变不重复上报, 减少刷屏
+            if overall == self._last_reported_progress and completed == self._last_reported_completed:
+                continue
+            self._last_reported_progress = overall
+            self._last_reported_completed = completed
             self._agent.report_progress(overall, "in_progress" if completed < total else "completed",
                                         f"整体进度: {completed}/{total} 子任务完成")
 
@@ -87,6 +94,47 @@ class PMMonitor:
                     self.aggregate_results()
 
     # ── 接收进度上报 ──────────────────────────────────────────────
+
+    def _log_self_check(self, task_name: str, self_check: dict) -> None:
+        """优化6: 记录子任务自检结果 (缺失/未通过/通过三态)。"""
+        if not self_check:
+            logger.warning("[%s] 子任务 '%s' 完成但未附带自检结果",
+                           self._pm_id[:8], task_name)
+        elif not self_check.get("passed", False):
+            logger.warning("[%s] 子任务 '%s' 自检未通过: %s", self._pm_id[:8],
+                           task_name, self_check.get("notes", "")[:200])
+        else:
+            logger.info("[%s] 子任务 '%s' 完成, 自检通过: %s", self._pm_id[:8],
+                        task_name, self_check.get("notes", "")[:100])
+            logger.info("[%s] 子任务 '%s' 完成, 输出已存储",
+                        self._pm_id[:8], task_name)
+
+    def _clear_subtask_timer(self, task_name: str, status: str) -> None:
+        """BUG-034: 子任务终态时移除超时计时器。
+
+        原实现只在 check_subtask_timeouts 里 del, 完成的子任务会一直留在
+        subtask_start_times 中; 满 subtask_timeout 后被判为"超时"触发重试,
+        同一子任务被反复执行, 直到全局超时把整个任务判失败。
+        """
+        if status not in ("completed", "failed") or not task_name:
+            return
+        with self._state.lock:
+            self._state.subtask_start_times.pop(task_name, None)
+
+    def _trace_retry(self, task_name: str, retry_count: int, error_msg: str) -> None:
+        """BUG-034: 记录子任务重试事件, 让重试在任务流追踪中可见 (异常静默)。"""
+        st = self._state
+        try:
+            from . import runtime_trace
+            runtime_trace.trace_task_event(
+                (st.task or {}).get("task_id", ""),
+                "subtask_retry",
+                detail=(f"{task_name} 第{retry_count + 1}/{st.max_retries}"
+                        f"次重试: {error_msg[:100]}"),
+                pm_id=self._pm_id,
+            )
+        except Exception:
+            pass
 
     def receive_progress_report(self, report: dict):
         """接收子 Agent 主动上报的进度 (通过 Worker API 转发)。
@@ -112,6 +160,8 @@ class PMMonitor:
                 target["status"] = status
                 target["current_task"] = task_name
 
+        self._clear_subtask_timer(task_name, status)
+
         # 优化1: 任务完成时存储输出并尝试分发依赖链
         if status == "completed" and task_name:
             output = report.get("output", report.get("message", ""))
@@ -120,17 +170,7 @@ class PMMonitor:
             with st.lock:
                 st.subtask_outputs[task_name] = output
 
-            # 优化6: 验证自检结果
-            self_check = report.get("self_check", {})
-            if not self_check:
-                logger.warning("[%s] 子任务 '%s' 完成但未附带自检结果", self._pm_id[:8], task_name)
-            elif not self_check.get("passed", False):
-                notes = self_check.get("notes", "")
-                logger.warning("[%s] 子任务 '%s' 自检未通过: %s", self._pm_id[:8], task_name, notes[:200])
-            else:
-                logger.info("[%s] 子任务 '%s' 完成, 自检通过: %s",
-                           self._pm_id[:8], task_name, self_check.get('notes', '')[:100])
-                logger.info("[%s] 子任务 '%s' 完成, 输出已存储", self._pm_id[:8], task_name)
+            self._log_self_check(task_name, report.get("self_check", {}))
 
             # F2.5: 质量验证
             quality = self._verify_output_quality(task_name, output)
@@ -220,6 +260,8 @@ class PMMonitor:
 
         original_station = st.task_station.get(task_name, {})
         original_agent = st.task_agent.get(task_name, {})
+
+        self._trace_retry(task_name, retry_count, error_msg)
 
         # 策略1: 同站重试
         if retry_count < st.max_retries:

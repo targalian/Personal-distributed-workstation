@@ -585,6 +585,12 @@ class APITestSuite:
             ok = r.status_code in (200, 201) and d.get("task_id")
             self._record("BTN-009", "按钮:提交任务", ok,
                          f"task_id={d.get('task_id', '?')[:16]}", r.status_code, t0)
+            # 自清理: 立即取消测试任务, 防 [LoopTest] 残留并避免 PM 派发持续消耗 LLM
+            if d.get("task_id"):
+                try:
+                    self._post(f"/api/tasks/{d['task_id']}/cancel")
+                except Exception:
+                    pass
         except Exception as e:
             self._record("BTN-009", "按钮:提交任务", False, str(e), None, t0)
 
@@ -598,9 +604,17 @@ class APITestSuite:
                 "budget_limit_usd": 1.0,
             })
             d = r.json()
-            ok = r.status_code in (200, 201) and (d.get("project_id") or d.get("id"))
+            pid = d.get("project_id") or d.get("id")
+            ok = r.status_code in (200, 201) and pid
             self._record("BTN-010", "按钮:创建项目", ok,
-                         f"project_id={d.get('project_id', d.get('id', '?'))[:16]}", r.status_code, t0)
+                         f"project_id={str(pid or '?')[:16]}", r.status_code, t0)
+            # 自清理: 创建后立即归档测试项目, 防 [LoopTest] 残留污染正式项目列表
+            # (iter-91: Station 曾累积 5 个未清理的按钮测试项目)
+            if pid:
+                try:
+                    self._delete(f"/api/projects/{pid}")
+                except Exception:
+                    pass
         except Exception as e:
             self._record("BTN-010", "按钮:创建项目", False, str(e), None, t0)
 

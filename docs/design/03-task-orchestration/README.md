@@ -118,10 +118,82 @@ task_id/pm_id)、交付链异常 (`_deliver` 后, 交付丢失风险)、记忆�
 
 **依赖**: model_resources, model_router, database
 
+## 对话派发任务的项目绑定 (iter-93, BUG-033)
+
+**症状**: 经秘书对话派发的任务, `project_id` 恒为空字符串。后果是蓝图驱动
+规划 (iter-89) 与交付前验收自检 (iter-90) 对这类任务**双双静默失效** — 两者
+都以 `task.project_id` 回查项目 charter, 查不到就降级成「无蓝图」路径, 既不
+报错也无日志, 从外部完全看不出来。
+
+**根因**: `StationSchedulerMixin.submit_task_from_chat()` 签名里没有
+`project_id`, `Task(...)` 构造也不传该字段; `ChatHandler._action_submit_task()`
+同样无从传递。HTTP 端点 `POST /api/tasks` 一直支持 `project_id`, 只有对话链路
+漏了 — 属长期存在的隐性缺口。
+
+**修复**:
+
+| 层 | 改动 |
+|---|---|
+| `station_scheduler.py` | `submit_task_from_chat()` 新增 `project_id: str = ""` 参数, 落到 `Task.project_id`; 成本预估由硬编码 `project_id=""` 改为传入真实项目 (预算适配随之生效); 日志追加项目字段 |
+| `chat_handler.py` | 新增 `_resolve_project_from_message()`: 按「完整 uuid → 8 位短码 → 活跃项目名最长匹配」三级解析; `_action_submit_task()` 解析后下传, 并在回复中回显项目归属让 Boss 当场看见绑定结果 |
+
+**兼容性**: `project_id` 默认空串, 未提及项目的对话行为不变; 名称匹配要求
+长度 ≥4 且取最长匹配, 避免「股票」这类短名误命中。
+
+**存量数据**: 修复前派发的任务需一次性修正, 见
+`scripts/fix_task_project_binding.py` (须先停 Station, 否则 SQLite 写锁独占)。
+
+## BUG-034 跨站子任务结果回传与超时计时器修复 (iter-94)
+
+### 现象
+
+M1 任务 (task-0cdc51ad40dd, 股票数据更新系统) 以「全局超时 (3600.0s)」失败。
+需求分析子任务被反复执行 3 次, 代码实现子任务在 192.168.1.206 远程 Station 上启动后
+零产出, 直到全局超时。
+
+### 根因 1: 子任务完成不清理计时器 → 误判超时 → 重试但不重新注册
+
+`_state.subtask_start_times[task_name]` 只在 `check_subtask_timeouts` 的 `del` 中移除,
+`receive_progress_report` 收到 completed/failed 后不移除 → 1800s subtask_timeout 后
+被误判超时, 触发 `handle_subagent_failure` → 重试 (同站或换站)。但重试调用的
+`dispatch_subtask` 不重新注册开始时间 → 重试后的子任务无超时保护, 永久挂起。
+
+**修复**: 在 `receive_progress_report` 中终态时清理 `subtask_start_times[task_name]`;
+`_record_subtask_start` 移入 `dispatch_subtask` 方法体, 确保每一次调用 `dispatch_subtask`
+(包括重试) 都重新注册开始时间。
+
+### 根因 2: `_local_execute_task` 忽略 `pm_id` → 跨站结果永远回传错误 PM
+
+`station_local_pm.py` 的 `_local_execute_task` 执行完毕后无条件调用
+`self._local_pm_agent.receive_subtask_result(...)`, 完全不检查 payload 中的 `pm_id`。
+当远程 PM 将子任务分发到本机执行时, 结果被注入本机 PM (或本机无 PM 时直接丢弃),
+原始 PM 永远等不到回调, 只能耗到全局超时失败。
+
+**修复**: 新增 `_report_subtask_result` 方法, 判断 `payload.pm_id` 是否匹配本机 PM。
+不匹配 → 跨站 → HTTP POST 到 `payload.secretary_url + "/pm/progress-report"` 回传
+原始 PM 所在 Station。匹配 → 原路本地注入。
+
+### 影响范围
+
+- `lan_mesh/pm_monitor.py` — 新增 `_clear_subtask_timer` / `_trace_retry` / `_log_self_check`
+- `lan_mesh/pm_dispatcher.py` — `_record_subtask_start` 移入 `dispatch_subtask`; payload 新增 `secretary_url`
+- `lan_mesh/station_local_pm.py` — 新增 `_report_subtask_result` 跨站路由
+- `lan_mesh/runtime_trace.py` — 新增 `subtask_retry` 阶段标签
+- `tests/test_core.py` — TestIter94 6 专项 + 4 变异
+
+### 验证
+
+- 481 pytest passed (基线 475)
+- 4 变异全部致红 (M1 跨站路由 / M2 计时器清理 / M3 重试注册 / M4 端点正确)
+- `sync_docs.py` / `check_unbound_names.py` / `git diff --check` 全部 PASS
+- 函数长度: 0 个超 80 行
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-09 | iter-94 | BUG-034 跨站子任务结果回传修复: `_local_execute_task` 忽略 `pm_id` 致跨站结果注入错误 PM (或丢弃), 新增 `_report_subtask_result` 按 `pm_id` 路由回传原始 Secretary; `subtask_start_times` 终态清理 + `_record_subtask_start` 移入 `dispatch_subtask` 使重试也有超时保护; 新增 `subtask_retry` 追踪阶段与进度上报去重; 专项 6 例 + 变异 4 处致红 |
+| 2026-09-09 | iter-93 | BUG-033 对话派发任务无项目归属修复: `submit_task_from_chat` 新增 `project_id` 并落库, `_resolve_project_from_message` 三级解析 (uuid/短码/名称最长匹配), 成本预估改用真实项目; 蓝图驱动与验收自检对对话任务恢复生效; 专项 7 例 + 变异 2 处致红 |
 | 2026-09-08 | iter-90 | 交付前蓝图验收自检: PM 交付前按验收标准逐条审查交付物, 结论随 delivery 落库与广播; 异常静默降级不阻塞交付; 专项 5 passed |
 | 2026-09-07 | iter-89 | 项目蓝图驱动规划: PMPlanner 拉取蓝图并注入 LLM 规划 prompt (非目标禁令 + 当前阶段), 按 project_id 缓存, `attach_blueprint_context` 随 input_data 下发至执行链路; 专项 8 passed |
 | 2026-09-07 | iter-88 | 项目蓝图工作台: DB v12 持久化 charter/roadmap/decisions + ProjectManager 蓝图更新 + GET/PUT /api/projects/{id}/blueprint + dashboard 结构化编辑; 专项 3 passed |
