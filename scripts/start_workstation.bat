@@ -183,4 +183,4 @@ echo.
 
 REM Launch Station Director
 %PYTHON% main.py station --port 45470
-pause
+if not "%LANMESH_NO_PAUSE%"=="1" pause
