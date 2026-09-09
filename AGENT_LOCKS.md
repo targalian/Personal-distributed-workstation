@@ -4,7 +4,7 @@
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
 - 更新时间：2026-09-09
-- 当前迭代：`iter-96`（Codex：BUG-035 询问句误触发执行动作修复 + iter-95 真机验证通过，已验证待 Boss 发货；iter-91~95 同批待发）
+- 当前迭代：`iter-98`（Codex：F6 影子运行状态 WS 广播闭环，Quest→Codex 交回项已清空；iter-97 BUG-036 同批待发货；iter-91~96 已发货）
 
 ## 一、职责边界（长期约定）
 
@@ -37,7 +37,22 @@
 
 **Quest（无待推送改动）**
 
-**Codex（iter-96 BUG-035 询问句误触发 + 重启脚本修复，已验证待 Boss 发货）**
+**Codex（iter-98 F6 影子开发运行状态 WS 实时广播，已验证待 Boss 发货）**
+- `lan_mesh/shadow_dev.py`（**F6**，Quest 在 iter-91 UI 审计中交回的唯一遗留项：影子开发全链路**零 WS 广播** —— 后端状态机完整但状态只活在内存 `self._runs`，前端只能切 Tab 或手动点刷新；一次运行可长达 1800s，期间面板全程静默。新增 `SHADOW_RUN_EVENT` 常量与 `_emit_run_event` 单一出口，四处埋点 `queued`/`running`/终态/`cancelled`。三条不变式：广播**必须在释放 `self._condition` 之后**（锁内只取快照，`publish` 会走 `call_soon_threadsafe`，持锁回调有死锁风险）；`_emit_run_event` 整体 `try/except` 只记日志，**事件通道故障绝不阻断影子执行流**；`cancelled` 只报「排队中被丢弃」的，已进 CLI 的运行不误报）
+- `lan_mesh/web/templates/dashboard.html`（`onStationEvent` 增 `shadow_run_update` 分支：**仅 `panel-shadowdev` 为 active 时**才 `refreshShadowDev()`——沿用 iter-91 F3 教训，那次恒真守卫失效正因判据选了静态 DOM 存在性；终态才弹 toast，排队/执行中不弹，否则一次运行连弹三次）
+- `tests/test_shadow_dev.py`（5 例：全生命周期事件顺序 / 异常 ERROR 带错误文本 / `stop_guardian` cancelled 且不含运行中 / 事件通道爆炸不影响执行 / dashboard 接线断言。**12 变异全部致红**）
+- `docs/design/02-station-core/README.md`（shadow_dev 状态事件小节）、`docs/design/09-frontend/README.md`（iter-98 变更记录）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-98 收尾）
+
+> **变异脚本踩坑（务必沿用）**：首轮 12 变异「全部 RED」是假象——脚本用 `subprocess.run(["python", ...])` 时 PATH 解析到了另一个解释器（idf-python）报 `No module named pytest`，退出码 1 被误判成 RED。必须用 `sys.executable`，并先打印 baseline rc 与 passed 行数自证 pytest 真跑起来了。
+
+**Codex（iter-97 BUG-036 非指令语气护栏，已验证待 Boss 发货）**
+- `lan_mesh/chat_handler.py`（**BUG-036**：认领 iter-96 待办「扫描关键词误触发面」时发现问题远超预期。系统扫描全部 69 个 `_ACTION_KEYWORDS`，用 21 句真实非指令样本实测 **15 句误触发**——BUG-035 只覆盖了疑问一类。三类漏网：否定（**最危险，语义完全相反**，真机实测「先不要创建项目」竟真创建了项目 `f16d07ff`「暂缓建项讨论蓝图」，已归档）、复述过去、议论提议。新增 `_looks_like_non_directive` 统合四类语气；**否定与复述不受祈使豁免**（「请先不要创建项目」语义是不要做）；新增 `_READONLY_ACTIONS` 白名单修正 BUG-035 把「查看任务列表」一并拦掉的过度拦截；**护栏同时加在 `_looks_like_command` 上**，否则关键词被拦后 LLM 分类兜底会把否定句重新判成动作，整条防线被绕过）
+- `tests/test_core.py`（`TestIter97NonDirectiveGuard` 8 例：否定/否定不受祈使豁免/复述/议论/只读放行/18 条真实指令 0 回归/helper 四类语气/**LLM 闸门同受护栏**。另同步更新 `TestIter96` 一条 marker 用例——「查看」已从疑问标记移除）
+- `docs/design/06-interaction/README.md`（BUG-036 节，含真机误建项目证据与两条路径说明 + iter-97 变更记录）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-97 收尾）
+
+**Codex（iter-96 BUG-035 询问句误触发 + 重启脚本修复，已随 iter-91~96 发货）**
 - `lan_mesh/chat_handler.py`（**BUG-035**，iter-95 真机验证时实测抓到：向秘书提问「M1 阶段的**验收标准**有哪些」，回答正确但末尾追加「📋 已验收任务…的交付物」——一次提问执行了一次验收。根因是 `_detect_action` 朴素子串匹配，`_ACTION_KEYWORDS` 把「验收」单列为触发词而「验收标准」必然命中；同类风险词还有退回/取消/暂停，且模块第 178 行本就把「验收标准」列为需求收集问句，两处语义冲突。修复：新增 `_looks_like_question` 在关键词匹配前拦截询问句，`_QUESTION_MARKERS` + `_IMPERATIVE_MARKERS`（祈使优先，保证「帮我验收一下任务A好吗」仍执行））
 - `scripts/stop_workstation.bat`、`scripts/restart_workstation.bat`（**Boss 首次重启未生效的根因**：`station.lock` 缺失时 stop 落入 `:fallback_netstat`，发了 taskkill 后既不校验是否杀掉、也不等端口释放就 `exit /b 0` 报成功，restart 于是带着旧进程去 start → 端口冲突 → 「脚本跑完了但服务还是旧的」。修复：fallback 补等端口释放 + 15s 仍占用则报错退出并给出可复制的 taskkill 命令；restart 检查 stop 返回码非 0 即中断；新增 `LANMESH_NO_PAUSE=1` 避免串联时卡在 pause；僵尸锁分支同样转入 netstat 兜底）
 - `tests/test_core.py`（`TestIter96QuestionNotAction` 6 例：询问不触发/真指令仍触发/疑问词不挡祈使/纯查询无动作/helper 语义/**每个标记独立生效**。最后一例是补的——首轮变异 M3、M4 未致红，因样本句同时命中多个标记形成冗余掩盖）
