@@ -1,4 +1,4 @@
-# restart_workstation.ps1 - 重启当前工作站 (关闭 → 等待 → 重新启动)
+﻿# restart_workstation.ps1 - 重启当前工作站 (关闭 → 等待 → 重新启动)
 # 用法: .\scripts\restart_workstation.ps1 [-Port 45470] [-Name "控制中心"] [-WithWorker] [-Force]
 # 功能: 复用 stop_workstation.ps1 关闭 → 复用 start_workstation.ps1 启动
 

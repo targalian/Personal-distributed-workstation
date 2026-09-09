@@ -1,7 +1,7 @@
 {
   "version": 1,
   "last_run": "2026-09-09T10:39:10+08:00",
-  "current_phase": "iter-95-blueprint-reflow-and-role-card",
+  "current_phase": "iter-96-question-not-action",
   "phase_status": "completed",
   "completed": [
     "F1.1",
@@ -106,22 +106,21 @@
     "iter-92-boss-channel-and-stock-handoff",
     "iter-93-stock-handoff-and-project-binding",
     "iter-94: BUG-034 跨站子任务结果回传 + 子任务超时计时器清理 + 重试超时保护 + 进度上报去重",
-    "iter-95: 交付结论回流蓝图闭环 + 秘书角色卡定位修正"
+    "iter-95: 交付结论回流蓝图闭环 + 秘书角色卡定位修正",
+    "iter-96: BUG-035 询问句误触发执行动作修复 + iter-95 真机验证(蓝图回流三场景 + 角色卡定位)通过"
   ],
   "failed": [],
   "blocked": [],
   "next_tasks": [
+    "Boss: 运行 powershell -File scripts/ship.ps1 发货 iter-91~96",
+    "Boss: 重启使 BUG-035 生效后, 再向秘书提问一次「验收标准有哪些」, 确认不再出现「📋 操作结果: 已验收...」",
+    "扫描 _ACTION_KEYWORDS 其余短词的同类误触发面 (退回/取消/暂停/激活), 评估是否需要更严格的指令边界 (如要求动词+宾语搭配)",
+    "重新派发 stock_player M1 任务验证 BUG-034 跨站回传 (需 192.168.1.206 与本机同时在线)",
     "Boss: 运行 powershell -File scripts/ship.ps1 发货 iter-91/92/93/94/95",
-    "Boss: 真机验证蓝图回流 — 给项目填带验收标准的蓝图并让 PM 完成一次交付, 检查 /api/projects/{id}/blueprint 的 roadmap 当前阶段是否出现 deliveries 记录 (pass 时 status 变 review, 有 unmet 时保持并列出缺口)",
-    "Boss: 与秘书重新讨论一轮 stock_player 蓝图, 验证角色卡修正后不再拒答业务软件项目管理类问题, 且蓝图梳理不再被压缩截断",
     "真机验证跨站回传: 保持 192.168.1.206 与本机同时在线, 派发含多子任务的项目, 确认 [Station] 跨站子任务 ... 结果已回传 日志出现且原始 PM 进度推进",
-    "Boss: 重启后核对进度报告去重生效 — 同一 PM 不应再每 10 秒重复落库同一条「N/3 子任务完成」",
-    "Boss: 重启 Station 使 iter-94 BUG-034 生效, 然后重新派发 M1 任务验证跨站子任务结果能回传 (观察 trace 出现 subtask_retry 与 代码实现→completed, 而非卡在 subtask_started)",
     "Boss: 停止 Station 后补绑存量任务项目归属 — python scripts/fix_task_project_binding.py --task task-0cdc51ad40dd --project 821230b9-79d6-4004-a96d-2688e58a3016 (运行中 DB 写锁独占会报 readonly)",
     "Boss: 重启 Station 使 iter-92 BUG-032 (停滞告警 DB 对账) 与 iter-93 BUG-033 (对话任务绑项目) 生效, 并验证停滞告警从 100 条降为仅真实在跑任务",
     "监管 task-0cdc51ad40dd (股票数据更新系统 M1) 进展: python scripts/boss_channel.py progress pm-2c5f4cc16b54; 交付后核对 acceptance_review 是否按 9 条验收标准逐条判定",
-    "Boss: 真机验证 BUG-032 修复 — 重启 Station 后 /api/runtime/task-stall-alerts 应只报 DB 中真实非终态任务 (修复前 100 条, 实测应为 0)",
-    "Boss: 归档 Station 中 5 个 [LoopTest] 测试残留项目, 避免正式项目混在测试数据里",
     "Boss: 真机验证 iter-90 交付前蓝图验收自检: 给项目填带验收标准的蓝图后提交任务, 交付时应出现自检结论 (卡片徽章 + 交付弹窗逐条判断), 无蓝图项目行为不变",
     "Boss: 真机验证 iter-87 本机长任务取消后子 Agent 不再继续 LLM/工具轮次",
     "Boss: 真机验证 iter-85 超时工具调用是否在 120s 内返回且面板记录 timed_out",
@@ -136,7 +135,7 @@
     "每次发布/推送后同步更新 VERSION.json 保持版本记录与实际代码一致",
     "代码设计变更时同步 docs/design 对应功能域文档 (docs-sync skill + sync_docs.py 机制, pre-push 第 8/9 项强制)"
   ],
-  "iteration_count": 95,
+  "iteration_count": 96,
   "total_files_modified": 391,
   "last_error": "",
   "notes_iter80": "创建对话失败修复补验: UI-061 使用 Edge headless + 本地 mock 完成浏览器实测, 503 detail/message 可见, secretary_yielded 后 Secretary tab 立即隐藏并展示对端地址; 测试清单已关闭。",
@@ -154,5 +153,6 @@
   "notes_iter92": "iter-92: Boss 通道 (scripts/boss_channel.py 12 子命令) + stock_player 任务图交接 (16 节点/22 边 DAG + G0 澄清闸门 + 阶段化 Agent 编队) + BUG-032 停滞告警幽灵刷屏修复 (DB 对账, 真实数据 100→0, 专项 5 例, 变异 3 处致红, 全量 468 passed)。",
   "notes_iter93": "iter-93: G0 澄清闸门通过 (答题卡 12 题全答) → 生成蓝图并建正式项目 821230b9 → 交接秘书并派发 task-0cdc51ad40dd (PM 已跑到 1/3); 交接中抓到并修复 BUG-033 (对话派发任务 project_id 恒空, 致蓝图驱动与验收自检静默失效), 专项 7 例 + 变异 2 处致红, 全量 475 passed。",
   "notes_iter94": "BUG-034 (阻塞性, M1 任务失败根因): task-0cdc51ad40dd「股票数据更新系统M1」以「全局超时(3600.0s)」失败, 进度整小时卡在 1/3。证据链: /api/runtime/stats 显示 llm_calls=0、subtasks.total=0 (PM 空转); trace 显示 需求分析 被重复 subtask_result completed 三次, 代码实现 subtask_started 后零事件; 成员表「需求分析 busy / 代码实现 waiting」与 trace「需求分析已完成、代码实现已启动」互相矛盾; 远程 192.168.1.206:45470 /pm/subagents 查到 3 个 idle 子 Agent (1 需求分析 + 2 代码实现, 后者因重试各建一个)。两个独立根因: (1) subtask_start_times 只在 check_subtask_timeouts 的 del 中移除, receive_progress_report 收到 completed/failed 后不清理 → 已完成子任务满 1800s subtask_timeout 被误判超时 → 触发 handle_subagent_failure 重试, 而重试走的 dispatch_subtask 不重新注册开始时间 → 重试后子任务永久无超时保护, 只能耗到全局超时; 这解释了「需求分析执行 3 次」与「代码实现挂死」。(2) station_local_pm._local_execute_task 执行完毕后无条件调用本机 _local_pm_agent.receive_subtask_result, 完全不看 payload.pm_id → 远程 PM 分发到本机执行的子任务, 结果被注入本机 PM 或(本机无 PM 时)直接丢弃, 原始 PM 永远等不到回调。这是跨站分发从未真正跑通的原因, 单机测试无法暴露。修复: pm_monitor 新增 _clear_subtask_timer (终态清理计时器) / _trace_retry (重试写入 trace) / _log_self_check (顺带抽出以压回函数长度门禁); pm_dispatcher 把 _record_subtask_start 移入 dispatch_subtask 方法体 (每次分发含重试都重新注册) 并在 /tasks/execute payload 增补 secretary_url; station_local_pm 新增 _report_subtask_result 按 pm_id 路由 — 跨站则 POST secretary_url + /pm/progress-report 回传原始 PM (该端点会真正注入 PM Monitor, 而 /api/pm/{id}/progress 只落库不触发依赖链, 选前者), 同 PM 走原路本地注入, 缺 secretary_url 时明确报错而非误注入; runtime_trace 新增 subtask_retry 阶段标签; 顺手修掉 next_tasks 里记录的进度刷屏 (progress_loop 进度未变即跳过上报, 实测 361 条报告里 341 条是重复的「1/3 完成」)。验证: 专项 6 例 + 变异 4 处 (跨站路由/计时器清理/重试注册/回传端点) 全部致红; 全量 pytest 481 passed (475 基线 +6); sync_docs PASS(106 条目/11 域)、check_unbound_names PASS(73 文件)、git diff --check 干净、函数长度 0 超标。注意 tests 中 TestIter87 的 SimpleNamespace 桩需补 _report_subtask_result 委托 (已补)。遗留判断: get_available_stations 会把在线 secretary 当作可执行站点返回, 本身不算错 (Station 内嵌 /tasks/execute 确实能执行), 修复 (2) 后跨站链路才真正闭环; 但 192.168.1.206 是另一台真实主机, 其上子 Agent 已 idle 说明远端确实执行过, 只是结果回传丢失 — 这轮修复正对此。",
-  "notes_iter95": "iter-95 (Boss 定调后落地): 确立「Boss↔秘书产出蓝图 → PM 依蓝图执行 → 交付结论回流蓝图 → Boss 提修改」的多轮迭代协作模式, 蓝图与项目一一对应。澄清一处此前的误判: 角色卡「拒答股票交易类问题」防的是秘书对交易策略产生幻觉, 与开发股票自动交易系统(业务软件项目管理)并不冲突 — 真正的问题是原文把「(如股票交易、编程开发等)」整类划入拒答, 属过度收敛, 已移除; 而「回复必须简洁」确为硬约束缺陷(iter-93 实测拆解计划被压到 605 字), 改为「简洁为默认, 但蓝图/需求/验收标准/阶段计划须完整输出」。代码侧补齐了此前只有下行没有上行的链路: 蓝图→PM 已有(iter-89 驱动规划 + iter-90 验收自检), 但 PM→蓝图为零 — update_project_blueprint 此前只被 HTTP PUT 调用, 交付物只落在 task.output_data._delivery, roadmap 阶段状态永远停在 Boss 手填值。新增 project.record_delivery_to_blueprint: verdict=pass 且无 unmet → 阶段推进 review(待 Boss 确认); 有 unmet → 阶段状态保持并记录缺口清单; 只动当前阶段 deliveries 字段不改 Boss 手填的 phase/goal/branch; 同阶段保留最近 5 条防膨胀。关键设计点: 模块级 _current_phase_index 的选取口径与 pm_planner._current_roadmap_phase 严格一致, 否则 PM 读 M2 而结论写进 M1 —— 已作为变异用例 M4 固化。station_routes_tasks 新增 _reflow_blueprint 桥梁 (由 task.project_id 定位项目), 交付广播新增 blueprint_updated; 异常一律吞掉不阻断交付入库。验证: 7 专项 + 7 变异全部致红; 全量 488 passed (iter-94 后 481 基线 +7); sync_docs PASS / check_unbound_names PASS / git diff --check 干净; 函数长度无新增超标 (build_task_routes 625→632 属既有警告, submit_task 未动)。注意 BUG-034 那轮的角色卡断言曾出现「部分替换仍过关」, 已补原文全串断言收紧。"
+  "notes_iter95": "iter-95 (Boss 定调后落地): 确立「Boss↔秘书产出蓝图 → PM 依蓝图执行 → 交付结论回流蓝图 → Boss 提修改」的多轮迭代协作模式, 蓝图与项目一一对应。澄清一处此前的误判: 角色卡「拒答股票交易类问题」防的是秘书对交易策略产生幻觉, 与开发股票自动交易系统(业务软件项目管理)并不冲突 — 真正的问题是原文把「(如股票交易、编程开发等)」整类划入拒答, 属过度收敛, 已移除; 而「回复必须简洁」确为硬约束缺陷(iter-93 实测拆解计划被压到 605 字), 改为「简洁为默认, 但蓝图/需求/验收标准/阶段计划须完整输出」。代码侧补齐了此前只有下行没有上行的链路: 蓝图→PM 已有(iter-89 驱动规划 + iter-90 验收自检), 但 PM→蓝图为零 — update_project_blueprint 此前只被 HTTP PUT 调用, 交付物只落在 task.output_data._delivery, roadmap 阶段状态永远停在 Boss 手填值。新增 project.record_delivery_to_blueprint: verdict=pass 且无 unmet → 阶段推进 review(待 Boss 确认); 有 unmet → 阶段状态保持并记录缺口清单; 只动当前阶段 deliveries 字段不改 Boss 手填的 phase/goal/branch; 同阶段保留最近 5 条防膨胀。关键设计点: 模块级 _current_phase_index 的选取口径与 pm_planner._current_roadmap_phase 严格一致, 否则 PM 读 M2 而结论写进 M1 —— 已作为变异用例 M4 固化。station_routes_tasks 新增 _reflow_blueprint 桥梁 (由 task.project_id 定位项目), 交付广播新增 blueprint_updated; 异常一律吞掉不阻断交付入库。验证: 7 专项 + 7 变异全部致红; 全量 488 passed (iter-94 后 481 基线 +7); sync_docs PASS / check_unbound_names PASS / git diff --check 干净; 函数长度无新增超标 (build_task_routes 625→632 属既有警告, submit_task 未动)。注意 BUG-034 那轮的角色卡断言曾出现「部分替换仍过关」, 已补原文全串断言收紧。",
+  "notes_iter96": "本轮先完成 Boss 要求的 iter-95 真机验证 (第2、3项), 验证中抓到并修掉一个新缺陷 BUG-035。重启确认: 旧进程(PID 30936/29012, 昨日21:36启动)已换为 PID 4608/33252, station.lock 正常写入, code_version=e58847a。附带确认 BUG-032 生效 — 停滞告警由 100 条降为 0; 5 个 [LoopTest] 项目已归档。第2项 蓝图回流真机验证 (全部通过): 用正式项目 821230b9 + 真实 HTTP 端点 /api/pm/{id}/deliver 打三个场景 — (A) verdict=risk 带 2 条 unmet → M1 保持 active 且缺口清单入库; (B) verdict=pass 无 unmet → M1 推进为 review, 其余三阶段 planned 不受影响; (C) 无 project_id 的任务交付 → 蓝图零变化, 未误伤。验证后已把蓝图还原 (deliveries 清空、status 回 active, 9 条验收标准与 9 条决策完好)。第3项 角色卡修正真机验证 (通过且超预期): 提问 M1 验收标准, 秘书输出 1685 字 (iter-93 被压到 605 字), 三层验收标准+硬约束+范围边界结构完整, 主动结合蓝图并说明交付结论会回流蓝图供 Boss 迭代, 全程未越界给交易策略判断, 也无一句「无法处理该类问题」。BUG-035 (本轮新发现, 阻塞性): 上述提问却触发了 accept_delivery, 把场景C的测试任务验收了 — 一次提问执行了一次验收。根因: _detect_action 朴素子串匹配, _ACTION_KEYWORDS 把「验收」单列为触发词, 「验收标准」必然命中; 同类风险词还有退回/取消/暂停, 凡「X是什么/X有哪些/X标准」形式提问都会误触发; 且模块内第178行本就把「验收标准」列为需求收集问句(acceptance), 两处语义直接冲突, 属设计遗漏。修复: 新增 _looks_like_question 在关键词匹配前拦截询问句, _QUESTION_MARKERS(是什么/有哪些/如何/吗/?/标准/口径/定义/查看等) + _IMPERATIVE_MARKERS(帮我/请/麻烦/立即等, 优先级更高) — 祈使优先确保「帮我验收一下任务A好吗」仍执行。验证: 6 专项 + 6 变异全部致红; 全量 494 passed (iter-95 后 488 基线 +6); 门禁全过; 无新增超长函数。变异经验: 首轮 M3(移除「标准」)/M4(削减疑问词表) 未致红, 因样本句同时命中多个标记形成冗余掩盖, 已补 test_each_marker_independently_effective 让每条样本只依赖一个标记。另: scripts/{stop,restart}_workstation.bat 的 fallback 分支缺陷已修 (锁文件缺失时 taskkill 后不校验不等端口就 exit 0, 导致 restart 带着旧进程去 start → 静默失败, 这正是 Boss 首次重启未生效的原因); 工作区另有 Boss/他方改动的 {stop,restart}_workstation.ps1 三级兜底(taskkill/Stop-Process/wmic), 我只清了尾部空行未动逻辑。"
 }

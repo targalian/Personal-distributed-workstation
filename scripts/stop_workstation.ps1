@@ -1,4 +1,4 @@
-# stop_workstation.ps1 - 关闭当前工作站 (Station Director + 附属 Worker)
+﻿# stop_workstation.ps1 - 关闭当前工作站 (Station Director + 附属 Worker)
 # 用法: .\scripts\stop_workstation.ps1 [-Force] [-Timeout 15]
 # 功能: 读取锁文件 → 确认进程 → 终止进程树 → 等待端口释放 → 清理锁文件
 
@@ -117,13 +117,39 @@ if (-not $Force) {
 
 # ── Step 4: 终止进程树 ──
 Write-Step "3/4 终止进程树..."
+$killed = $false
+
+# 尝试 1: taskkill /T 终止整个进程树 (含 Worker 子进程)
 try {
-    # taskkill /T 终止整个进程树 (含 Worker 子进程)
     $result = taskkill /PID $stationPid /F /T 2>&1
-    Write-Ok "已发送终止信号 (PID $stationPid + 子进程)"
+    Write-Ok "taskkill 已发送终止信号 (PID $stationPid + 子进程)"
+    $killed = $true
 } catch {
-    Write-Warn "taskkill 失败: $_, 尝试 Stop-Process..."
-    try { Stop-Process -Id $stationPid -Force -ErrorAction SilentlyContinue } catch {}
+    Write-Warn "taskkill 失败: $_"
+}
+
+# 尝试 2: Stop-Process
+if (-not $killed) {
+    try {
+        Stop-Process -Id $stationPid -Force -ErrorAction Stop
+        Write-Ok "Stop-Process 已终止 (PID $stationPid)"
+        $killed = $true
+    } catch {
+        Write-Warn "Stop-Process 失败: $_"
+    }
+}
+
+# 尝试 3: wmic 兜底 (taskkill/Stop-Process 权限不足时有效)
+if (-not $killed) {
+    try {
+        $wmicResult = wmic process where "ProcessId=$stationPid" delete 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "wmic 已终止 (PID $stationPid)"
+            $killed = $true
+        }
+    } catch {
+        Write-Warn "wmic 也失败: $_"
+    }
 }
 
 # 等待端口释放

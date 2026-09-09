@@ -4,7 +4,7 @@
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
 - 更新时间：2026-09-09
-- 当前迭代：`iter-95`（Codex：交付结论回流蓝图闭环 + 秘书角色卡定位修正，已验证待 Boss 发货；iter-91/92/93/94 同批待发）
+- 当前迭代：`iter-96`（Codex：BUG-035 询问句误触发执行动作修复 + iter-95 真机验证通过，已验证待 Boss 发货；iter-91~95 同批待发）
 
 ## 一、职责边界（长期约定）
 
@@ -36,6 +36,15 @@
 按归属各自提交，不要互相 `git add .`：
 
 **Quest（无待推送改动）**
+
+**Codex（iter-96 BUG-035 询问句误触发 + 重启脚本修复，已验证待 Boss 发货）**
+- `lan_mesh/chat_handler.py`（**BUG-035**，iter-95 真机验证时实测抓到：向秘书提问「M1 阶段的**验收标准**有哪些」，回答正确但末尾追加「📋 已验收任务…的交付物」——一次提问执行了一次验收。根因是 `_detect_action` 朴素子串匹配，`_ACTION_KEYWORDS` 把「验收」单列为触发词而「验收标准」必然命中；同类风险词还有退回/取消/暂停，且模块第 178 行本就把「验收标准」列为需求收集问句，两处语义冲突。修复：新增 `_looks_like_question` 在关键词匹配前拦截询问句，`_QUESTION_MARKERS` + `_IMPERATIVE_MARKERS`（祈使优先，保证「帮我验收一下任务A好吗」仍执行））
+- `scripts/stop_workstation.bat`、`scripts/restart_workstation.bat`（**Boss 首次重启未生效的根因**：`station.lock` 缺失时 stop 落入 `:fallback_netstat`，发了 taskkill 后既不校验是否杀掉、也不等端口释放就 `exit /b 0` 报成功，restart 于是带着旧进程去 start → 端口冲突 → 「脚本跑完了但服务还是旧的」。修复：fallback 补等端口释放 + 15s 仍占用则报错退出并给出可复制的 taskkill 命令；restart 检查 stop 返回码非 0 即中断；新增 `LANMESH_NO_PAUSE=1` 避免串联时卡在 pause；僵尸锁分支同样转入 netstat 兜底）
+- `tests/test_core.py`（`TestIter96QuestionNotAction` 6 例：询问不触发/真指令仍触发/疑问词不挡祈使/纯查询无动作/helper 语义/**每个标记独立生效**。最后一例是补的——首轮变异 M3、M4 未致红，因样本句同时命中多个标记形成冗余掩盖）
+- `docs/design/06-interaction/README.md`（BUG-035 节 + iter-96 变更记录）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-96 收尾）
+
+> 说明：`scripts/{stop,restart}_workstation.ps1` 的三级兜底（taskkill → Stop-Process → wmic）是 Boss/他方在本轮重启时的改动，**不属于 Codex 本轮工作**；我仅清理了其尾部空行以过 `git diff --check`，未改动其逻辑。
 
 **Codex（iter-95 蓝图回流闭环 + 秘书角色卡定位修正，已验证待 Boss 发货）**
 - `lan_mesh/project.py`（新增 `record_delivery_to_blueprint`：把 PM 交付结论回流到蓝图当前路线图阶段——pass 且无 unmet 则推进为 `review`，有 unmet 则保持状态并记录缺口清单；只动 `deliveries` 不改 Boss 手填的 phase/goal/branch；同阶段保留最近 5 条防膨胀。新增模块级 `_current_phase_index`，选取口径与 `pm_planner._current_roadmap_phase` 严格一致——口径漂移会让结论写错阶段，已固化为变异用例 M4）
