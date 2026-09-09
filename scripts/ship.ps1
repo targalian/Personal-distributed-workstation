@@ -46,6 +46,12 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+# 中文路径修复: PS 5.1 默认按 OEM/GBK 解码原生命令输出, git -z 的 UTF-8 字节流
+# 会变成乱码 pathspec (如 G0-答题卡.md → G0-绛旈鍗?md), git add 必然 fatal。
+# 显式切 UTF-8 解码 (等效 chcp 65001, 仅影响当前控制台会话)。
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
 function Write-Head($text) {
     Write-Host ""
     Write-Host ("=" * 62) -ForegroundColor Cyan

@@ -4,7 +4,7 @@
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
 - 更新时间：2026-09-09
-- 当前迭代：`iter-92`（Codex：Boss 通道 + stock_player 任务图交接 + BUG-032 停滞告警修复，已验证待 Boss 发货；iter-91 Quest UI 审计修复轮同批待发）
+- 当前迭代：`iter-94`（Codex：BUG-034 跨站子任务结果回传 + 子任务超时计时器修复，已验证待 Boss 发货；iter-91 Quest UI 审计 + iter-92 Boss 通道 + iter-93 项目绑定同批待发）
 
 ## 一、职责边界（长期约定）
 
@@ -36,6 +36,27 @@
 按归属各自提交，不要互相 `git add .`：
 
 **Quest（无待推送改动）**
+
+**Codex（iter-94 BUG-034 跨站子任务结果回传，已验证待 Boss 发货）**
+- `lan_mesh/station_local_pm.py`（**根因 2**：`_local_execute_task` 原先无条件把结果注入本机 PM，完全不看 `payload.pm_id` → 远程 PM 分发到本机的子任务，结果被注入错误 PM 或直接丢弃，原始 PM 只能耗到全局超时；新增 `_report_subtask_result` 按 `pm_id` 路由，跨站则 POST `secretary_url + /pm/progress-report` 回传原始 PM）
+- `lan_mesh/pm_monitor.py`（**根因 1**：新增 `_clear_subtask_timer` 在 completed/failed 时清理 `subtask_start_times`，此前已完成子任务满 1800s 会被误判超时并触发重试；新增 `_trace_retry` 让重试进入任务流追踪；`progress_loop` 进度未变即跳过上报（实测 361 条报告中 341 条重复）；顺带抽出 `_log_self_check` 压回函数长度门禁）
+- `lan_mesh/pm_dispatcher.py`（`_record_subtask_start` 从两处调用点移入 `dispatch_subtask` 方法体，确保重试分发也重新注册超时计时器；`/tasks/execute` payload 增补 `secretary_url` 供跨站回传定位）
+- `lan_mesh/runtime_trace.py`（`TASK_STAGE_LABELS` 新增 `subtask_retry` → 「子任务重试」）
+- `tests/test_core.py`（`TestIter94CrossStationSubtaskCallback` 6 例：跨站回传/同 PM 本地注入/缺 secretary_url 不误注入/终态清理计时器/重试刷新时间戳/去重游标初值；并给 `TestIter87` 的 SimpleNamespace 桩补 `_report_subtask_result` 委托；全量 481 passed）
+- `docs/design/03-task-orchestration/README.md`（BUG-034 双根因分析节 + iter-94 变更记录）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-94 收尾）
+
+**Codex（iter-93 G0 闸门 + 股票项目交接 + BUG-033，已验证待 Boss 发货）**
+- `lan_mesh/station_scheduler.py`（BUG-033：`submit_task_from_chat` 新增 `project_id` 参数并落到 `Task`；成本预估由硬编码空项目改为传入真实项目，预算适配随之生效）
+- `lan_mesh/chat_handler.py`（新增 `_resolve_project_from_message` 三级解析：完整 uuid → 8 位短码 → 活跃项目名最长匹配（≥4 字防短名误命中）；`_action_submit_task` 下传并回显绑定结果）
+- `scripts/fix_task_project_binding.py`（**新增**：存量任务补绑项目的一次性修正脚本，须先停 Station——运行中 SQLite 写锁独占会报 readonly database）
+- `scripts/sync_docs.py`（MAPPING 登记 fix_task_project_binding.py）
+- `tests/test_core.py`（`TestIter93TaskProjectBinding` 7 例：uuid/短码/名称最长匹配/无匹配/manager 缺失/动作下传/scheduler 落库；顺带修一处旧用例固定签名 lambda；全量 475 passed）
+- `docs/design/03-task-orchestration/README.md`（对话派发任务的项目绑定节 + iter-93 变更记录）
+- `docs/design/06-interaction/README.md`（秘书项目归属解析 + **已知局限**：角色卡「拒答股票交易类问题」「回复必须简洁」同交接定位冲突 + iter-93 变更记录）
+- `docs/reference/G0-答题卡.md`（**新增**：Boss 已答完 12 题，交接依据留档）
+- `docs/reference/stock-player-blueprint.json`（**新增**：据答题卡生成的项目蓝图，9 条验收标准 / 4 阶段 / 9 条决策，已写入 Station 项目 821230b9）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-93 收尾）
 
 **Codex（iter-92 Boss 通道 + 股票项目交接 + BUG-032，已验证待 Boss 发货）**
 - `scripts/boss_channel.py`（**新增**：Codex ↔ 秘书/PM CLI 通道，12 子命令；mesh token 自动加载；网络异常收敛不抛出；401/503/409 附成因提示）
@@ -99,6 +120,10 @@
 | ✅ BUG-032 停滞告警幽灵刷屏（iter-92 已完成：DB 对账，真实数据 100→0，5 例专项 + 3 处变异致红） | ~~Codex~~ | ~~已释放~~ |
 | stock_player 首里程碑执行（等 G0 闸门：Boss 答完 Q1/Q7/Q8/Q11/Q12 后写蓝图并派发 PM） | **Codex（交接）+ PM（执行）** | 项目侧仓库，不碰 work_station |
 | F6 shadow-dev WS 实时广播（Quest 已交回 `[Quest→Codex]`，建议走 `event_bus.publish_event("shadow_run_update", {run_id,status})`） | Codex | `lan_mesh/shadow_dev.py`；排期在 stock_player 之后 |
+| ✅ G0 澄清闸门 + 股票项目交接（iter-93 已完成：12 题答完 → 蓝图 → 建项目 821230b9 → 派发 task-0cdc51ad40dd） | ~~Codex~~ | ~~已释放~~ |
+| ✅ BUG-033 对话派发任务无项目归属（iter-93 已完成：致蓝图驱动+验收自检静默失效，7 例专项 + 2 处变异致红） | ~~Codex~~ | ~~已释放~~ |
+| 秘书角色卡定位冲突（拒答股票交易类问题 + 回复必须简洁，同项目交接入口定位冲突） | Codex（待 Boss 定调） | `lan_mesh/role_cards.py`；需先决策再动手 |
+| PM 进度报告去重（实测每 10 秒重复上报同一条进度，未变时应抑制落库） | Codex | `lan_mesh/pm_agent.py`；排期在 M1 交付后 |
 | 真物理多机实压 F3.1/F3.3 | Codex | 需真实主机，与拆分互斥（勿同轮） |
 | 前端 Tab 与新端点字段对齐复查 | Quest | `webui/`、`dashboard.html` |
 | ~~UI-064 影子开发面板（提交/队列/报告/守护，`/api/shadow-dev/*`）**P0**~~ ✅ 完成 (iter-91, UI-064 检测通过) | ~~Quest~~ | ~~`dashboard.html`~~ |

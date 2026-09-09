@@ -125,7 +125,7 @@ python scripts/boss_channel.py watch --interval 15         # 长任务盯盘
 | **BUG-032** | `/api/runtime/task-stall-alerts` 返回 100 条停滞告警, 其中 99 条 task_id 在 DB `tasks` 表已不存在 (JSONL 残留), 级别多为 Lv3, `idle_min` 高达 11455 分钟 — 真实告警被噪声完全淹没 | **已修**: `check_stall_alerts()` 新增 `_stall_db_filter()` 与 DB 对账, 抑制幽灵与已终态任务; 真实数据实测 100 → 0; 专项 5 例 + 变异 3 处致红 |
 | 通道端点错 | `diag` 初版使用 `/api/runtime/errors` → 404 | **已修**: 改为 `/api/errors/recent` |
 | 项目 git 不可读 | `E:\ingobj\stock_player` 报 `unsafe repository (owned by someone else)`, 无法读分支/日志 | 记入图节点 N1, 需 Boss 授权 `git config --global --add safe.directory` 后接管 |
-| 历史脏数据 | Station 有 6 个项目, 其中 5 个是 `[LoopTest]` 自动化测试残留 | 建议 G0 时一并归档, 避免正式项目混在测试数据里 |
+| 历史脏数据 | Station 有 6 个项目, 其中 5 个是 `[LoopTest]` 自动化测试残留 | **已归档** (2026-09-09 Quest 执行: `DELETE /api/projects/{id}` ×5 → archived, 正式项目「创建并启动项目」保持 active; `api_tests.py` BTN-009/010 已加创建即清理 (取消任务/归档项目) 防复发) |
 
 ## 七、下一步 (等 Boss 回话)
 
