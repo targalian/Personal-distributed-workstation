@@ -9930,3 +9930,157 @@ class TestIter99ProjectPathResolution:
         handler._action_submit_task("提交任务: 检查代码安全漏洞并给出报告")
 
         assert captured["input_data"] is None
+class TestIter100AgentWorkdir:
+    """iter-100 BUG-038: 子 Agent 实际工作目录 (M1 重跑实测发现)。
+
+    BUG-037 的孪生缺陷。M1 重跑时「需求分析」连续 3 次被质量门禁判不合格,
+    原因均为「达到最大轮次 30 后终止」+「后期脱离目标项目」。根因: ReAct 的
+    `cwd = input_data.get("cwd", self.shared_folder)`, 而没有任何代码往
+    input_data 写 cwd → Agent 恒在空的共享目录里摸索, 描述文本里的路径它
+    读得到却进不去。前者修「告诉 Agent 去哪」, 本处修「把 Agent 放到哪」。
+    """
+
+    def _planner(self, blueprint: dict):
+        from lan_mesh.pm_planner import PMPlanner
+        from lan_mesh.pm_state import PMState
+
+        planner = PMPlanner("pm-test100", None, PMState(), None)
+        planner._fetch_project_blueprint = lambda pid: blueprint
+        return planner
+
+    def test_workdir_attached_from_blueprint(self, tmp_path):
+        """蓝图 repo_path 指向真实目录时, cwd 必须进入 input_data。"""
+        proj = tmp_path / "stock_player"
+        proj.mkdir()
+        planner = self._planner({"charter": {"repo_path": str(proj)}})
+
+        out = planner.attach_blueprint_context(
+            {"project_id": "p1", "input_data": {}})
+
+        import os
+        assert out["input_data"]["cwd"] == os.path.realpath(str(proj))
+
+    def test_workdir_skipped_when_path_missing(self):
+        """路径解析不到 (回退 ".") 时不得注入 cwd — 保持 shared_folder 旧行为。"""
+        planner = self._planner({})
+
+        out = planner.attach_blueprint_context(
+            {"project_id": "", "input_data": {}})
+
+        assert "cwd" not in (out.get("input_data") or {})
+
+    def test_workdir_skipped_when_dir_not_exist(self):
+        """路径存在于蓝图但目录不存在时, 绝不能把 Agent 塞进无效目录。"""
+        planner = self._planner(
+            {"charter": {"repo_path": "E:/definitely/not/exist/xyz123"}})
+
+        out = planner.attach_blueprint_context(
+            {"project_id": "p1", "input_data": {}})
+
+        assert "cwd" not in (out.get("input_data") or {})
+
+    def test_workdir_attached_without_blueprint_hint(self, tmp_path):
+        """蓝图文本为空但 project_path 可解析时, cwd 仍须注入。
+
+        对话派发的任务常常拿不到蓝图正文 (charter 为空), 若以「无蓝图」
+        为条件提前 return, 作业目录就会连带丢掉 —— 正是 BUG-038 现场。
+        """
+        proj = tmp_path / "stock_player"
+        proj.mkdir()
+        planner = self._planner({})
+
+        out = planner.attach_blueprint_context(
+            {"project_id": "p1", "input_data": {"project_path": str(proj)}})
+
+        assert "_project_blueprint" not in out["input_data"]
+        assert out["input_data"]["cwd"]
+
+    def test_explicit_cwd_not_overwritten(self, tmp_path):
+        """上游已显式指定 cwd 时不覆盖 (允许精确控制作业目录)。"""
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        planner = self._planner({"charter": {"repo_path": str(proj)}})
+
+        out = planner.attach_blueprint_context(
+            {"project_id": "p1", "input_data": {"cwd": "D:/explicit"}})
+
+        assert out["input_data"]["cwd"] == "D:/explicit"
+
+    def test_blueprint_hint_still_attached(self, tmp_path):
+        """cwd 注入不得破坏 iter-89 的蓝图文本注入。"""
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        planner = self._planner(
+            {"charter": {"mission": "股票系统", "repo_path": str(proj)}})
+
+        out = planner.attach_blueprint_context(
+            {"project_id": "p1", "input_data": {}})
+
+        assert "股票系统" in out["input_data"]["_project_blueprint"]
+        assert out["input_data"]["cwd"]
+
+    def test_resolve_workdir_survives_exception(self):
+        """解析异常不得冒泡, 规划主流程不能被可选增强拖死。"""
+        planner = self._planner({})
+
+        def boom(task):
+            raise RuntimeError("blueprint down")
+
+        planner._resolve_project_path = boom
+
+        assert planner._resolve_workdir({"project_id": "p1"}) == ""
+
+    def test_react_prompt_declares_workdir_and_scope(self):
+        """ReAct system prompt 必须声明作业目录并禁止跨盘漫游。
+
+        仅注入 cwd 不够 —— 模型看不到 cwd 就仍会自由探索。M1 实测的
+        「后期脱离目标项目」正是提示缺位所致。
+        """
+        from lan_mesh.agent_runtime import _build_react_rules_prompt
+
+        prompt = _build_react_rules_prompt("E:/ingobj/stock_player")
+        assert "E:/ingobj/stock_player" in prompt
+        assert "相对路径均以此为基准" in prompt
+        assert "不要去其他盘符或上级目录漫游" in prompt
+        assert "不要靠反复试探消耗轮次" in prompt
+        # 既有规则不得在重构中丢失
+        assert "progress-report" in prompt
+        assert "git_safe_directory_denied" in prompt
+
+    def test_react_loop_falls_back_on_blank_cwd(self):
+        """cwd 缺省必须用 or 而非 get 默认值 (空串也要回落 shared_folder)。"""
+        import inspect
+        from lan_mesh.agent_runtime import AgentRuntime
+
+        code = inspect.getsource(AgentRuntime._handle_react_agent)
+        assert 'input_data.get("cwd") or self.shared_folder' in code
+        assert "_build_react_rules_prompt(cwd)" in code
+
+    def test_file_tools_resolve_relative_path_against_cwd(self):
+        """file_read/file_write 的相对路径必须以 cwd 为基准补成绝对路径。
+
+        这两个工具没有 cwd 参数, 原实现下相对路径会落到 Station 进程的启动
+        目录 (即本仓库), 既拿不到目标文件, 也有越界写入风险。
+        """
+        import os
+        from lan_mesh.agent_runtime import _resolve_tool_path
+
+        cwd = os.path.join("E:", os.sep, "ingobj", "stock_player")
+        assert _resolve_tool_path(cwd, "src/main.py") == os.path.join(
+            cwd, "src/main.py")
+        # 绝对路径原样保留, 不得被拼接到 cwd 之下
+        abs_path = os.path.join("D:", os.sep, "other", "a.txt")
+        assert _resolve_tool_path(cwd, abs_path) == abs_path
+        assert _resolve_tool_path(cwd, "~/notes.md") == "~/notes.md"
+        # cwd 缺省或路径为空时不改写
+        assert _resolve_tool_path("", "src/main.py") == "src/main.py"
+        assert _resolve_tool_path(cwd, "") == ""
+
+    def test_react_loop_wires_file_tools_through_resolver(self):
+        """ReAct 循环必须把 file 工具的 path 过一遍解析器。"""
+        import inspect
+        from lan_mesh.agent_runtime import AgentRuntime
+
+        code = inspect.getsource(AgentRuntime._handle_react_agent)
+        assert 'func_name in ("file_read", "file_write")' in code
+        assert "_resolve_tool_path(" in code

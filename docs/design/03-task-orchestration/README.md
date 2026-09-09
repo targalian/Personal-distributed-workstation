@@ -273,6 +273,59 @@ Station 自身 cwd 里找 `stock_player` 代码 —— 三次「需求分析」�
 > 因而全绿, 而真机走的是带鉴权的 HTTP 路径。凡「读远端配置」的改动, 单测桩
 > 之外必须补一次真机链路验证。
 
+## BUG-038 子 Agent 实际工作目录未注入 (iter-100)
+
+### 现象
+
+BUG-037 修复后 M1 重跑 (`task-af7e8cde65d4`): 子任务描述已正确显示
+`E:/ingobj/stock_player`, 但「需求分析」仍连续 **3 次**被质量门禁判不合格,
+原因均为「达到最大轮次 30 后终止」+「后期脱离目标项目」, 约 414 万 input
+tokens。已取消任务止损。
+
+### 根因: 有人读 `cwd`, 没人写 `cwd`
+
+`agent_runtime._handle_react_agent` 里 `cwd = input_data.get("cwd",
+self.shared_folder)` —— 而**全仓库没有任何代码往 `input_data` 写 `cwd`**。
+于是 `shell_exec`/`dir_list` 的注入值恒为空的 `shared_folder`: Agent 从描述
+文本**读得到**项目路径, 却始终**进不去**, 只能靠反复试探漫游, 耗尽 30 轮。
+
+这是 BUG-037 的**孪生缺陷**: 前者修「告诉 Agent 去哪」(描述里的路径),
+本处修「把 Agent 放到哪」(实际工作目录), 只修其一无效。
+
+附带问题: `file_read`/`file_write` 不接受 `cwd` 参数, 相对路径按 Station
+进程启动目录 (即本仓库) 解析 —— 既读不到目标项目文件, 也有越界写入风险。
+
+### 修复
+
+1. `attach_blueprint_context` 由「只注入蓝图文本」扩展为**同时注入 `cwd`**;
+   注入点选在 `pm_agent` 规划后那一次调用, 覆盖本地执行 + 远程分发全部路径。
+   蓝图文本为空但路径可解析时仍须注入 (对话派发任务常无 charter 正文)。
+2. 新增 `PMPlanner._resolve_workdir`: 复用 `_resolve_project_path` 的三级
+   口径, 但**只在目录真实存在时返回**; `"."` 或不存在的路径一律返回空串,
+   让 AgentRuntime 保持 `shared_folder` 旧行为 —— 绝不把 Agent 塞进无效目录。
+3. 上游已显式指定 `cwd` 的任务**不覆盖** (允许精确控制作业目录)。
+4. `cwd = input_data.get("cwd") or self.shared_folder`: 空串也回落, 避免
+   把 Agent 放进当前进程目录。
+5. 规则段 prompt 抽为模块级 `_build_react_rules_prompt(cwd)`, 新增三条:
+   相对路径以 cwd 为基准、禁止跨盘/上级目录漫游、内容不符即说明并结束而非
+   靠试探消耗轮次。仅注入 `cwd` 不够 —— 模型看不到它仍会自由探索。
+6. 新增模块级 `_resolve_tool_path(cwd, raw_path)`: 把 `file_read`/
+   `file_write` 的相对路径锚定到 `cwd`; 绝对路径与 `~` 展开后为绝对的路径
+   原样返回, `cwd` 为空时不改写。
+
+> 护栏边界: `validate_cli_agent_cwd` / `CLI_AGENT_ALLOW_SELF_REPO` 只作用于
+> `_handle_cli_agent` (防自举改写本仓库), 与 ReAct 循环的 `cwd` 是两条独立
+> 路径, 本改动不放宽自举护栏。
+
+### 验证
+
+10 专项 + 17 变异全部致红 (含 prompt 三条规则各删一条、`isabs` 反转、
+`expanduser` 缺失、显式 `cwd` 被覆盖、目录存在性校验去除)。
+
+> 教训: 「不报错但产物错」的缺陷 (路径错 / 目录错) 光看 `status` 发现不了 ——
+> BUG-037 与 BUG-038 都表现为子任务正常结束, 前者产物分析错目录, 后者耗尽
+> 轮次。定位靠 iter-94 的 `subtask_retry` 追踪记录了重试原因。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
@@ -290,3 +343,4 @@ Station 自身 cwd 里找 `stock_player` 代码 —— 三次「需求分析」�
 | 2026-08-16 | iter-30 补 | orchestrator 收敛裁定: 降级工具库 + stub 兼容, 3 个死端点下线, graph 端点改 DB 重建 |
 | 2026-08-16 | iter-27 后 | 初建 |
 | 2026-09-10 | iter-99 | BUG-037 子任务作业路径恒为 "." 修复: 蓝图 `charter.repo_path` 成为路径权威来源 + `_resolve_project_path` 三级回退 (input_data→蓝图→".") + 路径正则兼容正斜杠与引号且标签优先于裸路径 + `_action_submit_task` 传递 `project_path` + 蓝图提示暴露仓库路径; M1 失败复盘发现 (三次需求分析烧 448 万 tokens 分析错目录); 12 专项 + 15 变异致红 + 真机 API 实测 |
+| 2026-09-10 | iter-100 | BUG-038 子 Agent 实际工作目录未注入修复: `attach_blueprint_context` 同时注入 `cwd` + `_resolve_workdir` 仅在目录真实存在时返回 (`"."`/不存在回落 shared_folder) + 显式 `cwd` 不覆盖 + ReAct `cwd` 空串也回落 + 规则段抽为 `_build_react_rules_prompt` 并新增「相对路径基准/禁止跨盘漫游/禁止试探消耗轮次」+ `_resolve_tool_path` 把 file_read/file_write 相对路径锚定到 cwd; BUG-037 孪生缺陷 (M1 重跑三次需求分析耗尽 30 轮烧 414 万 tokens); 10 专项 + 17 变异致红 |

@@ -74,6 +74,26 @@ capture 到 module=`llm` (context 携带失败链), 异常隔离不影响降级�
 讨论通道点亮后中文对话量骤增才显形。回归锚点见 `TestIter74SseUtf8Decoding`
 (三例: 无 charset 兜底 / 显式 charset 尊重 / ASCII 不受影响; 已验证移除修复即 FAIL)。
 
+**子 Agent 作业目录注入** (iter-100, BUG-038): `_handle_react_agent` 的
+`cwd` 原为 `input_data.get("cwd", self.shared_folder)`, 而全仓库无人写入
+该键 —— 子 Agent 恒在空的共享目录里摸索, 明明从描述文本读得到项目路径却
+进不去, 耗尽 30 轮被质量门禁判不合格 (M1 重跑连续 3 次, 约 414 万 tokens)。
+
+运行时侧三处改动 (写入侧见 03 域 `attach_blueprint_context`):
+- `cwd = input_data.get("cwd") or self.shared_folder` —— 空串也回落,
+  避免把 Agent 放进当前进程目录
+- 规则段抽为模块级 `_build_react_rules_prompt(cwd)`, 新增「相对路径以此为
+  基准」「不要去其他盘符或上级目录漫游」「内容不符即说明并结束, 不要靠反复
+  试探消耗轮次」—— 仅注入 cwd 不够, 模型看不到它仍会自由探索
+- 新增模块级 `_resolve_tool_path(cwd, raw_path)`: `file_read`/`file_write`
+  不接受 `cwd` 参数, 相对路径原按 Station 进程启动目录 (即本仓库) 解析,
+  既读不到目标文件也有越界写入风险; 绝对路径与 `~` 展开后为绝对的路径原样
+  返回, `cwd` 为空时不改写
+
+与 `validate_cli_agent_cwd` / `CLI_AGENT_ALLOW_SELF_REPO` 是两条独立路径:
+后者只作用于 `_handle_cli_agent` 防自举改写本仓库, 本改动不放宽该护栏。
+回归锚点 `TestIter100AgentWorkdir` (10 例, 17 变异全致红)。
+
 ## agent_card.py — Agent Card（借鉴 A2A 协议）
 
 每个 Worker 启动时生成能力卡片（技能声明、可用工具、模型偏好），
@@ -207,3 +227,4 @@ planner/dispatcher/monitor 的共享引用有效 (resume 关键约束)
 | 2026-08-28 | iter-53 | PM 执行态快照持久化 + 断点恢复: PMState 序列化/就地恢复 + 六阶段快照写点 + resume_from_snapshot/_run_resumed 四场景续跑 + multi 模式聚合修复 (_multi_monitoring) |
 | 2026-08-27 | iter-45 | agent_runtime 降级链耗尽错误埋点 (module=llm, 携带失败链) |
 | 2026-08-16 | iter-27 后 | 初建 |
+| 2026-09-10 | iter-100 | BUG-038 子 Agent 作业目录注入 (运行时侧): ReAct `cwd` 改为 `get("cwd") or shared_folder` (空串也回落) + 规则段抽为 `_build_react_rules_prompt` 并新增作业目录基准/禁止跨盘漫游/禁止试探消耗轮次三条 + `_resolve_tool_path` 把 file_read/file_write 相对路径锚定 cwd (原落在 Station 启动目录, 有越界写入风险); 不放宽 CLI 自举护栏; 10 专项 + 17 变异致红 |

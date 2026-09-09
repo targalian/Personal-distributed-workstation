@@ -11,6 +11,7 @@ PM 规划器 — 任务分析与分解
 7. 交付前蓝图验收自检 (iter-90)
 """
 import json
+import os
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -406,25 +407,61 @@ class PMPlanner:
         )
 
     def attach_blueprint_context(self, task: dict) -> dict:
-        """把项目蓝图约束写入 task.input_data, 供子 Agent 执行时消费。
+        """把项目蓝图约束与作业目录写入 task.input_data, 供子 Agent 消费。
 
         规划后调用一次即可: 后续本地执行 / 远程分发都从 ``input_data``
-        继承 ``_project_blueprint``, 无蓝图时原样返回, 不新增键。
+        继承 ``_project_blueprint`` 与 ``cwd``。
+
+        BUG-038: 此前只注入蓝图文本, 子 Agent 的**实际工作目录**仍是
+        ``AgentRuntime.shared_folder`` (ReAct 循环 ``cwd`` 缺省值), 于是
+        ``dir_list``/``shell_exec`` 全部落在空的共享目录里 —— Agent 明明
+        从描述文本读得到项目路径, 却在错误的目录反复摸索, 耗尽 30 轮被质量
+        门禁判不合格, 重试后再次耗尽 (M1 实测连续 3 次, 约 414 万 tokens)。
+        这是 BUG-037 的孪生缺陷: 前者修「告诉 Agent 去哪」, 本处修「把
+        Agent 放到哪」, 只修其一无效。
 
         Args:
             task: PM 当前任务字典
 
         Returns:
-            带 ``_project_blueprint`` 的任务副本 (无蓝图时为原对象)
+            带 ``_project_blueprint`` / ``cwd`` 的任务副本; 两者都无则原样返回
         """
         hint = self._build_blueprint_hint(task)
-        if not hint:
+        cwd = self._resolve_workdir(task)
+        if not hint and not cwd:
             return task
         enriched = dict(task)
         input_data = dict(enriched.get("input_data", {}) or {})
-        input_data["_project_blueprint"] = hint
+        if hint:
+            input_data["_project_blueprint"] = hint
+        # 已显式指定 cwd 的任务不覆盖 (Boss/上游可精确控制作业目录)
+        if cwd and not str(input_data.get("cwd", "") or "").strip():
+            input_data["cwd"] = cwd
+            logger.info("[%s] 子 Agent 作业目录: %s", self._pm_id[:8], cwd)
         enriched["input_data"] = input_data
         return enriched
+
+    def _resolve_workdir(self, task: dict) -> str:
+        """BUG-038: 解析子 Agent 应实际进入的工作目录。
+
+        复用 `_resolve_project_path` 的三级口径 (input_data → 蓝图 repo_path
+        → "."), 但**只在解析到真实存在的目录时才返回** —— 回退值 "." 或不
+        存在的路径一律返回空串, 让 AgentRuntime 保持 shared_folder 旧行为,
+        绝不把 Agent 塞进一个不存在的目录。
+        """
+        try:
+            path = self._resolve_project_path(task)
+            if not path or path == ".":
+                return ""
+            expanded = os.path.realpath(os.path.expanduser(path))
+            if not os.path.isdir(expanded):
+                logger.warning("[%s] 项目路径不是有效目录, 作业目录回退默认: %s",
+                               self._pm_id[:8], path)
+                return ""
+            return expanded
+        except Exception as e:
+            logger.debug("[%s] 作业目录解析失败: %s", self._pm_id[:8], e)
+            return ""
 
     def _fetch_project_blueprint(self, project_id: str) -> dict:
         """向 Secretary 拉取项目蓝图, 失败返回空 dict (不影响规划主流程)。"""

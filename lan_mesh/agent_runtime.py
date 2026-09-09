@@ -33,6 +33,61 @@ from .logger import get_logger
 logger = get_logger("agent_runtime")
 
 
+def _build_react_rules_prompt(cwd: str) -> str:
+    """构造 ReAct 循环的规则段 system prompt。
+
+    BUG-038: 仅把 cwd 传给工具还不够 —— 模型看不到作业目录就仍会自由探索,
+    M1 实测的「后期脱离目标项目 + 耗尽 30 轮」正是提示缺位所致。故显式声明
+    相对路径基准、禁止跨盘漫游、禁止靠试探消耗轮次。
+
+    Args:
+        cwd: 子 Agent 作业目录
+
+    Returns:
+        追加到 system prompt 末尾的规则文本
+    """
+    return (
+        "\n\n你是一个自主执行 Agent。你可以使用提供的工具来完成任务。\n"
+        "规则:\n"
+        "- 直接执行, 不要反问\n"
+        "- 每次只调用一个工具, 观察结果后决定下一步\n"
+        "- 任务完成后直接输出最终结果 (不再调用工具)\n"
+        "- 如果工具执行失败, 尝试替代方案\n"
+        f"- 工作目录 (相对路径均以此为基准): {cwd}\n"
+        f"- 探索代码请从该目录开始 (如 dir_list 传 path='{cwd}'); "
+        "任务描述中提到的项目路径即该目录, 不要去其他盘符或上级目录漫游\n"
+        "- 若该目录内容与任务描述不符, 直接说明并结束, 不要靠反复试探消耗轮次\n"
+        "- 禁止: 不要执行进度上报/curl/HTTP POST 到任何 progress-report 端点, "
+        "框架会自动处理\n"
+        "- 禁止: 不要浪费轮次做网络请求上报状态, 专注于任务本身\n"
+        "- 工具返回 timed_out=true 时不要原样重试, 应缩小范围或直接说明超时原因\n"
+        "- git_safe_directory_denied=true 时禁止修改 git config 或重试 Git 命令, "
+        "改用 file_read/dir_list 只读分析\n"
+    )
+
+
+def _resolve_tool_path(cwd: str, raw_path: str) -> str:
+    """BUG-038: 把 file_read/file_write 的相对路径锚定到子 Agent 作业目录。
+
+    这两个工具不接受 cwd 参数, 相对路径原本按 Station 进程的启动目录解析
+    (即本仓库), 既读不到目标项目的文件, 也有越界写入风险。绝对路径与
+    ``~`` 展开后为绝对的路径原样返回; cwd 为空时不做改写。
+
+    Args:
+        cwd: 子 Agent 作业目录 (可为空)
+        raw_path: 工具调用里给出的原始路径
+
+    Returns:
+        解析后的路径 (无需改写时原样返回)
+    """
+    path = str(raw_path or "")
+    if not path or not cwd:
+        return path
+    if os.path.isabs(os.path.expanduser(path)):
+        return path
+    return os.path.join(cwd, path)
+
+
 _env_lock = threading.Lock()
 _env_loaded = False
 
@@ -751,7 +806,10 @@ class AgentRuntime:
 
         requirement = input_data.get("requirement", input_data.get("description", ""))
         max_iterations = input_data.get("max_iterations", 30)
-        cwd = input_data.get("cwd", self.shared_folder)
+        # BUG-038: cwd 由 PM 规划时经 attach_blueprint_context 注入 (取项目蓝图
+        # repo_path); 缺省才回落 shared_folder。此前无人注入该键, Agent 一律在
+        # 空的共享目录里摸索, 耗尽轮次也找不到目标项目。
+        cwd = input_data.get("cwd") or self.shared_folder
 
         # 初始化工具注册表
         registry = ToolRegistry()
@@ -761,19 +819,7 @@ class AgentRuntime:
         system_prompt = self._build_system_prompt(requirement)
         if not system_prompt:
             system_prompt = ""
-        system_prompt += (
-            "\n\n你是一个自主执行 Agent。你可以使用提供的工具来完成任务。\n"
-            "规则:\n"
-            "- 直接执行, 不要反问\n"
-            "- 每次只调用一个工具, 观察结果后决定下一步\n"
-            "- 任务完成后直接输出最终结果 (不再调用工具)\n"
-            "- 如果工具执行失败, 尝试替代方案\n"
-            f"- 工作目录: {cwd}\n"
-            "- 禁止: 不要执行进度上报/curl/HTTP POST 到任何 progress-report 端点, 框架会自动处理\n"
-            "- 禁止: 不要浪费轮次做网络请求上报状态, 专注于任务本身\n"
-            "- 工具返回 timed_out=true 时不要原样重试, 应缩小范围或直接说明超时原因\n"
-            "- git_safe_directory_denied=true 时禁止修改 git config 或重试 Git 命令, 改用 file_read/dir_list 只读分析\n"
-        )
+        system_prompt += _build_react_rules_prompt(cwd)
         # iter-89: ReAct 自建 prompt, 需单独追加项目蓝图约束
         system_prompt += _build_blueprint_prompt(
             input_data.get("_project_blueprint", ""))
@@ -836,6 +882,11 @@ class AgentRuntime:
                 # 注入 cwd
                 if func_name in ("shell_exec", "dir_list") and "cwd" not in func_args:
                     func_args["cwd"] = cwd
+                # BUG-038: file_read/file_write 无 cwd 参数, 相对路径会落到
+                # Station 进程的启动目录而非项目目录 —— 显式补成绝对路径
+                if func_name in ("file_read", "file_write"):
+                    func_args["path"] = _resolve_tool_path(
+                        cwd, func_args.get("path", ""))
 
                 logger.info("[ReAct] 轮次%d 工具: %s(%s)",
                            iteration + 1, func_name, str(func_args)[:100])
