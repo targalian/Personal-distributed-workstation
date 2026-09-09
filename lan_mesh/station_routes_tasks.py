@@ -25,6 +25,30 @@ from .station_routes_common import _broadcast, check_secretary
 logger = get_logger("station_api")
 
 
+def _reflow_blueprint(controller, task_id: str, task_name: str,
+                      acceptance_review: dict) -> bool:
+    """iter-95: 把交付结论回流到任务所属项目的蓝图路线图。
+
+    PM 依蓝图执行 → 交付结论回写蓝图对应阶段 → Boss 据此提修改, 形成闭环。
+    任务无 project_id (或项目无蓝图) 时静默跳过; 任何异常都只记日志,
+    绝不让蓝图回流失败影响交付物入库。
+    """
+    manager = getattr(controller, "project_manager", None)
+    if not manager:
+        return False
+    try:
+        task = controller.db.get_task(task_id)
+        project_id = getattr(task, "project_id", "") if task else ""
+        if not project_id:
+            return False
+        updated = manager.record_delivery_to_blueprint(
+            project_id, task_name, acceptance_review, task_id=task_id)
+        return updated is not None
+    except Exception as e:
+        logger.error("交付结论回流蓝图失败 (不影响交付): %s", e)
+        return False
+
+
 def build_task_routes(controller) -> APIRouter:
     """Secretary 任务域路由。"""
     router = APIRouter()
@@ -503,6 +527,12 @@ def build_task_routes(controller) -> APIRouter:
                 }
                 db.save_task(task)
 
+        # iter-95: 交付结论回流项目蓝图 (蓝图↔项目闭环, 异常不阻断交付)
+        blueprint_updated = False
+        if task_id:
+            blueprint_updated = _reflow_blueprint(
+                controller, task_id, task_name, acceptance_review)
+
         # WebSocket 广播
         await _broadcast(state, "task_delivered", {
             "pm_id": pm_id,
@@ -511,6 +541,7 @@ def build_task_routes(controller) -> APIRouter:
             "summary": summary,
             "subtask_stats": subtask_stats,
             "acceptance_review": acceptance_review,
+            "blueprint_updated": blueprint_updated,
         })
 
         # Bot 推送

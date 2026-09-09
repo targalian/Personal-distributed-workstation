@@ -143,6 +143,40 @@ task_id/pm_id)、交付链异常 (`_deliver` 后, 交付丢失风险)、记忆�
 **存量数据**: 修复前派发的任务需一次性修正, 见
 `scripts/fix_task_project_binding.py` (须先停 Station, 否则 SQLite 写锁独占)。
 
+## 交付结论回流蓝图: 「蓝图↔项目」一一对应闭环 (iter-95)
+
+### 协作模式
+
+Boss ↔ 秘书讨论产出项目蓝图 (`project.charter / roadmap / decisions`)。
+PM 依蓝图执行 (iter-89 蓝图驱动规划), 交付前按验收标准自检 (iter-90), 交付结论
+`acceptance_review` 再由 `record_delivery_to_blueprint` 回流到蓝图对应路线图阶段,
+Boss 据此提出下一轮修改 —— 蓝图与项目保持一一对应。
+
+| 交付结论 | 蓝图阶段处理 |
+|---|---|
+| `verdict=pass` 且无 `unmet` | 阶段 `status` 推进为 `review` (待 Boss 确认) |
+| 存在 `unmet` | 阶段状态**保持不变**, 记录 `deliveries[].unmet` 缺口清单供 Boss 决策 |
+
+只更新当前阶段的 `deliveries` 字段, 不改 `phase/goal/branch` 等 Boss 手填内容;
+同阶段只保留最近 5 条记录, 防蓝图无限膨胀。
+
+### 实现
+
+- `project.py` — `record_delivery_to_blueprint()` + 模块级 `_current_phase_index()`。
+  后者选取口径 (优先 `in_progress/doing/active`, 其次首个非 `done/completed`) 与
+  `pm_planner._current_roadmap_phase` 完全一致, 确保「PM 读到的阶段」与「回流写入的
+  阶段」是同一个 —— 口径漂移会让结论写错阶段, 已列为变异用例。
+- `station_routes_tasks.py` — `receive_pm_delivery` 交付入库后调用 `_reflow_blueprint`
+  桥梁函数 (由 `task.project_id` 定位项目), 广播新增 `blueprint_updated` 字段。
+  任何异常只记日志, 绝不阻断交付物入库。
+- 无 `project_id` / 项目无 roadmap / 项目不存在 → 静默跳过返回 None。
+
+### 验证
+
+7 专项 + 7 变异全部致红 (含「通过也不推进」「未满足也推进」「不限条数」
+「固定写第一个阶段」「helper 不触发回流」「恢复简洁压制」「恢复整类拒答」);
+488 pytest passed。
+
 ## BUG-034 跨站子任务结果回传与超时计时器修复 (iter-94)
 
 ### 现象
@@ -192,6 +226,7 @@ M1 任务 (task-0cdc51ad40dd, 股票数据更新系统) 以「全局超时 (3600
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-09 | iter-95 | 交付结论回流蓝图: `record_delivery_to_blueprint` 按验收结论推进/保持路线图阶段并记录缺口, 交付端点集成 `_reflow_blueprint`; 回流阶段选取口径与 PM 读取口径统一; 7 专项 + 7 变异致红 |
 | 2026-09-09 | iter-94 | BUG-034 跨站子任务结果回传修复: `_local_execute_task` 忽略 `pm_id` 致跨站结果注入错误 PM (或丢弃), 新增 `_report_subtask_result` 按 `pm_id` 路由回传原始 Secretary; `subtask_start_times` 终态清理 + `_record_subtask_start` 移入 `dispatch_subtask` 使重试也有超时保护; 新增 `subtask_retry` 追踪阶段与进度上报去重; 专项 6 例 + 变异 4 处致红 |
 | 2026-09-09 | iter-93 | BUG-033 对话派发任务无项目归属修复: `submit_task_from_chat` 新增 `project_id` 并落库, `_resolve_project_from_message` 三级解析 (uuid/短码/名称最长匹配), 成本预估改用真实项目; 蓝图驱动与验收自检对对话任务恢复生效; 专项 7 例 + 变异 2 处致红 |
 | 2026-09-08 | iter-90 | 交付前蓝图验收自检: PM 交付前按验收标准逐条审查交付物, 结论随 delivery 落库与广播; 异常静默降级不阻塞交付; 专项 5 passed |

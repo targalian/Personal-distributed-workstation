@@ -9361,3 +9361,159 @@ class TestIter94CrossStationSubtaskCallback:
         # 初始去重游标应为"未上报"
         assert monitor._last_reported_progress == -1.0
         assert monitor._last_reported_completed == -1
+
+
+class TestIter95BlueprintReflow:
+    """iter-95: 交付结论回流蓝图, 形成「蓝图↔项目」一对一闭环。"""
+
+    def _manager(self, tmp_path, roadmap):
+        from lan_mesh.database import Database
+        from lan_mesh.project import ProjectManager
+
+        manager = ProjectManager(Database(str(tmp_path / "p.db")))
+        project = manager.create_project(
+            "reflow-demo", workspace_base=str(tmp_path / "ws"))
+        manager.update_project_blueprint(
+            project.project_id,
+            {"mission": "闭环验证", "acceptance_criteria": ["A", "B"]},
+            roadmap, [])
+        return manager, project.project_id
+
+    def test_pass_verdict_advances_current_phase_to_review(self, tmp_path):
+        """验收通过 → 当前阶段推进为 review, 待 Boss 确认。"""
+        manager, pid = self._manager(tmp_path, [
+            {"phase": "M1", "goal": "数据更新", "status": "active"},
+            {"phase": "M2", "goal": "结构治理", "status": "planned"},
+        ])
+
+        updated = manager.record_delivery_to_blueprint(
+            pid, "M1 数据更新系统",
+            {"verdict": "pass", "unmet": [], "summary": "全部达标"},
+            task_id="task-1")
+
+        assert updated is not None
+        assert updated.roadmap[0]["status"] == "review"
+        assert updated.roadmap[1]["status"] == "planned"  # 后续阶段不受影响
+        entry = updated.roadmap[0]["deliveries"][-1]
+        assert entry["verdict"] == "pass"
+        assert entry["task_id"] == "task-1"
+
+    def test_unmet_criteria_keeps_phase_status_and_records_gap(self, tmp_path):
+        """有未满足项 → 阶段状态不推进, 但记录缺口供 Boss 决策。"""
+        manager, pid = self._manager(tmp_path, [
+            {"phase": "M1", "goal": "数据更新", "status": "active"},
+        ])
+
+        updated = manager.record_delivery_to_blueprint(
+            pid, "M1", {"verdict": "risk", "unmet": ["覆盖率未达标"]},
+            task_id="task-2")
+
+        assert updated.roadmap[0]["status"] == "active"  # 不得擅自推进
+        entry = updated.roadmap[0]["deliveries"][-1]
+        assert entry["unmet"] == ["覆盖率未达标"]
+        assert entry["verdict"] == "risk"
+
+    def test_targets_same_phase_pm_reads(self, tmp_path):
+        """回流写入的阶段必须与 PM 读取的当前阶段一致 (口径统一)。"""
+        from lan_mesh.pm_planner import _current_roadmap_phase
+
+        roadmap = [
+            {"phase": "M1", "goal": "已完成", "status": "done"},
+            {"phase": "M2", "goal": "在做", "status": "in_progress"},
+            {"phase": "M3", "goal": "待做", "status": "planned"},
+        ]
+        manager, pid = self._manager(tmp_path, roadmap)
+
+        pm_sees = _current_roadmap_phase(roadmap)
+        updated = manager.record_delivery_to_blueprint(
+            pid, "T", {"verdict": "pass", "unmet": []})
+
+        # PM 读到 M2, 回流也必须落在 M2
+        assert "M2" in pm_sees
+        assert "deliveries" in updated.roadmap[1]
+        assert "deliveries" not in updated.roadmap[0]
+        assert "deliveries" not in updated.roadmap[2]
+
+    def test_no_roadmap_returns_none_silently(self, tmp_path):
+        """项目无蓝图路线图时静默跳过, 不得抛异常阻断交付。"""
+        from lan_mesh.database import Database
+        from lan_mesh.project import ProjectManager
+
+        manager = ProjectManager(Database(str(tmp_path / "p2.db")))
+        project = manager.create_project("no-bp", workspace_base=str(tmp_path / "ws2"))
+
+        assert manager.record_delivery_to_blueprint(
+            project.project_id, "T", {"verdict": "pass"}) is None
+        assert manager.record_delivery_to_blueprint(
+            "nonexistent-id", "T", {"verdict": "pass"}) is None
+
+    def test_deliveries_capped_at_five(self, tmp_path):
+        """同阶段多次交付只保留最近 5 条, 防蓝图无限膨胀。"""
+        manager, pid = self._manager(tmp_path, [
+            {"phase": "M1", "goal": "g", "status": "active"},
+        ])
+        for i in range(7):
+            manager.record_delivery_to_blueprint(
+                pid, f"T{i}", {"verdict": "risk", "unmet": ["x"]})
+
+        project = manager.get_project(pid)
+        deliveries = project.roadmap[0]["deliveries"]
+        assert len(deliveries) == 5
+        assert deliveries[-1]["task_name"] == "T6"
+
+    def test_reflow_helper_wires_task_to_project(self, tmp_path):
+        """_reflow_blueprint: 由 task.project_id 定位项目并完成回流。"""
+        from types import SimpleNamespace
+        from lan_mesh.database import Database
+        from lan_mesh.project import ProjectManager
+        from lan_mesh.station_routes_tasks import _reflow_blueprint
+
+        db = Database(str(tmp_path / "r.db"))
+        manager = ProjectManager(db)
+        project = manager.create_project(
+            "wire", workspace_base=str(tmp_path / "ws3"))
+        manager.update_project_blueprint(
+            project.project_id, {"mission": "m"},
+            [{"phase": "M1", "goal": "g", "status": "active"}], [])
+
+        task = SimpleNamespace(project_id=project.project_id)
+        controller = SimpleNamespace(
+            project_manager=manager,
+            db=SimpleNamespace(get_task=lambda tid: task))
+
+        ok = _reflow_blueprint(controller, "task-9", "交付A",
+                               {"verdict": "pass", "unmet": []})
+        assert ok is True
+        assert manager.get_project(
+            project.project_id).roadmap[0]["status"] == "review"
+
+        # 任务无项目归属 → 跳过, 返回 False 而非抛错
+        controller.db = SimpleNamespace(
+            get_task=lambda tid: SimpleNamespace(project_id=""))
+        assert _reflow_blueprint(controller, "task-9", "x", {}) is False
+
+        # DB 异常 → 吞掉异常返回 False, 绝不阻断交付
+        def boom(tid):
+            raise RuntimeError("db down")
+        controller.db = SimpleNamespace(get_task=boom)
+        assert _reflow_blueprint(controller, "task-9", "x", {}) is False
+
+    def test_secretary_card_allows_project_discussion(self):
+        """秘书角色卡: 拒答领域专业判断, 但不得拒答业务软件项目管理。"""
+        from lan_mesh.role_cards import SECRETARY_CARD
+
+        constraints = SECRETARY_CARD["sections"]["行为约束 (重要)"]
+        capability = SECRETARY_CARD["sections"]["能力范围"]
+
+        # 旧约束把「编程开发」整类拒答, 与项目交接定位冲突, 必须已移除
+        assert "编程开发等" not in constraints
+        assert "无法处理该类问题" not in constraints
+        # 新定位: 蓝图为产出物, 领域判断才拒答
+        assert "项目蓝图" in constraints
+        assert "项目蓝图" in capability
+        assert "交易策略" in constraints
+        # 简洁不得压制蓝图梳理的完整输出
+        assert "应完整输出" in constraints
+        # 直接检查那条关键约束原文, 防部分替换过关
+        expected = "回复以简洁为默认, 但 Boss 要求梳理蓝图、需求、验收标准或阶段计划时, 应完整输出"
+        assert expected in constraints, "简洁压制约束应被替换为放宽版"
