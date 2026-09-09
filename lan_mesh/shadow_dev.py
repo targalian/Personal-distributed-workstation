@@ -276,6 +276,29 @@ def new_run_id() -> str:
     return f"{stamp}-{uuid.uuid4().hex[:6]}"
 
 
+# iter-98 F6: 影子运行状态变更 WS 事件类型 (前端 shadowdev 面板实时联动)
+SHADOW_RUN_EVENT = "shadow_run_update"
+
+
+def _emit_run_event(record: dict, status: str, queued: int = 0) -> None:
+    """广播影子运行状态变更; 事件通道故障绝不阻断影子开发执行流。"""
+    try:
+        from .event_bus import publish_event
+        data = {
+            "run_id": record.get("run_id", ""),
+            "status": status,
+            "task": (record.get("task") or "")[:120],
+            "backend": record.get("backend") or "auto",
+            "queued": queued,
+        }
+        for key in ("verdict", "error"):
+            if record.get(key):
+                data[key] = str(record[key])[:300]
+        publish_event(SHADOW_RUN_EVENT, data)
+    except Exception as exc:
+        log(f"状态事件广播失败 {record.get('run_id', '?')}: {exc}")
+
+
 def execute_run(run_id: str, task: str, backend: str, timeout: int,
                 keep: bool, simulate: bool = False) -> dict:
     """执行一次完整影子开发流程并返回报告。"""
@@ -381,12 +404,16 @@ class ShadowDevManager:
 
     def stop_guardian(self) -> dict:
         """停止守护线程; 已进入 CLI 的任务无法强制中断。"""
+        cancelled: list[dict] = []
         with self._condition:
             self._stopping = True
             for run in self._queue:
                 self._runs[run["run_id"]]["status"] = "cancelled"
+                cancelled.append(dict(self._runs[run["run_id"]]))
             self._queue.clear()
             self._condition.notify_all()
+        for run in cancelled:
+            _emit_run_event(run, "cancelled")
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=2)
         return {"running": self._thread is not None and self._thread.is_alive(),
@@ -413,7 +440,9 @@ class ShadowDevManager:
                 raise RuntimeError("影子开发守护已停止")
             self._runs[run_id] = record
             self._queue.append(record)
+            queued = len(self._queue)
             self._condition.notify_all()
+        _emit_run_event(record, "queued", queued)
         self.start_guardian()
         return record
 
@@ -453,6 +482,8 @@ class ShadowDevManager:
                 run_id = request["run_id"]
                 self._runs[run_id]["status"] = "running"
                 self._runs[run_id]["started_at"] = datetime.now().isoformat()
+                snapshot, queued = dict(self._runs[run_id]), len(self._queue)
+            _emit_run_event(snapshot, "running", queued)
             try:
                 report = execute_run(
                     run_id, request["task"], request["backend"],
@@ -460,12 +491,16 @@ class ShadowDevManager:
                 with self._condition:
                     self._runs[run_id].update(report)
                     self._runs[run_id]["status"] = report.get("verdict", "ERROR")
+                    snapshot, queued = dict(self._runs[run_id]), len(self._queue)
+                _emit_run_event(snapshot, snapshot["status"], queued)
             except Exception as exc:
                 log(f"守护执行异常 {run_id}: {exc}")
                 with self._condition:
                     self._runs[run_id]["status"] = "ERROR"
                     self._runs[run_id]["error"] = str(exc)
                     self._runs[run_id]["finished_at"] = datetime.now().isoformat()
+                    snapshot, queued = dict(self._runs[run_id]), len(self._queue)
+                _emit_run_event(snapshot, "ERROR", queued)
 
     def _read_report(self, run_id: str) -> dict | None:
         """读取历史 report.json。"""

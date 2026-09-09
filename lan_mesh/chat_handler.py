@@ -101,28 +101,61 @@ _ACTION_KEYWORDS = {
     "建立项目": "create_project",
 }
 
-# BUG-035: 询问式表达白名单 — 命中则不触发执行动作。
-# 关键词表用朴素子串匹配, 「验收标准有哪些」这类**询问**会命中「验收」
-# 这个**执行**关键词, 导致一问变一做 (实测把测试任务给验收了)。
+# BUG-035 / BUG-036: 非指令语气护栏 — 命中则不触发**变更类**动作。
+#
+# 关键词表是朴素子串匹配, 天然会把「谈论某动作」误判成「执行某动作」:
+#   - 疑问 (BUG-035): 「验收标准有哪些」命中「验收」→ 真实执行了验收
+#   - 否定 (BUG-036): 「先不要创建项目」命中「创建项目」→ 明确说不要却做了
+#   - 陈述 (BUG-036): 「上次取消任务导致数据不一致」→ 复述历史被当成新指令
+# 实测 21 句非指令样本中 15 句误触发, 否定句尤其危险 (语义完全相反)。
 _QUESTION_MARKERS = (
     "是什么", "有哪些", "是啥", "哪些", "什么时候", "为什么", "怎么",
     "如何", "多少", "是否", "能否", "可否", "吗", "呢", "?", "？",
-    "介绍", "说明一下", "讲讲", "解释", "查看", "看看", "了解",
-    "标准", "定义", "口径",
+    "介绍", "说明一下", "讲讲", "解释", "看看", "了解",
+    "标准", "定义", "口径", "区别", "有什么不同",
+    # 反复问句与征询式 (「会不会丢数据」「是不是更稳妥」)
+    "会不会", "是不是", "要不要", "能不能", "有没有", "行不行",
+    # 疑问代词
+    "谁", "哪个", "哪里", "何时",
 )
 
-# 明确的执行祈使信号 — 即使句中带疑问词也应按指令处理
+# 否定 / 推迟表达: 语义与执行相反, 必须拦截
+_NEGATION_MARKERS = (
+    "不要", "不用", "不需要", "不必", "没必要", "不想", "别急", "别再",
+    "先不", "暂时不", "还没", "尚未", "不是要", "不做", "无需",
+    "别", "勿",
+)
+
+# 议论 / 提议 / 评价: 在讨论「该不该做」, 尚未下达执行指令
+_DELIBERATION_MARKERS = (
+    "我们要做个决定", "做个决定", "应该", "是不是该", "建议", "考虑",
+    "打算", "计划中", "讨论", "商量", "评估一下", "更稳妥", "更好",
+)
+
+# 复述 / 陈述过去事件: 讨论已发生的事, 不是新指令
+_RETROSPECT_MARKERS = (
+    "刚才", "上次", "上轮", "之前", "已经", "曾经", "那次", "这次不",
+    "导致", "结果是",
+)
+
+# 明确的执行祈使信号 — 优先级最高, 即使句中带疑问词也按指令处理
 # (如「帮我验收一下任务A好吗」)
 _IMPERATIVE_MARKERS = (
     "帮我", "请", "麻烦", "立即", "马上", "现在就", "去做", "执行",
 )
 
+# 只读查询动作: 无副作用, 不受非指令语气护栏约束。
+# 「查看任务列表」「进度怎么样」这类即便是疑问句也应照常响应 ——
+# 护栏的目的是防止**误改状态**, 不是让查询失灵。
+_READONLY_ACTIONS = frozenset({
+    "query_status", "query_progress", "query_hosts", "query_tasks",
+})
+
 
 def _looks_like_question(message: str) -> bool:
-    """判断是否为询问句 (询问不应触发执行动作)。
+    """判断是否为询问句 (询问不应触发变更类动作)。
 
-    先看祈使信号: 命中则视为指令, 不算询问 (「帮我验收一下」仍应执行);
-    否则命中任一疑问标记即视为询问。
+    祈使信号优先: 命中则视为指令 (「帮我验收一下」仍应执行)。
     """
     text = (message or "").strip()
     if not text:
@@ -130,6 +163,24 @@ def _looks_like_question(message: str) -> bool:
     if any(m in text for m in _IMPERATIVE_MARKERS):
         return False
     return any(m in text for m in _QUESTION_MARKERS)
+
+
+def _looks_like_non_directive(message: str) -> bool:
+    """BUG-036: 判断是否为「谈论动作」而非「下达指令」。
+
+    覆盖三类: 疑问 / 否定或推迟 / 复述过去。否定与复述**不受祈使信号豁免**——
+    「请先不要创建项目」既有祈使也有否定, 语义是「不要做」, 必须拦住。
+    """
+    text = (message or "").strip()
+    if not text:
+        return False
+    if any(m in text for m in _NEGATION_MARKERS):
+        return True
+    if any(m in text for m in _RETROSPECT_MARKERS):
+        return True
+    if any(m in text for m in _DELIBERATION_MARKERS):
+        return True
+    return _looks_like_question(text)
 
 
 _ACTION_DESCRIPTIONS = {
@@ -1668,15 +1719,21 @@ class ChatHandler:
         Returns:
             操作类型字符串, 无意图则返回空字符串
         """
-        # BUG-035: 询问句不得触发执行动作。关键词表是朴素子串匹配,
-        # 「验收标准是什么」会命中「验收」→ 误执行 accept_delivery。
-        if _looks_like_question(message):
-            return ""
         msg_lower = message.lower()
+        matched = ""
         for keyword, action in _ACTION_KEYWORDS.items():
             if keyword in message or keyword in msg_lower:
-                return action
-        return ""
+                matched = action
+                break
+        if not matched:
+            return ""
+        # BUG-035/036: 只读查询无副作用, 直接放行; 变更类动作需过语气护栏,
+        # 避免「谈论/否定/复述某动作」被当成「执行该动作」。
+        if matched in _READONLY_ACTIONS:
+            return matched
+        if _looks_like_non_directive(message):
+            return ""
+        return matched
 
     def _detect_action_with_context(self, message: str,
                                     history: Optional[list] = None) -> str:
@@ -1758,6 +1815,11 @@ class ChatHandler:
         """
         text = (message or "").strip()
         if not text or len(text) > _CLASSIFIER_MAX_MESSAGE_LEN:
+            return False
+        # BUG-036: 非指令语气直接拒闸。否则关键词路径被护栏拦下后, 消息会
+        # 继续走 LLM 分类兜底, 由模型把「先不要创建项目」重新判成
+        # create_project —— 绕过整条防线。在闸门处拦截同时省掉一次 LLM 调用。
+        if _looks_like_non_directive(text):
             return False
         lowered = text.lower()
         for signal in _CLASSIFIER_VERB_SIGNALS + _CLASSIFIER_NOUN_SIGNALS:

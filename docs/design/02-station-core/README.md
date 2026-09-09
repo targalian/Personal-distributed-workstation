@@ -61,6 +61,15 @@
 查询队列与报告, `GET /api/shadow-dev/status` 查看守护状态。守护串行执行,
 停止 Station 时未开始的排队任务会被取消, 不强制中断已进入 CLI 的任务。
 
+**状态事件广播 (iter-98, F6)**: 守护线程在每次状态迁移处经 `event_bus`
+发布 `shadow_run_update`, 事件体 `{run_id, status, task, backend, queued}`
+(终态附 `verdict`/`error`), 覆盖 `queued` → `running` → 终态
+(`READY_FOR_REVIEW`/`GATES_FAILED`/`AGENT_FAILED`/`ERROR`) 与
+`stop_guardian` 取消的 `cancelled`。此前影子面板只能靠切 Tab 或手动刷新
+获知进展 (Quest UI 审计 F6)。广播全程 `try/except` 兜底并只记日志 —
+事件通道故障绝不能阻断影子开发执行流, 该不变式已固化为变异用例。
+广播在释放 `self._condition` 之后进行 (锁内只做状态快照), 避免持锁回调。
+
 ## workstation_optimizer.py - 常驻自我优化 (iter-72)
 
 **职责**: 聚合 Boss 主动要求、开发任务瓶颈与 Agent 自主建议, 经 Boss

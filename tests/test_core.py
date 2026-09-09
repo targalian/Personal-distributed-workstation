@@ -9566,6 +9566,17 @@ class TestIter96QuestionNotAction:
                              "query_hosts", "query_tasks"), \
                 f"{msg} -> {action}"
 
+    def test_readonly_query_not_blocked(self):
+        """iter-97 修正: 「查看」等只读词不得被当作疑问标记而拦掉查询。
+
+        BUG-035 初版把「查看」列入疑问标记, 导致「查看任务列表」这类
+        合法只读指令被一并拦下 —— 护栏应防误改状态, 不应让查询失灵。
+        """
+        h = self._handler()
+        assert h._detect_action("查看任务列表") == "query_tasks"
+        assert h._detect_action("任务进度怎么样了") == "query_progress"
+        assert h._detect_action("工作站状态") == "query_status"
+
     def test_question_helper_semantics(self):
         """_looks_like_question: 祈使优先于疑问标记。"""
         from lan_mesh.chat_handler import _looks_like_question
@@ -9593,8 +9604,131 @@ class TestIter96QuestionNotAction:
             ("验收吗", "吗"),
             ("验收?", "?"),
             ("验收如何进行", "如何"),
-            ("查看验收", "查看"),
+            ("验收的区别", "区别"),
+            ("验收会不会出错", "会不会"),
+            ("验收是不是必须的", "是不是"),
+            ("验收由谁负责", "谁"),
         ]
         for msg, marker in samples:
             assert h._detect_action(msg) == "", \
                 f"标记「{marker}」失效, 「{msg}」误触发执行"
+
+
+class TestIter97NonDirectiveGuard:
+    """BUG-036: 否定/复述/议论语气不得触发变更类动作 (BUG-035 的完整化)。
+
+    背景: BUG-035 只堵住疑问句。系统性扫描 69 个关键词后, 用 21 句真实
+    非指令样本实测, 仍有 15 句误触发 —— 其中否定句最危险: 「先不要创建
+    项目」「不需要暂停任务」语义与执行完全相反, 却照样执行。
+    """
+
+    def _det(self):
+        from types import SimpleNamespace
+        from lan_mesh.chat_handler import ChatHandler
+        return lambda m: ChatHandler._detect_action(SimpleNamespace(), m)
+
+    def test_negation_never_executes(self):
+        """否定/推迟表达绝不能触发动作 — 语义完全相反, 最危险的一类。"""
+        det = self._det()
+        for msg in (
+            "先不要创建项目",
+            "不需要暂停任务",
+            "没必要退回",
+            "我不想现在提交任务",
+            "别急着下发任务",
+            "这次不做一个新模块了",
+            "暂时不用取消任务",
+            "无需激活秘书",
+        ):
+            assert det(msg) == "", f"否定句误触发: {msg}"
+
+    def test_negation_not_bypassed_by_imperative(self):
+        """否定不受祈使豁免: 「请先不要创建项目」语义是「不要做」。"""
+        det = self._det()
+        assert det("请先不要创建项目") == ""
+        assert det("麻烦别再提交任务了") == ""
+
+    def test_retrospect_never_executes(self):
+        """复述过去事件不是新指令。"""
+        det = self._det()
+        for msg in (
+            "刚才那次验收是误触发的",
+            "上次取消任务导致了数据不一致",
+            "之前已经创建项目了",
+            "上轮退回的原因是覆盖率不足",
+        ):
+            assert det(msg) == "", f"复述句误触发: {msg}"
+
+    def test_deliberation_never_executes(self):
+        """议论「该不该做」阶段不应执行。"""
+        det = self._det()
+        for msg in (
+            "我们要做个决定: M2 先做结构治理",
+            "加一步审计是不是更稳妥",
+            "建议提交任务前先过一遍验收标准",
+            "在考虑要不要创建项目",
+        ):
+            assert det(msg) == "", f"议论句误触发: {msg}"
+
+    def test_readonly_actions_bypass_guard(self):
+        """只读查询无副作用, 不受语气护栏约束 (否则查询会失灵)。"""
+        det = self._det()
+        assert det("查看任务列表") == "query_tasks"
+        assert det("任务进度怎么样了") == "query_progress"
+        assert det("工作站状态如何") == "query_status"
+        # 即便含否定词, 只读查询仍应响应
+        assert det("不用管别的, 就看进度") == "query_progress"
+
+    def test_real_commands_unaffected(self):
+        """18 条真实指令全部保持 — 护栏不得削弱既有功能。"""
+        det = self._det()
+        expected = {
+            "提交任务: 补齐个股日线增量更新": "submit_task",
+            "创建项目 stock-player": "create_project",
+            "帮我验收": "accept_delivery",
+            "验收": "accept_delivery",
+            "取消任务 task-abc": "cancel_task",
+            "暂停任务": "pause_task",
+            "退回重做": "reject_delivery",
+            "做一个数据校验脚本": "submit_task",
+            "做个数据导出工具": "submit_task",
+            "写个校验脚本": "submit_task",
+            "加一步: 发布验收": "edit_task_graph",
+            "激活秘书": "activate_secretary",
+            "回复PM: 用方案A": "respond_to_pm",
+            "帮我提交任务: 修复覆盖率": "submit_task",
+            "请创建项目 alpha": "create_project",
+        }
+        for msg, want in expected.items():
+            assert det(msg) == want, f"{msg} -> {det(msg)}, 期望 {want}"
+
+    def test_llm_classifier_gate_also_guarded(self):
+        """护栏必须覆盖 LLM 分类兜底路径, 否则整条防线被绕过。
+
+        关键词路径被护栏拦下后, 消息会继续走 _classify_action_llm。若闸门
+        _looks_like_command 不设防, 模型可能把「先不要创建项目」重新判成
+        create_project —— 护栏形同虚设。在闸门处拦截同时省掉一次 LLM 调用。
+        """
+        from lan_mesh.chat_handler import ChatHandler
+
+        for msg in ("先不要创建项目", "不需要暂停任务",
+                    "刚才那次验收是误触发的", "别急着下发任务"):
+            assert ChatHandler._looks_like_command(msg) is False, \
+                f"非指令语气进入了 LLM 分类闸门: {msg}"
+
+        # 关键词未命中的口语化真指令仍须进入分类 (iter-79 的价值所在)
+        for msg in ("帮我建个项目", "弄一个数据校验的活", "帮我把这个任务停掉"):
+            assert ChatHandler._looks_like_command(msg) is True, \
+                f"口语化指令被误拒: {msg}"
+
+    def test_non_directive_helper_categories(self):
+        """_looks_like_non_directive 三类语气各自独立生效。"""
+        from lan_mesh.chat_handler import _looks_like_non_directive
+
+        assert _looks_like_non_directive("先不要创建项目") is True   # 否定
+        assert _looks_like_non_directive("刚才验收过了") is True     # 复述
+        assert _looks_like_non_directive("建议先评估") is True       # 议论
+        assert _looks_like_non_directive("验收标准是什么") is True   # 疑问
+        assert _looks_like_non_directive("帮我验收") is False        # 真指令
+        assert _looks_like_non_directive("提交任务: 修bug") is False
+        assert _looks_like_non_directive("") is False

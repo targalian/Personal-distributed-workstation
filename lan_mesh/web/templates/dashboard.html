@@ -1175,6 +1175,19 @@ function onStationEvent(evt){
     showToast(`❗ 错误突发 [${d.module||'?'}] ${d.count||0} 条/窗口, 请检查日志`,'err');
     if(typeof loadErrors==='function'){loadErrors();}
   }
+  if(t==='shadow_run_update'){
+    // iter-98 F6: 影子运行状态实时联动 — 仅停留在影子 Tab 时才拉列表 (避免无谓请求);
+    // 终态额外 toast, 排队/执行中不打扰 (一次运行会连发 queued→running→终态)
+    const d=evt.data||{};
+    const st=d.status||'';
+    const ps=document.getElementById('panel-shadowdev');
+    if(ps&&ps.classList.contains('active')&&typeof refreshShadowDev==='function')refreshShadowDev();
+    if(st&&st!=='queued'&&st!=='running'){
+      const rid=(d.run_id||'').slice(0,15);
+      const ok=st==='READY_FOR_REVIEW';
+      showToast(`🕶️ 影子运行 ${rid} ${ok?'门禁全过, 待审':'结束: '+st}`,ok?'ok':'err');
+    }
+  }
   if(t==='cost_budget_warning'){
     // iter-52: 成本感知调度预算适配告警 — toast + 任务面板刷新
     const cd=evt.data||{};

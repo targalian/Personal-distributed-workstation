@@ -225,3 +225,150 @@ def test_shadow_dev_api_contract() -> None:
     assert detail.status_code == 200
     assert missing.status_code == 404
     assert status.json()['queued'] == 1
+def _capture_shadow_events(monkeypatch) -> list[dict]:
+    """Intercept event_bus.publish_event and collect shadow run events."""
+    import lan_mesh.event_bus as event_bus
+
+    captured: list[dict] = []
+
+    def fake_publish(event_type: str, data: dict) -> None:
+        captured.append({'type': event_type, 'data': data})
+
+    monkeypatch.setattr(event_bus, 'publish_event', fake_publish)
+    return captured
+
+
+def test_shadow_run_events_cover_full_lifecycle(monkeypatch, tmp_path: Path) -> None:
+    """iter-98 F6: queued -> running -> terminal are broadcast on the event bus."""
+    import lan_mesh.shadow_dev as shadow_dev
+
+    events = _capture_shadow_events(monkeypatch)
+
+    def fake_execute(run_id: str, task: str, backend: str, timeout: int,
+                     keep: bool, simulate: bool) -> dict:
+        return {'run_id': run_id, 'task': task, 'verdict': 'READY_FOR_REVIEW'}
+
+    monkeypatch.setattr(shadow_dev, 'execute_run', fake_execute)
+    monkeypatch.setattr(shadow_dev, 'SHADOW_HOME', tmp_path)
+    manager = shadow_dev.ShadowDevManager()
+    record = manager.submit('demo task', simulate=True)
+
+    for _ in range(200):
+        if manager.get_run(record['run_id'])['status'] != 'queued':
+            break
+        time.sleep(0.01)
+    for _ in range(200):
+        if len([e for e in events if e['type'] == 'shadow_run_update']) >= 3:
+            break
+        time.sleep(0.01)
+    manager.stop_guardian()
+
+    shadow_events = [e for e in events if e['type'] == 'shadow_run_update']
+    statuses = [e['data']['status'] for e in shadow_events]
+    assert statuses[:3] == ['queued', 'running', 'READY_FOR_REVIEW']
+    assert all(e['data']['run_id'] == record['run_id'] for e in shadow_events)
+    assert shadow_events[0]['data']['task'] == 'demo task'
+    assert shadow_events[0]['data']['queued'] == 1
+
+
+def test_shadow_run_event_reports_execution_failure(monkeypatch,
+                                                    tmp_path: Path) -> None:
+    """iter-98 F6: guardian exceptions still reach the UI as ERROR events."""
+    import lan_mesh.shadow_dev as shadow_dev
+
+    events = _capture_shadow_events(monkeypatch)
+
+    def boom(run_id: str, task: str, backend: str, timeout: int,
+             keep: bool, simulate: bool) -> dict:
+        raise RuntimeError('shadow blew up')
+
+    monkeypatch.setattr(shadow_dev, 'execute_run', boom)
+    monkeypatch.setattr(shadow_dev, 'SHADOW_HOME', tmp_path)
+    manager = shadow_dev.ShadowDevManager()
+    record = manager.submit('failing task', simulate=True)
+
+    for _ in range(200):
+        if manager.get_run(record['run_id'])['status'] == 'ERROR':
+            break
+        time.sleep(0.01)
+    manager.stop_guardian()
+
+    errors = [e for e in events
+              if e['type'] == 'shadow_run_update' and e['data']['status'] == 'ERROR']
+    assert errors, 'ERROR terminal state must be broadcast'
+    assert 'shadow blew up' in errors[-1]['data'].get('error', '')
+
+
+def test_shadow_stop_guardian_broadcasts_cancelled(monkeypatch,
+                                                   tmp_path: Path) -> None:
+    """iter-98 F6: queued runs dropped by stop_guardian are broadcast too."""
+    import threading as _threading
+    import lan_mesh.shadow_dev as shadow_dev
+
+    events = _capture_shadow_events(monkeypatch)
+    release = _threading.Event()
+
+    def blocking_execute(run_id: str, task: str, backend: str, timeout: int,
+                         keep: bool, simulate: bool) -> dict:
+        release.wait(5)
+        return {'run_id': run_id, 'verdict': 'READY_FOR_REVIEW'}
+
+    monkeypatch.setattr(shadow_dev, 'execute_run', blocking_execute)
+    monkeypatch.setattr(shadow_dev, 'SHADOW_HOME', tmp_path)
+    manager = shadow_dev.ShadowDevManager()
+    first = manager.submit('long running', simulate=True)
+    for _ in range(200):
+        if manager.get_run(first['run_id'])['status'] == 'running':
+            break
+        time.sleep(0.01)
+    second = manager.submit('still queued', simulate=True)
+
+    manager.stop_guardian()
+    release.set()
+
+    cancelled = [e['data']['run_id'] for e in events
+                 if e['type'] == 'shadow_run_update'
+                 and e['data']['status'] == 'cancelled']
+    assert second['run_id'] in cancelled
+    assert first['run_id'] not in cancelled
+
+
+def test_shadow_event_failure_does_not_break_submit(monkeypatch,
+                                                    tmp_path: Path) -> None:
+    """iter-98 F6: a broken event channel must never block shadow execution."""
+    import lan_mesh.event_bus as event_bus
+    import lan_mesh.shadow_dev as shadow_dev
+
+    def exploding_publish(event_type: str, data: dict) -> None:
+        raise RuntimeError('bus down')
+
+    monkeypatch.setattr(event_bus, 'publish_event', exploding_publish)
+    monkeypatch.setattr(shadow_dev, 'execute_run',
+                        lambda *a, **k: {'verdict': 'READY_FOR_REVIEW'})
+    monkeypatch.setattr(shadow_dev, 'SHADOW_HOME', tmp_path)
+    manager = shadow_dev.ShadowDevManager()
+
+    record = manager.submit('resilient task', simulate=True)
+    for _ in range(200):
+        if manager.get_run(record['run_id'])['status'] != 'queued':
+            break
+        time.sleep(0.01)
+    manager.stop_guardian()
+
+    assert manager.get_run(record['run_id'])['status'] == 'READY_FOR_REVIEW'
+
+
+def test_dashboard_reacts_to_shadow_run_event() -> None:
+    """iter-98 F6: dashboard wires shadow_run_update to the shadowdev panel."""
+    from lan_mesh.station_controller import TEMPLATES_DIR
+
+    html = (TEMPLATES_DIR / 'dashboard.html').read_text(encoding='utf-8')
+    handler = html.split("if(t==='shadow_run_update'){", 1)[1].split(
+        "if(t==='cost_budget_warning')", 1)[0]
+
+    assert "refreshShadowDev()" in handler
+    # 仅在影子 Tab 停留时刷新 (iter-91 F3 同类恒真守卫踩过坑)
+    assert "panel-shadowdev" in handler
+    assert "classList.contains('active')" in handler
+    # 排队/执行中不弹 toast, 否则一次运行会连弹三次
+    assert "st!=='queued'&&st!=='running'" in handler
