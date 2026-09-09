@@ -9732,3 +9732,201 @@ class TestIter97NonDirectiveGuard:
         assert _looks_like_non_directive("帮我验收") is False        # 真指令
         assert _looks_like_non_directive("提交任务: 修bug") is False
         assert _looks_like_non_directive("") is False
+class TestIter99ProjectPathResolution:
+    """iter-99 BUG-037: 子任务作业路径解析 (M1 失败复盘发现)。
+
+    实测证据: 股票 M1 任务 task-0cdc51ad40dd 的三个子任务描述里项目路径
+    是字面量 "." — 「分析项目 . 的现有结构」。子 Agent 于是在 Station 自身
+    cwd 里找 stock_player 代码, 三次「需求分析」全报 completed 却毫无价值,
+    烧掉 448 万 input tokens。两条独立成因, 本类逐条钉死。
+    """
+
+    def test_path_regex_accepts_forward_slash(self):
+        """根因1: 原正则只认反斜杠, Boss 惯用正斜杠 → 恒 miss。
+
+        蓝图原文「本地 E:/ingobj/stock_player」在修复前两条正则全部返回
+        None, project_path 因此从未进入 input_data。
+        """
+        from lan_mesh.chat_handler import _extract_local_path
+
+        assert _extract_local_path(
+            "本地 E:/ingobj/stock_player, 仓库 gitee zhu-longzhuo/x"
+        ) == "E:/ingobj/stock_player"
+        assert _extract_local_path(
+            "本地路径: E:\\ingobj\\stock_player") == "E:\\ingobj\\stock_player"
+        assert _extract_local_path("项目路径为 E:/a/b") == "E:/a/b"
+        assert _extract_local_path('仓库路径 "E:/a/b"') == "E:/a/b"
+        assert _extract_local_path("代码路径是 D:\\work\\proj\\") == "D:\\work\\proj"
+
+    def test_labeled_path_wins_over_unrelated_bare_path(self):
+        """带标签的路径必须优先于文中先出现的无关裸路径。
+
+        变异 M12 暴露: 若只留裸路径正则, 「参考 C:/tmp/sample, 项目路径为
+        E:/ingobj/stock_player」会取到 C:/tmp/sample — 子 Agent 又跑错目录。
+        """
+        from lan_mesh.chat_handler import _extract_local_path
+
+        assert _extract_local_path(
+            "参考 C:/tmp/sample 的写法, 项目路径为 E:/ingobj/stock_player"
+        ) == "E:/ingobj/stock_player"
+        assert _extract_local_path(
+            "先看 D:/docs/spec.md, 本地路径: E:/ingobj/stock_player"
+        ) == "E:/ingobj/stock_player"
+
+    def test_path_regex_no_false_positive(self):
+        """无路径的普通指令不得凭空造出 project_path。"""
+        from lan_mesh.chat_handler import _extract_local_path
+
+        assert _extract_local_path("提交一个任务: 检查安全漏洞") == ""
+        assert _extract_local_path("") == ""
+        assert _extract_local_path("讨论一下 M1 的验收标准") == ""
+
+    def test_blueprint_repo_path_supports_key_aliases(self):
+        """蓝图 charter 的仓库路径键名兼容三种写法, 取首个非空。"""
+        from lan_mesh.pm_planner import _blueprint_repo_path
+
+        assert _blueprint_repo_path({"repo_path": "E:/x"}) == "E:/x"
+        assert _blueprint_repo_path({"local_path": "E:/y"}) == "E:/y"
+        assert _blueprint_repo_path({"project_path": "E:/z"}) == "E:/z"
+        assert _blueprint_repo_path({"repo_path": "  E:/trim  "}) == "E:/trim"
+        # 优先级: repo_path 先于其余别名
+        assert _blueprint_repo_path(
+            {"local_path": "E:/second", "repo_path": "E:/first"}) == "E:/first"
+        # 非法输入一律空串, 绝不抛出
+        assert _blueprint_repo_path({}) == ""
+        assert _blueprint_repo_path(None) == ""
+        assert _blueprint_repo_path({"repo_path": ""}) == ""
+        assert _blueprint_repo_path({"repo_path": 123}) == ""
+
+    def _planner(self, blueprint: dict):
+        """构造只桩掉蓝图拉取的 planner (不触网)。"""
+        from lan_mesh.pm_planner import PMPlanner
+        from lan_mesh.pm_state import PMState
+
+        planner = PMPlanner("pm-test99", None, PMState(), None)
+        planner._fetch_project_blueprint = lambda pid: blueprint
+        return planner
+
+    def test_resolve_path_prefers_explicit_input_data(self):
+        """input_data 显式给了路径时以它为准, 不去查蓝图。"""
+        planner = self._planner({"charter": {"repo_path": "E:/from-blueprint"}})
+
+        got = planner._resolve_project_path(
+            {"project_id": "p1", "input_data": {"project_path": "E:/explicit"}})
+
+        assert got == "E:/explicit"
+
+    def test_resolve_path_falls_back_to_blueprint(self):
+        """根因2: 对话派发不产出 project_path → 必须由蓝图 repo_path 兜底。
+
+        这是修复的核心价值: 蓝图是 Boss 维护的权威值, 不依赖每次消息措辞。
+        """
+        planner = self._planner({"charter": {"repo_path": "E:/ingobj/stock_player"}})
+
+        got = planner._resolve_project_path(
+            {"project_id": "821230b9", "input_data": {}})
+
+        assert got == "E:/ingobj/stock_player"
+
+    def test_resolve_path_last_resort_is_dot(self):
+        """无 input_data 无蓝图时保持旧行为返回 "."(不炸), 但会告警。"""
+        planner = self._planner({})
+
+        assert planner._resolve_project_path({"input_data": {}}) == "."
+        assert planner._resolve_project_path({}) == "."
+
+    def test_resolve_path_survives_blueprint_failure(self):
+        """蓝图查询抛异常不得冒泡 — 规划主流程不能被可选增强拖死。"""
+        planner = self._planner({})
+
+        def boom(pid):
+            raise RuntimeError("secretary down")
+
+        planner._fetch_project_blueprint = boom
+
+        assert planner._resolve_project_path({"project_id": "p1"}) == "."
+
+    def test_template_plan_uses_resolved_path(self):
+        """端到端: 模板命中时子任务描述必须带真实路径, 不再是 "."。"""
+        planner = self._planner({"charter": {"repo_path": "E:/ingobj/stock_player"}})
+        planner._skill_content = "stub"
+
+        plan = planner.analyze_with_skill({
+            "name": "股票数据更新系统M1",
+            "description": ("为 stock_player 实现新功能: 增量补齐与启动自检, "
+                            "需要代码实现与单元测试"),
+            "project_id": "821230b9",
+            "input_data": {},
+        })
+
+        descs = " ".join(sub.get("description", "")
+                         for sub in plan.get("decomposition", []))
+        assert "E:/ingobj/stock_player" in descs, descs[:300]
+        assert "分析项目 . 的" not in descs
+
+    def test_blueprint_hint_exposes_repo_path(self):
+        """蓝图提示里带上仓库路径, 让 LLM 规划也知道该在哪作业。"""
+        planner = self._planner({
+            "charter": {"mission": "股票自动交易系统",
+                        "repo_path": "E:/ingobj/stock_player"}})
+
+        hint = planner._build_blueprint_hint({"project_id": "821230b9"})
+
+        assert "E:/ingobj/stock_player" in hint
+        assert "本地仓库路径" in hint
+
+    def test_dialogue_dispatch_passes_project_path(self, monkeypatch):
+        """根因2 的调用侧: _action_submit_task 必须把解析到的路径传下去。
+
+        修复前该函数只传 project_id, project_path 全程丢失。
+        """
+        from lan_mesh.chat_handler import ChatHandler
+
+        captured = {}
+
+        class FakeController:
+            def submit_task_from_chat(self, **kwargs):
+                captured.update(kwargs)
+                return {"status": "running", "task_id": "task-x",
+                        "pm_agent_id": "pm-x"}
+
+        handler = ChatHandler.__new__(ChatHandler)
+        handler.controller = FakeController()
+        monkeypatch.setattr(
+            ChatHandler, "_parse_task_from_message",
+            lambda self, m: {"name": "股票数据更新", "description": m})
+        monkeypatch.setattr(
+            ChatHandler, "_resolve_project_from_message", lambda self, m: "821230b9")
+        monkeypatch.setattr(
+            ChatHandler, "_get_task_memory_hint", lambda self, n, d: "")
+
+        handler._action_submit_task(
+            "提交任务: 在 E:/ingobj/stock_player 实现数据增量补齐")
+
+        assert captured["input_data"]["project_path"] == "E:/ingobj/stock_player"
+        assert captured["project_id"] == "821230b9"
+
+    def test_dialogue_dispatch_omits_path_when_absent(self, monkeypatch):
+        """消息无路径时不得传入伪造值, 保持 input_data 为 None 走旧行为。"""
+        from lan_mesh.chat_handler import ChatHandler
+
+        captured = {}
+
+        class FakeController:
+            def submit_task_from_chat(self, **kwargs):
+                captured.update(kwargs)
+                return {"status": "running", "task_id": "t", "pm_agent_id": "p"}
+
+        handler = ChatHandler.__new__(ChatHandler)
+        handler.controller = FakeController()
+        monkeypatch.setattr(
+            ChatHandler, "_parse_task_from_message",
+            lambda self, m: {"name": "任务", "description": m})
+        monkeypatch.setattr(
+            ChatHandler, "_resolve_project_from_message", lambda self, m: "")
+        monkeypatch.setattr(
+            ChatHandler, "_get_task_memory_hint", lambda self, n, d: "")
+
+        handler._action_submit_task("提交任务: 检查代码安全漏洞并给出报告")
+
+        assert captured["input_data"] is None

@@ -222,6 +222,57 @@ M1 任务 (task-0cdc51ad40dd, 股票数据更新系统) 以「全局超时 (3600
 - `sync_docs.py` / `check_unbound_names.py` / `git diff --check` 全部 PASS
 - 函数长度: 0 个超 80 行
 
+## BUG-037 子任务作业路径恒为 "." (iter-99)
+
+### 现象
+
+股票 M1 任务 `task-0cdc51ad40dd` 的三个子任务描述里项目路径是**字面量 `.`**:
+「分析项目 **.** 的现有结构」「在 **.** 中实现功能代码」。子 Agent 于是在
+Station 自身 cwd 里找 `stock_player` 代码 —— 三次「需求分析」全部报
+`completed` 却毫无价值, 烧掉 448 万 input tokens 换回分析错目录的产物。
+
+这类缺陷**不会报错**: 模板正常渲染、子任务正常完成、PM 正常聚合, 只有产物
+内容是错的, 因此比崩溃类 bug 更隐蔽。
+
+### 根因 1: 对话派发路径从不解析 `project_path`
+
+`pm_planner.analyze_with_skill` 取 `input_data["project_path"]`, 缺省回退
+`"."`。但带路径提取的 `_extract_project_context` **只在需求收集流里调用**;
+「提交任务…」这类直接指令走 `_action_submit_task`, 该函数 iter-93 起只解析
+`project_id`, 从不解析路径 → `input_data` 里恒无该键。
+
+### 根因 2: 路径正则只认反斜杠
+
+`_extract_project_context` 的两条正则都写 `[A-Za-z]:\\`, 而 Boss 蓝图与
+消息里惯用**正斜杠**。实测蓝图原文「本地 E:/ingobj/stock_player」两条正则
+**全部返回 None** —— 即便走了需求收集流也提取不到。
+
+### 修复: 蓝图作为路径的权威来源
+
+1. `charter.repo_path` 成为结构化字段 (兼容 `local_path`/`project_path`
+   别名), 由 `_blueprint_repo_path` 读取 —— 蓝图是「项目」的单一事实来源,
+   不依赖每次消息措辞。
+2. 新增 `PMPlanner._resolve_project_path`, 优先级
+   `input_data.project_path` → 蓝图 `repo_path` → `"."`;
+   全程 `try/except`, 蓝图查询失败不影响规划主流程, 且兜底时打 WARNING
+   提示「建议在蓝图填 repo_path」, 不再静默用错路径。
+3. 路径正则收敛为模块级 `_extract_local_path`, 同时接受 `/` 与 `\\`、
+   支持引号包裹, **带标签的写法优先于文中先出现的无关裸路径**
+   (否则「参考 C:/tmp/sample, 项目路径为 E:/…」会取到前者)。
+4. `_action_submit_task` 把解析到的路径经 `input_data` 传下去; 无路径时传
+   `None` 保持旧行为, 不伪造值。
+5. 蓝图提示新增「本地仓库路径 (子任务须在此作业)」行, 让 LLM 规划路径也知情。
+
+### 验证
+
+12 专项 + 15 变异全部致红。真机经生产 Secretary API 实测: 写入
+`repo_path` 后子任务描述由「分析项目 . 的现有结构」变为「分析项目
+**E:/ingobj/stock_player** 的现有结构」, 蓝图提示出现路径行。
+
+> 教训: 首轮真机验证曾失败返回 `.` —— 单元测试桩掉了 `_fetch_project_blueprint`
+> 因而全绿, 而真机走的是带鉴权的 HTTP 路径。凡「读远端配置」的改动, 单测桩
+> 之外必须补一次真机链路验证。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
@@ -238,3 +289,4 @@ M1 任务 (task-0cdc51ad40dd, 股票数据更新系统) 以「全局超时 (3600
 | 2026-08-28 | iter-51 | F4.3 自然语言 DAG 编辑: PUT /api/tasks/{id}/graph 编辑端点恢复 (重接 DB 路径, 仅 pending 可编辑 + 环检测) + GET 端点复用 get_task_graph_data + 秘书自然语言编辑意图 |
 | 2026-08-16 | iter-30 补 | orchestrator 收敛裁定: 降级工具库 + stub 兼容, 3 个死端点下线, graph 端点改 DB 重建 |
 | 2026-08-16 | iter-27 后 | 初建 |
+| 2026-09-10 | iter-99 | BUG-037 子任务作业路径恒为 "." 修复: 蓝图 `charter.repo_path` 成为路径权威来源 + `_resolve_project_path` 三级回退 (input_data→蓝图→".") + 路径正则兼容正斜杠与引号且标签优先于裸路径 + `_action_submit_task` 传递 `project_path` + 蓝图提示暴露仓库路径; M1 失败复盘发现 (三次需求分析烧 448 万 tokens 分析错目录); 12 专项 + 15 变异致红 + 真机 API 实测 |

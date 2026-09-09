@@ -40,6 +40,26 @@ def _blueprint_items(value) -> list:
     return items
 
 
+def _blueprint_repo_path(charter) -> str:
+    """BUG-037: 从项目蓝图 charter 取结构化本地仓库路径。
+
+    子任务模板的 {{project_path}} 此前只认 task.input_data["project_path"],
+    对话派发的任务该键恒缺失 → 回退字面量 "." → 子 Agent 在 Station 自身
+    cwd 里找目标项目代码, 分析结果全部无效 (M1 实测烧掉 448 万 tokens
+    换回三份分析错目录的产物)。蓝图是「项目」的单一事实来源, 故优先取此。
+
+    兼容 repo_path / local_path / project_path 三种键名 (Boss 手填蓝图时
+    用词不一定统一), 取首个非空字符串值。
+    """
+    if not isinstance(charter, dict):
+        return ""
+    for key in ("repo_path", "local_path", "project_path"):
+        value = charter.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _current_roadmap_phase(roadmap) -> str:
     """选出路线图中的当前阶段: 优先 in_progress, 其次首个未完成阶段。"""
     if not isinstance(roadmap, list):
@@ -229,7 +249,7 @@ class PMPlanner:
             matched = match_template(task_desc)
             if matched and matched.get("match_score", 0) >= 2:
                 variables = {
-                    "project_path": task.get("input_data", {}).get("project_path", "."),
+                    "project_path": self._resolve_project_path(task),
                     "language": task.get("input_data", {}).get("language", "python"),
                     "data_source": task.get("input_data", {}).get("data_source", ""),
                     "output_format": task.get("input_data", {}).get("output_format", "json"),
@@ -421,6 +441,36 @@ class PMPlanner:
         data = resp.json()
         return data if isinstance(data, dict) else {}
 
+    def _resolve_project_path(self, task: dict) -> str:
+        """BUG-037: 解析子任务模板应作业的项目路径。
+
+        优先级: task.input_data["project_path"] (秘书从需求文本解析到的) →
+        项目蓝图 charter 的 repo_path → "." (保持旧行为的兜底)。
+
+        取蓝图兜底是关键: 对话派发路径不产出 project_path, 而蓝图里的
+        repo_path 是 Boss 维护的权威值, 不依赖每次消息措辞。
+        """
+        explicit = str(
+            (task.get("input_data") or {}).get("project_path", "") or "").strip()
+        if explicit:
+            return explicit
+        try:
+            project_id = (task.get("project_id")
+                          or (task.get("input_data") or {}).get("project_id", ""))
+            if project_id:
+                data = self._fetch_project_blueprint(project_id)
+                repo_path = _blueprint_repo_path(
+                    (data or {}).get("charter") if isinstance(data, dict) else None)
+                if repo_path:
+                    logger.info("[%s] 项目路径取自蓝图 repo_path: %s",
+                                self._pm_id[:8], repo_path)
+                    return repo_path
+        except Exception as e:
+            logger.debug("[%s] 蓝图项目路径解析失败: %s", self._pm_id[:8], e)
+        logger.warning("[%s] 未解析到项目路径, 子任务将以 '.' 作业 "
+                       "(建议在项目蓝图 charter 填 repo_path)", self._pm_id[:8])
+        return "."
+
     def _build_blueprint_hint(self, task: dict) -> str:
         """查询项目蓝图并生成约束提示 (使命/目标/非目标/验收标准/当前阶段)。"""
         try:
@@ -438,6 +488,9 @@ class PMPlanner:
             mission = str(charter.get("mission", "")).strip()
             if mission:
                 lines.append(f"- 项目使命: {mission}")
+            repo_path = _blueprint_repo_path(charter)
+            if repo_path:
+                lines.append(f"- 本地仓库路径 (子任务须在此作业): {repo_path}")
             for label, key in (("项目目标", "goals"),
                                ("明确非目标 (禁止展开)", "non_goals"),
                                ("验收标准", "acceptance_criteria"),

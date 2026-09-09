@@ -313,6 +313,28 @@ def _find_node_by_name(dag, name: str) -> str:
     return ""
 
 
+# BUG-037: Windows 本地路径提取 — 必须同时接受反斜杠与正斜杠。
+# 原正则只写 [A-Za-z]:\\ , 而 Boss 蓝图/消息里惯用正斜杠
+# (实测「本地 E:/ingobj/stock_player」两条正则全部 miss), 导致
+# project_path 恒缺失, 子任务模板回退字面量 "." 在错误目录作业。
+_PATH_BODY = r"[A-Za-z]:[\\/][^\s，。；;\"'）)]+"
+_PATH_LABELED = re.compile(
+    r"(?:本地地址|本地路径|项目路径|仓库路径|代码路径|工程路径)"
+    r"\s*(?:为|是|在)?[:：]?\s*[\"']?(" + _PATH_BODY + r")")
+_PATH_BARE = re.compile("(" + _PATH_BODY + ")")
+
+
+def _extract_local_path(text: str) -> str:
+    """从自由文本提取本机项目路径; 优先带标签的写法, 其次裸路径。"""
+    if not text:
+        return ""
+    for pattern in (_PATH_LABELED, _PATH_BARE):
+        match = pattern.search(text)
+        if match:
+            return match.group(1).rstrip("\\/.,;，。\"'")
+    return ""
+
+
 class ChatHandler:
     """秘书聊天处理器 — 支持多项目对话隔离。
 
@@ -727,15 +749,9 @@ class ChatHandler:
             texts.append(str(item.get("value", "")))
         text = "\n".join(texts)
         result = {}
-        local_match = re.search(
-            r"(?:本地地址|本地路径|项目路径)\s*(?:为|是)?[:：]?\s*([A-Za-z]:\\[^\s，。；;]+)",
-            text,
-        )
-        if not local_match:
-            local_match = re.search(
-                r"([A-Za-z]:\\[^\s，。；;]+)", text)
-        if local_match:
-            result["project_path"] = local_match.group(1).rstrip("\\.,;，。")
+        path = _extract_local_path(text)
+        if path:
+            result["project_path"] = path
         repo_match = re.search(
             r"(?:远端仓库|仓库|repo(?:sitory)?)\s*(?:地址)?(?:为|是)?[:：]?\s*(https?://[^\s，。；;]+)",
             text,
@@ -1994,12 +2010,20 @@ class ChatHandler:
 
         # iter-93 (BUG-033): 解析项目归属, 让蓝图驱动与验收自检对该任务生效
         project_id = self._resolve_project_from_message(message)
+        # BUG-037: 本路径此前只解析 project_id, 从不解析 project_path —
+        # 带路径提取的 _extract_project_context 只在需求收集流里调用, 而
+        # 「提交任务…」这类直接指令走本函数, 导致子任务在 "." 上作业。
+        input_data = {}
+        project_path = _extract_local_path(message)
+        if project_path:
+            input_data["project_path"] = project_path
         result = self.controller.submit_task_from_chat(
             name=name,
             description=description,
             created_by="secretary",
             priority=priority,
             project_id=project_id,
+            input_data=input_data or None,
         )
 
         # 优化14: 查询任务记忆, 提供历史参考

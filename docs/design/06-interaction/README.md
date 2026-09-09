@@ -387,6 +387,22 @@ LLM 意图分类兜底 (`_classify_action_llm`), 实测四句否定/复述**全�
 - 18 条真实指令 + 3 条口语化变体: 全部保持 (0 回归)
 - 8 专项 + 8 变异全部致红 (含「LLM 闸门护栏移除」一处); 503 pytest passed
 
+## BUG-037 路径提取正则只认反斜杠 (iter-99)
+
+`_extract_project_context` 原有两条正则均写 `[A-Za-z]:\\`, 只匹配反斜杠。
+Boss 在蓝图与对话里惯用正斜杠 (实测「本地 E:/ingobj/stock_player」两条全部
+miss), 导致 `project_path` 从未进入任务 `input_data`, 子任务在错误目录作业。
+
+收敛为模块级 `_extract_local_path`:
+
+- 同时接受 `/` 与 `\\`, 支持引号包裹与 `仓库路径/代码路径/工程路径` 等标签;
+- **带标签的写法优先于文中先出现的裸路径** —— 「参考 C:/tmp/sample 的写法,
+  项目路径为 E:/ingobj/stock_player」必须取后者, 该点由变异用例守护;
+- 尾部标点与引号统一清理。
+
+另: `_action_submit_task` (对话直接指令路径) 此前只解析 `project_id`,
+现同样解析并传递 `project_path`; 无路径时传 `None`, 不伪造值。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
@@ -407,3 +423,4 @@ LLM 意图分类兜底 (`_classify_action_llm`), 实测四句否定/复述**全�
 | 2026-08-28 | iter-52 | bot_gateway 新增 cost_budget_warning 事件模板 (预算适配告警, normal 优先级, 任务提交预估超预算时推送) |
 | 2026-09-01 | iter-73 | chat_handler 优化讨论纯对话通道: chat() 增 discuss_context (话题优化项/队列总览注入 system prompt + 跳过命令关键词检测, action_taken=opt_discuss), /api/secretary/chat 透传 |
 | 2026-08-16 | iter-27 后 | 初建 |
+| 2026-09-10 | iter-99 | BUG-037: `_extract_local_path` 兼容正斜杠/引号/路径标签且标签优先于裸路径, `_action_submit_task` 补传 `project_path`; 修复前对话派发任务的子任务全部在 "." 上作业 |
