@@ -101,6 +101,37 @@ _ACTION_KEYWORDS = {
     "建立项目": "create_project",
 }
 
+# BUG-035: 询问式表达白名单 — 命中则不触发执行动作。
+# 关键词表用朴素子串匹配, 「验收标准有哪些」这类**询问**会命中「验收」
+# 这个**执行**关键词, 导致一问变一做 (实测把测试任务给验收了)。
+_QUESTION_MARKERS = (
+    "是什么", "有哪些", "是啥", "哪些", "什么时候", "为什么", "怎么",
+    "如何", "多少", "是否", "能否", "可否", "吗", "呢", "?", "？",
+    "介绍", "说明一下", "讲讲", "解释", "查看", "看看", "了解",
+    "标准", "定义", "口径",
+)
+
+# 明确的执行祈使信号 — 即使句中带疑问词也应按指令处理
+# (如「帮我验收一下任务A好吗」)
+_IMPERATIVE_MARKERS = (
+    "帮我", "请", "麻烦", "立即", "马上", "现在就", "去做", "执行",
+)
+
+
+def _looks_like_question(message: str) -> bool:
+    """判断是否为询问句 (询问不应触发执行动作)。
+
+    先看祈使信号: 命中则视为指令, 不算询问 (「帮我验收一下」仍应执行);
+    否则命中任一疑问标记即视为询问。
+    """
+    text = (message or "").strip()
+    if not text:
+        return False
+    if any(m in text for m in _IMPERATIVE_MARKERS):
+        return False
+    return any(m in text for m in _QUESTION_MARKERS)
+
+
 _ACTION_DESCRIPTIONS = {
     "submit_task": "提交/创建/下发新任务, 或让秘书做/写/开发/搭建/设计某物",
     "create_project": "创建/新建/建立项目",
@@ -1637,6 +1668,10 @@ class ChatHandler:
         Returns:
             操作类型字符串, 无意图则返回空字符串
         """
+        # BUG-035: 询问句不得触发执行动作。关键词表是朴素子串匹配,
+        # 「验收标准是什么」会命中「验收」→ 误执行 accept_delivery。
+        if _looks_like_question(message):
+            return ""
         msg_lower = message.lower()
         for keyword, action in _ACTION_KEYWORDS.items():
             if keyword in message or keyword in msg_lower:

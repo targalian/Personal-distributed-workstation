@@ -9517,3 +9517,84 @@ class TestIter95BlueprintReflow:
         # 直接检查那条关键约束原文, 防部分替换过关
         expected = "回复以简洁为默认, 但 Boss 要求梳理蓝图、需求、验收标准或阶段计划时, 应完整输出"
         assert expected in constraints, "简洁压制约束应被替换为放宽版"
+
+
+class TestIter96QuestionNotAction:
+    """BUG-035: 询问句不得触发执行动作 (真机实测: 问验收标准把任务验收了)。"""
+
+    def _handler(self):
+        from types import SimpleNamespace
+        from lan_mesh.chat_handler import ChatHandler
+        return SimpleNamespace(_detect_action=lambda m: ChatHandler._detect_action(
+            SimpleNamespace(), m))
+
+    def test_asking_acceptance_criteria_does_not_accept(self):
+        """问「验收标准有哪些」不得触发 accept_delivery — 本轮真机缺陷。"""
+        h = self._handler()
+        for msg in (
+            "M1 阶段的验收标准有哪些?",
+            "这个项目的验收标准是什么",
+            "验收标准怎么定义的",
+            "蓝图里验收口径是啥",
+        ):
+            assert h._detect_action(msg) == "", f"误触发: {msg}"
+
+    def test_real_imperative_still_triggers(self):
+        """真正的祈使指令必须照常触发, 修复不能把功能改没了。"""
+        h = self._handler()
+        assert h._detect_action("帮我验收一下这个交付物") == "accept_delivery"
+        assert h._detect_action("验收") == "accept_delivery"
+        assert h._detect_action("请退回重做") == "reject_delivery"
+        assert h._detect_action("创建任务: 补齐个股日线") == "submit_task"
+
+    def test_question_words_do_not_block_imperatives(self):
+        """带疑问词但含祈使信号 → 仍按指令处理。"""
+        h = self._handler()
+        assert h._detect_action("帮我验收一下任务A好吗") == "accept_delivery"
+        assert h._detect_action("请立即取消任务") == "cancel_task"
+
+    def test_pure_queries_stay_actionless(self):
+        """纯查询类提问不触发任何执行动作。"""
+        h = self._handler()
+        for msg in (
+            "工作站现在什么状态?",
+            "这个项目是怎么规划的",
+            "解释一下 PM Agent 如何工作",
+        ):
+            action = h._detect_action(msg)
+            assert action in ("", "query_status", "query_progress",
+                             "query_hosts", "query_tasks"), \
+                f"{msg} -> {action}"
+
+    def test_question_helper_semantics(self):
+        """_looks_like_question: 祈使优先于疑问标记。"""
+        from lan_mesh.chat_handler import _looks_like_question
+
+        assert _looks_like_question("验收标准是什么") is True
+        assert _looks_like_question("有哪些主机?") is True
+        assert _looks_like_question("帮我验收") is False
+        assert _looks_like_question("请验收标准") is False
+        assert _looks_like_question("") is False
+
+    def test_each_marker_independently_effective(self):
+        """逐个标记单独生效 — 防「多标记冗余掩盖单点失效」。
+
+        每条样本只含一个疑问标记, 任一标记从表中丢失都会让本例变红。
+        """
+        h = self._handler()
+        # (样本, 唯一依赖的标记)
+        samples = [
+            ("验收标准", "标准"),
+            ("验收口径", "口径"),
+            ("验收的定义", "定义"),
+            ("验收有哪些", "有哪些"),
+            ("验收是什么", "是什么"),
+            ("验收是啥", "是啥"),
+            ("验收吗", "吗"),
+            ("验收?", "?"),
+            ("验收如何进行", "如何"),
+            ("查看验收", "查看"),
+        ]
+        for msg, marker in samples:
+            assert h._detect_action(msg) == "", \
+                f"标记「{marker}」失效, 「{msg}」误触发执行"
