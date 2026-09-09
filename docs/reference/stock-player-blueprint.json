@@ -1,6 +1,8 @@
 {
   "charter": {
     "mission": "股票自动交易系统 — 用「选股逻辑 × 买卖逻辑 × 持仓逻辑」的可组合策略配合自动交易套件实现自动交易; 分三方向演进: 平台化(生成 exe + 回测)、智能化(RL 选组合)、基础功能迭代。",
+    "repo_path": "E:/ingobj/stock_player",
+    "repo_url": "https://gitee.com/zhu-longzhuo/shrimp-quantification",
     "goals": [
       "M1 (当前唯一在办): 建成可信的股票数据更新系统 — 开市时段实时更新, 启动时按日期自检并自动补齐到最新",
       "数据新鲜度可被程序断言, 而不是靠人肉看日志",

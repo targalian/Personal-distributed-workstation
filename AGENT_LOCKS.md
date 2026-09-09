@@ -3,8 +3,8 @@
 多 Agent（Codex CLI / Qoder Quest）并行开发时的文件占用与交接看板。
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
-- 更新时间：2026-09-09
-- 当前迭代：`iter-98`（Codex：F6 影子运行状态 WS 广播闭环，Quest→Codex 交回项已清空；iter-97 BUG-036 同批待发货；iter-91~96 已发货）
+- 更新时间：2026-09-10
+- 当前迭代：`iter-99`（Codex：BUG-037 子任务作业路径恒为 `.` 修复，M1 失败复盘发现；iter-91~98 已发货）
 
 ## 一、职责边界（长期约定）
 
@@ -36,6 +36,16 @@
 按归属各自提交，不要互相 `git add .`：
 
 **Quest（无待推送改动）**
+
+**Codex（iter-99 BUG-037 子任务作业路径，已验证待 Boss 发货）**
+- `lan_mesh/pm_planner.py`（**BUG-037**，复盘 M1 任务 `task-0cdc51ad40dd` 失败时发现：三个子任务描述里项目路径是**字面量 `.`**——「分析项目 **.** 的现有结构」，子 Agent 在 Station 自身 cwd 里找 `stock_player` 代码，三次「需求分析」全报 `completed` 却毫无价值，**烧掉 448 万 input tokens**。此类缺陷**不报错**，只有产物内容是错的，光看 status 发现不了。新增模块级 `_blueprint_repo_path` 与 `_resolve_project_path`（三级回退 `input_data` → 蓝图 `repo_path` → `"."`，兜底打 WARNING 不再静默用错路径），蓝图提示新增「本地仓库路径」行）
+- `lan_mesh/chat_handler.py`（根因2：原路径正则两条都写 `[A-Za-z]:\\` **只认反斜杠**，而 Boss 惯用正斜杠——实测蓝图原文「本地 E:/ingobj/stock_player」两条全部 miss。收敛为模块级 `_extract_local_path`，兼容 `/` 与 `\\`、引号包裹，**标签写法优先于文中先出现的无关裸路径**；`_action_submit_task` 补传 `project_path`，无路径传 `None` 不伪造）
+- `tests/test_core.py`（`TestIter99ProjectPathResolution` 12 例，**15 变异全部致红**）
+- `docs/design/03-task-orchestration/README.md`、`docs/design/06-interaction/README.md`（BUG-037 双根因 + 变更记录）
+- `docs/reference/stock-player-blueprint.json`（补 `repo_path`/`repo_url` 结构化字段，已经 `boss_channel blueprint --set-file` 落到运行中的 Station）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-99 收尾）
+
+> **教训（务必沿用）**：首轮真机验证**失败**仍返回 `.`——单元测试桩掉了 `_fetch_project_blueprint` 所以全绿，而真机走的是带 mesh token 鉴权的 HTTP 路径（验证脚本漏了 `set_auth_token` → 401 → 蓝图空 dict → 回退 `.`）。凡「读远端配置」类改动，单测桩之外**必须补一次真机链路验证**，否则单测全绿也可能真机全废。
 
 **Codex（iter-98 F6 影子开发运行状态 WS 实时广播，已验证待 Boss 发货）**
 - `lan_mesh/shadow_dev.py`（**F6**，Quest 在 iter-91 UI 审计中交回的唯一遗留项：影子开发全链路**零 WS 广播** —— 后端状态机完整但状态只活在内存 `self._runs`，前端只能切 Tab 或手动点刷新；一次运行可长达 1800s，期间面板全程静默。新增 `SHADOW_RUN_EVENT` 常量与 `_emit_run_event` 单一出口，四处埋点 `queued`/`running`/终态/`cancelled`。三条不变式：广播**必须在释放 `self._condition` 之后**（锁内只取快照，`publish` 会走 `call_soon_threadsafe`，持锁回调有死锁风险）；`_emit_run_event` 整体 `try/except` 只记日志，**事件通道故障绝不阻断影子执行流**；`cancelled` 只报「排队中被丢弃」的，已进 CLI 的运行不误报）
