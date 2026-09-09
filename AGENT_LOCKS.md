@@ -4,7 +4,7 @@
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
 - 更新时间：2026-09-10
-- 当前迭代：`iter-99`（Codex：BUG-037 子任务作业路径恒为 `.` 修复，M1 失败复盘发现；iter-91~98 已发货）
+- 当前迭代：`iter-100`（Codex：BUG-038 子 Agent 实际工作目录未注入修复，BUG-037 孪生缺陷、M1 重跑复盘发现；iter-91~99 已发货）
 
 ## 一、职责边界（长期约定）
 
@@ -36,6 +36,15 @@
 按归属各自提交，不要互相 `git add .`：
 
 **Quest（无待推送改动）**
+
+**Codex（iter-100 BUG-038 子 Agent 实际工作目录，已验证待 Boss 发货）**
+- `lan_mesh/pm_planner.py`（**BUG-038 写入侧**，BUG-037 的**孪生缺陷**：BUG-037 修好后 M1 重跑 `task-af7e8cde65d4`，子任务描述已正确显示 `E:/ingobj/stock_player`，但「需求分析」仍连续 **3 次**被质量门禁判不合格，原因均为「达到最大轮次 30 后终止」+「后期脱离目标项目」，约 **414 万 input tokens**，已取消止损。根因是**有人读 `cwd`、没人写 `cwd`**——Agent 从描述文本读得到路径却始终进不去。`attach_blueprint_context` 由「只注入蓝图文本」扩展为**同时注入 `cwd`**，注入点复用 `pm_agent` 规划后那一次调用，覆盖本地执行 + 远程分发全部路径；新增 `_resolve_workdir` 复用 `_resolve_project_path` 三级口径但**只在目录真实存在时返回**，`"."`/不存在一律返回空串保持 `shared_folder` 旧行为；上游显式指定 `cwd` 的不覆盖）
+- `lan_mesh/agent_runtime.py`（**BUG-038 运行时侧**：`cwd = get("cwd") or shared_folder`（空串也回落）；规则段抽为模块级 `_build_react_rules_prompt(cwd)` 并新增「相对路径以此为基准」「不要去其他盘符或上级目录漫游」「内容不符即说明并结束、不要靠反复试探消耗轮次」三条——仅注入 `cwd` 不够，模型看不到它仍会自由探索；新增模块级 `_resolve_tool_path` 把 `file_read`/`file_write` 相对路径锚定到 `cwd`，这两个工具无 `cwd` 参数、原按 Station 进程启动目录即**本仓库**解析，既读不到目标文件也有**越界写入风险**。**不放宽** `validate_cli_agent_cwd` / `CLI_AGENT_ALLOW_SELF_REPO` 自举护栏，两者是独立路径）
+- `tests/test_core.py`（`TestIter100AgentWorkdir` 10 例，**17 变异全部致红**）
+- `docs/design/03-task-orchestration/README.md`、`docs/design/04-execution-engine/README.md`（BUG-038 节 + 变更记录）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-100 收尾）
+
+> **教训（承接 iter-99）**：BUG-037/038 都是「不报错但产物错」——子任务正常结束、PM 正常聚合，前者产物分析错目录、后者耗尽轮次，**光看 `status` 发现不了**。这次定位靠 iter-94 的 `subtask_retry` 追踪记录了重试原因。另：源码文本断言（`inspect.getsource` + `in`）杀不掉逻辑反转类变异，能抽成纯函数的一律**改行为断言**。
 
 **Codex（iter-99 BUG-037 子任务作业路径，已验证待 Boss 发货）**
 - `lan_mesh/pm_planner.py`（**BUG-037**，复盘 M1 任务 `task-0cdc51ad40dd` 失败时发现：三个子任务描述里项目路径是**字面量 `.`**——「分析项目 **.** 的现有结构」，子 Agent 在 Station 自身 cwd 里找 `stock_player` 代码，三次「需求分析」全报 `completed` 却毫无价值，**烧掉 448 万 input tokens**。此类缺陷**不报错**，只有产物内容是错的，光看 status 发现不了。新增模块级 `_blueprint_repo_path` 与 `_resolve_project_path`（三级回退 `input_data` → 蓝图 `repo_path` → `"."`，兜底打 WARNING 不再静默用错路径），蓝图提示新增「本地仓库路径」行）
