@@ -326,10 +326,58 @@ self.shared_folder)` —— 而**全仓库没有任何代码往 `input_data` 写
 > BUG-037 与 BUG-038 都表现为子任务正常结束, 前者产物分析错目录, 后者耗尽
 > 轮次。定位靠 iter-94 的 `subtask_retry` 追踪记录了重试原因。
 
+## BUG-040 single 模式终态链路三缺口 (iter-102)
+
+iter-101 修了 `AgentRuntime.execute` 采纳内层失败信号, 但 **single 模式**
+(PM 自己执行简单任务, 不走 dispatcher/monitor) 的 `execute_directly → _run_task`
+路径还有三个缺口:
+
+### 根因1: cancelled 被当成 completed 交付 (影响面最大)
+
+`_run_task` 单模式终态判定只认 `status == "failed"` —— **cancelled 落到正常
+分支**, 走完整交付链: 写交付物 → 上报 `completed` → 报 `任务完成: 完成`。
+
+Boss 取消任务后 PM 仍上报 `completed` 并写交付物, 是 iter-101 根因3
+(「失败被上报为成功」) 在 single 模式的孪生缺陷。
+
+修复: 抽出 `_run_single_pattern` 方法, 终态判定改为:
+- `cancelled` → 保持 cancelled 终态, 不写交付物
+- `failed` / `timeout` / `error` → 保持 failed 终态, 优先用 error 字段
+
+### 根因2: 失败原因丢失
+
+`execute_directly` 只返回 `{"summary", "status"}`。失败时 handler 的 output
+里没有 code/summary 字段, `summary` 就回退到字面量 `"完成"` —— PM 上报的
+失败原因变成了 `"完成"`, 运维看到完全无法定位真实问题。
+
+修复: `execute_directly` 补回传 `error` 字段, `_run_single_pattern` 失败上报
+优先取 `result.get("error")` 而非 `summary`。
+
+### 根因3: cancelled/timeout 计时器残留
+
+BUG-034 修了 `_clear_subtask_timer` 在子任务终态时清计时器, 但终态集合只含
+`completed` / `failed` —— **cancelled 和 timeout 的计时器留在
+`subtask_start_times`**, 满 `subtask_timeout` 后被 `check_subtask_timeouts`
+误判为「超时」再触发重试: Boss 明确取消的任务仍被反复重跑, 直到全局超时。
+
+修复: 终态集合扩为 `("completed", "failed", "cancelled", "timeout")`。
+
+### 附带: 子任务面板状态映射
+
+`_build_subtask_status` 中子 Agent 状态为 `cancelled` 时原映射成 `assigned`,
+前端看到「已分配」而非「已取消」——加入已知终态集合, 直接透传 `cancelled`。
+
+### 验证
+
+6 专项 + 5 变异全部致红 (cancelled 检查禁用 / error 字段置空 / 终态集合回退 /
+cancelled 映射移除 / error 优先级移除)。
+
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-11 | iter-102 | BUG-040 single 模式终态链路三缺口修复: `_run_single_pattern` cancelled 不再被当成 completed 交付 (iter-101 根因3 孪生) + `execute_directly` 补回传 error 字段 (原失败原因变成字面量「完成」) + `_clear_subtask_timer` 终态集合补 cancelled/timeout (BUG-034 只修了两个终态, 计时器残留致误重试) + `_build_subtask_status` cancelled 映射从 assigned 改为直接透传; 6 专项 + 5 变异致红 |
 | 2026-09-09 | iter-95 | 交付结论回流蓝图: `record_delivery_to_blueprint` 按验收结论推进/保持路线图阶段并记录缺口, 交付端点集成 `_reflow_blueprint`; 回流阶段选取口径与 PM 读取口径统一; 7 专项 + 7 变异致红 |
 | 2026-09-09 | iter-94 | BUG-034 跨站子任务结果回传修复: `_local_execute_task` 忽略 `pm_id` 致跨站结果注入错误 PM (或丢弃), 新增 `_report_subtask_result` 按 `pm_id` 路由回传原始 Secretary; `subtask_start_times` 终态清理 + `_record_subtask_start` 移入 `dispatch_subtask` 使重试也有超时保护; 新增 `subtask_retry` 追踪阶段与进度上报去重; 专项 6 例 + 变异 4 处致红 |
 | 2026-09-09 | iter-93 | BUG-033 对话派发任务无项目归属修复: `submit_task_from_chat` 新增 `project_id` 并落库, `_resolve_project_from_message` 三级解析 (uuid/短码/名称最长匹配), 成本预估改用真实项目; 蓝图驱动与验收自检对对话任务恢复生效; 专项 7 例 + 变异 2 处致红 |

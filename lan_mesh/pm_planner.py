@@ -635,9 +635,14 @@ class PMPlanner:
         status = result.get("status", "completed")
         if isinstance(code_content, str) and code_content.startswith(("[未配置", "[LLM 调用失败", "[模型调用失败")):
             status = "failed"
+        # BUG-040: 把 runtime 的失败原因带回上层。原实现只回 summary,
+        # 而失败时 handler 的 output 里没有 code/summary —— summary 于是回退到
+        # 字面量 "完成", PM 上报的失败原因就变成了 "完成"。
+        error = str(result.get("error", "") or output.get("error", "") or "")
         return {
             "summary": code_content if isinstance(code_content, str) else str(code_content),
             "status": status,
+            "error": error,
         }
 
     # ── F2.3: 多轮任务细化 ─────────────────────────────────────

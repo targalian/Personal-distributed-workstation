@@ -64,7 +64,7 @@ capture 到 module=`llm` (context 携带失败链), 异常隔离不影响降级�
 (RFC 2616 遗留默认, 见 `requests.utils.get_encoding_from_headers`)。
 火山方舟等端点返回 `Content-Type: text/event-stream` 不带 charset, 于是 UTF-8
 中文被逐字节拆成 Latin-1 字符 (「你好秘书」→ `ä½ å¥½ç§ä¹¦`)。
-**修复**: `raise_for_status()` 后, 仅当响应头未显式声明 charset 时兜底 
+**修复**: `raise_for_status()` 后, 仅当响应头未显式声明 charset 时兜底
 `resp.encoding = "utf-8"` (SSE 规范强制 UTF-8); 服务端显式声明的仍按声明走,
 不武断覆盖。requests 的增量解码器使用 `errors='replace'`, 故跨 chunk 截断的
 多字节字符不会抛异常。
@@ -93,6 +93,36 @@ capture 到 module=`llm` (context 携带失败链), 异常隔离不影响降级�
 与 `validate_cli_agent_cwd` / `CLI_AGENT_ALLOW_SELF_REPO` 是两条独立路径:
 后者只作用于 `_handle_cli_agent` 防自举改写本仓库, 本改动不放宽该护栏。
 回归锚点 `TestIter100AgentWorkdir` (10 例, 17 变异全致红)。
+
+**CLI Agent 分派链路修复** (iter-101, BUG-039): Boss 把子任务执行切到 CLI Agent
+后本机验证, 暴露五个缺口 —— 其中根因3 属**全局性**缺陷, 影响所有技能:
+
+1. **失败被上报为成功** (根因3, 影响面最大): 各 handler 用**返回值**
+   (`{"error": ...}` / `{"status": "failed"|"timeout"}`) 而非异常表达失败,
+   而 `execute` 原先只要 handler 未抛异常就一律记 `completed` —— 护栏拒绝、
+   CLI 非零退出、执行超时全部上报成功, PM 侧 `handle_subagent_failure` 的重试
+   与升级链**永不触发**。新增模块级 `infer_result_status` +
+   `_finalize_subtask` 采纳内层信号, `cancelled` 保持为独立终态。
+2. **未知后端静默回退** (根因2): 原实现把「拼错的后端名」与「未指定」同等对待,
+   实测 `backend="nonexistent_backend_zz"` 真的拉起 claude 跑了 180s 才 rc=1。
+   抽出 `resolve_cli_backend`, 未知后端名与「指定但未安装」一律显式失败。
+3. **业务项目目录被护栏拒绝** (根因1): iter-100 起 PM 会把蓝图 `repo_path`
+   注入子 Agent 的 `cwd`, 而 CLI 白名单默认只含 `shared_folder` —— 于是
+   iter-100 的修复在 CLI 路径上被打回。解法是配置层放行 (`.env` 的
+   `CLI_AGENT_ALLOWED_ROOTS`), 拒绝信息同步补上该变量名, 不动护栏逻辑。
+4. **「装了但不可用」仍被选中** (根因4): `detect_cli_agents` 只检查可执行文件
+   是否存在。实测本机 claude/aider 均 `--version` rc=0 却未登录, 真实调用跑满
+   超时才失败。凭据探测既慢又不可靠, 故新增 `CLI_AGENT_DISABLED_BACKENDS`
+   显式停用清单 (detect 与 `get_preferred_cli_agent` 两处分支都生效);
+   自动顺序改为 **codex > claude > aider** —— codex 是唯一同时带沙箱
+   (`-s workspace-write`) 与显式工作目录 (`-C cwd`) 的后端, 契合护栏意图。
+5. **codex 配置目录被环境净化滤掉** (根因5): codex 用 `CODEX_HOME` 定位
+   `auth.json`, 不认 `HOME`; 缺失时报「Error finding codex home」直接 rc=1 ——
+   与「未登录」是两种失败, 不补会误判成凭据问题。`_build_cli_env` 兜底为
+   `~/.codex` (仅 codex 后端、仅目录存在、不覆盖用户显式值)。
+
+> 自举护栏未放宽: 主仓库 cwd 仍被拒绝 (需影子模式或 `CLI_AGENT_ALLOW_SELF_REPO=1`)。
+> 回归锚点 `TestIter101CliDispatch` (13 例, 21 变异全致红)。
 
 ## agent_card.py — Agent Card（借鉴 A2A 协议）
 
@@ -228,3 +258,4 @@ planner/dispatcher/monitor 的共享引用有效 (resume 关键约束)
 | 2026-08-27 | iter-45 | agent_runtime 降级链耗尽错误埋点 (module=llm, 携带失败链) |
 | 2026-08-16 | iter-27 后 | 初建 |
 | 2026-09-10 | iter-100 | BUG-038 子 Agent 作业目录注入 (运行时侧): ReAct `cwd` 改为 `get("cwd") or shared_folder` (空串也回落) + 规则段抽为 `_build_react_rules_prompt` 并新增作业目录基准/禁止跨盘漫游/禁止试探消耗轮次三条 + `_resolve_tool_path` 把 file_read/file_write 相对路径锚定 cwd (原落在 Station 启动目录, 有越界写入风险); 不放宽 CLI 自举护栏; 10 专项 + 17 变异致红 |
+| 2026-09-10 | iter-101 | BUG-039 CLI Agent 分派链路五缺口修复: `infer_result_status` + `_finalize_subtask` 采纳 handler 内层失败信号 (原 execute 无条件判 completed, 致护栏拒绝/CLI 非零退出/超时全部上报成功, PM 重试与升级链永不触发, 属全局性缺陷) + `resolve_cli_backend` 让未知/未安装后端显式失败 (原静默回退, 实测拼错后端名真跑了 claude 180s) + `CLI_AGENT_DISABLED_BACKENDS` 停用「装了但未登录」的后端且自动顺序改为 codex 优先 (唯一带沙箱+显式 cwd) + `CODEX_HOME` 兜底 ~/.codex (环境净化滤掉后必然 rc=1) + 护栏拒绝信息补 `CLI_AGENT_ALLOWED_ROOTS` 指引; 本机实测发现, 自举护栏未放宽; 13 专项 + 21 变异致红 |

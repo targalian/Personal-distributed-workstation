@@ -10084,3 +10084,403 @@ class TestIter100AgentWorkdir:
         code = inspect.getsource(AgentRuntime._handle_react_agent)
         assert 'func_name in ("file_read", "file_write")' in code
         assert "_resolve_tool_path(" in code
+
+
+class TestIter101CliDispatch:
+    """iter-101 BUG-039: CLI Agent 分派链路五个缺口 (本机实测发现)。
+
+    Boss 把子任务执行切到 CLI Agent 后本机验证暴露: 失败被上报为成功、
+    拼错的后端名静默跑别的后端、iter-100 注入的项目目录被自举护栏拒绝、
+    「装了但未登录」的后端仍被选为首选、codex 配置目录变量被环境净化滤掉。
+    """
+
+    # ── 根因3: execute 无条件判 completed ──
+
+    def test_inner_failure_status_is_adopted(self):
+        """handler 返回 status=failed 时, 子任务不得上报 completed。
+
+        各 handler 用**返回值**而非异常表达失败, 原实现只要不抛异常就记
+        completed —— PM 的重试与升级链因此永不触发。
+        """
+        from lan_mesh.agent_runtime import infer_result_status
+
+        assert infer_result_status(
+            {"status": "failed", "stderr": "非零退出"})[0] == "failed"
+        assert infer_result_status({"status": "timeout"})[0] == "failed"
+        assert infer_result_status({"error": "护栏拒绝"})[0] == "failed"
+        assert infer_result_status({"result": "fine"})[0] == "completed"
+        # 取消是独立终态, 不能被归成 failed
+        assert infer_result_status({"status": "cancelled"})[0] == "cancelled"
+        # 非 dict 与空 error 不得误判
+        assert infer_result_status("plain text")[0] == "completed"
+        assert infer_result_status({"error": ""})[0] == "completed"
+
+    def test_inner_failure_carries_error_message(self):
+        """失败原因必须随结果向上传递, 否则 PM 只知失败不知为何。"""
+        from lan_mesh.agent_runtime import infer_result_status
+
+        _, err = infer_result_status({"status": "failed", "stderr": "非零退出"})
+        assert "非零退出" in err
+        _, err2 = infer_result_status({"error": "白名单拒绝"})
+        assert "白名单拒绝" in err2
+
+    def test_execute_reports_handler_failure(self, tmp_path):
+        """端到端: execute 必须把 handler 的失败信号透出为子任务 failed。"""
+        from lan_mesh.agent_runtime import AgentRuntime
+
+        agent = AgentRuntime(agent_id="t101", shared_folder_path=str(tmp_path))
+        agent._handlers["probe_fail"] = lambda d: {"status": "failed",
+                                                  "stderr": "boom"}
+        agent._handlers["probe_ok"] = lambda d: {"result": "fine"}
+
+        bad = agent.execute({"required_skill": "probe_fail", "input_data": {}})
+        good = agent.execute({"required_skill": "probe_ok", "input_data": {}})
+
+        assert bad["status"] == "failed"
+        assert "boom" in bad.get("error", "")
+        assert good["status"] == "completed"
+
+    # ── 根因2: 未知后端名静默回退 ──
+
+    def test_unknown_backend_fails_fast(self, tmp_path):
+        """拼错的后端名必须显式失败, 不得静默回退到首选后端。
+
+        实测 backend="nonexistent_backend_zz" 曾真的拉起 claude 跑了 180s。
+        """
+        from lan_mesh.agent_runtime import AgentRuntime
+
+        agent = AgentRuntime(agent_id="t101", shared_folder_path=str(tmp_path))
+        result = agent._handle_cli_agent({
+            "requirement": "分析代码",
+            "cwd": str(tmp_path),
+            "backend": "nonexistent_backend_zz",
+        })
+
+        assert result.get("status") == "failed"
+        assert "未知的 CLI Agent 后端" in result.get("error", "")
+
+    def test_requested_but_missing_backend_fails_fast(self, monkeypatch):
+        """显式指定的后端未安装时必须拦下, 不得回退到别的后端。
+
+        与 test_unknown_backend_fails_fast 的区别: 后端名合法但机器上没装。
+        若放过这一步会拿着不存在的可执行文件去 subprocess, 或悄悄换成他人。
+        """
+        import lan_mesh.agent_runtime as runtime
+
+        monkeypatch.setattr(runtime, "_which_with_fallback", lambda cmd: None)
+
+        backend, err = runtime.resolve_cli_backend("codex")
+        assert backend == ""
+        assert err["status"] == "failed"
+        assert "未安装" in err["error"]
+
+    def test_guard_rejection_marked_failed(self, tmp_path):
+        """护栏拒绝必须带 status=failed, 否则会被判成功。"""
+        from lan_mesh.agent_runtime import AgentRuntime
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        agent = AgentRuntime(agent_id="t101", shared_folder_path=str(shared))
+
+        result = agent._handle_cli_agent({
+            "requirement": "分析", "cwd": str(outside), "backend": "codex"})
+
+        assert result.get("status") == "failed"
+        assert "不在白名单内" in result.get("error", "")
+
+    # ── 根因4: 检测只查装没装, 不查能不能用 ──
+
+    def test_disabled_backend_not_selected(self, monkeypatch):
+        """被停用的后端不得出现在检测结果或被选为首选。
+
+        本机 claude/aider 已安装且 --version 返回 rc=0, 但未登录 —— 真实
+        调用会跑满超时后 rc=1, 白烧时间。凭据探测不可靠, 故用显式停用清单。
+        """
+        import lan_mesh.agent_runtime as runtime
+
+        monkeypatch.setattr(runtime, "CLI_AGENT_DISABLED_BACKENDS",
+                            ["claude", "aider"])
+        monkeypatch.setattr(runtime, "_which_with_fallback", lambda cmd: "/usr/bin/" + cmd)
+
+        assert runtime.detect_cli_agents() == ["codex"]
+        assert runtime.get_preferred_cli_agent() == "codex"
+
+    def test_disabled_backend_overrides_env_preference(self, monkeypatch):
+        """CLI_AGENT_BACKEND 指到已停用的后端时必须回退, 不能照用。"""
+        import lan_mesh.agent_runtime as runtime
+
+        monkeypatch.setattr(runtime, "CLI_AGENT_DISABLED_BACKENDS", ["claude"])
+        monkeypatch.setattr(runtime, "_which_with_fallback", lambda cmd: "/usr/bin/" + cmd)
+        monkeypatch.setenv("CLI_AGENT_BACKEND", "claude")
+
+        assert runtime.get_preferred_cli_agent() != "claude"
+
+    def test_auto_order_skips_disabled_backend(self, monkeypatch):
+        """自动检测分支也必须跳过停用后端。
+
+        与 test_disabled_backend_not_selected 的区别: 那条走 detect_cli_agents,
+        这条锁的是 get_preferred_cli_agent 内部的自动顺序循环 —— 两处各有一份
+        停用判断, 漏掉任一处都会让未登录后端被选中。
+        """
+        import lan_mesh.agent_runtime as runtime
+
+        monkeypatch.setattr(runtime, "CLI_AGENT_DISABLED_BACKENDS", ["codex"])
+        monkeypatch.setattr(runtime, "_which_with_fallback", lambda cmd: "/usr/bin/" + cmd)
+        monkeypatch.delenv("CLI_AGENT_BACKEND", raising=False)
+
+        assert runtime.get_preferred_cli_agent() != "codex"
+
+    def test_auto_order_prefers_sandboxed_backend(self, monkeypatch):
+        """自动选择优先 codex —— 唯一带沙箱与显式 cwd 的后端。"""
+        import lan_mesh.agent_runtime as runtime
+
+        monkeypatch.setattr(runtime, "CLI_AGENT_DISABLED_BACKENDS", [])
+        monkeypatch.setattr(runtime, "_which_with_fallback", lambda cmd: "/usr/bin/" + cmd)
+        monkeypatch.delenv("CLI_AGENT_BACKEND", raising=False)
+
+        assert runtime.get_preferred_cli_agent() == "codex"
+
+    # ── 根因1/5: 护栏提示可操作性 + codex 配置目录 ──
+
+    def test_guard_message_names_the_allowlist_env(self, tmp_path):
+        """拒绝信息必须告知合法放行方式, 而不只是列出白名单。"""
+        from lan_mesh.agent_runtime import validate_cli_agent_cwd
+
+        target = tmp_path / "proj"
+        target.mkdir()
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+
+        msg = validate_cli_agent_cwd(str(target), [str(allowed)])
+        assert "CLI_AGENT_ALLOWED_ROOTS" in msg
+
+    def test_codex_home_injected(self, monkeypatch, tmp_path):
+        """codex 靠 CODEX_HOME 定位 auth.json, 环境净化后必须兜底补回。
+
+        缺失时 codex 报「Error finding codex home」直接 rc=1 —— 与「未登录」
+        是两种不同失败, 不补会误判成凭据问题。
+        """
+        from lan_mesh.agent_runtime import _build_cli_env
+
+        home = tmp_path / "home"
+        (home / ".codex").mkdir(parents=True)
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+
+        env = _build_cli_env("codex")
+        assert env.get("CODEX_HOME") == str(home / ".codex")
+        # 其他后端不应被注入该变量
+        assert "CODEX_HOME" not in _build_cli_env("aider")
+
+    def test_codex_home_skipped_when_dir_absent(self, monkeypatch, tmp_path):
+        """~/.codex 不存在时不得凭空注入, 免得掩盖「未初始化」这一真实原因。"""
+        from lan_mesh.agent_runtime import _build_cli_env
+
+        home = tmp_path / "bare_home"
+        home.mkdir()
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+
+        assert "CODEX_HOME" not in _build_cli_env("codex")
+
+    def test_codex_home_respects_explicit_value(self, monkeypatch, tmp_path):
+        """用户显式配置的 CODEX_HOME 不得被覆盖。"""
+        from lan_mesh.agent_runtime import _build_cli_env
+
+        home = tmp_path / "home"
+        (home / ".codex").mkdir(parents=True)
+        explicit = tmp_path / "explicit"
+        explicit.mkdir()
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CODEX_HOME", str(explicit))
+
+        assert _build_cli_env("codex")["CODEX_HOME"] == str(explicit)
+
+
+class TestIter102SingleModeTerminalStates:
+    """BUG-040: single 模式三条终态链路缺口 (iter-101 孪生缺陷)。
+
+    iter-101 修了 AgentRuntime.execute 采纳内层失败信号, 但 single 模式的
+    PM 自执行路径 (PMPlanner.execute_directly → _run_task) 还有三个缺口:
+
+    1. _run_task 只判 failed —— cancelled 落到正常分支, 被当成成功交付
+       (Boss 取消后 PM 仍上报 completed 并写交付物);
+    2. execute_directly 只回 summary —— 失败时 output 里没有 code/summary,
+       summary 回退到字面量 "完成", PM 上报的失败原因就成了 "完成";
+    3. _clear_subtask_timer 只清 completed/failed —— cancelled/timeout
+       计时器残留, 之后被误判为 "超时" 再触发重试 (BUG-034 只修了两个终态)。
+    """
+
+    # ── 缺口1: cancelled 被当成 completed 交付 ──
+
+    def test_single_cancelled_not_delivered(self, tmp_path):
+        """single 模式 cancelled 必须保持 cancelled 终态, 不得写交付物。"""
+        from lan_mesh.pm_agent import PMState, PMPlanner, ProjectManagerAgent
+
+        class CancelledRuntime:
+            def execute(self, subtask):
+                return {"output": {}, "status": "cancelled"}
+            def cancel(self):
+                pass
+            def reset_cancel(self):
+                pass
+
+        state = PMState()
+        state.task = {"task_id": "task-single-cancel"}
+        agent = ProjectManagerAgent(
+            "pm-single-cancel", CancelledRuntime(), "http://secretary.invalid",
+            "dev-single-cancel")
+        agent._state = state
+        agent._planner = PMPlanner(
+            "pm-single-cancel", CancelledRuntime(), state, agent)
+
+        statuses, progress, delivered = [], [], []
+        agent.report_status = lambda status, **kw: statuses.append(status)
+        agent.report_progress = lambda progress_value, status, message, **kw: \
+            progress.append((status, message))
+        agent.deliver_result = lambda *args, **kw: delivered.append(args)
+        agent.sync_subtasks = lambda: None
+        agent._persist_snapshot = lambda *args, **kw: None
+        agent._planner.analyze_with_skill = lambda task: \
+            {"pattern": "single", "decomposition": []}
+        agent._planner.attach_blueprint_context = lambda task: task
+        agent._planner.refine_requirements = lambda task: task
+
+        agent._run_task({"task_id": "task-single-cancel", "name": "测试",
+                        "description": "测试描述"})
+
+        assert statuses[-1] == "cancelled"
+        assert progress[-1][0] == "cancelled"
+        assert delivered == []
+
+    # ── 缺口2: 失败原因丢失 (summary 回退到 "完成") ──
+
+    def test_execute_directly_returns_error(self, tmp_path):
+        """execute_directly 必须回传 runtime 的 error 字段。"""
+        from lan_mesh.pm_agent import PMState, PMPlanner
+
+        class FailedRuntime:
+            def execute(self, subtask):
+                return {"output": {"error": "CLI Agent 执行超时 (180s)"},
+                        "status": "failed", "error": "CLI Agent 执行超时 (180s)"}
+
+        state = PMState()
+        state.task = {"task_id": "task-err"}
+        planner = PMPlanner("pm-err", FailedRuntime(), state, None)
+
+        result = planner.execute_directly(
+            {"task_id": "task-err", "name": "测试", "description": "描述"})
+
+        assert result["status"] == "failed"
+        assert "CLI Agent 执行超时" in result["error"]
+
+    def test_single_failed_reason_preserved(self, tmp_path):
+        """PM 上报的失败原因必须是真实 error, 而非字面量 "完成"。"""
+        from lan_mesh.pm_agent import PMState, PMPlanner, ProjectManagerAgent
+
+        class FailedRuntime:
+            def execute(self, subtask):
+                return {"output": {"error": "CLI Agent 执行超时 (180s)"},
+                        "status": "failed", "error": "CLI Agent 执行超时 (180s)"}
+            def cancel(self):
+                pass
+            def reset_cancel(self):
+                pass
+
+        state = PMState()
+        state.task = {"task_id": "task-fail-reason"}
+        agent = ProjectManagerAgent(
+            "pm-fail-reason", FailedRuntime(), "http://secretary.invalid",
+            "dev-fail-reason")
+        agent._state = state
+        agent._planner = PMPlanner(
+            "pm-fail-reason", FailedRuntime(), state, agent)
+
+        progress = []
+        agent.report_status = lambda status, **kw: None
+        agent.report_progress = lambda progress_value, status, message, **kw: \
+            progress.append((status, message))
+        agent.deliver_result = lambda *args, **kw: None
+        agent.sync_subtasks = lambda: None
+        agent._persist_snapshot = lambda *args, **kw: None
+        agent._planner.analyze_with_skill = lambda task: \
+            {"pattern": "single", "decomposition": []}
+        agent._planner.attach_blueprint_context = lambda task: task
+        agent._planner.refine_requirements = lambda task: task
+
+        agent._run_task({"task_id": "task-fail-reason", "name": "测试",
+                        "description": "描述"})
+
+        assert progress[-1][0] == "failed"
+        assert "CLI Agent 执行超时" in progress[-1][1]
+
+    # ── 缺口3: cancelled/timeout 计时器残留导致误重试 ──
+
+    def test_cancelled_clears_subtask_timer(self, tmp_path):
+        """cancelled 必须清子任务计时器, 否则之后被误判超时触发重试。"""
+        from types import SimpleNamespace
+        from lan_mesh.pm_agent import PMState
+        from lan_mesh.pm_monitor import PMMonitor
+
+        state = PMState()
+        state.task = {"task_id": "task-timer"}
+        state.plan = {"decomposition": [{"name": "S1", "skill": "code_generation"}]}
+        state.subtask_start_times["S1"] = 1.0
+        agent = SimpleNamespace(sync_subtasks=lambda: None,
+                                report_progress=lambda *args, **kw: None)
+        monitor = PMMonitor(
+            "pm-timer", None, "http://secretary.invalid", state, agent,
+            SimpleNamespace(try_dispatch_pending=lambda: None))
+
+        monitor.receive_progress_report(
+            {"reporter_id": "a1", "task_name": "S1",
+             "status": "cancelled", "progress": 0.0})
+
+        assert "S1" not in state.subtask_start_times
+
+    def test_timeout_clears_subtask_timer(self, tmp_path):
+        """timeout 也必须清计时器 (与 cancelled 同理)。"""
+        from types import SimpleNamespace
+        from lan_mesh.pm_agent import PMState
+        from lan_mesh.pm_monitor import PMMonitor
+
+        state = PMState()
+        state.task = {"task_id": "task-timeout-timer"}
+        state.plan = {"decomposition": [{"name": "S1", "skill": "code_generation"}]}
+        state.subtask_start_times["S1"] = 1.0
+        agent = SimpleNamespace(sync_subtasks=lambda: None,
+                                report_progress=lambda *args, **kw: None)
+        monitor = PMMonitor(
+            "pm-timeout-timer", None, "http://secretary.invalid", state, agent,
+            SimpleNamespace(try_dispatch_pending=lambda: None))
+
+        monitor.receive_progress_report(
+            {"reporter_id": "a1", "task_name": "S1",
+             "status": "timeout", "progress": 0.0})
+
+        assert "S1" not in state.subtask_start_times
+
+    # ── 子任务状态面板映射 ──
+
+    def test_build_subtask_status_preserves_cancelled(self, tmp_path):
+        """子 Agent 已取消时, 子任务状态必须显示 cancelled 而非 assigned。"""
+        from lan_mesh.pm_agent import ProjectManagerAgent
+
+        class DummyRuntime:
+            def cancel(self):
+                pass
+            def reset_cancel(self):
+                pass
+
+        agent = ProjectManagerAgent(
+            "pm-cancel-status", DummyRuntime(), "http://secretary.invalid", "dev")
+        agent._state.plan = {
+            "decomposition": [{"name": "S1", "skill": "code_generation"}]}
+        agent._state.subagents = {"agent1": {"current_task": "S1",
+                                             "status": "cancelled"}}
+
+        subtasks = agent._build_subtask_status()
+
+        assert subtasks[0]["status"] == "cancelled"

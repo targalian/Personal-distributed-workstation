@@ -116,7 +116,11 @@ class PMMonitor:
         subtask_start_times 中; 满 subtask_timeout 后被判为"超时"触发重试,
         同一子任务被反复执行, 直到全局超时把整个任务判失败。
         """
-        if status not in ("completed", "failed") or not task_name:
+        # BUG-040: cancelled / timeout 也是终态。原集合只含 completed/failed,
+        # 取消或超时的子任务计时器留在 subtask_start_times 里, 满
+        # subtask_timeout 后被 check_subtask_timeouts 判为"超时"再触发重试 ——
+        # Boss 明确取消的任务仍被反复重跑, 直到全局超时。
+        if status not in ("completed", "failed", "cancelled", "timeout") or not task_name:
             return
         with self._state.lock:
             self._state.subtask_start_times.pop(task_name, None)

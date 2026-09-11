@@ -236,6 +236,67 @@ class ProjectManagerAgent:
             self._running = False
             self._clear_snapshot()
 
+    def _run_single_pattern(self, task: dict, plan: dict) -> None:
+        """single 模式: PM 自己执行并收尾 (BUG-040 从 _run_task 抽出)。
+
+        终态判定原先只认 failed —— cancelled 落到正常分支被当成成功交付
+        (Boss 取消后 PM 仍上报 completed 并写交付物); 失败原因也只取
+        summary, 而失败时 summary 会回退到字面量 "完成"。
+
+        Args:
+            task: 任务字典
+            plan: 规划结果 (无分解时就地补一条)
+        """
+        st = self._state
+        self.report_status("executing", collaboration_mode="single")
+        if not plan.get("decomposition"):
+            plan["decomposition"] = [{
+                "name": task.get("name", "执行"),
+                "skill": "code_generation",
+                "depends_on": [],
+                "description": task.get("description", ""),
+            }]
+        self.sync_subtasks()
+        result = self._planner.execute_directly(task)
+
+        # 校验: 如果执行结果是错误信息, 不能当作完成交付
+        # BUG-040: 原实现只认 failed —— cancelled 落到 else 分支被当成
+        # 成功交付 (Boss 取消后 PM 仍报 completed 并写交付物);
+        # 失败原因也优先取 error, summary 失败时会回退到 "完成"。
+        summary = result.get("summary", "")
+        outcome = str(result.get("status", "") or "").strip().lower()
+        if outcome == "cancelled":
+            logger.warning("[%s] 任务已取消 (单人执行中断), 不写交付物", self.pm_id[:8])
+            self.report_status("cancelled")
+            self.report_progress(0.0, "cancelled",
+                                 result.get("error", "") or "任务已取消")
+            return
+        if outcome in ("failed", "timeout", "error") or summary.startswith(("[未配置", "[LLM 调用失败", "[模型调用失败")):
+            error_msg = result.get("error", "") or summary or "执行失败"
+            logger.error("[%s] 任务执行失败 (LLM 错误): %s", self.pm_id[:8], error_msg)
+            self.report_status("failed")
+            self.report_progress(0.0, "failed", error_msg)
+            return
+
+        for sub in plan.get("decomposition", []):
+            st.subtask_outputs[sub.get("name", "")] = result
+        self.sync_subtasks()
+
+        # 构建交付物并上报 (修复: single 模式也必须创建交付记录)
+        task_name = task.get("name", "")
+        task_desc = task.get("description", "")
+        deliverable = result.get("summary", "")
+        # 尝试从 runtime 结果中提取完整代码
+        full_output = st.subtask_outputs.get(plan["decomposition"][0].get("name", ""), {})
+        if isinstance(full_output, dict) and full_output.get("summary"):
+            deliverable = full_output["summary"]
+        subtask_results = [{"name": s.get("name", ""), "status": "completed", "output": result}
+                           for s in plan.get("decomposition", [])]
+        self.deliver_result(task_name, task_desc, deliverable, subtask_results)
+
+        self.report_status("completed", task_list=[{"name": task_name, "status": "completed"}])
+        self.report_progress(1.0, "completed", f"任务完成: {result.get('summary', '')[:100]}")
+
     def _run_task(self, task: dict):
         st = self._state
         st.start_time = time.time()
@@ -267,44 +328,7 @@ class ProjectManagerAgent:
             # 阶段 2: 执行
             pattern = plan.get("pattern", "single")
             if pattern == "single":
-                self.report_status("executing", collaboration_mode="single")
-                if not plan.get("decomposition"):
-                    plan["decomposition"] = [{
-                        "name": task.get("name", "执行"),
-                        "skill": "code_generation",
-                        "depends_on": [],
-                        "description": task.get("description", ""),
-                    }]
-                self.sync_subtasks()
-                result = self._planner.execute_directly(task)
-
-                # 校验: 如果执行结果是错误信息, 不能当作完成交付
-                summary = result.get("summary", "")
-                if result.get("status") == "failed" or summary.startswith(("[未配置", "[LLM 调用失败", "[模型调用失败")):
-                    error_msg = summary or "执行失败"
-                    logger.error("[%s] 任务执行失败 (LLM 错误): %s", self.pm_id[:8], error_msg)
-                    self.report_status("failed")
-                    self.report_progress(0.0, "failed", error_msg)
-                    return
-
-                for sub in plan.get("decomposition", []):
-                    st.subtask_outputs[sub.get("name", "")] = result
-                self.sync_subtasks()
-
-                # 构建交付物并上报 (修复: single 模式也必须创建交付记录)
-                task_name = task.get("name", "")
-                task_desc = task.get("description", "")
-                deliverable = result.get("summary", "")
-                # 尝试从 runtime 结果中提取完整代码
-                full_output = st.subtask_outputs.get(plan["decomposition"][0].get("name", ""), {})
-                if isinstance(full_output, dict) and full_output.get("summary"):
-                    deliverable = full_output["summary"]
-                subtask_results = [{"name": s.get("name", ""), "status": "completed", "output": result}
-                                   for s in plan.get("decomposition", [])]
-                self.deliver_result(task_name, task_desc, deliverable, subtask_results)
-
-                self.report_status("completed", task_list=[{"name": task_name, "status": "completed"}])
-                self.report_progress(1.0, "completed", f"任务完成: {result.get('summary', '')[:100]}")
+                self._run_single_pattern(task, plan)
             else:
                 self.report_status("executing", collaboration_mode=pattern,
                                    task_list=plan.get("decomposition", []))
@@ -514,7 +538,8 @@ class ProjectManagerAgent:
                             raw = m.get("status", "pending")
                             if raw in ("busy", "executing", "working"):
                                 status = "running"
-                            elif raw in ("completed", "failed"):
+                            elif raw in ("completed", "failed", "cancelled"):
+                                # BUG-040: cancelled 也回传, 原映射成 assigned 误导前端
                                 status = raw
                             else:
                                 status = "assigned"

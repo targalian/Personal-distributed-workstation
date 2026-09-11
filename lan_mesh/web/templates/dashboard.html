@@ -228,8 +228,11 @@
   .pm-meta{font-size:13px;color:var(--dim);line-height:1.6}
   .pm-meta span{color:var(--text)}
   .team-block{margin-left:20px;margin-top:10px;padding-left:16px;border-left:2px solid var(--border)}
-  .team-head{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;margin-bottom:6px}
-  .member-row{display:flex;align-items:center;gap:6px;padding:4px 0;font-size:13px;color:var(--dim);margin-left:20px;padding-left:14px;border-left:1px solid var(--border)}
+  .team-head{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;margin-bottom:6px;cursor:pointer;user-select:none}
+  .team-head:hover{color:var(--accent)}
+  .team-block.collapsed .team-members{display:none}
+  .member-row{display:flex;align-items:center;gap:6px;padding:4px 0;font-size:13px;color:var(--dim);margin-left:20px;padding-left:14px;border-left:1px solid var(--border);cursor:pointer}
+  .member-row:hover{background:var(--surface2)}
   .member-row span{color:var(--text)}
   .progress-bar{height:6px;background:var(--surface2);border-radius:3px;overflow:hidden;margin-top:6px}
   .progress-fill{height:100%;background:var(--green);border-radius:3px;transition:width .5s ease}
@@ -734,6 +737,8 @@
     <tbody id="cost-body"></tbody>
   </table>
   </div>
+  <div class="stitle">☁️ 云存储同步 <span style="font-weight:400;font-size:11px;color:var(--dim)">(S3 兼容, 跨主机共享目录; 状态源 /api/cloud-sync, UI-069)</span></div>
+  <div id="cloud-sync-card"><div class="empty"><p>加载中...</p></div></div>
 </div>
 
 <!-- 面板: Station Director (默认显示) -->
@@ -864,8 +869,19 @@
     <div class="empty" style="grid-column:1/-1"><p>加载中...</p></div>
   </div>
   <div id="runtime-errors"></div>
-  <div class="stitle">🧠 按模型统计</div>
+  <div class="stitle">🧠 按模型统计 <span style="font-weight:400;font-size:11px;color:var(--dim)">(数据源: SQLite 审计表)</span></div>
   <div id="runtime-model-table"><div class="empty"><p>暂无数据</p></div></div>
+  <div class="stitle">⚡ 执行统计 <span style="font-weight:400;font-size:11px;color:var(--dim)">(数据源: JSONL 追踪日志, 含子任务执行层 — 与上方 SQLite 审计表互补, UI-068)</span></div>
+  <div class="toolbar" style="padding:0 0 10px">
+    <select id="rstats-hours" onchange="loadRuntimeStats()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:13px">
+      <option value="1" selected>窗口 1h</option>
+      <option value="6">窗口 6h</option>
+      <option value="24">窗口 24h</option>
+      <option value="168">窗口 7d</option>
+    </select>
+    <span style="font-size:12px;color:var(--dim)" id="rstats-window-info"></span>
+  </div>
+  <div id="rstats-panel"><div class="empty"><p>加载中...</p></div></div>
   <div class="stitle">📝 调用明细 (最近 50 条)</div>
   <div id="runtime-call-table" style="overflow-x:auto"><div class="empty"><p>暂无数据</p></div></div>
   <div class="stitle">🧵 子任务轨迹 (最近 30 条)</div>
@@ -1111,6 +1127,8 @@ function connectWS(){
       if(st==='awaiting_input'){showToast(`❓ PM 请求决策: ${msg.data.clarification_question||'请查看 PM 线程'}`,'info');}
     }
     if(msg.type==='team_update'){refreshPMAgents();}
+    // iter-101 (UI-069): 云同步结果广播 (手动/定时/他机触发) — 静默刷新状态卡, 不打扰 toast
+    if(msg.type==='cloud_sync'){const cs=document.getElementById('cloud-sync-card');if(cs&&cs.isConnected)loadCloudSync();}
     if(msg.type==='pm_thread_attached'){onPMThreadAttached(msg.data);}
     if(msg.type==='pm_thread_message'){/* 线程消息已通过 API 响应处理 */}
     if(msg.type==='progress_report'){
@@ -1339,12 +1357,64 @@ async function showTaskDetail(id){
   ${deliverySec}
   <div class="modal-sec"><h3>子任务 (${(t.subtasks||[]).length})</h3>${steps||'<p style="color:var(--dim)">无子任务</p>'}</div>
   <div class="modal-sec"><h3>输出结果</h3>${out}</div>
+  <div class="modal-sec" id="task-cost-sec" style="display:none"><h3>💰 成本预估</h3><div id="task-cost-box"></div></div>
+  <div class="modal-sec" id="task-ckpt-sec" style="display:none"><h3>📌 断点 (Checkpoints)</h3><div id="task-ckpt-box"></div></div>
   <div style="margin-top:18px;display:flex;gap:10px;justify-content:flex-end">
     ${canAct?`<button class="btn sm" style="background:#e5a33c;color:#fff;border:none" onclick="closeOverlayForce();pauseTask('${t.task_id}','${escJs(t.name||'')}')">&#10074;&#10074; 暂停</button><button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="closeOverlayForce();cancelTask('${t.task_id}','${escJs(t.name||'')}')">&#9724; 取消任务</button>`:''}
     <button class="btn sm" onclick="closeOverlayForce()">关闭</button>
     <button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="deleteTask('${t.task_id}','${escJs(t.name||'')}')">🗑️ 删除任务</button>
   </div>`;
   document.getElementById('overlay').classList.add('show');
+  const mtok=(window._taskModalSeq=(window._taskModalSeq||0)+1); // iter-101: 异步段回来时验证弹窗未被替换
+  loadTaskCostSec(t.task_id,mtok);loadTaskCkptSec(t.task_id,mtok); // iter-101 UI-066: 异步补成本/断点段, 无数据静默隐藏
+}
+// iter-101 (UI-066): 任务详情弹窗 — 成本预估段 (GET /api/tasks/{id}/cost-estimate)
+async function loadTaskCostSec(taskId,mtok){
+  try{
+    const r=await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/cost-estimate`);
+    if(!r.ok)return;
+    const e=await r.json();
+    const sec=document.getElementById('task-cost-sec');
+    if(!sec||!sec.isConnected||(mtok&&window._taskModalSeq!==mtok))return; // 弹窗已关闭/被替换
+    const fit=e.budget_fit||{};
+    const fitColor={ok:'#4ade80',tight:'#ffa94d',insufficient:'#ff6b6b'}[fit.status]||'var(--dim)';
+    const rows=[['预估 Token',`<b>${Number(e.estimated_tokens||0).toLocaleString()}</b>`],
+      ['预估依据',{baseline:'文本基线',history:'历史均值',mixed:'基线+历史混合',failed:'预估失败'}[e.basis]||esc(e.basis||'—')],
+      ['置信度',{high:'高',medium:'中',low:'低',none:'无'}[e.confidence]||esc(e.confidence||'—')],
+      ['历史样本',`${Number(e.history_samples||0)} 个 (均值 ${Number(e.history_avg_tokens||0).toLocaleString()})`],
+      ['预算适配',`<span style="color:${fitColor};font-weight:700">${esc(fit.label||'—')}</span>${fit.advice?` <span style="color:var(--dim);font-size:12px">${esc(fit.advice)}</span>`:''}`]];
+    if(e.saved_estimate)rows.push(['提交时预估',`<span style="color:var(--dim)">${Number(e.saved_estimate).toLocaleString()} token (落盘)</span>`]);
+    document.getElementById('task-cost-box').innerHTML=`<table class="fleet-table"><tbody>`+rows.map(x=>`<tr><td style="color:var(--dim);width:110px">${x[0]}</td><td>${x[1]}</td></tr>`).join('')+`</tbody></table>`;
+    sec.style.display='';
+  }catch(err){/* 静默隐藏 */}
+}
+// iter-101 (UI-066): 任务详情弹窗 — 断点列表段 (GET /api/tasks/{id}/checkpoints)
+async function loadTaskCkptSec(taskId,mtok){
+  try{
+    const r=await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/checkpoints`);
+    if(!r.ok)return;
+    const d=await r.json();
+    const sec=document.getElementById('task-ckpt-sec');
+    if(!sec||!sec.isConnected||(mtok&&window._taskModalSeq!==mtok))return;
+    if(!d.total){sec.remove();return;} // 无断点静默隐藏
+    document.getElementById('task-ckpt-box').innerHTML=`<table class="fleet-table"><thead><tr><th>Checkpoint</th><th>阶段</th><th>创建时间</th></tr></thead><tbody>`+
+      (d.checkpoints||[]).map(c=>`<tr><td style="font-family:monospace;font-size:12px">${esc(String(c.checkpoint_id||'').slice(0,12))}</td><td>${esc(c.phase||'—')}</td><td>${fmtTime(c.created_at)}</td></tr>`).join('')+`</tbody></table>`
+      +`<div style="margin-top:10px;text-align:right"><button class="btn sm primary" onclick="resumeTask('${escJs(taskId)}')">▶️ 断点恢复</button></div>`;
+    sec.style.display='';
+  }catch(e){/* 静默隐藏 */}
+}
+// iter-101 (UI-066): 断点恢复 (复用 iter-53 POST /api/tasks/{id}/resume)
+async function resumeTask(taskId){
+  if(!confirm('从最新执行态快照恢复该任务？PM 将续跑未完成部分。'))return;
+  try{
+    const r=await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/resume`,{method:'POST'});
+    if(r.ok){
+      showToast('▶️ 任务已从断点恢复','ok');closeOverlayForce();refreshTasks();refreshPMAgents();
+    }else{
+      const d=await r.json().catch(()=>({}));
+      showToast('恢复失败: '+(d.detail||(r.status===404?'无执行态快照':r.status)),'err');
+    }
+  }catch(e){showToast('恢复请求异常: '+e.message,'err');}
 }
 async function deleteTask(taskId, name){
   if(!confirm(`确定删除任务 "${name}" 及其 PM 记录？此操作不可恢复。`))return;
@@ -1473,6 +1543,7 @@ async function refreshTools(){
 
 // ── 模型资源面板 ──
 async function refreshResources(){
+  loadCloudSync(); // iter-101 UI-069: 云存储同步状态卡
   try{
     const r=await apiFetch('/api/resources');const d=await r.json();
     renderResAlerts(d.alerts||[]);
@@ -1507,6 +1578,60 @@ async function refreshResources(){
     }).join('');
   }catch(e){console.error(e);}
   finally{refreshRotationPlan();refreshCostByTask();}  // 早退分支也必须刷新轮换表与成本表
+}
+// iter-101 (UI-069): 云存储同步状态卡 — GET /api/cloud-sync/status
+let _csDegraded=false; // 503/未启动降级态: 禁用两个操作按钮
+async function loadCloudSync(){
+  const box=document.getElementById('cloud-sync-card');
+  if(!box)return;
+  try{
+    const r=await apiFetch('/api/cloud-sync/status');
+    if(!r.ok){box.innerHTML='<div class="empty"><p>状态加载失败: '+r.status+'</p></div>';return;}
+    renderCloudSync(await r.json());
+  }catch(e){box.innerHTML='<div class="empty"><p>状态加载失败: '+esc(e.message)+'</p></div>';}
+}
+function renderCloudSync(s){
+  const box=document.getElementById('cloud-sync-card');
+  if(!box)return;
+  // 降级判据: 完整状态含 endpoint 字段; 未启动时后端只回 4 字段+message
+  _csDegraded=!(s.enabled&&s.endpoint);
+  const badge=(on,tOn,tOff)=>`<span class="badge ${on?'idle':'archived'}" style="margin-right:6px">${on?tOn:tOff}</span>`;
+  const last=s.last_sync||null;
+  const errs=(last&&last.errors||[]);
+  const lastTxt=last?`↑${Number(last.uploaded)||0} ↓${Number(last.downloaded)||0} · ${Number(last.duration||0).toFixed(1)}s${errs.length?` · <span style="color:#ff6b6b">${errs.length} 错误</span>`:''}`:'暂无同步记录';
+  const rows=[
+    ['状态',badge(!!s.enabled,'已启用','未启用')+badge(s.configured!==false&&!!s.endpoint,'已配置','未配置')+badge(!!s.running,'守护运行中','守护未运行')],
+    ['目标',s.endpoint?`<span style="font-family:monospace;font-size:12px">${esc(s.endpoint)}</span> · bucket <b>${esc(s.bucket||'—')}</b> · 前缀 ${esc(s.prefix||'—')}<br><span style="color:var(--dim);font-size:12px">本地: ${esc(s.local_path||'—')}</span>`:`<span style="color:var(--dim)">${esc(s.message||'未配置 endpoint')}</span>`],
+    ['自动同步',s.auto_sync?`每 ${Number(s.sync_interval)||0}s`:'关闭'],
+    ['最近同步',lastTxt]];
+  box.innerHTML=`<table class="fleet-table"><tbody>`+rows.map(x=>`<tr><td style="color:var(--dim);width:90px;vertical-align:top">${x[0]}</td><td>${x[1]}</td></tr>`).join('')+`</tbody></table>`
+    +`<div style="margin-top:10px;display:flex;gap:10px">`
+    +`<button class="btn sm primary" id="cs-sync-btn" onclick="cloudSyncNow(this)" ${_csDegraded?'disabled title="云存储同步未启动/未配置, 按钮不可用"':''}>🔄 立即同步</button>`
+    +`<button class="btn sm" id="cs-test-btn" onclick="cloudSyncTest(this)" ${_csDegraded?'disabled title="云存储同步未启动/未配置, 按钮不可用"':''}>🔗 测试连接</button>`
+    +(_csDegraded?`<span style="font-size:12px;color:var(--dim);align-self:center">${esc(s.message||'云存储同步未启动')} — 在 config.yaml cloud_storage 段启用后重启生效</span>`:'')
+    +`</div>`;
+}
+async function cloudSyncNow(btn){
+  if(btn){btn.disabled=true;btn.textContent='⏳ 同步中...';}
+  try{
+    const r=await apiFetch('/api/cloud-sync/sync',{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){showToast('同步失败: '+(d.detail||(r.status===503?'云存储同步未启动':r.status)),'err');return;}
+    const errs=d.errors||[];
+    showToast(errs.length?`⚠️ 同步完成但有 ${errs.length} 个错误: ↑${d.uploaded||0} ↓${d.downloaded||0}`:`☁️ 同步完成: ↑${d.uploaded||0} ↓${d.downloaded||0} (${Number(d.duration||0).toFixed(1)}s)`,errs.length?'err':'ok');
+  }catch(e){showToast('同步请求异常: '+e.message,'err');}
+  finally{loadCloudSync();}
+}
+async function cloudSyncTest(btn){
+  if(btn){btn.disabled=true;btn.textContent='⏳ 测试中...';}
+  try{
+    const r=await apiFetch('/api/cloud-sync/test',{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){showToast('测试失败: '+(d.detail||(r.status===503?'云存储同步未启动':r.status)),'err');return;}
+    if(d.ok)showToast(`☁️ 连接正常: ${d.bucket||''} @ ${d.endpoint||''}`,'ok');
+    else showToast('连接失败: '+(d.error||'未知错误'),'err');
+  }catch(e){showToast('测试请求异常: '+e.message,'err');}
+  finally{loadCloudSync();}
 }
 async function refreshRotationPlan(){
   // R5: 多池轮换调度方案 (逐模型候选池优先级)
@@ -3037,9 +3162,10 @@ async function renderPMAgents(){
     const teamHtml=(teams||[]).map(t=>{
       const members=(t.members||[]).map(m=>{
         const st=m.status==='busy'?'busy':m.status==='idle'?'idle':'archived';
-        return `<div class="member-row">👤 <span>${esc(m.agent_name||m.agent_id||'未知')}</span> [${esc(m.role||'worker')}] ${esc(m.status||'idle')}${m.current_task?' · 执行: '+esc(m.current_task):''}${m.progress?` (${Math.round(m.progress*100)}%)`:''}</div>`;
+        return `<div class="member-row" title="点击查看 Agent 详情 (UI-067)" onclick="showAgentDetail('${escJs(m.agent_id||'')}','${escJs(m.agent_name||'')}')">👤 <span>${esc(m.agent_name||m.agent_id||'未知')}</span> [${esc(m.role||'worker')}] ${esc(m.status||'idle')}${m.current_task?' · 执行: '+esc(m.current_task):''}${m.progress?` (${Math.round(m.progress*100)}%)`:''}</div>`;
       }).join('');
-      return `<div class="team-block"><div class="team-head">👥 ${esc(t.team_name||t.team_id)} <span class="badge ${t.status==='active'?'idle':t.status==='pending'?'busy':'archived'}">${esc(t.status||'pending')}</span> <span style="font-size:12px;color:var(--dim)">类型: ${esc(t.team_type||'single')}</span></div>${members||'<div class="member-row">无成员</div>'}</div>`;
+      const collapsed=window._teamCollapsed&&window._teamCollapsed.has(t.team_id); // iter-101 UI-067: 折叠态跨刷新保持
+      return `<div class="team-block${collapsed?' collapsed':''}"><div class="team-head" title="点击折叠/展开 (UI-067)" onclick="toggleTeamCollapse('${escJs(t.team_id)}')"><span style="font-size:11px;color:var(--dim)">${collapsed?'▶':'▼'}</span>👥 ${esc(t.team_name||t.team_id)} <span class="badge ${t.status==='active'?'idle':t.status==='pending'?'busy':'archived'}">${esc(t.status||'pending')}</span> <span style="font-size:12px;color:var(--dim)">类型: ${esc(t.team_type||'single')} · ${(t.members||[]).length} 成员</span></div><div class="team-members">${members||'<div class="member-row" style="cursor:default">无成员</div>'}</div></div>`;
     }).join('');
     const taskList=(pm.task_list||[]);
     const taskHtml=taskList.length?`<div style="font-size:12px;color:var(--dim);margin-top:6px">📋 任务列表: ${taskList.map(t=>esc(t.name||'')+`[${esc(t.status||'pending')}]`).join(', ')}</div>`:'';
@@ -3063,6 +3189,56 @@ async function renderPMAgents(){
     const c=r.status==='completed'?'idle':r.status==='failed'?'archived':'busy';
     return `<div class="task-step"><span class="step-dot ${r.status==='completed'?'completed':r.status==='failed'?'failed':'assigned'}"></span><span>${esc(r.pm_name||r.pm_id)} → ${esc(r.reporter_id||'').slice(0,8)}: ${esc(r.task_name||'')} <span class="badge ${c}">${esc(r.status)} ${pct}%</span> ${esc(r.message||'').slice(0,80)}</span></div>`;
   }).join('');
+}
+// iter-101 (UI-067): 团队折叠 — 折叠态存 window._teamCollapsed, WS 刷新后保持
+function toggleTeamCollapse(teamId){
+  window._teamCollapsed=window._teamCollapsed||new Set();
+  const s=window._teamCollapsed;
+  if(s.has(teamId))s.delete(teamId);else s.add(teamId);
+  const blk=document.querySelector(`#pm-tree .team-block .team-head[onclick*="${CSS.escape(teamId)}"]`);
+  const block=blk?blk.closest('.team-block'):null;
+  if(block){
+    block.classList.toggle('collapsed',s.has(teamId));
+    const ar=block.querySelector('.team-head span');
+    if(ar)ar.textContent=s.has(teamId)?'▶':'▼';
+  }
+}
+// iter-101 (UI-067): 成员点击 → Agent 详情弹窗 (GET /api/agents/{id}: 技能/状态/主机)
+async function showAgentDetail(agentId,fallbackName){
+  const ov=document.getElementById('overlay'),md=document.getElementById('modal');
+  const tok=(window._agentModalSeq=(window._agentModalSeq||0)+1); // 异步回来后验证弹窗未被替换/关闭
+  const live=()=>window._agentModalSeq===tok&&ov.classList.contains('show');
+  md.innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🤖 ${esc(fallbackName||agentId||'Agent')}</h2><div class="empty"><p>加载中...</p></div>`;
+  ov.classList.add('show');
+  if(!agentId){
+    md.innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🤖 ${esc(fallbackName||'Agent')}</h2><div class="empty"><p>该成员未关联已注册 Agent (无 agent_id)</p></div>`;
+    return;
+  }
+  try{
+    const r=await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`);
+    if(!live())return;
+    if(!r.ok){
+      md.innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🤖 ${esc(fallbackName||agentId)}</h2><div class="empty"><p>${r.status===404?'Agent 未注册或已离线':'加载失败: '+r.status}</p><p class="hint" style="font-family:monospace">${esc(agentId)}</p></div>`;
+      return;
+    }
+    const a=await r.json();
+    if(!live())return;
+    const stColor={online:'#4ade80',idle:'#4ade80',busy:'#ffa94d',offline:'#ff6b6b'}[a.status]||'var(--dim)';
+    const rows=[
+      ['Agent ID',`<span style="font-family:monospace;font-size:12px">${esc(a.agent_id||'')}</span>`],
+      ['状态',`<span style="color:${stColor};font-weight:700">${esc(a.status||'—')}</span> · 并发 ${Number(a.current_task_count)||0}/${Number(a.max_concurrent_tasks)||0}`],
+      ['所在主机',`${esc(a.hostname||'—')} <span style="color:var(--dim)">(${esc(a.ip||'-')}:${Number(a.api_port)||0} · ${esc(a.device_id||'-')})</span>`],
+      ['技能',(a.skills||[]).length?(a.skills||[]).map(s=>`<span class="badge idle" style="margin:2px">${esc(typeof s==='string'?s:(s.name||JSON.stringify(s)))}</span>`).join(''):'<span style="color:var(--dim)">—</span>'],
+      ['工具',(a.tools||[]).length?esc((a.tools||[]).map(s=>typeof s==='string'?s:(s.name||'')).filter(Boolean).join(', ')):'<span style="color:var(--dim)">—</span>'],
+      ['模型偏好',esc(Object.keys(a.model_preferences||{}).length?JSON.stringify(a.model_preferences):'—')],
+      ['版本 / 注册',`${esc(a.version||'—')} · ${fmtTime(a.registered_at)}`],
+      ['最后心跳',fmtTime(a.last_seen)]];
+    md.innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🤖 ${esc(a.agent_name||a.agent_id)}</h2>`
+      +`<table class="fleet-table"><tbody>`+rows.map(x=>`<tr><td style="color:var(--dim);width:110px;vertical-align:top">${x[0]}</td><td>${x[1]}</td></tr>`).join('')+`</tbody></table>`
+      +`<div style="margin-top:18px;display:flex;justify-content:flex-end"><button class="btn sm" onclick="closeOverlayForce()">关闭</button></div>`;
+  }catch(e){
+    if(live())md.innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>🤖 Agent 详情</h2><div class="empty"><p>加载异常: ${esc(e.message)}</p></div>`;
+  }
 }
 
 // ── 项目工作台 (多维合一) ──
@@ -3808,6 +3984,43 @@ async function refreshRuntime(){
   loadStallAlerts();
   loadTaskMemory();
   loadErrors();
+  loadRuntimeStats(); // iter-101 UI-068: JSONL 执行统计 (独立时间窗)
+}
+// iter-101 (UI-068): 执行统计 — GET /api/runtime/stats (JSONL 追踪源, 含子任务层)
+async function loadRuntimeStats(){
+  const box=document.getElementById('rstats-panel');
+  if(!box)return;
+  const hours=document.getElementById('rstats-hours').value||'1';
+  try{
+    const r=await apiFetch(`/api/runtime/stats?hours=${hours}`);
+    if(!r.ok){box.innerHTML='<div class="empty"><p>加载失败: '+r.status+(r.status===503?' (秘书未激活)':'')+'</p></div>';return;}
+    renderRuntimeStats(await r.json());
+  }catch(e){box.innerHTML='<div class="empty"><p>加载失败: '+esc(e.message)+'</p></div>';}
+}
+function renderRuntimeStats(s){
+  const box=document.getElementById('rstats-panel');
+  if(!box)return;
+  const info=document.getElementById('rstats-window-info');
+  if(info)info.textContent=`窗口 ${s.window_hours||'?'}h · LLM 调用 ${Number(s.llm_calls)||0} 次`;
+  const st=s.subtasks||{};
+  const stTotal=Number(st.total)||0;
+  const stRate=stTotal?((Number(st.completed)||0)/stTotal*100).toFixed(0)+'%':'—';
+  const cards=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">`
+    +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">子任务成功率</div><div style="font-size:22px;font-weight:700;margin-top:4px;color:${stTotal&&stRate!=='—'&&Number(st.completed)/stTotal>=0.7?'#4ade80':'#ffa94d'}">${stRate}</div><div style="font-size:11px;color:var(--dim);margin-top:2px">${Number(st.completed)||0}✓ / ${Number(st.failed)||0}✗ · 共 ${stTotal}</div></div>`
+    +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">LLM 调用</div><div style="font-size:22px;font-weight:700;margin-top:4px">${Number(s.llm_calls)||0}</div><div style="font-size:11px;color:var(--dim);margin-top:2px">均延 ${_rtFmtMs(s.avg_latency_ms)} · P99 ${_rtFmtMs(s.p99_latency_ms)}</div></div>`
+    +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">Token 消耗</div><div style="font-size:22px;font-weight:700;margin-top:4px">${fmtTokens((Number(s.total_input_tokens)||0)+(Number(s.total_output_tokens)||0))}</div><div style="font-size:11px;color:var(--dim);margin-top:2px">入 ${fmtTokens(s.total_input_tokens)} · 出 ${fmtTokens(s.total_output_tokens)}</div></div>`
+    +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">调用状态</div><div style="font-size:13px;margin-top:6px;line-height:1.6">${Object.entries(s.by_status||{}).map(([k,v])=>`${_rtStatusBadge(k)} ×${Number(v)||0}`).join(' ')||'—'}</div></div></div>`;
+  const distTbl=(label,obj)=>{
+    const es=Object.entries(obj||{}).sort((a,b)=>b[1]-a[1]);
+    if(!es.length)return '';
+    const max=Number(es[0][1])||1;
+    return `<div class="stitle" style="font-size:12px;margin:10px 0 6px">${label}</div><table class="fleet-table"><tbody>`
+      +es.map(([k,v])=>`<tr><td style="width:220px">${esc(k)}</td><td style="width:60px;text-align:right"><b>${Number(v)||0}</b></td><td><div style="background:var(--surface2);border-radius:3px;height:8px"><div style="width:${Math.max(2,Math.round((Number(v)||0)/max*100))}%;background:var(--accent);border-radius:3px;height:8px"></div></div></td></tr>`).join('')+`</tbody></table>`;
+  };
+  const errTbl=(s.errors||[]).length?`<div class="stitle" style="font-size:12px;margin:10px 0 6px">错误 Top5</div><table class="fleet-table"><thead><tr><th>模型: 错误</th><th>次数</th></tr></thead><tbody>`
+    +s.errors.map(e=>`<tr><td style="color:#ff6b6b">${esc(e.model||'')} : ${esc(e.error||'')}</td><td><b>${Number(e.count)||0}</b></td></tr>`).join('')+`</tbody></table>`:'';
+  const empty=(!(Number(s.llm_calls)||0)&&!stTotal)?'<div class="empty"><p>窗口内无 JSONL 追踪记录</p><p class="hint">子任务执行与 LLM 调用会自动写入追踪日志</p></div>':'';
+  box.innerHTML=cards+empty+distTbl('模型分布 (JSONL)',s.by_model)+distTbl('技能分布 (子任务)',s.by_skill)+errTbl;
 }
 async function loadTaskFlowList(){
   const box=document.getElementById('taskflow-list');
@@ -4032,6 +4245,8 @@ async function loadTaskMemory(){
 }
 function renderTaskMemory(m){
   const box=document.getElementById('task-memory-panel');
+  window._tmLastM=m; // iter-101 UI-066: 缓存供下钻重渲染
+  if(window._tmSelType&&!(m.by_type||[]).some(g=>g.task_type===window._tmSelType))window._tmSelType='';
   if(!m.total){box.innerHTML='<div class="empty"><p>暂无任务记忆</p><p class="hint">任务完成后会自动沉淀经验于此, 供后续同类任务规划参考 (F4.1)</p></div>';return;}
   const pct=v=>(v*100).toFixed(0)+'%';
   const errs=(m.common_errors||[]).map(e=>`${esc(String(e[0]||''))} ×${e[1]}`).join(' · ')||'—';
@@ -4041,10 +4256,38 @@ function renderTaskMemory(m){
     +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">推荐协作模式</div><div style="font-size:15px;font-weight:700;margin-top:8px">${esc(m.recommended_mode||'—')}</div></div>`
     +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">常见错误预警</div><div style="font-size:12px;margin-top:6px;line-height:1.5">${errs}</div></div></div>`;
   const typeTbl=(m.by_type||[]).length?`<table class="fleet-table"><thead><tr><th>任务类型</th><th>次数</th><th>成功率</th><th>平均耗时</th><th>推荐模式</th></tr></thead><tbody>`+
-    m.by_type.map(g=>`<tr><td><b>${esc(g.task_type)}</b></td><td>${g.count}</td><td style="color:${g.success_rate>=0.7?'#4ade80':'#ffa94d'}">${pct(g.success_rate)}</td><td>${(g.avg_duration||0)>=60?((g.avg_duration/60).toFixed(1)+'m'):((g.avg_duration||0).toFixed(0)+'s')}</td><td>${esc(g.recommended_mode||'—')}</td></tr>`).join('')+`</tbody></table>`:'';
+    m.by_type.map(g=>`<tr style="cursor:pointer${g.task_type===window._tmSelType?';background:var(--surface2)':''}" title="点击下钻该类型统计 (UI-066)" onclick="drillMemoryType('${escJs(g.task_type)}')"><td><b>${esc(g.task_type)}</b>${g.task_type===window._tmSelType?' <span style="color:var(--dim);font-size:11px">▼</span>':''}</td><td>${g.count}</td><td style="color:${g.success_rate>=0.7?'#4ade80':'#ffa94d'}">${pct(g.success_rate)}</td><td>${(g.avg_duration||0)>=60?((g.avg_duration/60).toFixed(1)+'m'):((g.avg_duration||0).toFixed(0)+'s')}</td><td>${esc(g.recommended_mode||'—')}</td></tr>`).join('')+`</tbody></table>`:'';
   const recentTbl=(m.recent||[]).length?`<div class="stitle" style="font-size:12px;margin:12px 0 8px">最近沉淀 (${m.recent.length} 条)</div>`+`<table class="fleet-table"><thead><tr><th>任务</th><th>类型</th><th>协作模式</th><th>团队</th><th>耗时</th><th>结果</th><th>关键词</th></tr></thead><tbody>`+
     m.recent.map(r=>`<tr><td><b>${esc(r.task_name||'—')}</b></td><td>${esc(r.task_type)}</td><td>${esc(r.collaboration_mode||'—')}</td><td>${r.team_size||'—'}</td><td>${(r.duration_secs||0)>=60?((r.duration_secs/60).toFixed(1)+'m'):((r.duration_secs||0).toFixed(0)+'s')}</td><td>${r.success?'<span style="color:#4ade80">✅</span>':('<span style="color:#ff6b6b" title="'+esc(r.error_pattern||'')+'">❌</span>')}</td><td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(r.keywords||[]).map(esc).join(', ')||'—'}</td></tr>`).join('')+`</tbody></table>`:'';
-  box.innerHTML=cards+typeTbl+recentTbl;
+  box.innerHTML=cards+typeTbl+`<div id="tm-type-stats"></div>`+recentTbl;
+  if(window._tmSelType)loadMemoryDrill(window._tmSelType); // 刷新后保持下钻态 (纯加载, 不切换)
+}
+// iter-101 (UI-066): 类型行点击 — 切换选中态后重渲染 (再次点击同类型 = 收起)
+function drillMemoryType(tt){
+  window._tmSelType=(window._tmSelType===tt)?'':tt;
+  if(window._tmLastM)renderTaskMemory(window._tmLastM);
+}
+// iter-101 (UI-066): 拉取并渲染类型下钻统计卡 + 常见错误 Top3 (GET /api/task-memory/stats)
+async function loadMemoryDrill(tt){
+  const b2=document.getElementById('tm-type-stats');
+  if(b2)b2.innerHTML='<div class="empty"><p>统计加载中...</p></div>';
+  try{
+    const r=await apiFetch('/api/task-memory/stats?task_type='+encodeURIComponent(tt));
+    if(!r.ok||window._tmSelType!==tt)return; // 失败/已切换类型时静默
+    const s=await r.json();
+    const el=document.getElementById('tm-type-stats');
+    if(!el)return;
+    if(!s.total){el.innerHTML='';return;}
+    const pct=v=>((v||0)*100).toFixed(0)+'%';
+    const errs=(s.common_errors||[]).map(e=>`<span style="color:#ffa94d">${esc(String(e[0]||''))}</span> ×${Number(e[1])||0}`).join(' · ')||'—';
+    el.innerHTML=`<div class="stitle" style="font-size:12px;margin:12px 0 8px">🔬 类型下钻: ${esc(tt)} <span style="color:var(--dim);font-weight:400">(点击类型行收起)</span></div>`
+      +`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">`
+      +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">同类任务</div><div style="font-size:20px;font-weight:700;margin-top:4px">${Number(s.total)||0}</div></div>`
+      +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">成功率</div><div style="font-size:20px;font-weight:700;margin-top:4px;color:${(s.success_rate||0)>=0.7?'#4ade80':'#ff6b6b'}">${pct(s.success_rate)}</div></div>`
+      +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">平均耗时</div><div style="font-size:20px;font-weight:700;margin-top:4px">${(s.avg_duration||0)>=60?((s.avg_duration/60).toFixed(1)+'m'):((s.avg_duration||0).toFixed(0)+'s')}</div></div>`
+      +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">推荐模式</div><div style="font-size:14px;font-weight:700;margin-top:8px">${esc(s.recommended_mode||'—')}</div></div>`
+      +`<div class="stat-card"><div style="font-size:12px;color:var(--dim)">常见错误 Top</div><div style="font-size:12px;margin-top:6px;line-height:1.5">${errs}</div></div></div>`;
+  }catch(e){/* 下钻失败不打扰主面板 */}
 }
 // iter-44: 错误追踪面板 (F1.4 异常聚合可视化)
 async function loadErrors(){

@@ -66,6 +66,75 @@ def _build_react_rules_prompt(cwd: str) -> str:
     )
 
 
+def resolve_cli_backend(requested: str) -> tuple:
+    """解析本次调用应使用的 CLI Agent 后端 (iter-101, BUG-039 根因2)。
+
+    原实现把「拼错的后端名」与「未指定」同等对待, 静默回退到首选后端并真的
+    开跑 —— 实测 `backend="nonexistent_backend_zz"` 拉起 claude 跑了 180s,
+    调用方拿不到任何提示。未知后端名一律显式失败。
+
+    Args:
+        requested: 调用方指定的后端名 (可为空表示自动选择)
+
+    Returns:
+        `(backend, error_result)`; `error_result` 非空时表示应直接返回它
+    """
+    backend = str(requested or "").lower().strip()
+    if backend and backend not in CLI_AGENT_BACKENDS:
+        return "", {
+            "error": (f"未知的 CLI Agent 后端: '{backend}' "
+                      f"(支持: {sorted(CLI_AGENT_BACKENDS)})"),
+            "status": "failed",
+            "backend": backend,
+        }
+    if backend:
+        if not _which_with_fallback(CLI_AGENT_BACKENDS[backend]["detect"]):
+            return "", {
+                "error": (f"CLI Agent '{backend}' 未安装 "
+                          f"(which {CLI_AGENT_BACKENDS[backend]['detect']} 未找到)"),
+                "status": "failed",
+                "backend": backend,
+            }
+        return backend, None
+    backend = get_preferred_cli_agent()
+    if not backend:
+        hint = ("请安装: npm install -g @anthropic-ai/claude-code "
+                "或 pip install aider-chat")
+        return "", {
+            "error": f"未检测到可用的 CLI Agent。{hint}",
+            "hint": "支持: claude (Claude Code), codex (OpenAI), aider",
+            "status": "failed",
+        }
+    return backend, None
+
+
+def infer_result_status(result) -> tuple:
+    """从技能处理器返回值推断子任务成败 (iter-101, BUG-039 根因3)。
+
+    `AgentRuntime.execute` 原先只要 handler 未抛异常就一律记 `completed`,
+    而各 handler 表达失败的方式是**返回** `{"error": ...}` 或
+    `{"status": "failed"|"timeout"}` —— 于是护栏拒绝、CLI 非零退出、执行
+    超时全部被上报为成功: PM 侧 `handle_subagent_failure` 的重试与升级链
+    永不触发, 交付物是错的却显示一切正常。
+
+    Args:
+        result: handler 返回值 (通常为 dict)
+
+    Returns:
+        `(status, error)` 二元组; status 取 `completed` / `failed`
+    """
+    if not isinstance(result, dict):
+        return "completed", ""
+    inner = str(result.get("status", "") or "").strip().lower()
+    if inner in ("failed", "timeout", "error", "cancelled"):
+        err = str(result.get("error", "") or result.get("stderr", "") or "")
+        return ("cancelled" if inner == "cancelled" else "failed"), err
+    err = str(result.get("error", "") or "")
+    if err.strip():
+        return "failed", err
+    return "completed", ""
+
+
 def _resolve_tool_path(cwd: str, raw_path: str) -> str:
     """BUG-038: 把 file_read/file_write 的相对路径锚定到子 Agent 作业目录。
 
@@ -185,6 +254,16 @@ CLI_AGENT_ALLOWED_ROOTS = [
     r for r in os.environ.get("CLI_AGENT_ALLOWED_ROOTS", "").split(os.pathsep) if r
 ]
 
+# 显式停用的 CLI 后端 (逗号分隔; iter-101, BUG-039 根因4)
+# detect_cli_agents 只检查可执行文件是否存在, 无法判断「装了但未登录/未配置」
+# —— 实测本机 claude 与 aider 均可 --version 成功 (rc=0) 却在真实调用时
+# 跑满 180s 后 rc=1。凭据探测既慢又不可靠, 故改为显式声明不可用的后端。
+CLI_AGENT_DISABLED_BACKENDS = [
+    name.strip().lower()
+    for name in os.environ.get("CLI_AGENT_DISABLED_BACKENDS", "").split(",")
+    if name.strip()
+]
+
 # 显式开关: 置 1 才允许 CLI Agent 在主仓库内直接作业 (默认禁止, 走影子模式)
 CLI_AGENT_ALLOW_SELF_REPO = os.environ.get("CLI_AGENT_ALLOW_SELF_REPO", "") == "1"
 
@@ -242,8 +321,12 @@ def validate_cli_agent_cwd(
         for root in resolved_roots
     )
     if not ok:
+        # iter-101: 原提示只列白名单, 未告知如何合法放行 —— iter-100 起 PM
+        # 会把业务项目目录注入 cwd, 运维看到拒绝却不知该配哪个变量。
         return (f"[自举护栏] 工作目录不在白名单内: {resolved}"
-                f" (允许: {resolved_roots})")
+                f" (允许: {resolved_roots})。"
+                f" 如需放行业务项目目录, 请在 .env 配置"
+                f" CLI_AGENT_ALLOWED_ROOTS (os.pathsep 分隔的根目录清单)")
     return None
 
 
@@ -387,6 +470,14 @@ def _build_cli_env(backend: str) -> dict:
     # Windows CLI (codex/claude) 需要 HOME; 沙箱进程可能未继承 -> 用 USERPROFILE 补
     if not env.get("HOME") and env.get("USERPROFILE"):
         env["HOME"] = env["USERPROFILE"]
+    # iter-101: codex 定位配置目录 (auth.json) 用的是 CODEX_HOME, 不认 HOME。
+    # 环境净化把它滤掉后, 子进程报「Error finding codex home」直接 rc=1 ——
+    # 未登录与找不到配置目录是两种失败, 此处显式兜底为 ~/.codex。
+    if backend == "codex" and not env.get("CODEX_HOME"):
+        codex_home = os.path.join(
+            env.get("USERPROFILE") or env.get("HOME") or "", ".codex")
+        if os.path.isdir(codex_home):
+            env["CODEX_HOME"] = codex_home
     _harden_git_env(env)
     token_plan_key = os.environ.get("ALIYUN_TOKENPLAN_API_KEY", "")
 
@@ -450,6 +541,8 @@ def detect_cli_agents() -> list[str]:
     """
     available = []
     for name, cfg in CLI_AGENT_BACKENDS.items():
+        if name in CLI_AGENT_DISABLED_BACKENDS:
+            continue
         if _which_with_fallback(cfg["detect"]):
             available.append(name)
     return available
@@ -464,12 +557,22 @@ def get_preferred_cli_agent() -> Optional[str]:
     """
     preferred = os.environ.get("CLI_AGENT_BACKEND", "").lower().strip()
     if preferred and preferred in CLI_AGENT_BACKENDS:
-        if _which_with_fallback(CLI_AGENT_BACKENDS[preferred]["detect"]):
+        if preferred in CLI_AGENT_DISABLED_BACKENDS:
+            logger.warning("指定的 CLI Agent '%s' 已被 "
+                           "CLI_AGENT_DISABLED_BACKENDS 停用, 回退自动检测",
+                           preferred)
+        elif _which_with_fallback(CLI_AGENT_BACKENDS[preferred]["detect"]):
             return preferred
-        logger.warning("指定的 CLI Agent '%s' 未安装, 回退自动检测", preferred)
+        else:
+            logger.warning("指定的 CLI Agent '%s' 未安装, 回退自动检测",
+                           preferred)
 
-    # 自动检测, 按优先级: claude > aider > codex
-    for name in ["claude", "aider", "codex"]:
+    # 自动检测优先级: codex > claude > aider。codex 置首位是安全取向 ——
+    # 它是唯一同时带沙箱 (-s workspace-write) 与显式工作目录 (-C cwd) 的
+    # 后端, 契合自举护栏的意图。
+    for name in ["codex", "claude", "aider"]:
+        if name in CLI_AGENT_DISABLED_BACKENDS:
+            continue
         if _which_with_fallback(CLI_AGENT_BACKENDS[name]["detect"]):
             return name
     return None
@@ -607,19 +710,50 @@ class AgentRuntime:
             if isinstance(result, dict) and "usage" in result:
                 usage = result.pop("usage", {})
             elapsed_ms = (_time.time() - exec_start) * 1000
-            runtime_trace.trace_subtask_end(
-                trace_id, skill, "completed", elapsed_ms,
-                model=usage.get("model", ""),
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                task_id=task_id)
-            return {"output": result, "status": "completed", "usage": usage}
+            return self._finalize_subtask(
+                result, usage, skill, trace_id, task_id, elapsed_ms)
         except Exception as e:
             elapsed_ms = (_time.time() - exec_start) * 1000
             runtime_trace.trace_subtask_end(
                 trace_id, skill, "failed", elapsed_ms,
                 error=str(e), task_id=task_id)
             return {"output": {}, "status": "failed", "error": str(e)}
+
+    def _finalize_subtask(self, result, usage: dict, skill: str,
+                          trace_id, task_id: str, elapsed_ms: float) -> dict:
+        """收尾子任务: 采纳 handler 内层成败信号并写追踪 (BUG-039 根因3)。
+
+        各技能处理器用**返回值** (`{"error": ...}` / `{"status": "failed"}`)
+        而非异常表达失败。原先只要 handler 未抛异常就一律记 `completed`,
+        于是护栏拒绝、CLI 非零退出、执行超时全被上报为成功 —— PM 侧的重试与
+        升级链永不触发, 交付物是错的却显示一切正常。
+
+        Args:
+            result: handler 返回值
+            usage: 已提取的 token 用量
+            skill: 技能类型
+            trace_id: 追踪 ID
+            task_id: 父任务 ID
+            elapsed_ms: 执行耗时 (毫秒)
+
+        Returns:
+            子任务结果字典 (含真实 status)
+        """
+        from . import runtime_trace
+
+        outcome, inner_err = infer_result_status(result)
+        runtime_trace.trace_subtask_end(
+            trace_id, skill, outcome, elapsed_ms,
+            model=usage.get("model", ""),
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            error=inner_err[:500], task_id=task_id)
+        if outcome != "completed":
+            logger.warning("[AgentRuntime] 子任务技能 %s 返回失败: %s",
+                           skill, inner_err[:200])
+            return {"output": result, "status": outcome,
+                    "error": inner_err[:500], "usage": usage}
+        return {"output": result, "status": "completed", "usage": usage}
 
     # ── 技能处理器 ──────────────────────────────────────────────
 
@@ -979,21 +1113,13 @@ class AgentRuntime:
         reject = validate_cli_agent_cwd(cwd, allowed_roots)
         if reject:
             logger.warning("[CLI Agent] cwd 校验拒绝: %s", reject)
-            return {"error": reject, "cwd": cwd}
+            return {"error": reject, "cwd": cwd, "status": "failed"}
 
         # 确定后端
-        backend = input_data.get("backend", "").lower().strip()
-        if backend and backend in CLI_AGENT_BACKENDS:
-            if not _which_with_fallback(CLI_AGENT_BACKENDS[backend]["detect"]):
-                return {"error": f"CLI Agent '{backend}' 未安装 (which {CLI_AGENT_BACKENDS[backend]['detect']} 未找到)"}
-        else:
-            backend = get_preferred_cli_agent()
-            if not backend:
-                available_hint = "请安装: npm install -g @anthropic-ai/claude-code 或 pip install aider-chat"
-                return {
-                    "error": f"未检测到可用的 CLI Agent。{available_hint}",
-                    "hint": "支持: claude (Claude Code), codex (OpenAI), aider",
-                }
+        backend, backend_err = resolve_cli_backend(
+            input_data.get("backend", ""))
+        if backend_err:
+            return backend_err
 
         cfg = CLI_AGENT_BACKENDS[backend]
         logger.info("[CLI Agent] 后端=%s, cwd=%s, timeout=%ds", backend, cwd, timeout)
