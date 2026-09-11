@@ -4,7 +4,7 @@
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
 - 更新时间：2026-09-10
-- 当前迭代：`iter-100`（Codex：BUG-038 子 Agent 实际工作目录未注入修复，BUG-037 孪生缺陷、M1 重跑复盘发现；iter-91~99 已发货）
+- 当前迭代：`iter-102`（Codex：BUG-040 single 模式终态链路三缺口修复，iter-101 根因3 孪生缺陷；iter-91~101 已验证待 Boss 发货）
 
 ## 一、职责边界（长期约定）
 
@@ -36,6 +36,38 @@
 按归属各自提交，不要互相 `git add .`：
 
 **Quest（无待推送改动）**
+
+**Codex（iter-102 BUG-040 single 模式终态链路，已验证待 Boss 发货）**
+- `lan_mesh/pm_agent.py`（**BUG-040，三个缺口**。iter-101 修了 `AgentRuntime.execute` 采纳内层失败信号后，本轮排查发现 single 模式——PM 自己执行——还有三个缺口）：
+  - **根因1（影响面最大）**：`_run_task` 单模式终态判定只认 `failed` —— **cancelled 落到正常分支**，走完整交付链（写交付物 → 上报 completed → 报「任务完成: 完成」）。Boss 取消后 PM 仍上报 completed 并写交付物，是 iter-101 根因3 的孪生缺陷。抽出 `_run_single_pattern` 方法，cancelled → cancelled 终态不写交付物
+  - **根因2**：`execute_directly` 只返回 summary+status，失败时 handler output 里没有 code/summary 字段 → summary 回退到字面量「完成」→ PM 上报的失败原因变成「完成」。`execute_directly` 补回传 `error` 字段，`_run_single_pattern` 失败上报优先取 error 而非 summary
+  - **根因3**：BUG-034 修了 `_clear_subtask_timer`，但终态集合只含 completed/failed —— **cancelled/timeout 的计时器残留** → 之后被误判为「超时」再触发重试（Boss 明确取消的任务被反复重跑直到全局超时）。终态集合扩为四元组
+  - 附带：`_build_subtask_status` cancelled 从 assigned 改为直接透传
+- `lan_mesh/pm_planner.py`（`execute_directly` 补回传 `error` 字段）
+- `lan_mesh/pm_monitor.py`（`_clear_subtask_timer` 终态集合补 cancelled/timeout）
+- `tests/test_core.py`（`TestIter102SingleModeTerminalStates` 6 例，**5 变异全部致红**）
+- `docs/design/03-task-orchestration/README.md`（BUG-040 节 + 变更记录）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-102 收尾）
+
+> **重构副产物**：`_run_task` 从 97 行降到阈值内（抽出 `_run_single_pattern` 后），无新增超标函数。
+
+**Codex（iter-101 BUG-039 CLI Agent 分派链路，已验证待 Boss 发货）**
+- `lan_mesh/agent_runtime.py`（**BUG-039，五个缺口**。Boss 把子任务执行切到 CLI Agent 后本机实测暴露）：
+  - **根因3（影响面最大，属全局性缺陷，不限 CLI）**：各 handler 用**返回值**（`{"error":...}` / `{"status":"failed"|"timeout"}`）而非异常表达失败，而 `execute` 原先只要 handler 未抛异常就一律记 `completed` —— 护栏拒绝、CLI 非零退出、执行超时**全部上报成功**，PM 侧 `handle_subagent_failure` 的重试与升级链**永不触发**。新增 `infer_result_status` + `_finalize_subtask`，`cancelled` 保持独立终态，失败原因随 `error` 上传
+  - **根因2**：原实现把「拼错的后端名」与「未指定」同等对待 → 静默回退并真的开跑（实测 `backend="nonexistent_backend_zz"` 拉起 claude 跑了 **180s**）。抽出 `resolve_cli_backend`，未知后端名与「指定但未安装」一律显式失败
+  - **根因4**：`detect_cli_agents` 只查可执行文件在不在 —— Boss 反馈本机**仅 codex 已登录**，claude/aider 虽装了且 `--version` rc=0（探测区分不出登录态）却在真实调用跑满超时才 rc=1。新增 `CLI_AGENT_DISABLED_BACKENDS` 停用清单（detect 与 `get_preferred_cli_agent` **两处各有一份判断**，漏一处即失效，已各自加测）；自动顺序改为 **codex > claude > aider**（codex 是唯一带沙箱 + 显式 cwd 的后端）
+  - **根因5**：codex 靠 `CODEX_HOME` 定位 `auth.json`，不认 `HOME`；环境净化滤掉后报「Error finding codex home」直接 rc=1 —— 与「未登录」是两种失败，不补会误判成凭据问题。兜底 `~/.codex`（仅 codex、仅目录存在、不覆盖显式值）
+  - **根因1**：护栏拒绝信息补上 `CLI_AGENT_ALLOWED_ROOTS` 指引（原提示只列白名单，运维看到拒绝却不知该配哪个变量）
+- `.env`（`CLI_AGENT_BACKEND` claude→**codex**；新增 `CLI_AGENT_DISABLED_BACKENDS=claude,aider` 与 `CLI_AGENT_ALLOWED_ROOTS=E:\ingobj`。**根因1 的解法刻意放在配置层**：iter-100 起 PM 会把蓝图 `repo_path` 注入子 Agent `cwd`，而 CLI 白名单默认只含 `shared_folder`，于是 iter-100 的修复在 CLI 路径上被打回 —— 但这属部署配置，不该动护栏逻辑）
+- `tests/test_core.py`（`TestIter101CliDispatch` 13 例，**21 变异全部致红**）
+- `docs/design/04-execution-engine/README.md`（BUG-039 五缺口 + 变更记录）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-101 收尾）
+
+> **自举护栏未放宽**：主仓库 cwd 仍被拒绝（需影子模式或 `CLI_AGENT_ALLOW_SELF_REPO=1`），已实测确认。
+
+> **教训**：①「失败被上报为成功」比「报错」危险得多 —— 它让上游所有容错机制静默失效，且与 BUG-037/038 同属「不报错但产物错」家族，光看 `status` 永远发现不了。② 能力探测要区分「装了」和「能用」：`--version` rc=0 完全不代表可用，本机 claude/aider 就是这样白烧了 180s。③ 同一条规则若在多处分支各写一份（如停用清单判断），**每处都要独立加测**，否则变异只能杀掉其中一处。
+
+> **已知环境限制（非产品缺陷）**：本会话无法端到端真跑 codex —— 我自身运行在 codex 沙箱内（`CODEX_SANDBOX_NETWORK_DISABLED=1`、`CODEX_PERMISSION_PROFILE=:workspace`），嵌套调用时家目录受限，即便完整继承 `os.environ` 也 rc=1。真机由 Station 进程（非嵌套）拉起时不受此限。
 
 **Codex（iter-100 BUG-038 子 Agent 实际工作目录，已验证待 Boss 发货）**
 - `lan_mesh/pm_planner.py`（**BUG-038 写入侧**，BUG-037 的**孪生缺陷**：BUG-037 修好后 M1 重跑 `task-af7e8cde65d4`，子任务描述已正确显示 `E:/ingobj/stock_player`，但「需求分析」仍连续 **3 次**被质量门禁判不合格，原因均为「达到最大轮次 30 后终止」+「后期脱离目标项目」，约 **414 万 input tokens**，已取消止损。根因是**有人读 `cwd`、没人写 `cwd`**——Agent 从描述文本读得到路径却始终进不去。`attach_blueprint_context` 由「只注入蓝图文本」扩展为**同时注入 `cwd`**，注入点复用 `pm_agent` 规划后那一次调用，覆盖本地执行 + 远程分发全部路径；新增 `_resolve_workdir` 复用 `_resolve_project_path` 三级口径但**只在目录真实存在时返回**，`"."`/不存在一律返回空串保持 `shared_folder` 旧行为；上游显式指定 `cwd` 的不覆盖）

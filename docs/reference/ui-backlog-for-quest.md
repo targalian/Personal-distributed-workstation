@@ -12,12 +12,12 @@
 
 | 优先 | 编号 | 主题 | 载体 | 后端就绪 |
 |---|---|---|---|---|
-| P0 | UI-064 | 影子开发面板（提交/队列/报告/守护） | dashboard | ✅ |
-| P0 | UI-065 | 任务停滞主动告警面板与手动巡检 | dashboard | ✅ |
-| P1 | UI-066 | 任务记忆统计与成本预估/断点视图 | dashboard | ✅ |
-| P1 | UI-067 | 团队与子 Agent 拓扑视图 | dashboard | ✅ |
-| P1 | UI-068 | 运行时 JSONL 统计（stats）面板 | dashboard | ✅ |
-| P2 | UI-069 | 云存储同步状态卡（状态/手动同步/连通性测试） | dashboard | ✅ |
+| P0 | UI-064 | 影子开发面板（提交/队列/报告/守护） | dashboard | ✅ 已交付（iter-90 轮） |
+| P0 | UI-065 | 任务停滞主动告警面板与手动巡检 | dashboard | ✅ 已交付（iter-90 轮） |
+| P1 | UI-066 | 任务记忆统计与成本预估/断点视图 | dashboard | ✅ 已交付（iter-101，checklist UI-069~071） |
+| P1 | UI-067 | 团队与子 Agent 拓扑视图 | dashboard | ✅ 已交付（iter-101，checklist UI-072） |
+| P1 | UI-068 | 运行时 JSONL 统计（stats）面板 | dashboard | ✅ 已交付（iter-101，checklist UI-073） |
+| P2 | UI-069 | 云存储同步状态卡（状态/手动同步/连通性测试） | dashboard | ✅ 已交付（iter-101，checklist UI-074） |
 | P2 | UI-070 | 路由 dry-run 调试台 | dashboard | ✅ |
 | P2 | UI-071 | 日志容量修剪运维入口 | dashboard | ✅ |
 | P2 | UI-072 | 联邦信息卡（本站联邦身份与对端） | dashboard | ✅ |
@@ -59,6 +59,12 @@
 
 ### UI-066 任务记忆统计与成本/断点视图（P1）
 
+> **已交付（iter-101，Quest）**：①记忆面板 by_type 行点击下钻（stats 统计卡+常见错误 Top3，
+> 再点收起，刷新保持下钻态）；②任务详情弹窗异步补「成本预估」与「断点」两段，
+> 无数据/非 200 静默隐藏；③断点列表带「断点恢复」按钮（复用 POST resume，404 提示无快照）。
+> Playwright mock 回归 19/19 PASS（含 XSS 注入、双态、零 pageerror）。
+> 注意双编号体系：checklist 自增编号为 **UI-069/070/071**，与本清单 UI-066 不是同一套。
+
 - `GET /api/task-memory/stats?task_type=` → 同类任务总数/成功率/平均耗时/推荐协作模式/常见错误
 - `GET /api/tasks/{task_id}/cost-estimate` → 预估 token 与预算适配
 - `GET /api/tasks/{task_id}/checkpoints` → `{checkpoints: [...], total: n}`
@@ -71,6 +77,14 @@
 
 ### UI-067 团队与子 Agent 拓扑（P1）
 
+> **已交付（iter-101，Quest）**：在现有 pm-tree（PM→团队→成员三层）上补齐：
+> ①团队头点击折叠/展开（折叠态存 `window._teamCollapsed`，WS 刷新后保持）+ 成员计数；
+> ②成员点击弹 Agent 详情（`GET /api/agents/{id}`：状态/并发、所在主机、技能、工具、
+> 模型偏好、版本/心跳；404 显式提示，无 agent_id 兜底文案）；异步回来用序号令牌验证
+> 弹窗未被替换/关闭（同模式回补到 UI-066 两段）。Playwright mock 18/18 PASS
+> （含单引号 agent_id 的 escJs 实测、XSS 注入零执行、过期响应不复活弹窗）。
+> 注意双编号体系：checklist 自增编号为 **UI-072**（与本清单 P2 项 UI-072 日志容量修剪同号不同项）。
+
 - `GET /api/teams` → 团队列表；`GET /api/teams/{team_id}` → 团队详情（成员/子 Agent）
 - `GET /api/agents/{agent_id}` → 单 Agent 详情
 
@@ -78,11 +92,28 @@
 
 ### UI-068 运行时 JSONL 统计面板（P1）
 
+> **已交付（iter-101，Quest）**：运行时 Tab「按模型统计」与「调用明细」之间新增
+> 「⚡ 执行统计」区（`GET /api/runtime/stats`）：独立时间窗选择 1h/6h/24h/7d；
+> 子任务成功率卡（完成/失败/总数）、LLM 调用卡（均延/P99）、Token 消耗卡（入/出）、
+> 调用状态徽章、模型/技能分布条形表、错误 Top5；空窗口显式提示。
+> 数据源差异已在两处标题标注：「按模型统计 (SQLite 审计表)」 vs
+> 「执行统计 (JSONL 追踪日志, 含子任务执行层)」。refreshRuntime 末尾联动重拉。
+> Playwright mock 12/12 PASS（含 hours 透传、XSS 注入零执行、空/满双态、零 pageerror）。
+> 注意双编号体系：checklist 自增编号为 **UI-073**（与本清单 P2 项 UI-073 对话管理增强同号不同项）。
+
 - `GET /api/runtime/stats?hours=0.1..168` → 子任务成功率、模型分布、错误 Top5
 
 期望前端行为：运行时 Tab 增「执行统计」区，时间窗切换（1h/6h/24h/7d）；与既有 `/api/runtime/metrics`（SQLite 审计）并列展示，标题需标明数据源差异。
 
 ### UI-069 云存储同步状态卡（P2）
+
+> **已交付（iter-101，Quest）**：资源 Tab「成本分摊」下方新增「☁️ 云存储同步」状态卡
+> （`GET /api/cloud-sync/status`）：已启用/已配置/守护运行三徽章、endpoint/bucket/前缀/本地路径、
+> 自动同步间隔、最近同步 ↑↓ 与错误数；「立即同步」「测试连接」按钮带反馈 toast；
+> 降级态（无 endpoint）徽章置灰 + 按钮禁用 + config.yaml 指引；503 显式错误 toast；
+> WS `cloud_sync` 推送静默重拉状态卡（不另弹 toast，手动触发由 HTTP 响应弹一次）。
+> Playwright+/ws mock 13/13 PASS（含 endpoint XSS 注入零执行、降级双态、零 pageerror）。
+> 注意双编号体系：checklist 自增编号为 **UI-074**（与本清单 P3 项 UI-074 SPA 项目蓝图页同号不同项）。
 
 - `GET /api/cloud-sync/status` → `{enabled, configured, running, message}` 或完整状态
 - `POST /api/cloud-sync/sync` → 手动同步结果（同时广播 WS `cloud_sync`）
