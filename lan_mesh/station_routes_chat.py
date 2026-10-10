@@ -35,6 +35,8 @@ def build_chat_routes(controller) -> APIRouter:
         if not message:
             raise HTTPException(status_code=400, detail="消息不能为空")
         conv_id = payload.get("conv_id", "")
+        if conv_id and not chat_handler._get_conv_meta(conv_id):
+            raise HTTPException(status_code=404, detail="对话不存在")
         history = payload.get("history")
         result = chat_handler.chat(message, conv_id=conv_id, history=history)
         await _broadcast(state, "chat_reply", result)
@@ -105,6 +107,8 @@ def build_chat_routes(controller) -> APIRouter:
         if not ch:
             raise HTTPException(status_code=503, detail="聊天处理器未初始化")
         message = payload.get("message", "")
+        if not ch._get_conv_meta(conv_id):
+            raise HTTPException(status_code=404, detail="对话不存在")
         if not message:
             raise HTTPException(status_code=400, detail="消息不能为空")
         pm_thread_id = payload.get("pm_thread_id", "")

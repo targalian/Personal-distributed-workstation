@@ -14,6 +14,7 @@
 | station_controller.py | Station Director 独立控制器 — 基础设施管理入口 |
 | station_director.py | Station Director (工作站主管) — 基础设施资源管理器 |
 | station_routes_basic.py | Station 基础路由 — 健康/错误/角色/注册心跳/主机网络/Director (P1 #2 拆分产物) |
+| station_routes_briefs.py | Project description editing, generation and portable Markdown export. |
 | station_routes_chat.py | Station 交互路由 — 秘书聊天/多对话/PM 线程/Bot 消息入口 (P1 #2 拆分产物) |
 | station_routes_common.py | Station API 路由公共层 — 限流/认证中间件与共享工具 (P1 #2 拆分产物) |
 | station_routes_pm.py | Station PM 路由 — PM Agent 管理/进度上报/子任务同步/团队 (P1 #2 拆分产物) |
@@ -165,6 +166,7 @@ skill_assignments、resource_usage_log、events 等。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-10 | 项目描述工作区 | 新增对话产物、三层需求 DAG、版本保存、Markdown 导出与集成验证 |
 | 2026-08-18 | iter-35 | E6: 主机级单实例守护 — ~/.lan_mesh/station.lock 锁仲裁 (同版本/更新实例取消启动, 旧版实例关闭接管, 僵尸锁覆盖, dev-reload 同版接管; 无锁时按端口占用者是否为工作站进程兜底清理旧版遗留) |
 | 2026-08-18 | iter-34 | auth 白名单补 `/` 仪表盘 HTML 入口 (auth_enabled 时 Web UI 可自举加载, 与 auth-token 同一信任假设; 回归测试锁定其余 API 仍 401) |
 | 2026-08-17 | iter-32 | M5-2: /ws/worker Worker 事件直推端点 (mesh_token 鉴权 + usage_batch 幂等复用 + 通用事件转发 event_bus; 白名单收录) |
@@ -175,3 +177,7 @@ skill_assignments、resource_usage_log、events 等。
 | 2026-08-16 | iter-30 补④ | P3: 删除历史遗留 secretary.py/master.py 与 main.py secretary 入口; api.py 移除旧 Secretary 路由及专用模型; Orchestrator stub 随之下线 |
 | 2026-08-16 | iter-28 | E4: 双 Secretary 冲突仲裁 (真实角色广播 + device_id 字典序让位) + role 落库 + 密钥接收端自愈 |
 | 2026-08-16 | iter-27 后 | 初建；收录 S1/S2/S3 同步链路设计 |
+
+## station_routes_briefs.py — 项目描述接口
+
+由 station_api 装配，会话级读取、版本比较保存、模型整理与 Markdown 导出。结构和依赖由 project_brief.py 校验；详细接口见 [项目描述工作区](../06-interaction/项目描述工作区.md)。

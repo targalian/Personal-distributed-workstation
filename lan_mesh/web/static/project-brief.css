@@ -1,0 +1,23 @@
+/* Conversation artifact workbench; no external CDN or frontend build required. */
+#panel-chat .chat-main{min-width:260px;flex:1}
+.brief-panel{flex:1.5;min-width:0;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);height:calc(100vh - 180px);min-height:560px;overflow:hidden}
+.brief-toolbar{padding:12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)}
+.brief-toolbar strong{font-size:15px;margin-right:auto}.brief-toolbar .btn{font-size:12px;padding:6px 9px}
+.brief-status{font-size:12px;color:var(--dim);padding:8px 12px;border-bottom:1px solid var(--border);line-height:1.6;min-height:36px}
+.brief-status.dirty{color:var(--yellow)}
+.brief-tabs{display:flex;gap:6px;padding:8px 12px}.brief-tabs button[aria-selected=true]{background:var(--accent);color:white}
+.brief-content{flex:1;min-height:0;overflow:auto;padding:12px}.brief-content label{display:block;font-size:12px;color:var(--dim);margin-bottom:10px}
+.brief-content input,.brief-content textarea,.brief-content select{display:block;width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:5px;font:inherit}
+.brief-content textarea{min-height:90px;resize:vertical;line-height:1.6}.brief-content summary{font-size:13px;cursor:pointer;padding:10px 0;color:var(--text)}
+.brief-content details{border-bottom:1px solid var(--border)}.brief-content pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.7}
+.brief-graph-wrap{display:flex;flex-direction:column;height:100%;min-height:480px}.brief-graph-tools{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px}
+.brief-graph-tools button{font-size:12px;padding:6px 8px}.brief-graph-tools .active{outline:2px solid var(--accent)}
+.brief-canvas{width:100%;flex:1;min-height:300px;background:var(--bg);border:1px solid var(--border);border-radius:8px;touch-action:none;user-select:none}
+.brief-canvas text{fill:var(--text);font-size:13px;pointer-events:none}.brief-canvas .brief-node{cursor:grab}.brief-canvas .brief-node:focus rect{stroke:white;stroke-width:3}
+.brief-node-editor{max-height:245px;overflow:auto;margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:8px}
+.brief-node-editor .brief-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px}.brief-node-editor textarea{min-height:55px}
+.brief-hint{font-size:12px;color:var(--dim);line-height:1.6;padding:6px 0}.brief-empty{padding:28px 14px;color:var(--dim);line-height:1.8}
+.brief-panel[aria-busy=true]{opacity:.7;pointer-events:none}
+@media(min-width:1400px){#panel-chat .conv-sidebar{width:180px}#panel-chat .chat-main{flex:1}#panel-chat .brief-panel{flex:1.6}}
+@media(max-width:1150px){#panel-chat .chat-layout{flex-wrap:wrap;height:auto}#panel-chat .brief-panel{flex-basis:100%;height:680px}#panel-chat .chat-main{min-width:0}#panel-chat .conv-sidebar{max-width:180px}}
+@media(max-width:600px){#panel-chat .brief-panel{height:740px;min-width:0}#panel-chat .chat-main{flex-basis:100%}.brief-node-editor .brief-fields{grid-template-columns:1fr}.brief-toolbar{gap:5px}}

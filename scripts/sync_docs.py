@@ -54,6 +54,7 @@ MAPPING = {
     "lan_mesh/station_routes_resources.py": "02-station-core",
     "lan_mesh/station_routes_pm.py": "02-station-core",
     "lan_mesh/station_routes_chat.py": "02-station-core",
+    "lan_mesh/station_routes_briefs.py": "02-station-core",
     "lan_mesh/station_routes_projects.py": "02-station-core",
     "lan_mesh/station_routes_worker.py": "02-station-core",
     "lan_mesh/singleton.py": "02-station-core",
@@ -87,6 +88,7 @@ MAPPING = {
     "lan_mesh/collect_config.py": "05-resources-secrets",
     # 06-interaction — 聊天/机器人/角色卡
     "lan_mesh/chat_handler.py": "06-interaction",
+    "lan_mesh/project_brief.py": "06-interaction",
     "lan_mesh/bot_gateway.py": "06-interaction",
     "lan_mesh/role_cards.py": "06-interaction",
     # 07-data-sync — 共享/云同步/主机信息
@@ -110,6 +112,8 @@ MAPPING = {
     "lan_mesh/web/static/": ("09-frontend", "CSS/JS 静态资源"),
     # 10-test-loop — 测试与验证循环
     "tests/test_core.py": "10-test-loop",
+    "tests/test_project_brief.py": "10-test-loop",
+    "test_bug/project_brief_browser.py": "10-test-loop",
     "test_bug/run_loop.py": "10-test-loop",
     "test_bug/dev_loop.py": "10-test-loop",
     "test_bug/nightly_loop.py": "10-test-loop",

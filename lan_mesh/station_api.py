@@ -24,6 +24,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .logger import get_logger
 from .station_routes_basic import build_basic_routes
+from .station_routes_briefs import build_brief_routes
 from .station_routes_chat import build_chat_routes
 from .station_routes_pm import build_pm_routes
 from .station_routes_projects import build_project_routes
@@ -54,6 +55,7 @@ def create_station_router(controller) -> APIRouter:
     router.include_router(build_resource_routes(controller))
     router.include_router(build_pm_routes(controller))
     router.include_router(build_chat_routes(controller))
+    router.include_router(build_brief_routes(controller))
     router.include_router(build_project_routes(controller))
     router.include_router(build_worker_routes(controller))
 

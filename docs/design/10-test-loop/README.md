@@ -15,12 +15,14 @@
 | test_bug/discover_tests.py | 测试项自动推导工具 — 从源码中机械式提取所有可测试点 |
 | test_bug/loop_config.yaml | 循环配置 |
 | test_bug/nightly_loop.py | Loop Engineering — 夜间自动巡检 (定时任务用) |
+| test_bug/project_brief_browser.py | Manual browser integration check with temporary storage and a simulated LLM. |
 | test_bug/run_loop.py | Loop Engineering — 每日验证循环编排器 |
 | test_bug/setup_scheduler.bat | 定时任务安装脚本 |
 | test_bug/test_checklist.csv | UI 变更清单 (UI-0xx 编号) |
 | test_bug/ui_change_log.py | Loop Engineering — UI 改动待检登记工具 |
 | test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
 | tests/test_core.py | 核心模块单元测试 |
+| tests/test_project_brief.py | Artifact correctness: graph integrity, concurrency, isolation, and chat integration. |
 <!-- /AUTO:module-list -->
 ---
 
@@ -81,9 +83,16 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-10 | 项目描述工作区 | 新增对话产物、三层需求 DAG、版本保存、Markdown 导出与集成验证 |
 | 2026-08-16 | iter-30 补 | P1 #9: 新增 PM 三件套接口级单测 33 条 (TestPMPlanner/TestPMMonitor/TestPMDispatcher), 基线 121→154 |
 | 2026-08-16 | iter-30 补 | E5: 新增 TestSecretaryFailover 6 条, 基线 115→121 |
 | 2026-08-16 | iter-30 | F1: 新增 TestRoleFreeAlign 10 条, 基线 105→115; 自动升级与 post-merge 回归验证闭环 |
 | 2026-08-16 | iter-29 | 新增 .githooks/post-merge: git pull 升级后自动 pytest 回归验证 |
 | 2026-08-16 | iter-28 | E4: 新增 TestSecretaryConflict 7 条, 基线 98→105 |
 | 2026-08-16 | iter-27 后 | 初建 |
+
+## 项目描述验证
+
+`tests/test_project_brief.py` 验证图结构、原子持久化、冲突、会话隔离、聊天产物和已审阅版本下发。`test_bug/project_brief_browser.py` 使用临时目录与模拟 LLM，在真实 Chrome 和 FastAPI 接口上验证编辑器及完整仪表盘；截图保存在 temp_resault/，UI 清单登记为 UI-035。
+
+`TestRoleFreeAlign` 通过临时资源配置隔离文件存在性检查，避免测试依赖真实工作站的 resources.yaml；上库验证为 205 passed、1 skipped。

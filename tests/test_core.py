@@ -1172,6 +1172,14 @@ class TestSecretaryConflict:
 class TestRoleFreeAlign:
     """F1 角色无关自动对齐 — config_ts 仲裁、池数仲裁、自动升级安全边界。"""
 
+    @pytest.fixture(autouse=True)
+    def isolated_resource_config(self, tmp_path, monkeypatch):
+        """Include the file-existence boundary in the mocked configuration IO."""
+        import lan_mesh.station_controller as station
+
+        monkeypatch.setattr(station, "__file__", str(tmp_path / "station_controller.py"))
+        (tmp_path / "resources.yaml").write_text("resources: []\n", encoding="utf-8")
+
     def _fake(self):
         from lan_mesh.station_controller import StationController
 

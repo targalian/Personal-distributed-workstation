@@ -10,10 +10,12 @@
 
 聊天历史持久化到 SQLite DB (chat_history 表), 重启不丢失。
 """
+import re
 import time
 from typing import Optional
 
 from .logger import get_logger
+from .project_brief import BriefStore, brief_instructions, parse_brief_reply
 from .role_cards import render_secretary_prompt
 
 logger = get_logger("chat_handler")
@@ -104,6 +106,7 @@ class ChatHandler:
         self._db = db
         self._shared_folder = shared_folder
         self._max_history = 50
+        self.briefs = BriefStore(self._get_conv_dir())
 
         # ── 多对话状态 ──
         self._conv_index: list[dict] = []       # [{id, title, project_id, pm_threads, created_at, updated_at}]
@@ -150,8 +153,11 @@ class ChatHandler:
         """
         # 确定对话
         cid = conv_id or self._active_conv_id
-        if not cid or cid not in self._conversations:
+        if conv_id and not self._get_conv_meta(conv_id):
+            raise ValueError("对话不存在")
+        if not cid:
             cid = self._conv_index[0]["id"] if self._conv_index else self._create_conversation("默认对话")
+        self.get_messages(cid)
         self._active_conv_id = cid
 
         # ── 方案C: L2 路由 — PM 线程内直接对话 ──
@@ -174,6 +180,11 @@ class ChatHandler:
 
         # 2. 构建 system prompt
         system_prompt = self._build_system_prompt(status_context)
+        current_brief = self.briefs.get(cid)
+        action = self._detect_action(message)
+        system_prompt += brief_instructions(current_brief)
+        if action == "submit_task":
+            system_prompt += "\n本轮是明确下发指令，请仅回复简短确认，project_brief 必须为 null，不改写已保存的文档。"
 
         # 3. 拼接对话历史 + 用户消息
         prompt = self._build_prompt(message, chat_history)
@@ -208,11 +219,20 @@ class ChatHandler:
             },
         )
         reply_text = resp.get("content", "[LLM 调用失败]")
+        reply_text, document = parse_brief_reply(reply_text)
+        brief_revision = current_brief["revision"]
+        if document is not None and action != "submit_task":
+            try:
+                saved = self.briefs.save(cid, document, current_brief["revision"])
+                brief_revision = saved["revision"]
+                reply_text += f"\n\n📄 项目描述草稿已更新至 v{brief_revision}，可在右侧编辑或导出。"
+            except (ValueError, OSError) as exc:
+                logger.warning("项目描述更新失败: %s", exc)
+                reply_text += "\n\n项目描述未更新（内容校验失败、版本冲突或存储不可用），原稿已保留。可点击「从对话整理」重试。"
 
         # 5. 检测操作意图
         action_taken = ""
         action_result = ""
-        action = self._detect_action(message)
         if action:
             action_result = self._execute_action(action, message)
             if action_result:
@@ -251,7 +271,26 @@ class ChatHandler:
             "action_taken": action_taken,
             "timestamp": now,
             "conv_id": cid,
+            "brief_revision": brief_revision,
         }
+
+    def generate_project_brief(self, conv_id: str, expected_revision: int) -> dict:
+        """Explicitly compile conversation + current document without dispatching a task."""
+        if not self._get_conv_meta(conv_id):
+            raise KeyError("对话不存在")
+        current = self.briefs.get(conv_id)
+        if current["revision"] != expected_revision:
+            from .project_brief import RevisionConflict
+            raise RevisionConflict("项目描述已更新，请重新加载后整理")
+        response = self.runtime._call_llm_with_routing(
+            self._build_prompt("请根据以上讨论和当前文档整理完整项目描述，缺失信息标为待讨论。", self.get_messages(conv_id)),
+            {"_model_preference": getattr(self.controller, "_default_model", ""),
+             "_system_prompt": self._build_system_prompt("") + brief_instructions(current, generate=True)},
+        )
+        _, document = parse_brief_reply(response.get("content", ""))
+        if document is None:
+            raise ValueError("模型未返回有效项目描述，原稿已保留，请重试或手工编辑")
+        return self.briefs.save(conv_id, document, expected_revision)
 
     def get_history(self, limit: int = 50, conv_id: str = "") -> list[dict]:
         """返回指定对话的最近消息。"""
@@ -883,8 +922,14 @@ class ChatHandler:
             操作类型字符串, 无意图则返回空字符串
         """
         msg_lower = message.lower()
+        if re.match(r"^\s*下发项目描述\s*[。！!]?\s*$", message):
+            return "submit_task"
         for keyword, action in _ACTION_KEYWORDS.items():
             if keyword in message or keyword in msg_lower:
+                if action == "submit_task" and not re.match(
+                    r"^\s*(?:请)?(?:提交任务|提交一个|创建任务|新任务|下发任务|激活下发|立即下发|分配任务)", message
+                ):
+                    continue
                 return action
         return ""
 
@@ -957,7 +1002,13 @@ class ChatHandler:
 
     def _action_submit_task(self, message: str) -> str:
         """从对话直接提交任务并分配 PM Agent (优化13: 支持优先级)。"""
-        task_info = self._parse_task_from_message(message)
+        if message.strip().rstrip("。！!") == "下发项目描述":
+            current = self.briefs.get(self._active_conv_id)
+            if not current["revision"]:
+                return "请先整理并保存项目描述，再下发给 PM。"
+            task_info = {"name": current["document"]["title"], "description": current["markdown"]}
+        else:
+            task_info = self._parse_task_from_message(message)
         name = task_info.get("name", "")
         description = task_info.get("description", "")
 
