@@ -1,7 +1,7 @@
 {
-  "version": "0.31.0",
-  "commit": "2f51fe3",
-  "released_at": "2026-10-10",
-  "note": "Project descriptions from secretary conversations with editable three-level requirements DAG and Markdown export",
+  "version": "0.31.1",
+  "commit": "d837a65",
+  "released_at": "2026-10-13",
+  "note": "Repair Unix startup, dependency isolation and Worker cleanup; add local verification loop and repair loop state history",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }
