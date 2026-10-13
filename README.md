@@ -148,9 +148,24 @@ bash scripts/start_workstation.sh --port 8080 --name "Control Center"
 
 # Also start a local Worker
 bash scripts/start_workstation.sh --with-worker
+
+# Prepare Python 3.10+ and development dependencies without starting services
+./scripts/start_workstation.sh --install-dev --check
+
+# Run one local verification loop (no running Station or model API key required)
+.venv/bin/python test_bug/dev_loop.py --local
+
+# Watch application files and restart Station after changes
+./scripts/start_workstation.sh --dev
 ```
 
-After startup, open `http://localhost:45470` to enter the Web UI and click "Set as Master" to activate the Secretary.
+The Unix launcher checks all required dependency versions and imports, and downloads packages only when a repair is needed. It isolates Python from inherited ROS paths and preserves an incompatible virtual environment. To use a separate environment, pass `--python /path/to/python3 --venv .venv-linux`. Paths passed to `--config`, `--shared`, and `--venv` are relative to your current directory.
+
+`--with-worker` forwards the configuration and shared directory to both processes and stops both when the launcher exits. Worker logs are saved in `.lan_mesh/logs/`. Use `--dev` without `--with-worker`; Station includes a Worker for local tasks.
+
+Local verification checks Python syntax, loop-state JSON, unit tests, UI static rules, design-document inventory, and Bash/JavaScript syntax when those tools are available. Results and command output are saved to `.lan_mesh/local-checks.json`; a failed check returns a nonzero exit code. This does not replace live model, browser, or multi-host testing. For a custom timeout or report location, use `.venv/bin/python test_bug/local_checks.py --timeout 600 --report /tmp/local-checks.json`.
+
+After startup, open `http://localhost:45470` to enter the Web UI. Secretary election runs automatically after the discovery window.
 
 ### Manual Installation
 

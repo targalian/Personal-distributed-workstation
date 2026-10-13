@@ -1,163 +1,172 @@
 #!/usr/bin/env bash
-# start_workstation.sh - One-click start for LAN Mesh Work Station
-# Usage: bash scripts/start_workstation.sh [--port 45470] [--name "Control Center"] [--with-worker]
+# Start Station on Linux/macOS; preserve existing environments and report failures.
 set -euo pipefail
 
-# Resolve project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$PROJECT_ROOT"
+CALLER_DIR="$PWD"
 
-# Colors
-CYAN='\033[0;36m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-DARK='\033[0;90m'
-NC='\033[0m'
-
-step()  { echo -e "${CYAN}[step] $1${NC}"; }
-ok()    { echo -e "  ${GREEN}-> $1${NC}"; }
-skip()  { echo -e "  ${DARK}-> $1 (skip)${NC}"; }
-warn()  { echo -e "  ${YELLOW}-> $1${NC}"; }
-fail()  { echo -e "  ${RED}[ERROR] $1${NC}"; }
-
-# Parse args
+info() { printf '[Station] %s\n' "$*"; }
+fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+usage() {
+    cat <<'EOF'
+Usage: scripts/start_workstation.sh [options]
+  --port PORT          Station port (default: 45470)
+  --name NAME          Device name
+  --config FILE        Config file, relative to the caller's directory
+  --shared DIR         Shared directory, relative to the caller's directory
+  --with-worker        Run a local Worker; stop it when Station exits
+  --worker-port PORT   Local Worker port (default: 45460)
+  --python EXECUTABLE  Python 3.10+ used to create a new virtual environment
+  --venv DIR           Virtual environment (default: project/.venv)
+  --install-dev        Install/check dependencies needed for the local dev loop
+  --check              Prepare and verify the environment without starting services
+  --dev                Enable Station code reload (without --with-worker)
+  -h, --help           Show this help without changing the environment
+EOF
+}
+require_value() {
+    if [[ $# -lt 2 || -z "$2" || "$2" == --* ]]; then
+        fail "$1 requires a value. Use --help for usage."
+    fi
+}
+absolute_path() {
+    case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s/%s\n' "$CALLER_DIR" "$1" ;; esac
+}
+validate_port() {
+    [[ "$2" =~ ^[0-9]{1,5}$ ]] || fail "$1 must be an integer from 1 to 65535."
+    ((10#$2 >= 1 && 10#$2 <= 65535)) || fail "$1 must be from 1 to 65535."
+}
+# Do not let ROS, user site packages, or an activated environment leak into this venv.
+clean_python() { env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$@"; }
 PORT=45470
+WORKER_PORT=45460
 NAME=""
 CONFIG=""
 SHARED=""
+BOOTSTRAP_PYTHON=""
+VENV_DIR="$PROJECT_ROOT/.venv"
 WITH_WORKER=false
-WORKER_PORT=45460
-
+INSTALL_DEV=false
+CHECK_ONLY=false
+DEV=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --port)        PORT="$2"; shift 2 ;;
-        --name)        NAME="$2"; shift 2 ;;
-        --config)      CONFIG="$2"; shift 2 ;;
-        --shared)      SHARED="$2"; shift 2 ;;
+        --port) require_value "$@"; PORT="$2"; shift 2 ;;
+        --worker-port) require_value "$@"; WORKER_PORT="$2"; shift 2 ;;
+        --name) require_value "$@"; NAME="$2"; shift 2 ;;
+        --config) require_value "$@"; CONFIG="$(absolute_path "$2")"; shift 2 ;;
+        --shared) require_value "$@"; SHARED="$(absolute_path "$2")"; shift 2 ;;
+        --python) require_value "$@"; BOOTSTRAP_PYTHON="$2"; shift 2 ;;
+        --venv) require_value "$@"; VENV_DIR="$(absolute_path "$2")"; shift 2 ;;
         --with-worker) WITH_WORKER=true; shift ;;
-        --worker-port) WORKER_PORT="$2"; shift 2 ;;
-        *) echo "Unknown option: $1"; exit 1 ;;
+        --install-dev) INSTALL_DEV=true; shift ;;
+        --check) CHECK_ONLY=true; shift ;;
+        --dev) DEV=true; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) fail "Unknown option: $1. Use --help for usage." ;;
     esac
 done
-
-echo ""
-echo "========================================"
-echo " LAN Mesh Work Station - One-Click Start"
-echo "========================================"
-echo ""
-
-# ── Step 1: Check Python ──
-step "1/5 Check Python..."
-if ! command -v python3 &>/dev/null; then
-    if ! command -v python &>/dev/null; then
-        fail "Python not found. Please install Python 3.10+"
-        echo "  Download: https://www.python.org/downloads/"
-        exit 1
-    fi
-    PYTHON=python
-else
-    PYTHON=python3
+validate_port --port "$PORT"
+validate_port --worker-port "$WORKER_PORT"
+PORT=$((10#$PORT))
+WORKER_PORT=$((10#$WORKER_PORT))
+if $WITH_WORKER && ((PORT == WORKER_PORT)); then fail "Station and Worker must use different ports."; fi
+if $WITH_WORKER && $DEV; then fail "--dev cannot be combined with --with-worker; Station already embeds a Worker."; fi
+if [[ -n "$CONFIG" && ! -f "$CONFIG" ]]; then fail "Config file does not exist: $CONFIG"; fi
+if [[ -n "$BOOTSTRAP_PYTHON" ]]; then
+    BOOTSTRAP_PYTHON="$(command -v "$BOOTSTRAP_PYTHON")" || fail "Selected Python executable was not found."
+    [[ "$BOOTSTRAP_PYTHON" == /* ]] || BOOTSTRAP_PYTHON="$(absolute_path "$BOOTSTRAP_PYTHON")"
 fi
-PY_VER="$($PYTHON --version 2>&1)"
-ok "Python: $PY_VER"
-
-# ── Step 2: Virtual Environment ──
-step "2/5 Check venv..."
-VENV_PYTHON=".venv/bin/python"
-VENV_PIP=".venv/bin/pip"
-
-if [ ! -f "$VENV_PYTHON" ]; then
-    if [ -d ".venv" ]; then
-        warn ".venv exists but not Unix format, rebuilding..."
-        rm -rf ".venv"
+cd "$PROJECT_ROOT"
+VENV_PYTHON="$VENV_DIR/bin/python"
+if [[ ! -e "$VENV_DIR" && ! -L "$VENV_DIR" ]]; then
+    if [[ -z "$BOOTSTRAP_PYTHON" ]]; then
+        for candidate in python3 python; do
+            if command -v "$candidate" >/dev/null 2>&1 && clean_python "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
+                BOOTSTRAP_PYTHON="$(command -v "$candidate")"
+                break
+            fi
+        done
     fi
-    echo -e "  ${YELLOW}Creating virtual environment...${NC}"
-    $PYTHON -m venv .venv
-    if [ ! -f "$VENV_PYTHON" ]; then
-        fail "venv creation failed"
-        exit 1
-    fi
-    ok "Created .venv/"
-else
-    skip "venv already exists"
-fi
-
-# ── Step 3: Install Dependencies ──
-step "3/5 Check dependencies..."
-if [ ! -f "requirements.txt" ]; then
-    skip "requirements.txt not found"
-else
-    if ! $VENV_PIP show fastapi &>/dev/null; then
-        echo -e "  ${YELLOW}Installing dependencies (may take 1-2 min on first run)...${NC}"
-        $VENV_PIP install -r requirements.txt -q
-        if [ $? -ne 0 ]; then
-            fail "Dependencies install failed"
-            echo "  Please run manually: .venv/bin/pip install -r requirements.txt"
-            exit 1
-        fi
-        ok "Dependencies installed"
-    else
-        skip "Dependencies already installed"
+    [[ -n "$BOOTSTRAP_PYTHON" ]] || fail "Python 3.10+ is required; install it or use --python /path/to/python."
+    clean_python "$BOOTSTRAP_PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 10))' || fail "Python 3.10+ is required."
+    info "Creating virtual environment: $VENV_DIR"
+    if ! clean_python "$BOOTSTRAP_PYTHON" -m venv "$VENV_DIR"; then
+        fail "Cannot create venv. On Ubuntu/Debian install python3-venv; then use --venv with a new directory. Existing files were preserved."
     fi
 fi
-
-# ── Step 4: Config File ──
-step "4/5 Check config..."
-POOL_SRC="lan_mesh/model_pool.example.yaml"
-POOL_DST="lan_mesh/model_pool.yaml"
-if [ -f "$POOL_SRC" ] && [ ! -f "$POOL_DST" ]; then
+[[ -x "$VENV_PYTHON" && -f "$VENV_DIR/pyvenv.cfg" ]] || fail "Existing environment is incomplete or from Windows: $VENV_DIR. It was preserved. Use --venv with a new directory."
+if ! clean_python "$VENV_PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 10) or sys.prefix == sys.base_prefix)'; then
+    fail "Existing venv is broken or uses Python older than 3.10. It was preserved. Use --python and --venv with a new directory."
+fi
+info "Python: $(clean_python "$VENV_PYTHON" --version) ($VENV_PYTHON)"
+if ! clean_python "$VENV_PYTHON" -m pip --version >/dev/null 2>&1; then
+    clean_python "$VENV_PYTHON" -m ensurepip --upgrade || fail "Cannot initialize pip; repair the virtual environment."
+fi
+REQ_FILE="$PROJECT_ROOT/requirements.txt"
+CHECK_ARGS=()
+if $INSTALL_DEV; then REQ_FILE="$PROJECT_ROOT/requirements-dev.txt"; CHECK_ARGS+=(--dev); fi
+if ! clean_python "$VENV_PYTHON" "$SCRIPT_DIR/check_environment.py" "${CHECK_ARGS[@]}"; then
+    info "Installing missing or incompatible dependencies..."
+    if ! clean_python "$VENV_PYTHON" -m pip install --disable-pip-version-check -r "$REQ_FILE"; then
+        fail "Dependency installation failed. Check network/proxy/index settings and retry this command. Manual repair: '$VENV_PYTHON' -m pip install -r '$REQ_FILE'"
+    fi
+    clean_python "$VENV_PYTHON" "$SCRIPT_DIR/check_environment.py" "${CHECK_ARGS[@]}" || fail "Dependencies still fail validation; see the errors above."
+else
+    info "Dependencies ready; no download required."
+fi
+# Import the application as well: installed package metadata alone is insufficient.
+clean_python "$VENV_PYTHON" -c 'from lan_mesh.station_controller import StationController; from lan_mesh.worker import WorkerAgent' || fail "Application import failed. See the traceback above."
+POOL_SRC="$PROJECT_ROOT/lan_mesh/model_pool.example.yaml"
+POOL_DST="$PROJECT_ROOT/lan_mesh/model_pool.yaml"
+if [[ -f "$POOL_SRC" && ! -e "$POOL_DST" ]]; then
     cp "$POOL_SRC" "$POOL_DST"
-    ok "Created lan_mesh/model_pool.yaml (edit to add API Key)"
-elif [ -f "$POOL_DST" ]; then
-    skip "model_pool.yaml already exists"
-else
-    skip "model_pool.example.yaml not found"
+    info "Created model_pool.yaml. Configure models and keys through the Web UI or .env."
 fi
-
-# Check API Key
-HAS_KEY=false
-for KEY_NAME in DEEPSEEK_API_KEY OPENAI_API_KEY ALIYUN_TOKENPLAN_API_KEY QWEN_API_KEY; do
-    if [ -n "${!KEY_NAME:-}" ]; then
-        HAS_KEY=true
-        break
+if $CHECK_ONLY; then
+    info "Environment ready. No Station or Worker process was started."
+    exit 0
+fi
+STATION_ARGS=("$PROJECT_ROOT/main.py" station --port "$PORT")
+WORKER_ARGS=("$PROJECT_ROOT/main.py" worker --port "$WORKER_PORT")
+if [[ -n "$NAME" ]]; then STATION_ARGS+=(--name "$NAME"); WORKER_ARGS+=(--name "${NAME}-Worker"); fi
+if [[ -n "$CONFIG" ]]; then STATION_ARGS+=(--config "$CONFIG"); WORKER_ARGS+=(--config "$CONFIG"); fi
+if [[ -n "$SHARED" ]]; then STATION_ARGS+=(--shared "$SHARED"); WORKER_ARGS+=(--shared "$SHARED"); fi
+if $DEV; then STATION_ARGS+=(--dev); fi
+info "Starting Station: http://localhost:$PORT (Secretary election is automatic)."
+if ! $WITH_WORKER; then
+    exec env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$VENV_PYTHON" "${STATION_ARGS[@]}"
+fi
+# Supervise only processes created by this launcher; no global process-name kills.
+STATION_PID=""
+WORKER_PID=""
+cleanup() {
+    local pid
+    for pid in "$STATION_PID" "$WORKER_PID"; do
+        if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; fi
+    done
+    for pid in "$STATION_PID" "$WORKER_PID"; do
+        if [[ -n "$pid" ]]; then wait "$pid" 2>/dev/null || true; fi
+    done
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+WORKER_LOG_DIR="$PROJECT_ROOT/.lan_mesh/logs"
+mkdir -p "$WORKER_LOG_DIR"
+WORKER_LOG="$(mktemp "$WORKER_LOG_DIR/worker-$WORKER_PORT.XXXXXX")"
+info "Local Worker log: $WORKER_LOG"
+env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$VENV_PYTHON" "${WORKER_ARGS[@]}" > "$WORKER_LOG" 2>&1 &
+WORKER_PID=$!
+env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$VENV_PYTHON" "${STATION_ARGS[@]}" &
+STATION_PID=$!
+while kill -0 "$STATION_PID" 2>/dev/null; do
+    if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+        fail "Local Worker exited; stopping Station. Check $WORKER_LOG"
     fi
+    sleep 1
 done
-if [ "$HAS_KEY" = false ]; then
-    warn "No LLM API Key detected, secretary chat will not use LLM"
-    echo -e "  ${DARK}Set: export DEEPSEEK_API_KEY='sk-xxx'${NC}"
-fi
-
-# ── Step 5: Launch ──
-step "5/5 Launch Station Director..."
-echo ""
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN} LAN Mesh Station Director${NC}"
-echo -e "${GREEN} Port: $PORT${NC}"
-echo -e "${GREEN} Web UI: http://localhost:$PORT${NC}"
-if [ -n "$NAME" ]; then echo -e "${GREEN} Name: $NAME${NC}"; fi
-echo -e "${YELLOW} Secretary: inactive (activate in Web UI)${NC}"
-if [ "$WITH_WORKER" = true ]; then
-    echo -e "${GREEN} Local Worker: http://localhost:$WORKER_PORT (background)${NC}"
-fi
-echo -e "${GREEN}========================================${NC}"
-echo ""
-
-# Build launch args
-STATION_ARGS=("main.py" "station" "--port" "$PORT")
-if [ -n "$NAME" ];   then STATION_ARGS+=("--name" "$NAME"); fi
-if [ -n "$CONFIG" ]; then STATION_ARGS+=("--config" "$CONFIG"); fi
-if [ -n "$SHARED" ]; then STATION_ARGS+=("--shared" "$SHARED"); fi
-
-# Optional: start local Worker in background
-if [ "$WITH_WORKER" = true ]; then
-    WORKER_ARGS=("main.py" "worker" "--port" "$WORKER_PORT")
-    if [ -n "$NAME" ]; then WORKER_ARGS+=("--name" "${NAME}-Worker"); fi
-    echo -e "${DARK}[INFO] Starting local Worker (port $WORKER_PORT)...${NC}"
-    nohup "$VENV_PYTHON" "${WORKER_ARGS[@]}" > /tmp/lanmesh_worker.log 2>&1 &
-    sleep 2
-fi
-
-# Foreground launch Station Director
-exec "$VENV_PYTHON" "${STATION_ARGS[@]}"
+STATION_STATUS=0
+wait "$STATION_PID" || STATION_STATUS=$?
+exit "$STATION_STATUS"

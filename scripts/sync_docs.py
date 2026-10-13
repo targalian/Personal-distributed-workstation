@@ -116,6 +116,9 @@ MAPPING = {
     "test_bug/project_brief_browser.py": "10-test-loop",
     "test_bug/run_loop.py": "10-test-loop",
     "test_bug/dev_loop.py": "10-test-loop",
+    "test_bug/local_checks.py": "10-test-loop",
+    "tests/test_startup.py": "10-test-loop",
+    "tests/test_local_checks.py": "10-test-loop",
     "test_bug/nightly_loop.py": "10-test-loop",
     "test_bug/api_tests.py": "10-test-loop",
     "test_bug/ui_tests.py": "10-test-loop",
@@ -130,6 +133,7 @@ MAPPING = {
     # 11-scripts-subprojects — 运维脚本/技能库/独立子项目
     "scripts/sync_docs.py": "11-scripts-subprojects",
     "scripts/update_version.py": "11-scripts-subprojects",
+    "scripts/check_environment.py": "11-scripts-subprojects",
     "scripts/sync_push.ps1": ("11-scripts-subprojects",
                               "★ 双库同步推送脚本 (上库唯一入口)"),
     "scripts/start_workstation.bat": ("11-scripts-subprojects",

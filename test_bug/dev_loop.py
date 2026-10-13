@@ -13,13 +13,14 @@ Dev Loop Engineering — 开发+测试闭环编排器
   python test_bug/dev_loop.py --verify            # 验证: 复测所有"已修复"项
   python test_bug/dev_loop.py --verify BUG-004    # 验证指定Bug
   python test_bug/dev_loop.py --status            # 查看当前Loop状态
+  python test_bug/dev_loop.py --local             # 无服务本地验证（语法/单测/UI/文档）
   python test_bug/dev_loop.py --close BUG-005     # 手动关闭已确认修复的Bug
   python test_bug/dev_loop.py --cycle             # 完整循环: plan→等待→verify
 """
 import argparse
 import json
 import sys
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -50,7 +51,7 @@ def load_loop_status() -> dict:
 
 def save_loop_status(status: dict):
     """保存 loop_status.json。"""
-    status["last_run"] = datetime.now().isoformat() + "Z"
+    status["last_run"] = datetime.now(timezone.utc).isoformat()
     with open(LOOP_STATUS_PATH, "w", encoding="utf-8") as f:
         json.dump(status, f, ensure_ascii=False, indent=2)
 
@@ -377,7 +378,14 @@ def main():
     parser.add_argument("--close", nargs="+", metavar="BUG_ID", help="关闭已确认修复的Bug")
     parser.add_argument("--status", action="store_true", help="查看当前Loop状态")
     parser.add_argument("--cycle", action="store_true", help="完整循环: plan→提示→verify")
+    parser.add_argument("--local", action="store_true", help="只运行本地语法、单测、UI 与文档验证，无需 Station")
     args = parser.parse_args()
+
+    if args.local:
+        if args.plan or args.verify is not None or args.close or args.status or args.cycle:
+            parser.error("--local 不能与在线循环或状态管理参数组合")
+        from test_bug.local_checks import run_local_checks
+        sys.exit(0 if run_local_checks() else 1)
 
     config = load_config()
     base_url = config.get("server", {}).get("base_url", "http://localhost:45470")

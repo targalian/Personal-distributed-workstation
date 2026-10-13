@@ -13,6 +13,7 @@
 | test_bug/daily_loop.bat | 每日循环定时任务形态 (Windows) |
 | test_bug/dev_loop.py | Dev Loop Engineering — 开发+测试闭环编排器 |
 | test_bug/discover_tests.py | 测试项自动推导工具 — 从源码中机械式提取所有可测试点 |
+| test_bug/local_checks.py | Local development loop: syntax, unit tests, UI and docs checks without a Station. |
 | test_bug/loop_config.yaml | 循环配置 |
 | test_bug/nightly_loop.py | Loop Engineering — 夜间自动巡检 (定时任务用) |
 | test_bug/project_brief_browser.py | Manual browser integration check with temporary storage and a simulated LLM. |
@@ -22,7 +23,9 @@
 | test_bug/ui_change_log.py | Loop Engineering — UI 改动待检登记工具 |
 | test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
 | tests/test_core.py | 核心模块单元测试 |
+| tests/test_local_checks.py | Verify local-loop failure propagation, environment isolation and offline reports. |
 | tests/test_project_brief.py | Artifact correctness: graph integrity, concurrency, isolation, and chat integration. |
+| tests/test_startup.py | Launch the shell wrapper in temporary projects to verify errors, arguments and cleanup. |
 <!-- /AUTO:module-list -->
 ---
 
@@ -83,6 +86,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-13 | iter-35/36 | Unix 启动回归、本地无服务验证 loop、状态 JSON 检查与 UTC 时间戳修复 |
 | 2026-10-10 | 项目描述工作区 | 新增对话产物、三层需求 DAG、版本保存、Markdown 导出与集成验证 |
 | 2026-08-16 | iter-30 补 | P1 #9: 新增 PM 三件套接口级单测 33 条 (TestPMPlanner/TestPMMonitor/TestPMDispatcher), 基线 121→154 |
 | 2026-08-16 | iter-30 补 | E5: 新增 TestSecretaryFailover 6 条, 基线 115→121 |
@@ -96,3 +100,13 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 `tests/test_project_brief.py` 验证图结构、原子持久化、冲突、会话隔离、聊天产物和已审阅版本下发。`test_bug/project_brief_browser.py` 使用临时目录与模拟 LLM，在真实 Chrome 和 FastAPI 接口上验证编辑器及完整仪表盘；截图保存在 temp_resault/，UI 清单登记为 UI-035。
 
 `TestRoleFreeAlign` 通过临时资源配置隔离文件存在性检查，避免测试依赖真实工作站的 resources.yaml；上库验证为 205 passed、1 skipped。
+
+## 本地开发验证循环（iter-36）
+
+先执行 `./scripts/start_workstation.sh --install-dev --check`，再执行 `.venv/bin/python test_bug/dev_loop.py --local`。该入口无需正在运行的 Station 或模型密钥，也不会调用在线 API 测试套件。它与 `--plan / --verify / --cycle / --close / --status` 互斥。
+
+`local_checks.py` 依次校验 Python 语法、`loop_status.json` 可解析性、完整 pytest、UI 静态规则、设计文档清单、Bash 语法和前端 JavaScript 语法。Bash/Node 缺失时明确记录 skipped；检查失败或超时均返回非零退出码。子进程移除 PYTHONPATH/PYTHONHOME 干扰，并关闭外部 pytest 插件自动加载。每项命令默认最多 300 秒，可通过独立入口 `local_checks.py --timeout 600` 调整。
+
+报告默认写入 `.lan_mesh/local-checks.json`（不入库），含 UTC 时间、解释器、检查命令、结果、耗时及输出。该命令不自动修改开发迭代状态或在线验证 CSV；开发者根据证据单独记录完成项。在线模型、跨主机联调和真实浏览器验收仍须分别执行。
+
+本轮修复历史 `loop_status.json` 备注未转义引号导致的解析失败，并将状态保存时间改为带真实 UTC 时区的 ISO 时间。启动回归测试用临时项目及可控子进程覆盖依赖失败、路径空格、参数透传、异常退出和信号清理；真实服务启动另做冒烟验证。

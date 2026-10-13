@@ -8,6 +8,7 @@
 | 文件/目录 | 职责一句话 |
 |---|---|
 | quicklan-main/ | 独立子项目: Tauri + React 桌面文件共享应用 |
+| scripts/check_environment.py | Validate startup dependencies and imports without contacting a package index. |
 | scripts/start_workstation.bat | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/start_workstation.ps1 | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/start_workstation.sh | 跨平台一键启动 Station (bat/ps1/sh) |
@@ -30,6 +31,20 @@
 commit/released_at 自动对齐 git HEAD (幂等); `--bump patch/minor/major`
 递增版本号 (低位归零), `--note` 更新说明。由 sync_push.ps1 推送前自动
 调用, 消除 VERSION.json 手工维护遗漏。
+
+## Unix 启动与环境检查（iter-35）
+
+`scripts/start_workstation.sh` 支持 Linux/macOS、Python 3.10+。启动顺序为：校验参数 → 创建或检查虚拟环境 → 验证依赖版本及导入 → 按需安装 → 验证应用导入 → 启动 Station。默认环境为项目 `.venv`；损坏环境或 Windows 环境只报错保留，不自动删除，用户可通过 `--venv .venv-linux --python python3` 创建独立环境。
+
+`scripts/check_environment.py` 读取 requirements 的版本要求，使用当前环境的包元数据与实际导入双重验证。存在 FastAPI 不代表依赖齐全；Pydantic 版本不符、缺 cryptography 等均会触发修复。pip 安装失败返回非零退出码并显示手动修复命令。已满足依赖时不访问包索引。所有解释器调用都清除 PYTHONPATH/PYTHONHOME，禁用用户 site-packages，避免 ROS 等系统环境污染。
+
+- `--check`：准备环境并检查，不启动服务；首次可能安装依赖、复制模型池模板。
+- `--install-dev`：使用 `requirements-dev.txt`，包含运行依赖、pytest、pytest-cov、httpx、ruff。
+- `--config / --shared / --venv`：相对于调用者当前目录解析，支持空格和中文路径。
+- `--with-worker`：Station/Worker 共享传入的 config/shared 配置；日志保存在 `.lan_mesh/logs/`；Station 退出或启动器收到 INT/TERM 时清理本次创建的两个进程。Worker 提前退出时停止 Station 并报错。
+- `--dev`：单独启动 Station 的文件监控模式，不与 `--with-worker` 组合，避免应用自重启脱离进程监督。
+
+Station 已内嵌本机 Worker，并在发现窗口结束后自动选举 Secretary。默认启动不要求预先填写模型密钥；实际模型调用前需在 Web UI 或 `.env` 中配置。Windows 启动脚本本轮未改动。
 
 **已知坑**（历次迭代沉淀）:
 - origin 固定 push refspec（master:CN、en:EN）导致显式推送报
@@ -63,5 +78,6 @@ React + TypeScript 前端、Rust/Tauri 后端的桌面文件共享应用。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-13 | iter-35 | Unix 启动器保留异常环境、检查完整依赖、隔离 ROS 路径、监督 Worker 生命周期；统一 Python 3.10+ |
 | 2026-08-16 | iter-30 补③ | P2 #10: VERSION.json 自动化 (update_version.py 幂等同步 + sync_push 推送前自动调用提交) |
 | 2026-08-16 | iter-27 后 | 初建 |
