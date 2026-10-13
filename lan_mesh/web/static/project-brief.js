@@ -5,12 +5,17 @@ window.ProjectBriefUI = (() => {
   let cid = '', state = null, tab = 'document', selected = null, edgeSelected = -1;
   let connecting = false, connectSource = null, drag = null, boxes = new Map();
   let view = {x:0,y:0,w:1100,h:680}, requestId = 0, busy = false;
+  let editGroup = null;
+  const historyLimit = 50, inputGroupMs = 1000;
   const copy = value => JSON.parse(JSON.stringify(value));
   const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const statuses = {discussion:'待讨论',proposed:'建议',confirmed:'已确认'};
+  panel.tabIndex=-1;
   panel.innerHTML = `<div class="brief-toolbar"><strong>项目描述.md</strong>
     <button class="btn" data-action="generate">从对话整理</button><button class="btn primary" data-action="save">保存</button>
     <button class="btn" data-action="export">导出 .md</button><button class="btn" data-action="reload">重新加载</button>
+    <button class="btn" data-action="undo" title="撤销（Ctrl/Cmd+Z）" disabled>撤销</button>
+    <button class="btn" data-action="redo" title="重做（Ctrl/Cmd+Shift+Z 或 Ctrl+Y）" disabled>重做</button>
     </div><div class="brief-status" role="status" aria-live="polite"></div>
     <div class="brief-tabs" role="tablist" aria-label="项目描述视图">
       <button class="btn" role="tab" data-tab="document">文档</button><button class="btn" role="tab" data-tab="graph">需求 DAG</button>
@@ -25,8 +30,45 @@ window.ProjectBriefUI = (() => {
     note(`v${state.revision} · ${state.dirty?'有未保存修改':'已同步'} · ${pending} 个待讨论节点 · 需求草稿`);
   }
   function remember() { if (cid && state) drafts.set(cid, state); }
-  function checkpoint() { state.undo.push(copy(state.document)); if(state.undo.length>50)state.undo.shift(); state.redo=[]; }
-  function changed() { state.dirty=true; remember(); summary(); }
+  function same(a,b) {
+    // API serialization may reorder node fields; equality must compare their values.
+    const stable=value=>JSON.stringify(value,(_,item)=>item&&typeof item==='object'&&!Array.isArray(item)
+      ?Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])):item);
+    return stable(a)===stable(b);
+  }
+  function pushHistory(stack,document) { stack.push(copy(document)); if(stack.length>historyLimit)stack.shift(); }
+  function historyButtons() {
+    for(const action of ['undo','redo'])panel.querySelector(`[data-action="${action}"]`).disabled=!state?.[action].length;
+  }
+  function checkpoint(element) {
+    const now=Date.now();
+    if(!editGroup || editGroup.state!==state || editGroup.element!==element || now-editGroup.time>inputGroupMs){
+      pushHistory(state.undo,state.document);
+    }
+    editGroup={state,element,time:now};state.redo=[];
+  }
+  function changed() { state.dirty=!same(state.document,state.savedDocument); remember(); summary(); historyButtons(); }
+  function travel(action) {
+    editGroup=null;
+    const source=state[action],destination=state[action==='undo'?'redo':'undo'];
+    if(!source.length)return;
+    const focused=document.activeElement;
+    const focusedNode=focused?.closest('[data-node]')?.dataset.node;
+    const field=['field','section','nodeField'].find(key=>focused?.dataset[key]);
+    const value=field?focused.dataset[field]:null,caret=focused?.selectionStart;
+    const scroll=content.scrollTop;
+    pushHistory(destination,state.document);state.document=source.pop();
+    if(!state.document.nodes.some(n=>n.id===selected))selected=null;
+    edgeSelected=-1;connectSource=null;drag=null;
+    changed();render();
+    if(field){
+      const attr=field==='nodeField'?'node-field':field;
+      const input=content.querySelector(`[data-${attr}="${value}"]`);
+      input?.focus({preventScroll:true});
+      if(input?.setSelectionRange && caret!==null)input.setSelectionRange(caret,caret);
+    }else if(focusedNode)(content.querySelector(`[data-node="${focusedNode}"]`)||panel).focus({preventScroll:true});
+    content.scrollTop=scroll;
+  }
   async function request(suffix='', options={}) {
     const response = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/brief${suffix}`, options);
     if (!response.ok) {
@@ -35,15 +77,21 @@ window.ProjectBriefUI = (() => {
     }
     return response;
   }
-  function accept(data) {
-    state={...data,dirty:false,undo:[],redo:[]}; remember(); render();
+  function received(data, previous=null) {
+    return {...data,dirty:false,savedDocument:copy(data.document),undo:previous?.undo||[],redo:previous?.redo||[]};
+  }
+  function accept(data,previous=null) {
+    editGroup=null;state=received(data,previous); remember(); render();
   }
   async function open(id) {
-    remember(); cid=id; state=drafts.get(id)||null; selected=null; edgeSelected=-1; drag=null; connectSource=null;
+    remember(); editGroup=null;cid=id; state=drafts.get(id)||null; selected=null; edgeSelected=-1; drag=null; connectSource=null;
     const token=++requestId;
     render();
     if (!id || state?.dirty) return;
-    try { const data=await (await request()).json(); if(token===requestId && !state?.dirty)accept(data); }
+    try { const data=await (await request()).json(); if(token===requestId && !state?.dirty){
+      const previous=state?.revision===data.revision && same(state.document,data.document)?state:null;
+      accept(data,previous);
+    } }
     catch(error) {if(token===requestId)note(error.message);}
   }
   async function refresh(id) {
@@ -54,11 +102,12 @@ window.ProjectBriefUI = (() => {
   async function save() {
     if(!state)return;
     if(!state.dirty && state.revision)return;
-    const target=cid, token=requestId;
+    const target=cid, token=requestId,previous=state;
+    editGroup=null;
     const data=await (await request('', {method:'PUT',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({document:state.document,expected_revision:state.revision})})).json();
-    if(target===cid && token===requestId)accept(data);
-    else drafts.set(target,{...data,dirty:false,undo:[],redo:[]});
+    if(target===cid && token===requestId)accept(data,previous);
+    else drafts.set(target,received(data,previous));
   }
   async function flush() {
     if(busy)throw new Error('项目描述正在保存或整理，请稍后发送。');
@@ -67,14 +116,15 @@ window.ProjectBriefUI = (() => {
     try {await save();} finally {busy=false;panel.setAttribute('aria-busy','false');panel.inert=false;}
   }
   function render() {
-    summary(); panel.querySelectorAll('[data-tab]').forEach(el=>el.setAttribute('aria-selected',el.dataset.tab===tab));
+    summary(); historyButtons();panel.querySelectorAll('[data-tab]').forEach(el=>el.setAttribute('aria-selected',el.dataset.tab===tab));
     if(!state){content.innerHTML='<div class="brief-empty">与秘书讨论项目背景、需求和想法，内容将整理到这里。<br>文档、模块框图与依赖关系可以共同编辑。</div>';return;}
     if(tab==='document')renderDocument(); else if(tab==='graph')renderGraph(); else renderPreview();
   }
   function renderDocument() {
+    const opened=new Set([...content.querySelectorAll('details[open] textarea')].map(el=>el.dataset.section));
     content.innerHTML=`<label>项目名称<input data-field="title" maxlength="160" value="${escape(state.document.title)}"></label>
-      <p class="brief-hint">空白信息保留为待讨论。模块、功能和验收点可在「需求 DAG」中编辑，导出时一并写入文档。</p>`+
-      Object.entries(state.section_labels).map(([key,label],i)=>`<details ${i<2?'open':''}><summary>${escape(label)} ${state.document.sections[key]?.trim()?'':'· 待讨论'}</summary>
+      <p class="brief-hint">空白信息保留为待讨论。模块、功能和验收点可在「需求 DAG」中编辑。顶部撤销/重做覆盖两种视图，保存后仍可撤销最近 50 步；刷新页面或加载新版本会清空历史。</p>`+
+      Object.entries(state.section_labels).map(([key,label],i)=>`<details ${i<2||opened.has(key)?'open':''}><summary>${escape(label)} ${state.document.sections[key]?.trim()?'':'· 待讨论'}</summary>
       <label>${escape(label)}<textarea data-section="${key}" maxlength="12000" placeholder="待讨论：事实、建议、负责人及确认结论">${escape(state.document.sections[key]||'')}</textarea></label></details>`).join('');
   }
   // Local preview also works during conflicts, so unsaved work can always be exported.
@@ -118,7 +168,7 @@ window.ProjectBriefUI = (() => {
     function visit(id){if(active.has(id))throw new Error('该连线会形成循环，请保持 DAG 无环。');if(done.has(id))return;active.add(id);adjacency.get(id).forEach(visit);active.delete(id);done.add(id);}
     d.nodes.forEach(n=>visit(n.id));
   }
-  function mutate(fn){const before=copy(state.document),previousSelected=selected;try{fn();validate();state.undo.push(before);if(state.undo.length>50)state.undo.shift();state.redo=[];changed();render();}catch(e){state.document=before;selected=previousSelected;note(e.message);}}
+  function mutate(fn){editGroup=null;const before=copy(state.document),previousSelected=selected;try{fn();validate();if(!same(before,state.document)){pushHistory(state.undo,before);state.redo=[];changed();}render();}catch(e){state.document=before;selected=previousSelected;note(e.message);}}
   function sizes() {
     const result=new Map();
     const measure=n=>{const children=state.document.nodes.filter(c=>c.parent_id===n.id);let w=230,h=85;
@@ -130,8 +180,7 @@ window.ProjectBriefUI = (() => {
     content.innerHTML=`<div class="brief-graph-wrap"><div class="brief-graph-tools">
       <button class="btn" data-action="add">＋ 模块</button><button class="btn" data-action="child">＋ 子节点</button>
       <button class="btn ${connecting?'active':''}" data-action="connect">依赖连线</button><button class="btn" data-action="delete">删除选中</button>
-      <button class="btn" data-action="layout">自动布局</button><button class="btn" data-action="fit">适配</button>
-      <button class="btn" data-action="undo" ${state.undo.length?'':'disabled'}>撤销</button><button class="btn" data-action="redo" ${state.redo.length?'':'disabled'}>重做</button></div>
+      <button class="btn" data-action="layout">自动布局</button><button class="btn" data-action="fit">适配</button></div>
       <p class="brief-hint">拖动节点调整位置，拖动空白平移，滚轮缩放。选中框后添加子节点，最多三层；双击框折叠。箭头：前置 → 后续。</p>
       <svg class="brief-canvas" aria-label="可编辑项目需求 DAG" role="img"></svg><div class="brief-node-editor" hidden></div></div>`;
     draw();renderNodeEditor();
@@ -178,6 +227,7 @@ window.ProjectBriefUI = (() => {
   }
   function point(event){const svg=content.querySelector('svg');const p=svg.createSVGPoint();p.x=event.clientX;p.y=event.clientY;return p.matrixTransform(svg.getScreenCTM().inverse());}
   function pointerDown(event){if(event.button!==0)return;const element=event.target.closest('[data-node]');const edge=event.target.closest('[data-edge]');const p=point(event);
+    editGroup=null;
     if(edge){edgeSelected=Number(edge.dataset.edge);selected=null;draw();renderNodeEditor();return;}
     if(element){const id=element.dataset.node;selected=id;edgeSelected=-1;
       if(connecting){if(!connectSource){connectSource=id;note('已选前置节点，请点击依赖它的后续节点。');draw();}else{const source=connectSource;connectSource=null;mutate(()=>state.document.edges.push({source,target:id}));}return;}
@@ -189,7 +239,7 @@ window.ProjectBriefUI = (() => {
     const n=state.document.nodes.find(n=>n.id===drag.id);n.x=Math.min(20000,Math.max(16,drag.x+p.x-drag.p.x));n.y=Math.min(20000,Math.max(n.parent_id?55:16,drag.y+p.y-drag.p.y));
     drag.moved ||= Math.abs(n.x-drag.x)+Math.abs(n.y-drag.y)>1;draw();
   }
-  function pointerUp(){if(drag?.moved&&!drag.pan){state.undo.push(drag.before);if(state.undo.length>50)state.undo.shift();state.redo=[];changed();}drag=null;renderNodeEditor();}
+  function pointerUp(){if(drag&&!drag.pan&&!same(drag.before,state.document)){pushHistory(state.undo,drag.before);state.redo=[];changed();}drag=null;renderNodeEditor();}
   function renderNodeEditor(){const el=content.querySelector('.brief-node-editor');if(!el)return;const n=state.document.nodes.find(n=>n.id===selected);
     if(!n){el.hidden=true;return;}el.hidden=false;
     const excluded=new Set([n.id,...descendants(n.id).map(n=>n.id)]);
@@ -216,10 +266,26 @@ window.ProjectBriefUI = (() => {
     if(el.dataset.nodeField){const key=el.dataset.nodeField;mutate(()=>{const n=state.document.nodes.find(n=>n.id===selected);n[key]=key==='parent_id'?(el.value||null):el.value;if(!n.title.trim())throw new Error('节点名称不能为空。');if(key==='parent_id'){n.x=24;n.y=n.parent_id?60:24;}});}
   });
   panel.addEventListener('input',event=>{if(!state)return;const el=event.target;
-    if(el.dataset.field==='title'||el.dataset.section){checkpoint();if(el.dataset.field)state.document.title=el.value;else state.document.sections[el.dataset.section]=el.value;changed();}
+    if(el.dataset.field==='title'||el.dataset.section){
+      const current=el.dataset.field?state.document.title:state.document.sections[el.dataset.section];
+      if(current===el.value)return;
+      checkpoint(el);if(el.dataset.field)state.document.title=el.value;else state.document.sections[el.dataset.section]=el.value;changed();
+    }
+  });
+  panel.addEventListener('focusout',()=>{editGroup=null;});
+  panel.addEventListener('keydown',event=>{
+    if(!state||busy||event.isComposing||event.altKey||!(event.ctrlKey||event.metaKey))return;
+    const key=event.key.toLowerCase();
+    const action=key==='z'?(event.shiftKey?'redo':'undo'):key==='y'&&!event.shiftKey?'redo':null;
+    if(!action)return;
+    // Node fields commit on change; leave their native text history intact until then.
+    if(event.target.matches('[data-node-field]'))return;
+    event.preventDefault();
+    travel(action);
   });
   panel.addEventListener('click',async event=>{
     const target=event.target.closest('button');if(!target||busy)return;
+    editGroup=null;
     if(target.dataset.tab){tab=target.dataset.tab;render();return;}
     const action=target.dataset.action;if(!action||!state)return;
     try{
@@ -240,7 +306,7 @@ window.ProjectBriefUI = (() => {
         if(edgeSelected>=0){mutate(()=>state.document.edges.splice(edgeSelected,1));edgeSelected=-1;draw();}
         else if(selected){const removed=new Set([selected,...descendants(selected).map(n=>n.id)]);if(removed.size>1&&!confirm(`将删除该框及 ${removed.size-1} 个子节点，可撤销。继续？`))return;
           mutate(()=>{state.document.nodes=state.document.nodes.filter(n=>!removed.has(n.id));state.document.edges=state.document.edges.filter(e=>!removed.has(e.source)&&!removed.has(e.target));selected=null;});}
-      }else if(action==='undo'||action==='redo'){const source=state[action],destination=state[action==='undo'?'redo':'undo'];if(source.length){destination.push(copy(state.document));state.document=source.pop();selected=null;changed();render();}}
+      }else if(action==='undo'||action==='redo')travel(action);
       else if(action==='layout'){mutate(autoLayout);fit();}else if(action==='fit')fit();
     }catch(error){note(error.message);showToast(error.message,'err');}
     finally{busy=false;panel.setAttribute('aria-busy','false');panel.inert=false;}

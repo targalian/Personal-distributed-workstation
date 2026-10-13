@@ -45,6 +45,146 @@ function showToast(msg){window.lastToast=msg}
 document.querySelectorAll('.panel').forEach(p=>p.style.display=p.id==='panel-chat'?'block':'none');
 </script><script src="/static/project-brief.js"></script>''')
 errors=[]
+
+
+def verify_document_history(page, history_id, other_id):
+    """Exercise grouped typing, save boundaries, conflict handling and conversation isolation."""
+    page.evaluate('(id)=>ProjectBriefUI.open(id)', history_id)
+    title = page.locator('[data-field="title"]')
+    undo = page.locator('[data-action="undo"]')
+    redo = page.locator('[data-action="redo"]')
+    status = page.locator('.brief-status')
+    original = title.input_value()
+    assert undo.is_disabled() and redo.is_disabled()
+    title.click()
+    title.press('End')
+    title.press_sequentially(' grouped edit')
+    assert undo.is_enabled()
+    title.press('Control+z')
+    assert title.input_value() == original
+    assert '已同步' in status.inner_text()
+    title.press('Control+Shift+z')
+    assert title.input_value() == original + ' grouped edit'
+    page.locator('[data-action="save"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v2 · 已同步')")
+    assert undo.is_enabled()
+    undo.click()
+    assert title.input_value() == original
+    assert '未保存' in status.inner_text()
+    assert chat.briefs.get(history_id)['document']['title'] == original + ' grouped edit'
+    redo.click()
+    assert '已同步' in status.inner_text()
+    # A clean cached conversation retains its history when the server is unchanged.
+    page.evaluate('(id)=>ProjectBriefUI.open(id)', other_id)
+    assert page.locator('[data-action="undo"]').is_disabled()
+    page.evaluate('(id)=>ProjectBriefUI.open(id)', history_id)
+    assert undo.is_enabled()
+    undo.click()
+    title.fill('新分支')
+    assert redo.is_disabled()
+    # Sections stay open and keep focus when undone by a keyboard shortcut.
+    section = page.locator('[data-section="risks"]')
+    section.evaluate('(el)=>el.closest("details").open=true')
+    before = section.input_value()
+    section.fill('新的风险说明')
+    section.press('Control+z')
+    assert section.input_value() == before
+    assert section.evaluate('(el)=>el===document.activeElement')
+    section.press('Control+y')
+    assert section.input_value() == '新的风险说明'
+    # A conflicting save must keep both the local draft and its undo history.
+    saved = chat.briefs.get(history_id)
+    chat.briefs.save(history_id, saved['document'], saved['revision'])
+    page.locator('[data-action="save"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('版本冲突')")
+    assert undo.is_enabled()
+    undo.click()
+    assert section.input_value() == before
+    page.locator('[data-action="reload"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v3 · 已同步')")
+    assert undo.is_disabled() and redo.is_disabled()
+    # A server-side (AI/other-page) revision starts a new history boundary.
+    title.fill('本地已保存')
+    page.locator('[data-action="save"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v4 · 已同步')")
+    saved = chat.briefs.get(history_id)
+    saved['document']['title'] = '外部更新'
+    chat.briefs.save(history_id, saved['document'], saved['revision'])
+    page.evaluate('(id)=>ProjectBriefUI.refresh(id)', history_id)
+    assert title.input_value() == '外部更新'
+    assert undo.is_disabled() and redo.is_disabled()
+    # Undo in the chat composer must not consume the document's history.
+    title.fill('编辑范围隔离')
+    composer = page.locator('#chat-input')
+    composer.fill('只撤销聊天输入')
+    composer.press('Control+z')
+    assert title.input_value() == '编辑范围隔离'
+    undo.click()
+    assert '已同步' in status.inner_text()
+
+
+def verify_graph_history(page):
+    """Check drag checkpoints, subtree recovery, no-op behavior and the history bound."""
+    undo = page.locator('[data-action="undo"]')
+    redo = page.locator('[data-action="redo"]')
+    page.locator('#project-brief-panel [data-tab="graph"]').click()
+    page.locator('[data-action="fit"]').click()
+    page.locator('.brief-canvas').scroll_into_view_if_needed()
+    node = page.locator('[data-node="module"]')
+    old_position = node.get_attribute('transform')
+    rect = node.locator('rect').bounding_box()
+    page.mouse.move(rect['x']+15, rect['y']+5)
+    page.mouse.down()
+    page.mouse.move(rect['x']+65, rect['y']+25, steps=5)
+    page.mouse.up()
+    moved_position = node.get_attribute('transform')
+    assert moved_position != old_position and undo.is_enabled(), (old_position,moved_position,rect)
+    undo.click()
+    assert node.get_attribute('transform') == old_position
+    assert undo.is_disabled() and redo.is_enabled()
+    # A click without a drag is not an edit and must not erase the redo stack.
+    node.click(position={'x':15, 'y':5})
+    assert undo.is_disabled() and redo.is_enabled()
+    redo.click()
+    assert node.get_attribute('transform') == moved_position
+    node.focus()
+    page.keyboard.press('Control+z')
+    assert node.get_attribute('transform') == old_position
+    assert node.evaluate('(el)=>el===document.activeElement')
+    page.keyboard.press('Control+Shift+z')
+    assert node.get_attribute('transform') == moved_position
+    page.locator('[data-action="delete"]').click()
+    assert page.locator('[data-node]').count() == 1
+    undo.click()
+    assert page.locator('[data-node]').count() == 4
+    redo.click()
+    assert page.locator('[data-node]').count() == 1
+    undo.click()
+    page.locator('[data-node="detail"]').click()
+    page.locator('[data-node-field="owner"]').fill('Boss')
+    page.locator('[data-node-field="owner"]').press('Tab')
+    undo.click()
+    assert page.locator('[data-node-field="owner"]').input_value() == ''
+    redo.click()
+    assert page.locator('[data-node-field="owner"]').input_value() == 'Boss'
+    # A saved API response uses schema field order; undoing a later edit is still clean.
+    page.locator('[data-action="add"]').click()
+    page.locator('[data-action="save"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v6 · 已同步')")
+    page.locator('[data-action="add"]').click()
+    undo.click()
+    assert '已同步' in page.locator('.brief-status').inner_text()
+    page.locator('#project-brief-panel [data-tab="document"]').click()
+    title = page.locator('[data-field="title"]')
+    for i in range(55):
+        title.fill(f'edit-{i}')
+        title.press('Tab')
+    for _ in range(50):
+        undo.click()
+    assert undo.is_disabled()
+    assert title.input_value() == 'edit-4'
+
+
 with sync_playwright() as p:
     browser=p.chromium.launch(executable_path=os.environ.get('BRIEF_BROWSER_EXECUTABLE', '/usr/bin/google-chrome'),headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
     page=browser.new_page(viewport={'width':1680,'height':1100},device_scale_factor=1)
@@ -183,5 +323,32 @@ with sync_playwright() as p:
     assert page.locator('[data-field="title"]').input_value()=='加载中输入的修改'
     assert 'v8 · 已同步' in page.locator('.brief-status').inner_text()
     assert not errors,errors
+    # UI-036: test unified editing history against isolated conversations and the real API.
+    history_id=chat.create_conversation('编辑历史测试')['id']
+    untouched_id=chat.create_conversation('无编辑历史')['id']
+    history_document=document()
+    history_document['nodes'][-1].update(x=650,y=60)
+    chat.briefs.save(history_id,history_document,0)
+    page=browser.new_page(viewport={'width':1680,'height':1100})
+    page.on('pageerror',lambda e:errors.append(str(e)))
+    page.on('dialog',lambda d:d.accept())
+    # Use the minimal editor shell to keep dashboard refreshes out of history assertions.
+    html=re.sub(r'<script>.*?</script>','',html,flags=re.S)
+    html=html.replace('<script src="/static/project-brief.js"></script>', '''<script>
+function apiFetch(url,opts){return fetch(url,opts)}
+function showToast(msg){window.lastToast=msg}
+document.querySelectorAll('.panel').forEach(p=>p.style.display=p.id==='panel-chat'?'block':'none');
+</script><script src="/static/project-brief.js"></script>''')
+    page.route('**/*',route)
+    page.goto('http://brief.test/')
+    verify_document_history(page,history_id,untouched_id)
+    verify_graph_history(page)
+    page.screenshot(path=str(output/'project_brief_history_desktop.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    page.locator('#project-brief-panel').scroll_into_view_if_needed()
+    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+    assert page.locator('[data-action="redo"]').is_visible()
+    page.screenshot(path=str(output/'project_brief_history_mobile.png'),full_page=True)
+    assert not errors,errors
     browser.close()
-print('PASS: generation, nested DAG, drag, editing, cycle guard, undo/redo, isolation, conflict reload, export, mobile, dashboard chat + WebSocket, delayed load/save; zero page errors')
+print('PASS: generation, nested DAG, drag, editing, cycle guard, grouped typing, document/graph undo/redo, save history, clean state, 50-step bound, isolation, conflict reload, external revision, export, mobile, dashboard chat + WebSocket, delayed load/save; zero page errors')
