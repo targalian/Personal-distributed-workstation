@@ -189,6 +189,7 @@ class BriefStore:
             else:
                 brief = ProjectBrief()
                 value = {"revision": 0, "updated_at": None, "document": brief.model_dump()}
+            value.pop("_history", None)
             return {**value, "proposal": value.get("proposal"),
                     "markdown": render_markdown(brief, value["revision"]), "section_labels": SECTIONS}
 
@@ -200,7 +201,7 @@ class BriefStore:
                 raise RevisionConflict("项目描述已更新，请保留当前修改并重新加载后合并")
             value = {"revision": previous["revision"] + 1, "updated_at": time.time(), "document": brief.model_dump()}
             value["proposal"] = previous.get("proposal")
-            self._write(conv_id, value)
+            self._write(conv_id, value, source="manual")
             return self.get(conv_id)
 
     def propose(self, conv_id: str, document: dict, expected_revision: int) -> dict:
@@ -239,15 +240,77 @@ class BriefStore:
                 current["revision"] += 1
                 current["updated_at"] = time.time()
             current["proposal"] = None
-            self._write(conv_id, current)
+            self._write(conv_id, current, source="ai_review" if selected else "")
             return self.get(conv_id)
 
-    def _write(self, conv_id: str, value: dict) -> None:
-        """Store the document and pending review in one atomic file replacement."""
+    def history(self, conv_id: str, before_revision: int | None = None, limit: int = 50) -> dict:
+        """List committed snapshots newest first, without loading document bodies."""
+        with self.lock:
+            path = self._path(conv_id)
+            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            entries = self._history_entries(raw)
+            if before_revision is not None:
+                entries = [entry for entry in entries if entry["revision"] < before_revision]
+            entries = sorted(entries, key=lambda entry: entry["revision"], reverse=True)
+            page = entries[:limit]
+            return {"revisions": [{key: value for key, value in entry.items() if key != "file"} for entry in page],
+                    "next_before": page[-1]["revision"] if len(entries) > limit else None}
+
+    def revision(self, conv_id: str, revision: int) -> dict:
+        """Read a committed snapshot; unpublished files are never exposed as history."""
+        with self.lock:
+            path = self._path(conv_id)
+            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            entry = next((item for item in self._history_entries(raw) if item["revision"] == revision), None)
+            if entry is None:
+                raise KeyError("历史版本不存在")
+            snapshot = json.loads((path.parent / "revisions" / entry["file"]).read_text(encoding="utf-8")) if entry.get("file") else raw
+            brief = ProjectBrief.model_validate(snapshot["document"])
+            return {"revision": revision, "document": brief.model_dump(), "updated_at": entry["updated_at"],
+                    "source": entry["source"], "markdown": render_markdown(brief, revision)}
+
+    def restore(self, conv_id: str, revision: int, expected_revision: int) -> dict:
+        """Restore old content as a new revision, preserving all committed snapshots."""
+        with self.lock:
+            current = self.get(conv_id)
+            if current["revision"] != expected_revision:
+                raise RevisionConflict("当前文档已更新，请重新比较后恢复")
+            snapshot = self.revision(conv_id, revision)
+            current.update(document=snapshot["document"], revision=current["revision"] + 1, updated_at=time.time())
+            self._write(conv_id, current, source="restore", restored_from=revision)
+            return self.get(conv_id)
+
+    @staticmethod
+    def _history_entries(raw: dict) -> list[dict]:
+        entries = list(raw.get("_history", []))
+        if not entries and raw.get("revision", 0) > 0:
+            entries.append({"revision": raw["revision"], "updated_at": raw.get("updated_at"),
+                            "source": "legacy", "title": raw["document"]["title"]})
+        return entries
+
+    def _write(self, conv_id: str, value: dict, source: str = "", restored_from: int | None = None) -> None:
+        """Prepare snapshots, then atomically publish document, proposal and history index."""
         stored = {key: value[key] for key in ("revision", "updated_at", "document", "proposal")}
         path = self._path(conv_id)
         path.parent.mkdir(parents=True, exist_ok=True)
+        raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        entries = self._history_entries(raw)
+        if value["revision"] != raw.get("revision", 0):
+            if entries and not entries[-1].get("file"):
+                entries[-1] = self._snapshot(path, raw, "legacy")
+            entries.append(self._snapshot(path, stored, source or "manual", restored_from))
+        stored["_history"] = entries
         self._atomic_write(path, json.dumps(stored, ensure_ascii=False, indent=2))
+
+    def _snapshot(self, path: Path, value: dict, source: str, restored_from: int | None = None) -> dict:
+        folder = path.parent / "revisions"
+        folder.mkdir(exist_ok=True)
+        filename = f"{value['revision']}-{uuid.uuid4().hex}.json"
+        snapshot = {key: value[key] for key in ("revision", "updated_at", "document")}
+        snapshot.update(source=source, restored_from=restored_from)
+        self._atomic_write(folder / filename, json.dumps(snapshot, ensure_ascii=False, indent=2))
+        return {"revision": value["revision"], "updated_at": value["updated_at"], "source": source,
+                "restored_from": restored_from, "title": value["document"]["title"], "file": filename}
 
     @staticmethod
     def _atomic_write(path, text):

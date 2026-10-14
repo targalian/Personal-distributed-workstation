@@ -55,6 +55,55 @@ def accept_all_suggestions(page):
     page.locator('[data-action="review-apply"]').click()
 
 
+def verify_revision_history(page, revision_id, output):
+    """Check persisted history, version comparison, restore and concurrent edits in the UI."""
+    page.reload()
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',revision_id)
+    page.locator('[data-tab="history"]').click()
+    page.wait_for_selector('[data-history-choice] option[value="1"]',state='attached')
+    page.locator('[data-history-choice]').select_option('1')
+    page.locator('[data-action="history-view"]').click()
+    page.wait_for_selector('.brief-diff')
+    assert '第二版内容' in page.locator('.brief-diff').inner_text()
+    assert '协作工作台' in page.locator('.brief-diff').inner_text()
+    assert page.locator('[data-action="history-restore"]').is_enabled()
+    page.screenshot(path=str(output/'project_brief_revisions_desktop.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    page.locator('#project-brief-panel').scroll_into_view_if_needed()
+    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+    page.screenshot(path=str(output/'project_brief_revisions_mobile.png'),full_page=True)
+    page.set_viewport_size({'width':1680,'height':1100})
+    page.locator('[data-action="history-restore"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v3 · 已同步')")
+    assert chat.briefs.get(revision_id)['document']['title']=='协作工作台'
+    assert chat.briefs.revision(revision_id,2)['document']['title']=='第二版内容'
+    page.wait_for_selector('[data-history-choice] option[value="3"]',state='attached')
+    assert '恢复历史' in page.locator('[data-history-choice] option[value="3"]').inner_text()
+    page.locator('[data-history-choice]').select_option('2')
+    page.locator('[data-action="history-view"]').click()
+    page.wait_for_function("document.querySelector('[data-action=history-restore]').disabled===false")
+    # Locally dirty drafts cannot be overwritten by restore.
+    page.locator('[data-tab="document"]').click()
+    page.locator('[data-field="title"]').fill('本地草稿')
+    page.locator('[data-tab="history"]').click()
+    assert page.locator('[data-action="history-restore"]').is_disabled()
+    page.locator('[data-action="undo"]').click()
+    assert page.locator('[data-action="history-restore"]').is_enabled()
+    # An external save after viewing a diff is caught by the server revision guard.
+    saved=chat.briefs.get(revision_id)
+    saved['document']['title']='并发保存的新内容'
+    chat.briefs.save(revision_id,saved['document'],saved['revision'])
+    page.locator('[data-action="history-restore"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('版本冲突')")
+    assert chat.briefs.get(revision_id)['document']['title']=='并发保存的新内容'
+    # Reload and compare survive a fresh page lifecycle.
+    page.reload()
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',revision_id)
+    page.locator('[data-tab="history"]').click()
+    page.wait_for_selector('[data-history-choice] option[value="4"]',state='attached')
+    assert page.locator('[data-history-choice] option').count()==4
+
+
 def verify_ai_review(page, review_id, other_id, output):
     """Verify selective adoption, escaping, stale review guards and draft preservation."""
     page.evaluate('(id)=>ProjectBriefUI.open(id)',review_id)
@@ -442,6 +491,12 @@ document.querySelectorAll('.panel').forEach(p=>p.style.display=p.id==='panel-cha
     page.set_viewport_size({'width':1680,'height':1100})
     verify_ai_review(page,review_id,untouched_id,output)
     assert not errors,errors
+    revision_id=chat.create_conversation('持久化版本历史测试')['id']
+    chat.briefs.save(revision_id,document(),0)
+    chat.briefs.save(revision_id,{**document(),'title':'第二版内容'},1)
+    verify_revision_history(page,revision_id,output)
+    assert not errors,errors
     browser.close()
 print('PASS: generation, nested DAG, drag, editing, cycle guard, grouped typing, document/graph undo/redo, save history, clean state, 50-step bound, isolation, conflict reload, external revision, export, mobile, dashboard chat + WebSocket, delayed load/save; zero page errors')
 print('PASS: AI review, selective adoption, saved document protection, proposal persistence, draft-preserving discard, stale proposal guard, undo after acceptance, escaped HTML, desktop/mobile diff; zero page errors')
+print('PASS: revision history, persisted snapshots, comparison, restore as new version, dirty draft protection, concurrent save rejection, reload and desktop/mobile history; zero page errors')

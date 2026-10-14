@@ -21,6 +21,7 @@ window.ProjectBriefUI = (() => {
       <button class="btn" role="tab" data-tab="document">文档</button><button class="btn" role="tab" data-tab="graph">需求 DAG</button>
       <button class="btn" role="tab" data-tab="preview">Markdown 预览</button>
       <button class="btn" role="tab" data-tab="review">AI 建议</button>
+      <button class="btn" role="tab" data-tab="history">版本历史</button>
     </div><div class="brief-content"></div>`;
   const content = panel.querySelector('.brief-content');
   const status = panel.querySelector('.brief-status');
@@ -122,7 +123,7 @@ window.ProjectBriefUI = (() => {
     summary(); historyButtons();panel.querySelectorAll('[data-tab]').forEach(el=>el.setAttribute('aria-selected',el.dataset.tab===tab));
     panel.querySelector('[data-tab="review"]').textContent=state?.proposal?`AI 建议 (${state.proposal.changes.length})`:'AI 建议';
     if(!state){content.innerHTML='<div class="brief-empty">与秘书讨论项目背景、需求和想法，内容将整理到这里。<br>文档、模块框图与依赖关系可以共同编辑。</div>';return;}
-    if(tab==='document')renderDocument(); else if(tab==='graph')renderGraph(); else if(tab==='review')renderReview(); else renderPreview();
+    if(tab==='document')renderDocument(); else if(tab==='graph')renderGraph(); else if(tab==='review')renderReview(); else if(tab==='history')renderHistory(); else renderPreview();
   }
   function renderDocument() {
     const opened=new Set([...content.querySelectorAll('details[open] textarea')].map(el=>el.dataset.section));
@@ -200,6 +201,49 @@ window.ProjectBriefUI = (() => {
     }else if(previous.revision!==data.revision||!same(previous.document,data.document))history=null;
     if(target===cid&&token===requestId)accept(data,history);
     else drafts.set(target,received(data,history));
+  }
+  async function loadHistory(more=false) {
+    const current=state,target=cid,token=requestId;
+    const suffix=more&&current.historyNext?`?before_revision=${current.historyNext}`:'';
+    const data=await(await request('/history'+suffix)).json();
+    current.historyList=more?[...(current.historyList||[]),...data.revisions]:data.revisions;
+    current.historyNext=data.next_before;
+    if(target===cid&&token===requestId&&state===current&&tab==='history')renderHistory();
+  }
+  async function inspectHistory(revision) {
+    const current=state,target=cid,token=requestId;
+    const data=await(await request(`/history/${revision}`)).json();
+    current.historyDetail=data;
+    if(target===cid&&token===requestId&&state===current&&tab==='history')renderHistory();
+  }
+  function renderHistory() {
+    const entries=state.historyList||[],detail=state.historyDetail;
+    const sources={manual:'手工保存',ai_review:'采纳 AI 建议',restore:'恢复历史',legacy:'升级前版本'};
+    const time=value=>value?new Date(value*1000).toLocaleString():'时间未知';
+    const blocked=state.dirty||!detail||detail.current_revision!==state.revision||!detail.changes.length;
+    content.innerHTML=`<p class="brief-hint">保存和采纳建议会保留版本。选择旧版本与当前已保存内容比较；恢复会创建新版本，历史记录不变。升级前只能保留当时的最新版本。</p>
+      ${state.dirty?'<p class="brief-review-warning" role="alert">当前有未保存修改，请先保存或导出并处理草稿，再恢复历史。</p>':''}
+      <div class="brief-review-tools"><button class="btn" data-action="history-refresh">刷新列表</button>
+      ${state.historyNext?'<button class="btn" data-action="history-more">加载更早版本</button>':''}</div>
+      ${entries.length?`<label>历史版本<select data-history-choice>${entries.map(entry=>`<option value="${entry.revision}" ${detail?.revision===entry.revision?'selected':''}>v${entry.revision} · ${escape(sources[entry.source]||entry.source)}${entry.restored_from?`（来自 v${entry.restored_from}）`:''} · ${escape(time(entry.updated_at))} · ${escape(entry.title)}</option>`).join('')}</select></label>
+      <div class="brief-review-tools"><button class="btn" data-action="history-view">查看版本与差异</button>
+      <button class="btn primary" data-action="history-restore" ${blocked?'disabled':''}>恢复所看版本为新版本</button></div>`:'<p class="brief-empty">暂无已保存的历史版本。</p>'}
+      ${detail?`<p>正在查看 v${detail.revision}，对比已保存 v${detail.current_revision} · ${detail.changes.length} 项差异</p>
+        ${detail.current_revision!==state.revision?'<p class="brief-review-warning" role="alert">当前页面版本与服务端不同，请重新加载后比较。</p>':''}
+        <details><summary>查看该版本 Markdown</summary><pre>${escape(detail.markdown)}</pre></details>`+
+        detail.changes.map(change=>`<details class="brief-change" open><summary>${escape(change.label)}</summary><div class="brief-diff"><div><strong>当前已保存内容</strong><pre>${escape(reviewValue(change.before))}</pre></div><div><strong>历史版本内容</strong><pre>${escape(reviewValue(change.after))}</pre></div></div></details>`).join(''):''}`;
+  }
+  async function restoreHistory() {
+    const detail=state.historyDetail;
+    if(state.dirty)throw new Error('请先处理未保存修改，再恢复历史。');
+    if(!detail||detail.current_revision!==state.revision)throw new Error('请重新加载并查看历史版本。');
+    if(!confirm(`将 v${detail.revision} 的内容保存为新版本？当前及旧版本都会保留。`))return;
+    const target=cid,token=requestId,previous=state;
+    const data=await(await request(`/history/${detail.revision}/restore`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({expected_revision:state.revision})})).json();
+    pushHistory(previous.undo,previous.document);previous.redo=[];
+    if(target===cid&&token===requestId){accept(data,previous);await loadHistory();}
+    else drafts.set(target,received(data,previous));
   }
   function download(text) {
     const url=URL.createObjectURL(new Blob([text],{type:'text/markdown;charset=utf-8'}));
@@ -343,16 +387,19 @@ window.ProjectBriefUI = (() => {
   panel.addEventListener('click',async event=>{
     const target=event.target.closest('button');if(!target||busy)return;
     editGroup=null;
-    if(target.dataset.tab){tab=target.dataset.tab;render();return;}
+    if(target.dataset.tab){tab=target.dataset.tab;render();if(tab==='history'&&state)try{await loadHistory();}catch(error){note(error.message);}return;}
     const action=target.dataset.action;if(!action||!state)return;
     if(action==='generate'&&state.proposal){tab='review';render();note('请先采纳或忽略现有建议，再重新整理。');return;}
     try{
-      if(['save','generate','export','reload','review-apply','review-discard'].includes(action)){
+      if(['save','generate','export','reload','review-apply','review-discard','history-refresh','history-more','history-view','history-restore'].includes(action)){
         busy=true;panel.setAttribute('aria-busy','true');panel.inert=true;
         if(action==='save')await save();
         if(action==='generate'){const id=cid,token=requestId;await save();if(id!==cid||token!==requestId)return;note('正在整理修改建议…');const data=await(await request('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_revision:state.revision})})).json();if(id===cid&&token===requestId){tab='review';accept(data,state);}}
         if(action==='review-apply')await reviewProposal(false);
         if(action==='review-discard'&&confirm('忽略这份 AI 建议？已保存文档和本地编辑保持不变。'))await reviewProposal(true);
+        if(action==='history-refresh'||action==='history-more')await loadHistory(action==='history-more');
+        if(action==='history-view')await inspectHistory(content.querySelector('[data-history-choice]').value);
+        if(action==='history-restore')await restoreHistory();
         if(action==='export'){if(state.dirty)download(markdown());else download(await(await request('/markdown')).text());}
         if(action==='reload'){if(!state.dirty||confirm('重新加载将替换本地未保存修改。建议先导出草稿，是否继续？')){drafts.delete(cid);state=null;await open(cid);}}
       }else if(action==='review-all'||action==='review-none'){

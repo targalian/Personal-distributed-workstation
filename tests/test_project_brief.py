@@ -280,3 +280,95 @@ def test_handoff_does_not_include_unaccepted_suggestion(chat):
     chat.chat('下发项目描述', cid)
     assert chat.controller.submit_task_from_chat.call_args.kwargs['name'] == '协作工作台'
     assert chat.briefs.get(cid)['proposal'] is not None
+
+
+def test_revision_history_survives_restart_and_restore_creates_new_version(tmp_path):
+    store = BriefStore(tmp_path)
+    first = store.save('one', document(), 0)
+    store.save('one', {**document(), 'title': '第二版'}, 1)
+    restored = BriefStore(tmp_path).restore('one', 1, 2)
+    assert restored['revision'] == 3
+    assert restored['document'] == first['document']
+    assert store.revision('one', 2)['document']['title'] == '第二版'
+    entries = store.history('one')['revisions']
+    assert [entry['revision'] for entry in entries] == [3, 2, 1]
+    assert entries[0]['source'] == 'restore' and entries[0]['restored_from'] == 1
+    assert store.history('two')['revisions'] == []
+    with pytest.raises(KeyError):
+        store.revision('two', 1)
+    with pytest.raises(RevisionConflict):
+        store.restore('one', 1, 2)
+
+
+def test_legacy_document_history_is_captured_on_first_new_save(tmp_path):
+    store = BriefStore(tmp_path)
+    path = store._path('legacy')
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'revision': 12, 'updated_at': 100,
+                                'document': ProjectBrief.model_validate(document()).model_dump()}))
+    assert store.history('legacy')['revisions'][0]['source'] == 'legacy'
+    assert store.revision('legacy', 12)['document']['title'] == '协作工作台'
+    store.save('legacy', {**document(), 'title': '新内容'}, 12)
+    assert store.revision('legacy', 12)['document']['title'] == '协作工作台'
+    assert store.revision('legacy', 13)['document']['title'] == '新内容'
+    with pytest.raises(KeyError):
+        store.revision('legacy', 11)
+
+
+def test_failed_index_publish_does_not_expose_uncommitted_snapshot(tmp_path, monkeypatch):
+    store = BriefStore(tmp_path)
+    store.save('one', document(), 0)
+    real_write = store._atomic_write
+    def fail_current(path, text):
+        if path.name == 'brief.json':
+            raise OSError('disk full after snapshot')
+        real_write(path, text)
+    monkeypatch.setattr(store, '_atomic_write', fail_current)
+    with pytest.raises(OSError):
+        store.save('one', {**document(), 'title': '未提交'}, 1)
+    assert len(store.history('one')['revisions']) == 1
+    assert store.get('one')['revision'] == 1
+    with pytest.raises(KeyError):
+        store.revision('one', 2)
+    monkeypatch.setattr(store, '_atomic_write', real_write)
+    store.save('one', {**document(), 'title': '重试成功'}, 1)
+    assert store.revision('one', 2)['document']['title'] == '重试成功'
+
+
+def test_proposals_do_not_create_history_until_accepted_and_pagination_is_stable(tmp_path):
+    store = BriefStore(tmp_path)
+    pending = store.propose('one', document(), 0)
+    assert store.history('one')['revisions'] == []
+    store.review('one', pending['proposal']['id'], 0, ['title'])
+    assert store.history('one')['revisions'][0]['source'] == 'ai_review'
+    store.save('one', document(), 1)
+    store.save('one', {**document(), 'title': '第三版'}, 2)
+    first = store.history('one', limit=2)
+    assert [entry['revision'] for entry in first['revisions']] == [3, 2]
+    assert first['next_before'] == 2
+    second = store.history('one', before_revision=2, limit=2)
+    assert [entry['revision'] for entry in second['revisions']] == [1]
+    assert second['next_before'] is None
+
+
+def test_history_api_diff_restore_conflicts_and_isolation(chat):
+    app = FastAPI()
+    app.include_router(build_brief_routes(chat.controller))
+    client = TestClient(app)
+    cid = chat._active_conv_id
+    base = f'/api/conversations/{cid}/brief'
+    chat.briefs.save(cid, document(), 0)
+    chat.briefs.save(cid, {**document(), 'title': '新标题'}, 1)
+    assert len(client.get(base+'/history').json()['revisions']) == 2
+    detail = client.get(base+'/history/1').json()
+    assert detail['current_revision'] == 2
+    assert detail['changes'][0]['id'] == 'title'
+    assert detail['changes'][0]['before'] == '新标题'
+    assert detail['changes'][0]['after'] == '协作工作台'
+    assert client.get(base+'/history/99').status_code == 404
+    assert client.post(base+'/history/1/restore', json={'expected_revision': 1}).status_code == 409
+    assert client.post(base+'/history/99/restore', json={'expected_revision': 2}).status_code == 404
+    assert client.post(base+'/history/1/restore', json={'expected_revision': 2}).json()['revision'] == 3
+    assert client.get('/api/conversations/missing/brief/history').status_code == 404
+    chat.controller.secretary_active = False
+    assert client.get(base+'/history').status_code == 503

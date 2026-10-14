@@ -1,7 +1,7 @@
 """Project description editing, generation and portable Markdown export."""
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,10 @@ class ReviewBrief(BaseModel):
     proposal_id: str = Field(min_length=1, max_length=64)
     expected_revision: int = Field(ge=0)
     selected: list[str] = Field(default_factory=list, max_length=2048)
+
+
+class RestoreBrief(BaseModel):
+    expected_revision: int = Field(ge=0)
 
 
 def build_brief_routes(controller):
@@ -72,5 +76,31 @@ def build_brief_routes(controller):
             raise HTTPException(409, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+
+    @router.get("/history")
+    def list_history(conv_id: str, before_revision: int | None = Query(default=None, ge=1)):
+        return handler(conv_id).briefs.history(conv_id, before_revision)
+
+    @router.get("/history/{revision}")
+    def get_revision(conv_id: str, revision: int):
+        from .brief_review import brief_changes
+        store = handler(conv_id).briefs
+        try:
+            with store.lock:
+                historical = store.revision(conv_id, revision)
+                current = store.get(conv_id)
+                return {**historical, "current_revision": current["revision"],
+                        "changes": brief_changes(current["document"], historical["document"])}
+        except KeyError as exc:
+            raise HTTPException(404, "历史版本不存在") from exc
+
+    @router.post("/history/{revision}/restore")
+    def restore_revision(conv_id: str, revision: int, payload: RestoreBrief):
+        try:
+            return handler(conv_id).briefs.restore(conv_id, revision, payload.expected_revision)
+        except RevisionConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(404, "历史版本不存在") from exc
 
     return router

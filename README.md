@@ -306,3 +306,7 @@ Secretary conversations now have a shared document and requirements DAG editor. 
 AI replies and “Generate from conversation” now produce a pending suggestion. Open **AI 建议**, compare changes, and select the fields to accept. The saved document, export, and PM handoff remain based on the accepted content. Suggestions survive reloads; stale suggestions cannot overwrite newer edits. Graph structure changes are accepted as a group to keep nesting and dependencies valid.
 
 The document and DAG share Undo/Redo controls with up to 50 steps per conversation. Consecutive typing is grouped; saving preserves local history. Use Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z inside the workbench. Undo after saving changes the local draft until you save again. Reloading the page or accepting a new server revision clears local history.
+
+**版本历史** keeps saved document snapshots on the server. Compare a previous revision with the current saved document, inspect its Markdown, and restore it as a new revision. Older snapshots remain intact. Existing installations start their history from the latest document available at upgrade time.
+
+See the [1.0 readiness criteria](docs/1.0-readiness.md) for release scope, verified capabilities, and remaining real-model, multi-host, recovery, and deployment checks.
