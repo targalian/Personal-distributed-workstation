@@ -878,7 +878,7 @@ function connectWS(){
     // PM Agent 架构: 新消息类型
     if(msg.type==='chat_reply'&&(!msg.data.conv_id||msg.data.conv_id===_activeConvId)){
       appendChatMessage('assistant',msg.data.reply,msg.data.timestamp);
-      if(msg.data.brief_revision)window.ProjectBriefUI?.refresh(msg.data.conv_id);
+      if(msg.data.brief_revision||msg.data.brief_proposal_id)window.ProjectBriefUI?.refresh(msg.data.conv_id);
     }
     if(msg.type==='pm_registered'){refreshPMAgents();refreshTasks();loadPMThreads();}
     if(msg.type==='pm_status_change'){

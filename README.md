@@ -303,4 +303,6 @@ MIT
 
 Secretary conversations now have a shared document and requirements DAG editor. Discuss a project to build a structured draft, edit its sections and three levels of nested modules/features, save with revision checks, and export `项目描述.md` with a Mermaid diagram. Explicitly send `下发项目描述` to hand the saved description to the PM. See the [design and interaction guide](docs/design/06-interaction/项目描述工作区.md) for the document format, APIs, limitations, and recommended next improvements.
 
+AI replies and “Generate from conversation” now produce a pending suggestion. Open **AI 建议**, compare changes, and select the fields to accept. The saved document, export, and PM handoff remain based on the accepted content. Suggestions survive reloads; stale suggestions cannot overwrite newer edits. Graph structure changes are accepted as a group to keep nesting and dependencies valid.
+
 The document and DAG share Undo/Redo controls with up to 50 steps per conversation. Consecutive typing is grouped; saving preserves local history. Use Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z inside the workbench. Undo after saving changes the local draft until you save again. Reloading the page or accepting a new server revision clears local history.

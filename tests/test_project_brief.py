@@ -100,14 +100,19 @@ def chat(tmp_path):
     return ch
 
 
-def test_chat_updates_artifact_without_dispatch_and_uses_saved_document(chat):
+def test_chat_proposes_artifact_without_dispatch_and_uses_saved_document(chat):
     cid = chat._active_conv_id
     chat._execute_action = Mock()
     result = chat.chat('帮我做一个项目文档编辑器', cid)
-    assert result['brief_revision'] == 1
+    assert result['brief_revision'] == 0
+    assert result['brief_proposal_id']
     assert result['action_taken'] == ''
     chat._execute_action.assert_not_called()
-    assert chat.briefs.get(cid)['document']['title'] == '协作工作台'
+    pending = chat.briefs.get(cid)
+    assert pending['document']['title'] == '待命名项目'
+    assert 'AI 建议' in result['reply']
+    proposal = pending['proposal']
+    chat.briefs.review(cid, proposal['id'], 0, [change['id'] for change in proposal['changes']])
     chat.runtime._call_llm_with_routing.return_value = {'content': '普通回复'}
     chat.chat('预算尚未确定', cid)
     assert '协作工作台' in chat.runtime._call_llm_with_routing.call_args.args[1]['_system_prompt']
@@ -167,8 +172,111 @@ def test_api_validation_export_generation_and_conversation_scope(chat):
     assert export.status_code == 200
     assert 'filename*=UTF-8' in export.headers['content-disposition']
     assert export.text == chat.briefs.get(chat._active_conv_id)['markdown']
-    assert client.post(base+'/generate', json={'expected_revision': 1}).json()['revision'] == 2
+    updated = {**document(), 'title': '模型建议的新标题'}
+    chat.runtime._call_llm_with_routing.return_value = {'content': json.dumps({'reply': '建议', 'project_brief': updated})}
+    generated = client.post(base+'/generate', json={'expected_revision': 1}).json()
+    assert generated['revision'] == 1
+    assert generated['document']['title'] == '协作工作台'
     assert client.post(base+'/generate', json={'expected_revision': 1}).status_code == 409
+    review = {'proposal_id': generated['proposal']['id'], 'expected_revision': 1, 'selected': ['title']}
+    assert client.post(base+'/review', json={**review, 'selected': ['invalid']}).status_code == 422
+    assert client.post(base+'/review', json=review).json()['revision'] == 2
+    assert client.post(base+'/review', json=review).status_code == 409
     assert client.get('/api/conversations/missing/brief').status_code == 404
     chat.controller.secretary_active = False
     assert client.get(base).status_code == 503
+
+
+def test_proposal_survives_restart_and_partial_review_keeps_unselected_fields(tmp_path):
+    store = BriefStore(tmp_path)
+    original = store.save('one', document(), 0)
+    candidate = {**document(), 'title': 'AI 标题', 'sections': {'background': 'AI 背景'}}
+    pending = store.propose('one', candidate, 1)
+    assert pending['document'] == original['document']
+    assert pending['markdown'] == original['markdown']
+    assert BriefStore(tmp_path).get('one')['proposal'] == pending['proposal']
+    assert store.get('two')['proposal'] is None
+    result = store.review('one', pending['proposal']['id'], 1, ['section:background'])
+    assert result['revision'] == 2 and result['proposal'] is None
+    assert result['document']['title'] == '协作工作台'
+    assert result['document']['sections']['background'] == 'AI 背景'
+    assert result['document']['sections']['questions'] == '预算待 Boss 确认'
+
+
+def test_pending_proposal_is_not_replaced_and_stale_proposal_cannot_overwrite_edits(tmp_path):
+    store = BriefStore(tmp_path)
+    store.save('one', document(), 0)
+    proposal = store.propose('one', {**document(), 'title': 'AI'}, 1)['proposal']
+    with pytest.raises(RevisionConflict, match='已有待审阅'):
+        store.propose('one', {**document(), 'title': '第二份'}, 1)
+    store.save('one', {**document(), 'title': 'Boss 手改'}, 1)
+    with pytest.raises(RevisionConflict, match='旧版本'):
+        store.review('one', proposal['id'], 2, ['title'])
+    assert store.get('one')['document']['title'] == 'Boss 手改'
+    discarded = store.review('one', proposal['id'], 2, [])
+    assert discarded['revision'] == 2 and discarded['proposal'] is None
+
+
+def test_review_atomic_failure_keeps_proposal_and_original(tmp_path, monkeypatch):
+    store = BriefStore(tmp_path)
+    pending = store.propose('one', document(), 0)
+    monkeypatch.setattr('lan_mesh.project_brief.os.replace', Mock(side_effect=OSError('disk full')))
+    with pytest.raises(OSError):
+        store.review('one', pending['proposal']['id'], 0, ['title'])
+    assert store.get('one') == pending
+
+
+def test_concurrent_reviews_only_one_can_resolve_proposal(tmp_path):
+    store = BriefStore(tmp_path)
+    proposal = store.propose('one', document(), 0)['proposal']
+    def review(_):
+        try:
+            return store.review('one', proposal['id'], 0, ['title'])['revision']
+        except RevisionConflict:
+            return 'conflict'
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(map(str, pool.map(review, range(2)))) == ['1', 'conflict']
+
+
+def test_graph_structure_is_one_review_unit_but_node_fields_are_independent(tmp_path):
+    store = BriefStore(tmp_path)
+    original = store.save('one', document(), 0)
+    candidate = document()
+    candidate['nodes'] = [candidate['nodes'][-1]]
+    candidate['edges'] = []
+    proposal = store.propose('one', candidate, 1)['proposal']
+    assert [change['id'] for change in proposal['changes']] == ['graph']
+    store.review('one', proposal['id'], 1, [])
+    candidate = original['document']
+    candidate['nodes'][0].update(title='AI模块名', owner='Boss')
+    proposal = store.propose('one', candidate, 1)['proposal']
+    assert {change['id'] for change in proposal['changes']} == {'node:module:title', 'node:module:owner'}
+    result = store.review('one', proposal['id'], 1, ['node:module:owner'])
+    assert result['document']['nodes'][0]['title'] == '项目工作区'
+    assert result['document']['nodes'][0]['owner'] == 'Boss'
+    assert len(result['document']['nodes']) == 4
+
+
+def test_noop_and_failed_generation_do_not_mutate_document(chat):
+    cid = chat._active_conv_id
+    original = chat.briefs.save(cid, document(), 0)
+    assert chat.generate_project_brief(cid, 1) == original
+    def concurrent_edit(*_):
+        chat.briefs.save(cid, {**document(), 'title': '同时发生的编辑'}, 1)
+        return {'content': json.dumps({'reply': '建议', 'project_brief': document()})}
+    chat.runtime._call_llm_with_routing.side_effect = concurrent_edit
+    with pytest.raises(RevisionConflict):
+        chat.generate_project_brief(cid, 1)
+    assert chat.briefs.get(cid)['proposal'] is None
+    assert chat.briefs.get(cid)['document']['title'] == '同时发生的编辑'
+
+
+def test_handoff_does_not_include_unaccepted_suggestion(chat):
+    cid = chat._active_conv_id
+    chat.briefs.save(cid, document(), 0)
+    chat.briefs.propose(cid, {**document(), 'title': '未采纳的标题'}, 1)
+    chat.controller.submit_task_from_chat = Mock(return_value={'status': 'pending'})
+    chat._get_task_memory_hint = Mock(return_value='')
+    chat.chat('下发项目描述', cid)
+    assert chat.controller.submit_task_from_chat.call_args.kwargs['name'] == '协作工作台'
+    assert chat.briefs.get(cid)['proposal'] is not None

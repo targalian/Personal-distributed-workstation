@@ -20,6 +20,7 @@ window.ProjectBriefUI = (() => {
     <div class="brief-tabs" role="tablist" aria-label="项目描述视图">
       <button class="btn" role="tab" data-tab="document">文档</button><button class="btn" role="tab" data-tab="graph">需求 DAG</button>
       <button class="btn" role="tab" data-tab="preview">Markdown 预览</button>
+      <button class="btn" role="tab" data-tab="review">AI 建议</button>
     </div><div class="brief-content"></div>`;
   const content = panel.querySelector('.brief-content');
   const status = panel.querySelector('.brief-status');
@@ -27,7 +28,7 @@ window.ProjectBriefUI = (() => {
   function summary() {
     if (!state) return note('选择一个对话，开始沉淀项目描述。');
     const pending = state.document.nodes.filter(n => n.status === 'discussion').length;
-    note(`v${state.revision} · ${state.dirty?'有未保存修改':'已同步'} · ${pending} 个待讨论节点 · 需求草稿`);
+    note(`v${state.revision} · ${state.dirty?'有未保存修改':'已同步'} · ${pending} 个待讨论节点${state.proposal?' · 有 AI 建议待审阅':''} · 需求草稿`);
   }
   function remember() { if (cid && state) drafts.set(cid, state); }
   function same(a,b) {
@@ -73,12 +74,14 @@ window.ProjectBriefUI = (() => {
     const response = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/brief${suffix}`, options);
     if (!response.ok) {
       let detail; try {detail=(await response.json()).detail;} catch {detail=response.statusText;}
-      throw new Error(response.status===409?'版本冲突：当前修改已保留。请导出本地草稿，再重新加载并合并。':typeof detail==='string'?detail:JSON.stringify(detail));
+      throw new Error(response.status===409?`版本冲突：${typeof detail==='string'?detail:'项目描述已更新'}。当前修改已保留，请重新加载后审阅或合并。`:typeof detail==='string'?detail:JSON.stringify(detail));
     }
     return response;
   }
   function received(data, previous=null) {
-    return {...data,dirty:false,savedDocument:copy(data.document),undo:previous?.undo||[],redo:previous?.redo||[]};
+    const sameProposal=previous?.proposal?.id===data.proposal?.id;
+    return {...data,dirty:false,savedDocument:copy(data.document),undo:previous?.undo||[],redo:previous?.redo||[],
+      reviewSelection:sameProposal?previous?.reviewSelection||[]:[]};
   }
   function accept(data,previous=null) {
     editGroup=null;state=received(data,previous); remember(); render();
@@ -117,8 +120,9 @@ window.ProjectBriefUI = (() => {
   }
   function render() {
     summary(); historyButtons();panel.querySelectorAll('[data-tab]').forEach(el=>el.setAttribute('aria-selected',el.dataset.tab===tab));
+    panel.querySelector('[data-tab="review"]').textContent=state?.proposal?`AI 建议 (${state.proposal.changes.length})`:'AI 建议';
     if(!state){content.innerHTML='<div class="brief-empty">与秘书讨论项目背景、需求和想法，内容将整理到这里。<br>文档、模块框图与依赖关系可以共同编辑。</div>';return;}
-    if(tab==='document')renderDocument(); else if(tab==='graph')renderGraph(); else renderPreview();
+    if(tab==='document')renderDocument(); else if(tab==='graph')renderGraph(); else if(tab==='review')renderReview(); else renderPreview();
   }
   function renderDocument() {
     const opened=new Set([...content.querySelectorAll('details[open] textarea')].map(el=>el.dataset.section));
@@ -150,6 +154,53 @@ window.ProjectBriefUI = (() => {
     return out+'```\n';
   }
   function renderPreview(){content.innerHTML='<p class="brief-hint">预览当前编辑内容；保存后可导出正式版本。模块和 DAG 自动生成。</p><pre></pre>';content.querySelector('pre').textContent=markdown();}
+  function reviewValue(value) {
+    if(value?.nodes && value?.edges){
+      const names=new Map(value.nodes.map(node=>[node.id,node.title]));
+      const nodes=value.nodes.map(node=>`${node.title} · ${node.priority} · ${statuses[node.status]}\n所属框：${names.get(node.parent_id)||'顶层'}\n说明：${node.description||'待讨论'}\n验收：${node.acceptance||'待讨论'}\n负责人：${node.owner||'待讨论'}\n位置：${node.x}, ${node.y}${node.collapsed?' · 已折叠':''}`);
+      const edges=value.edges.map(edge=>`${names.get(edge.source)} → ${names.get(edge.target)}`);
+      return `模块与功能\n${nodes.join('\n\n')||'暂无节点'}\n\n前置依赖\n${edges.join('\n')||'暂无依赖'}`;
+    }
+    if(value && typeof value==='object')return JSON.stringify(value,null,2);
+    if(typeof value==='boolean')return value?'是':'否';
+    return Object.hasOwn(statuses,value)?statuses[value]:String(value??'')||'（空）';
+  }
+  function renderReview() {
+    const proposal=state.proposal;
+    if(!proposal){content.innerHTML='<div class="brief-empty">暂无待审阅建议。与秘书讨论或点击「从对话整理」后，先在这里比较差异，再选择要保存的修改。</div>';return;}
+    const stale=proposal.base_revision!==state.revision;
+    const selection=new Set(state.reviewSelection);
+    content.innerHTML=`<p class="brief-hint">建议基于 v${proposal.base_revision}。勾选要采纳的内容；保存所选后，其余建议将被忽略。已保存文档在采纳前保持原样。结构变化整体采纳，确保节点、嵌套与依赖保持一致。</p>
+      ${stale?'<p class="brief-review-warning" role="alert">文档版本已变化，这份建议已过期。请忽略后重新整理。</p>':''}
+      ${state.dirty?'<p class="brief-review-warning" role="alert">有未保存修改，暂不能采纳。可先导出或撤销本地修改；若保存了新版本，请重新整理建议。</p>':''}
+      <div class="brief-review-tools"><button class="btn" data-action="review-all" ${stale||state.dirty?'disabled':''}>全选</button>
+      <button class="btn" data-action="review-none">清空选择</button>
+      <button class="btn primary" data-action="review-apply" ${stale||state.dirty||!selection.size?'disabled':''}>保存所选，忽略其余</button>
+      <button class="btn" data-action="review-discard">忽略全部建议</button><span>${selection.size}/${proposal.changes.length} 项已选</span></div>`+
+      proposal.changes.map((change,index)=>`<details class="brief-change" open><summary>
+        <label><input type="checkbox" data-review-index="${index}" ${selection.has(change.id)?'checked':''} ${stale||state.dirty?'disabled':''}>${escape(change.label)}</label></summary>
+        <div class="brief-diff"><div><strong>当前内容</strong><pre>${escape(reviewValue(change.before))}</pre></div>
+        <div><strong>AI 建议</strong><pre>${escape(reviewValue(change.after))}</pre></div></div></details>`).join('');
+  }
+  async function reviewProposal(discard) {
+    if(!state.proposal)return;
+    if(!discard && state.dirty)throw new Error('请先处理未保存修改，避免覆盖本地草稿。');
+    const target=cid,token=requestId,previous=state;
+    const data=await(await request('/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      proposal_id:state.proposal.id,expected_revision:state.revision,selected:discard?[]:state.reviewSelection,
+    })})).json();
+    if(discard && previous.dirty){
+      previous.proposal=null;previous.reviewSelection=[];drafts.set(target,previous);
+      if(target===cid&&token===requestId){state=previous;render();}
+      return;
+    }
+    let history=previous;
+    if(!discard && !same(previous.document,data.document)){
+      pushHistory(history.undo,previous.document);history.redo=[];
+    }else if(previous.revision!==data.revision||!same(previous.document,data.document))history=null;
+    if(target===cid&&token===requestId)accept(data,history);
+    else drafts.set(target,received(data,history));
+  }
   function download(text) {
     const url=URL.createObjectURL(new Blob([text],{type:'text/markdown;charset=utf-8'}));
     const a=document.createElement('a');a.href=url;a.download='项目描述.md';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -263,6 +314,12 @@ window.ProjectBriefUI = (() => {
     };arrange(null);
   }
   panel.addEventListener('change',event=>{if(!state)return;const el=event.target;
+    if(el.dataset.reviewIndex!==undefined){
+      const key=state.proposal.changes[Number(el.dataset.reviewIndex)].id;
+      const selection=new Set(state.reviewSelection);if(el.checked)selection.add(key);else selection.delete(key);
+      state.reviewSelection=[...selection];remember();const index=el.dataset.reviewIndex;renderReview();
+      content.querySelector(`[data-review-index="${index}"]`)?.focus({preventScroll:true});return;
+    }
     if(el.dataset.nodeField){const key=el.dataset.nodeField;mutate(()=>{const n=state.document.nodes.find(n=>n.id===selected);n[key]=key==='parent_id'?(el.value||null):el.value;if(!n.title.trim())throw new Error('节点名称不能为空。');if(key==='parent_id'){n.x=24;n.y=n.parent_id?60:24;}});}
   });
   panel.addEventListener('input',event=>{if(!state)return;const el=event.target;
@@ -288,13 +345,18 @@ window.ProjectBriefUI = (() => {
     editGroup=null;
     if(target.dataset.tab){tab=target.dataset.tab;render();return;}
     const action=target.dataset.action;if(!action||!state)return;
+    if(action==='generate'&&state.proposal){tab='review';render();note('请先采纳或忽略现有建议，再重新整理。');return;}
     try{
-      if(['save','generate','export','reload'].includes(action)){
+      if(['save','generate','export','reload','review-apply','review-discard'].includes(action)){
         busy=true;panel.setAttribute('aria-busy','true');panel.inert=true;
         if(action==='save')await save();
-        if(action==='generate'){const id=cid,token=requestId;await save();if(id!==cid||token!==requestId)return;note('正在从对话整理项目描述…');const data=await(await request('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_revision:state.revision})})).json();if(id===cid&&token===requestId)accept(data);}
+        if(action==='generate'){const id=cid,token=requestId;await save();if(id!==cid||token!==requestId)return;note('正在整理修改建议…');const data=await(await request('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_revision:state.revision})})).json();if(id===cid&&token===requestId){tab='review';accept(data,state);}}
+        if(action==='review-apply')await reviewProposal(false);
+        if(action==='review-discard'&&confirm('忽略这份 AI 建议？已保存文档和本地编辑保持不变。'))await reviewProposal(true);
         if(action==='export'){if(state.dirty)download(markdown());else download(await(await request('/markdown')).text());}
         if(action==='reload'){if(!state.dirty||confirm('重新加载将替换本地未保存修改。建议先导出草稿，是否继续？')){drafts.delete(cid);state=null;await open(cid);}}
+      }else if(action==='review-all'||action==='review-none'){
+        state.reviewSelection=action==='review-all'?state.proposal.changes.map(change=>change.id):[];remember();renderReview();
       }else if(action==='add'||action==='child'){
         if(action==='child'&&!selected)throw new Error('请先选择一个父框。');
         const parent=action==='child'?selected:null;

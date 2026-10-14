@@ -8,6 +8,7 @@
 | 文件/目录 | 职责一句话 |
 |---|---|
 | bot_gateway.py | Bot 网关 — 手机消息通道 |
+| brief_review.py | Build reviewable AI changes and merge an explicit selection without breaking graphs. |
 | chat_handler.py | 秘书聊天处理器 — Web 端对话接口 |
 | project_brief.py | Conversation-scoped project specification; Markdown and DAG share one source. |
 | role_cards.py | 统一角色卡定义 (M6) — Secretary/PM/Worker 人格的单一事实源。 |
@@ -57,6 +58,7 @@ Keyboard（PM 决策交互）。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-14 | iter-38 | AI 回复与整理生成持久化建议，差异审阅后逐项采纳；原稿、版本冲突和 PM 下发保护 |
 | 2026-10-10 | 项目描述工作区 | 新增对话产物、三层需求 DAG、版本保存、Markdown 导出与集成验证 |
 | 2026-08-16 | iter-27 后 | 初建 |
 

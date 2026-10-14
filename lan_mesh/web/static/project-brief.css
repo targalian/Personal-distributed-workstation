@@ -18,6 +18,16 @@
 .brief-node-editor .brief-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px}.brief-node-editor textarea{min-height:55px}
 .brief-hint{font-size:12px;color:var(--dim);line-height:1.6;padding:6px 0}.brief-empty{padding:28px 14px;color:var(--dim);line-height:1.8}
 .brief-panel[aria-busy=true]{opacity:.7;pointer-events:none}
+.brief-tabs{flex-wrap:wrap}
+.brief-review-tools{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0;font-size:12px}
+.brief-review-tools .btn{font-size:12px;padding:6px 8px}
+.brief-review-warning{color:var(--yellow);font-size:13px;line-height:1.6}
+.brief-change summary label{display:inline-flex;align-items:center;gap:8px;color:var(--text);margin:0;cursor:pointer}
+.brief-change input[type=checkbox]{display:inline;width:auto;margin:0;flex-shrink:0}
+.brief-diff{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;padding:8px 0;font-size:12px}
+.brief-diff>div{min-width:0;padding:10px;border:1px solid var(--border);border-radius:6px}
+.brief-diff pre{max-height:280px;overflow:auto;margin:8px 0 0}
+@media(max-width:600px){.brief-diff{grid-template-columns:minmax(0,1fr)}}
 @media(min-width:1400px){#panel-chat .conv-sidebar{width:180px}#panel-chat .chat-main{flex:1}#panel-chat .brief-panel{flex:1.6}}
 @media(max-width:1150px){#panel-chat .chat-layout{flex-wrap:wrap;height:auto}#panel-chat .brief-panel{flex-basis:100%;height:680px}#panel-chat .chat-main{min-width:0}#panel-chat .conv-sidebar{max-width:180px}}
 @media(max-width:600px){#panel-chat .brief-panel{height:740px;min-width:0}#panel-chat .chat-main{flex-basis:100%}.brief-node-editor .brief-fields{grid-template-columns:1fr}.brief-toolbar{gap:5px}}

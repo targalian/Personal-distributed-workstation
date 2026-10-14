@@ -9,6 +9,7 @@ import re
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -188,7 +189,8 @@ class BriefStore:
             else:
                 brief = ProjectBrief()
                 value = {"revision": 0, "updated_at": None, "document": brief.model_dump()}
-            return {**value, "markdown": render_markdown(brief, value["revision"]), "section_labels": SECTIONS}
+            return {**value, "proposal": value.get("proposal"),
+                    "markdown": render_markdown(brief, value["revision"]), "section_labels": SECTIONS}
 
     def save(self, conv_id, document, expected_revision):
         brief = ProjectBrief.model_validate(document)
@@ -197,10 +199,55 @@ class BriefStore:
             if expected_revision != previous["revision"]:
                 raise RevisionConflict("项目描述已更新，请保留当前修改并重新加载后合并")
             value = {"revision": previous["revision"] + 1, "updated_at": time.time(), "document": brief.model_dump()}
-            path = self._path(conv_id)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            self._atomic_write(path, json.dumps(value, ensure_ascii=False, indent=2))
+            value["proposal"] = previous.get("proposal")
+            self._write(conv_id, value)
             return self.get(conv_id)
+
+    def propose(self, conv_id: str, document: dict, expected_revision: int) -> dict:
+        """Persist a candidate without changing the saved document or its revision."""
+        from .brief_review import brief_changes
+        candidate = ProjectBrief.model_validate(document).model_dump()
+        with self.lock:
+            current = self.get(conv_id)
+            if current["revision"] != expected_revision:
+                raise RevisionConflict("项目描述已更新，请重新加载后整理")
+            if current["proposal"]:
+                raise RevisionConflict("已有待审阅建议，请先采纳或忽略，原建议已保留")
+            changes = brief_changes(current["document"], candidate)
+            if not changes:
+                return current
+            current["proposal"] = {
+                "id": uuid.uuid4().hex, "base_revision": expected_revision,
+                "created_at": time.time(), "document": candidate, "changes": changes,
+            }
+            self._write(conv_id, current)
+            return self.get(conv_id)
+
+    def review(self, conv_id: str, proposal_id: str, expected_revision: int,
+               selected: list[str]) -> dict:
+        """Atomically resolve the proposal; an empty selection discards it, even if stale."""
+        from .brief_review import apply_brief_changes
+        with self.lock:
+            current = self.get(conv_id)
+            proposal = current["proposal"]
+            if current["revision"] != expected_revision or not proposal or proposal["id"] != proposal_id:
+                raise RevisionConflict("版本或待审阅建议已变化，请重新加载后审阅")
+            if selected:
+                if proposal["base_revision"] != current["revision"]:
+                    raise RevisionConflict("建议基于旧版本，请忽略后重新整理；当前文档已保留")
+                current["document"] = apply_brief_changes(current["document"], proposal["document"], selected)
+                current["revision"] += 1
+                current["updated_at"] = time.time()
+            current["proposal"] = None
+            self._write(conv_id, current)
+            return self.get(conv_id)
+
+    def _write(self, conv_id: str, value: dict) -> None:
+        """Store the document and pending review in one atomic file replacement."""
+        stored = {key: value[key] for key in ("revision", "updated_at", "document", "proposal")}
+        path = self._path(conv_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._atomic_write(path, json.dumps(stored, ensure_ascii=False, indent=2))
 
     @staticmethod
     def _atomic_write(path, text):
@@ -224,6 +271,7 @@ def brief_instructions(current: dict, *, generate=False) -> str:
         '{"reply":"简短说明本轮变更和最多三个关键待讨论问题", "project_brief":{'
         '"title":"项目名称", "sections":{}, "nodes":[], "edges":[]}}。\n'
         "project_brief 是完整的新文档，保留已有有效内容、节点 ID、布局与 Boss 手工修改。"
+        "返回的修改仅作为待审阅建议；未经 Boss 采纳，不得声称已更新或保存项目描述。"
         "仅查询状态等非项目讨论时 project_brief 设为 null。"
         + ("本次明确要求整理项目描述，必须返回完整 project_brief。" if generate else "")
         + "sections 按下列键填写中文内容，未知信息写待讨论，不可臆造预算、期限或已确认决定："

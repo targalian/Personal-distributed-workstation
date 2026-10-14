@@ -47,6 +47,82 @@ document.querySelectorAll('.panel').forEach(p=>p.style.display=p.id==='panel-cha
 errors=[]
 
 
+def accept_all_suggestions(page):
+    """Review and explicitly accept a candidate without relying on automatic writes."""
+    page.locator('#project-brief-panel [data-tab="review"]').click()
+    page.wait_for_selector('[data-action="review-all"]')
+    page.locator('[data-action="review-all"]').click()
+    page.locator('[data-action="review-apply"]').click()
+
+
+def verify_ai_review(page, review_id, other_id, output):
+    """Verify selective adoption, escaping, stale review guards and draft preservation."""
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',review_id)
+    page.locator('[data-action="generate"]').click()
+    page.wait_for_selector('[data-review-index]')
+    assert chat.briefs.get(review_id)['revision']==1
+    assert page.locator('[data-action="review-apply"]').is_disabled()
+    assert '<img src=x onerror=' in page.locator('.brief-diff').first.inner_text()
+    assert page.locator('.brief-diff img').count()==0
+    # The pending proposal survives a full page reload and conversation switches.
+    page.reload()
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',review_id)
+    page.locator('[data-tab="review"]').click()
+    page.wait_for_selector('[data-review-index]')
+    page.locator('.brief-change').filter(has_text='项目背景与问题').locator('input').check()
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',other_id)
+    assert page.locator('[data-review-index]').count()==0
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',review_id)
+    assert page.locator('[data-review-index]:checked').count()==1
+    page.screenshot(path=str(output/'project_brief_review_desktop.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    page.locator('#project-brief-panel').scroll_into_view_if_needed()
+    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+    page.screenshot(path=str(output/'project_brief_review_mobile.png'),full_page=True)
+    page.set_viewport_size({'width':1680,'height':1100})
+    page.locator('[data-action="review-apply"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v2 · 已同步')")
+    saved=chat.briefs.get(review_id)
+    assert saved['document']['title']=='协作工作台'
+    assert saved['document']['sections']['background']=='建议的新背景'
+    assert saved['document']['nodes'][0]['owner']==''
+    assert saved['proposal'] is None
+    # Accepted changes are a single undo step, kept separate from the saved version.
+    page.locator('[data-action="undo"]').click()
+    assert '未保存' in page.locator('.brief-status').inner_text()
+    assert chat.briefs.get(review_id)['revision']==2
+    page.locator('[data-action="redo"]').click()
+    assert '已同步' in page.locator('.brief-status').inner_text()
+    page.locator('[data-action="generate"]').click()
+    page.wait_for_selector('[data-review-index]')
+    page.locator('[data-tab="document"]').click()
+    page.locator('[data-field="title"]').fill('尚未保存的手工编辑')
+    page.locator('[data-tab="review"]').click()
+    assert page.locator('[data-action="review-apply"]').is_disabled()
+    page.locator('[data-action="review-discard"]').click()
+    page.wait_for_function("!document.querySelector('[data-action=review-discard]')")
+    page.locator('[data-tab="document"]').click()
+    assert page.locator('[data-field="title"]').input_value()=='尚未保存的手工编辑'
+    page.locator('[data-action="undo"]').click()
+    page.locator('[data-action="generate"]').click()
+    page.wait_for_selector('[data-review-index]')
+    # Another page saves while the proposal is being reviewed; no stale acceptance.
+    saved=chat.briefs.get(review_id)
+    saved['document']['title']='其他页面已保存'
+    chat.briefs.save(review_id,saved['document'],saved['revision'])
+    page.locator('[data-action="review-all"]').click()
+    page.locator('[data-action="review-apply"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('版本冲突')")
+    assert chat.briefs.get(review_id)['document']['title']=='其他页面已保存'
+    page.locator('[data-action="reload"]').click()
+    page.wait_for_selector('.brief-review-warning')
+    assert '过期' in page.locator('.brief-review-warning').inner_text()
+    assert page.locator('[data-action="review-apply"]').is_disabled()
+    page.locator('[data-action="review-discard"]').click()
+    page.wait_for_function("!document.querySelector('[data-action=review-discard]')")
+    assert chat.briefs.get(review_id)['proposal'] is None
+
+
 def verify_document_history(page, history_id, other_id):
     """Exercise grouped typing, save boundaries, conflict handling and conversation isolation."""
     page.evaluate('(id)=>ProjectBriefUI.open(id)', history_id)
@@ -212,6 +288,9 @@ with sync_playwright() as p:
     page.locator('[data-action="save"]').click()
     page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v1')")
     page.locator('[data-action="generate"]').click()
+    page.wait_for_selector('[data-review-index]')
+    assert chat.briefs.get(cid)['revision']==1
+    accept_all_suggestions(page)
     page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v2')")
     page.locator('[data-tab="graph"]').click()
     page.locator('[data-action="layout"]').click()
@@ -282,8 +361,11 @@ with sync_playwright() as p:
     page.wait_for_function("document.querySelector('[data-field=title]').value==='协作工作台'")
     page.locator('#chat-input').fill('帮我做一个需求编辑器，请整理项目描述')
     page.locator('#chat-send-btn').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('有 AI 建议待审阅')")
+    assert chat.briefs.get(cid)['revision']==5
+    assert '修改建议已生成' in page.locator('#chat-messages').inner_text()
+    accept_all_suggestions(page)
     page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v6')")
-    assert '项目描述草稿已更新至 v6' in page.locator('#chat-messages').inner_text()
     page.locator('#project-brief-panel [data-tab="graph"]').click()
     page.locator('[data-action="layout"]').click()
     page.locator('[data-action="save"]').click()
@@ -350,5 +432,16 @@ document.querySelectorAll('.panel').forEach(p=>p.style.display=p.id==='panel-cha
     assert page.locator('[data-action="redo"]').is_visible()
     page.screenshot(path=str(output/'project_brief_history_mobile.png'),full_page=True)
     assert not errors,errors
+    review_id=chat.create_conversation('AI审阅测试')['id']
+    chat.briefs.save(review_id,document(),0)
+    candidate=document()
+    candidate['title']='<img src=x onerror=alert(1)>'
+    candidate['sections']['background']='建议的新背景'
+    candidate['nodes'][0]['owner']='AI 建议负责人'
+    runtime._call_llm_with_routing.return_value={'content':json.dumps({'reply':'待审阅','project_brief':candidate},ensure_ascii=False)}
+    page.set_viewport_size({'width':1680,'height':1100})
+    verify_ai_review(page,review_id,untouched_id,output)
+    assert not errors,errors
     browser.close()
 print('PASS: generation, nested DAG, drag, editing, cycle guard, grouped typing, document/graph undo/redo, save history, clean state, 50-step bound, isolation, conflict reload, external revision, export, mobile, dashboard chat + WebSocket, delayed load/save; zero page errors')
+print('PASS: AI review, selective adoption, saved document protection, proposal persistence, draft-preserving discard, stale proposal guard, undo after acceptance, escaped HTML, desktop/mobile diff; zero page errors')

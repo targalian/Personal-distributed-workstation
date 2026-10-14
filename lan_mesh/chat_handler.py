@@ -183,6 +183,8 @@ class ChatHandler:
         current_brief = self.briefs.get(cid)
         action = self._detect_action(message)
         system_prompt += brief_instructions(current_brief)
+        if current_brief.get("proposal"):
+            system_prompt += "\n已有待审阅建议。本轮请正常回答讨论，project_brief 设为 null，并提醒先审阅现有建议。"
         if action == "submit_task":
             system_prompt += "\n本轮是明确下发指令，请仅回复简短确认，project_brief 必须为 null，不改写已保存的文档。"
 
@@ -221,11 +223,13 @@ class ChatHandler:
         reply_text = resp.get("content", "[LLM 调用失败]")
         reply_text, document = parse_brief_reply(reply_text)
         brief_revision = current_brief["revision"]
+        brief_proposal_id = (current_brief.get("proposal") or {}).get("id")
         if document is not None and action != "submit_task":
             try:
-                saved = self.briefs.save(cid, document, current_brief["revision"])
-                brief_revision = saved["revision"]
-                reply_text += f"\n\n📄 项目描述草稿已更新至 v{brief_revision}，可在右侧编辑或导出。"
+                saved = self.briefs.propose(cid, document, current_brief["revision"])
+                brief_proposal_id = (saved.get("proposal") or {}).get("id")
+                reply_text += ("\n\n📄 项目描述修改建议已生成，请在右侧「AI 建议」中查看差异并选择采纳；已保存文档未改变。"
+                               if brief_proposal_id else "\n\n📄 项目描述与当前文档一致，无新增修改建议。")
             except (ValueError, OSError) as exc:
                 logger.warning("项目描述更新失败: %s", exc)
                 reply_text += "\n\n项目描述未更新（内容校验失败、版本冲突或存储不可用），原稿已保留。可点击「从对话整理」重试。"
@@ -272,6 +276,7 @@ class ChatHandler:
             "timestamp": now,
             "conv_id": cid,
             "brief_revision": brief_revision,
+            "brief_proposal_id": brief_proposal_id,
         }
 
     def generate_project_brief(self, conv_id: str, expected_revision: int) -> dict:
@@ -282,6 +287,9 @@ class ChatHandler:
         if current["revision"] != expected_revision:
             from .project_brief import RevisionConflict
             raise RevisionConflict("项目描述已更新，请重新加载后整理")
+        if current.get("proposal"):
+            from .project_brief import RevisionConflict
+            raise RevisionConflict("已有待审阅建议，请先采纳或忽略")
         response = self.runtime._call_llm_with_routing(
             self._build_prompt("请根据以上讨论和当前文档整理完整项目描述，缺失信息标为待讨论。", self.get_messages(conv_id)),
             {"_model_preference": getattr(self.controller, "_default_model", ""),
@@ -290,7 +298,7 @@ class ChatHandler:
         _, document = parse_brief_reply(response.get("content", ""))
         if document is None:
             raise ValueError("模型未返回有效项目描述，原稿已保留，请重试或手工编辑")
-        return self.briefs.save(conv_id, document, expected_revision)
+        return self.briefs.propose(conv_id, document, expected_revision)
 
     def get_history(self, limit: int = 50, conv_id: str = "") -> list[dict]:
         """返回指定对话的最近消息。"""
