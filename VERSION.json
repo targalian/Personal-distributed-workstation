@@ -1,7 +1,7 @@
 {
-  "version": "0.31.2",
-  "commit": "c48aea1",
-  "released_at": "2026-10-13",
-  "note": "Unify project brief document and DAG undo/redo, group typing, and preserve local history across saves with revision isolation",
+  "version": "0.32.0",
+  "commit": "5f5eeb4",
+  "released_at": "2026-10-14",
+  "note": "Persist AI project brief suggestions and review selected differences before saving; protect drafts, revisions, export and PM handoff",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }
