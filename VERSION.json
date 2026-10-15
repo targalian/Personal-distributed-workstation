@@ -1,7 +1,7 @@
 {
-  "version": "0.33.0",
-  "commit": "22252bd",
-  "released_at": "2026-10-14",
-  "note": "Persist project brief revision snapshots, compare history and restore as new revisions; document 1.0 readiness criteria",
+  "version": "0.34.0",
+  "commit": "62e3066",
+  "released_at": "2026-10-15",
+  "note": "Confirm saved project brief revisions before dispatch; preserve content snapshots and task references; show delivery and acceptance status",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }
