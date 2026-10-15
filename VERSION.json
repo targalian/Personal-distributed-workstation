@@ -1,7 +1,7 @@
 {
-  "version": "0.34.8",
-  "commit": "1b7b34d",
+  "version": "0.34.9",
+  "commit": "3518303",
   "released_at": "2026-10-15",
-  "note": "任务未知结果提示与原节点只读核实；Station/Worker历史启动记录查询；437项单测、Chrome及启动退出验证通过，PM续跑与实机多机验收待补",
+  "note": "取消暂停按原节点/PM/任务身份控制；持久化停止意图与确认，响应丢失只读核实；473项单测与Chrome/启动回归通过，在途工具强制停止仍待实现",
   "upgrade_hint": "无在途任务时升级所有参与节点：git pull && pip install -r requirements.txt 后重启；旧异步节点不支持执行回执，已有在途结果需先核实"
 }
