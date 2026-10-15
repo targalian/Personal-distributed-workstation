@@ -12,6 +12,7 @@ Worker 角色与 PM 路由 — 角色管理/PM 生命周期/子 Agent 管理 (it
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 
 def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
@@ -66,9 +67,10 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
         task_data = payload.get("task_data")
         if not task_id or not secretary_url:
             raise HTTPException(status_code=400, detail="缺少 task_id 或 secretary_url")
-        result = role_manager.start_pm(task_id, secretary_url, task_data)
+        result = await run_in_threadpool(role_manager.start_pm, task_id, secretary_url, task_data,
+                                         pm_id=payload.get("pm_id", ""))
         if not result.get("ok"):
-            raise HTTPException(status_code=409, detail=result.get("message", "启动失败"))
+            raise HTTPException(status_code=409, detail=result)
         return result
 
     @router.post("/role/stop-pm")

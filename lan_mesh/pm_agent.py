@@ -91,6 +91,7 @@ class ProjectManagerAgent:
         st = self._state
         return {
             "pm_id": self.pm_id,
+            "task_id": st.task.get("task_id", ""),
             "device_id": self.device_id,
             "running": self._running,
             "teams": len(st.teams),

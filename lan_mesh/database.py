@@ -824,6 +824,49 @@ class Database:
                         task.status = row["status"]
             self._save_task_fields(task)
 
+    def create_task_once(self, task: Task) -> bool:
+        """Create a task without overwriting a concurrent submission with the same ID."""
+        conn = self._get_conn()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if self.get_task(task.task_id) is not None:
+                return False
+            self._save_task_fields(task)
+        return True
+
+    def bind_task_pm(self, pm: PMAgent) -> bool:
+        """Commit task ownership and the PM row before any execution can start."""
+        conn = self._get_conn()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self.get_task(pm.task_id)
+            if task is None or task.status != "pending" or task.pm_agent_id:
+                return False
+            if self.get_pm_agent(pm.pm_id) is not None:
+                raise ValueError("PM 编号已经登记")
+            self._save_pm_agent_fields(pm)
+            conn.execute("UPDATE tasks SET pm_agent_id=?, status='running' WHERE task_id=?", (pm.pm_id, pm.task_id))
+        return True
+
+    def note_pm_start_issue(self, pm_id: str, message: str, uncertain: bool = True, startup_only: bool = True) -> None:
+        """Record a startup issue only while no runtime status has superseded startup."""
+        conn = self._get_conn()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            pm = self.get_pm_agent(pm_id)
+            task = self.get_task(pm.task_id) if pm else None
+            if (not task or task.status != "running" or (startup_only and pm.status != "starting")
+                    or pm.status in ("completed", "failed", "cancelled", "paused")):
+                return
+            data = task.output_data or {}
+            data["_pm_start" if startup_only else "_pm_execution"] = {
+                "state": "unknown" if uncertain else "failed", "message": message}
+            data["error"] = message
+            conn.execute("UPDATE tasks SET output_data=?, status=? WHERE task_id=?",
+                         (json.dumps(data, ensure_ascii=False), "running" if uncertain else "failed", task.task_id))
+            conn.execute("UPDATE pm_agents SET status=?,updated_at=? WHERE pm_id=?",
+                         ("unknown" if uncertain else "failed", time.time(), pm_id))
+
     def _save_task_fields(self, task: Task):
         """Write within save_task's transaction; delivery writes use dedicated methods."""
         import json
@@ -854,7 +897,7 @@ class Database:
             task = self.get_task(task_id)
             if task is None:
                 raise KeyError("交付对应的任务不存在")
-            if task.pm_agent_id and task.pm_agent_id != pm_id:
+            if task.pm_agent_id != pm_id:
                 raise ValueError("交付 PM 与任务当前关联的 PM 不一致")
             output = task.output_data or {}
             existing = output.get("_delivery")
@@ -1226,6 +1269,10 @@ class Database:
 
     def upsert_pm_agent(self, pm: PMAgent):
         """插入或更新 PM Agent 记录。"""
+        with self._get_conn():
+            self._save_pm_agent_fields(pm)
+
+    def _save_pm_agent_fields(self, pm: PMAgent):
         conn = self._get_conn()
         conn.execute("""
             INSERT INTO pm_agents (
@@ -1253,7 +1300,6 @@ class Database:
             json.dumps(pm.task_list), pm.collaboration_mode,
             pm.created_at, pm.updated_at,
         ))
-        conn.commit()
 
     def get_pm_agent(self, pm_id: str) -> Optional[PMAgent]:
         """查询单个 PM Agent。"""
@@ -1319,11 +1365,22 @@ class Database:
             sets.append("collaboration_mode = ?")
             params.append(collaboration_mode)
         params.append(pm_id)
-        conn.execute(
-            f"UPDATE pm_agents SET {', '.join(sets)} WHERE pm_id = ?",
-            params,
-        )
-        conn.commit()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(f"UPDATE pm_agents SET {', '.join(sets)} WHERE pm_id = ?", params)
+            if status in ("planning", "executing", "monitoring", "awaiting_input", "completed", "failed"):
+                row = conn.execute("SELECT task_id,output_data FROM tasks WHERE pm_agent_id=?", (pm_id,)).fetchone()
+                if row:
+                    output = json.loads(row["output_data"]) or {}
+                    changed = "_pm_start" in output or "_pm_execution" in output
+                    messages = [(output.get(key) or {}).get("message") for key in ("_pm_start", "_pm_execution")]
+                    if output.get("error") in messages:
+                        output.pop("error", None)
+                    output.pop("_pm_start", None)
+                    output.pop("_pm_execution", None)
+                    if changed:
+                        conn.execute("UPDATE tasks SET output_data=? WHERE task_id=?",
+                                     (json.dumps(output, ensure_ascii=False), row["task_id"]))
 
     # ── Agent Team CRUD ──────────────────────────────────────────
 

@@ -541,202 +541,30 @@ class StationController:
             pass
 
     def submit_task_from_chat(self, name: str, description: str, created_by: str = "secretary",
-                              priority: str = "normal", task_id: str = "", input_data: dict | None = None) -> dict:
-        """从秘书对话直接提交任务并分配 PM Agent。
-
-        与 station_api.submit_task() 逻辑一致, 但同步执行。
-        优化13: 支持优先级 + 负载感知选站。
-
-        Args:
-            priority: 优先级 (low / normal / high / urgent)
-        """
-        from .protocol import Task, PMAgent
-
-        if task_id:
-            existing = self.db.get_task(task_id)
-            if existing is not None:
-                return existing.to_dict()
-        task = Task(
-            task_id=task_id or f"task-{uuid.uuid4().hex[:12]}",
-            name=name,
-            description=description,
-            created_by=created_by,
-            status="pending",
-            input_data=dict(input_data or {}),
-        )
-        # 优化13: 记录优先级到 input_data
-        task.input_data = task.input_data or {}
-        task.input_data["_priority"] = priority
-        self.db.save_task(task)
-        logger.info("对话提交任务: %s (%s) 优先级=%s", task.task_id, name, priority)
-        # WS 广播: 通知前端任务面板刷新
-        self._queue_ws_broadcast("task_submitted", task.to_dict())
-
-        # 选择在线 work_station (优化13: 评级 + 负载感知)
-        hosts = self.db.list_hosts()
-        online_hosts = [h for h in hosts if h.online and h.device_id != self.state.device_id]
-        if not online_hosts:
-            online_hosts = [h for h in hosts if h.online]
-
-        if not online_hosts:
-            task.status = "failed"
-            task.output_data = {"error": "无可用 work_station"}
-            self.db.save_task(task)
-            return task.to_dict()
-
-        # 优化13: 负载感知排序 — 评级优先, 同评级选 PM 数量少的
-        tier_order = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "": 0}
-        pm_agents = self.db.list_pm_agents()
-        # 统计每台主机上的活跃 PM 数量
-        host_pm_count: dict[str, int] = {}
-        for pm in pm_agents:
-            if pm.status in ("planning", "executing", "monitoring", "awaiting_input"):
-                host_pm_count[pm.device_id] = host_pm_count.get(pm.device_id, 0) + 1
-
-        def _host_sort_key(h):
-            tier = tier_order.get(h.rating_tier, 0)
-            load = host_pm_count.get(h.device_id, 0)
-            # 先按评级降序, 再按负载升序
-            return (-tier, load)
-
-        online_hosts.sort(key=_host_sort_key)
-        target_host = online_hosts[0]
-
-        # 构造 Secretary URL: 本机派发用 localhost; 远程派发在回退分支重建可达地址
-        secretary_url = f"http://127.0.0.1:{self.state.api_port}"
-
-        # 优先本机派发 (内嵌 Worker, 无需单独 Worker 进程)
-        if self.secretary_active and self.chat_runtime:
-            result = self._local_start_pm(task.task_id, secretary_url, task.to_dict())
-            if result.get("ok"):
-                pm_id = result["pm_id"]
-                task.pm_agent_id = pm_id
-                task.status = "running"
-                self.db.save_task(task)
-                pm_agent = PMAgent(
-                    pm_id=pm_id,
-                    agent_name=f"PM-{pm_id[:8]}",
-                    task_id=task.task_id,
-                    device_id=self.state.device_id,
-                    hostname=self.state.device_name,
-                    ip="127.0.0.1",
-                    api_port=self.state.api_port,
-                    status="starting",
-                )
-                self.db.upsert_pm_agent(pm_agent)
-                self._pm_worker_map[pm_id] = {
-                    "ip": "127.0.0.1",
-                    "api_port": self.state.api_port,
-                    "device_id": self.state.device_id,
-                    "local": True,
-                }
-                logger.info("PM Agent 本机启动: %s", pm_id[:12])
-                # WS 广播: 通知前端 PM 面板 + 任务面板刷新
-                self._queue_ws_broadcast("pm_registered", {
-                    "pm_id": pm_id, "agent_name": f"PM-{pm_id[:8]}",
-                    "task_id": task.task_id, "status": "starting",
-                    "device_id": self.state.device_id,
-                })
-                self._queue_ws_broadcast("task_updated", task.to_dict())
-                self.bot_gateway.notify("pm_registered", {
-                    "pm_id": pm_id[:12], "task": task.name, "station": self.state.device_name,
-                })
-                return task.to_dict()
-            else:
-                logger.warning("本机 PM 启动失败: %s, 尝试远程派发", result.get('message'))
-
-        # 回退: POST 到远程 Worker 启动 PM Agent
-        # 修复: 如果目标就是本机 (Tailscale IP 不可达), 直接用 127.0.0.1
-        target_ip = target_host.ip
-        if target_host.device_id == self.state.device_id:
-            target_ip = "127.0.0.1"
-        # 修复 (任务③): 远程 PM 必须回报到本机 Secretary, 不能用 127.0.0.1
-        from .host_info import pick_reachable_ip
-        reach_ip = pick_reachable_ip(target_ip)
-        remote_secretary_url = (
-            f"http://{reach_ip}:{self.state.api_port}" if reach_ip else secretary_url
-        )
-        try:
-            resp = http_post(
-                f"http://{target_ip}:{target_host.api_port}/role/start-pm",
-                json={
-                    "task_id": task.task_id,
-                    "secretary_url": remote_secretary_url,
-                    "task_data": task.to_dict(),
-                },
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                pm_data = resp.json()
-                pm_id = pm_data.get("pm_id", "")
-                task.pm_agent_id = pm_id
-                task.status = "running"
-                self.db.save_task(task)
-
-                pm_agent = PMAgent(
-                    pm_id=pm_id,
-                    agent_name=f"PM-{pm_id[:8]}",
-                    task_id=task.task_id,
-                    device_id=target_host.device_id,
-                    hostname=target_host.hostname or target_host.device_name,
-                    ip=target_host.ip,
-                    api_port=target_host.api_port,
-                    status="starting",
-                )
-                self.db.upsert_pm_agent(pm_agent)
-                # 优化7: 记录 PM→Worker 映射
-                self._pm_worker_map[pm_id] = {
-                    "ip": target_host.ip,
-                    "api_port": target_host.api_port,
-                    "device_id": target_host.device_id,
-                }
-                logger.info("PM Agent 已启动: %s → %s", pm_id[:12], target_host.device_name)
-                self.bot_gateway.notify("pm_registered", {
-                    "pm_id": pm_id[:12], "task": task.name,
-                    "station": target_host.device_name or target_host.hostname,
-                })
-                # 方案C: 自动将 PM 绑定到当前活跃对话的线程
-                self._auto_attach_pm_thread(pm_id, task.name, f"PM-{pm_id[:8]}")
-            else:
-                task.status = "failed"
-                task.output_data = {"error": f"PM 启动失败: {resp.text}"}
-                self.db.save_task(task)
-        except Exception as e:
-            task.status = "failed"
-            task.output_data = {"error": f"PM 启动异常: {e}"}
-            self.db.save_task(task)
-
-        return task.to_dict()
+                              priority: str = "normal", task_id: str = "", input_data: dict | None = None,
+                              project_id: str = "") -> dict:
+        """Use the same prebound PM dispatch path for chat, briefs and the task API."""
+        from .task_submission import submit_task
+        return submit_task(self, name, description, created_by, priority, task_id, input_data, project_id)
 
     # ── 内嵌 Worker: 本机 PM Agent 管理 ─────────────────────
 
-    def _local_start_pm(self, task_id: str, secretary_url: str, task_data: dict = None) -> dict:
-        """在本机 Station 进程内直接启动 PM Agent (无需 Worker)。"""
-        if self._local_pm_agent and getattr(self._local_pm_agent, '_running', False):
-            return {"ok": False, "message": "本机 PM Agent 已在运行"}
-        if not self.chat_runtime:
-            return {"ok": False, "message": "AgentRuntime 未初始化 (Secretary 未激活)"}
-
-        import uuid as _uuid
-        from .pm_agent import ProjectManagerAgent
-        pm_id = f"pm-{_uuid.uuid4().hex[:12]}"
-
-        if not task_data:
-            return {"ok": False, "message": "缺少任务数据"}
-
-        self._local_pm_agent = ProjectManagerAgent(
-            pm_id=pm_id,
-            agent_runtime=self.chat_runtime,
-            secretary_url=secretary_url,
-            device_id=self.state.device_id,
-            device_name=self.state.device_name,
-        )
-        self._local_pm_agent.start_task(task_data)
-        logger.info("本机 PM Agent 已启动: %s, 任务: %s", pm_id, task_id)
-        # 方案C: 自动将 PM 绑定到当前活跃对话的线程
-        task_name = task_data.get("name", task_id)
-        self._auto_attach_pm_thread(pm_id, task_name, f"PM-{pm_id[:8]}")
-        return {"ok": True, "pm_id": pm_id, "device_id": self.state.device_id}
+    def _local_start_pm(self, task_id: str, secretary_url: str, task_data: dict = None,
+                        pm_id: str = "") -> dict:
+        from .pm_start import start_pm_once
+        from .http_retry import http_get
+        def lookup(task_id):
+            if secretary_url.rstrip("/") == f"http://127.0.0.1:{self.state.api_port}":
+                task = self.db.get_task(task_id)
+                return task.to_dict() if task else None
+            response = http_get(f"{secretary_url.rstrip('/')}/api/tasks/{task_id}", timeout=5, retries=0)
+            return response.json() if response is not None and response.status_code == 200 else None
+        return start_pm_once(
+            pm_id=pm_id or (task_data or {}).get("pm_agent_id", ""), task_id=task_id,
+            secretary_url=secretary_url, task_data=task_data, runtime=self.chat_runtime,
+            device_id=self.state.device_id, device_name=self.state.device_name,
+            receipt_path=self.db.path.with_name(self.db.path.stem + "-pm-starts.sqlite3"),
+            current=lambda: self._local_pm_agent, assign=lambda pm: setattr(self, "_local_pm_agent", pm), lookup=lookup)
 
     def _local_stop_pm(self) -> dict:
         """停止本机 PM Agent。"""
@@ -1627,78 +1455,21 @@ class StationController:
     # ── F3.3: PM Agent 故障迁移 ─────────────────────────────────
 
     def _migrate_orphaned_pms(self, gone_device_ids: list[str]):
-        """F3.3: 检测离线主机上的 PM, 将其任务迁移到可用节点或本机接管。
-
-        策略:
-        1. 扫描 _pm_worker_map, 找出 device_id 在 gone_ids 中的 PM
-        2. 查找该 PM 关联的任务, 重置为 pending
-        3. 优先派发到其他在线 Worker, 否则本机接管
-        """
-        gone_set = set(gone_device_ids)
-        orphaned_pms = []
-
+        """An offline host may still execute tools; record uncertainty without migration."""
         for pm_id, info in list(self._pm_worker_map.items()):
-            if info.get("device_id") in gone_set:
-                orphaned_pms.append((pm_id, info))
-
-        if not orphaned_pms:
-            return
-
-        logger.warning("[F3.3] 检测到 %d 个 PM 因主机离线而孤立", len(orphaned_pms))
-
-        # 查找可用替代 Worker
-        hosts = self.db.list_hosts()
-        available_workers = [
-            h for h in hosts
-            if getattr(h, 'online', False)
-            and getattr(h, 'role', '') == 'worker'
-            and getattr(h, 'device_id', '') not in gone_set
-        ]
-
-        for pm_id, info in orphaned_pms:
-            # 查找关联任务
-            task_id = info.get("task_id", "")
-            if task_id:
-                task = self.db.get_task(task_id)
-                if task and getattr(task, 'status', '') in ('running', 'monitoring'):
-                    # 重置任务状态
-                    task.status = "pending"
-                    task.pm_agent_id = ""
-                    self.db.upsert_task(task)
-                    logger.info("[F3.3] 任务 %s 已重置为 pending", task_id[:8])
-
-                    # 尝试迁移
-                    if available_workers:
-                        target = available_workers[0]
-                        self._dispatch_next_task_to_worker(target)
-                        logger.info("[F3.3] 任务已迁移到 %s",
-                                   getattr(target, 'device_name', ''))
-                    else:
-                        # 本机接管
-                        logger.info("[F3.3] 无可用 Worker, 本机接管任务 %s", task_id[:8])
-                        self._start_local_pm_for_task(task_id)
-
-            # 清理映射
-            del self._pm_worker_map[pm_id]
+            if info.get("device_id") not in gone_device_ids:
+                continue
+            self.db.note_pm_start_issue(pm_id, "PM 所在主机离线，执行结果待核实；不自动迁移或重派", startup_only=False)
+            pm = self.db.get_pm_agent(pm_id)
+            if pm:
+                self._queue_ws_broadcast("pm_status_change", pm.to_dict())
 
     def _start_local_pm_for_task(self, task_id: str):
-        """F3.3: 本机启动 PM Agent 接管指定任务。"""
-        try:
-            from .pm_agent import ProjectManagerAgent
-            task = self.db.get_task(task_id)
-            if not task:
-                return
-
-            pm = ProjectManagerAgent(
-                pm_id=f"pm-migrated-{task_id[:8]}",
-                task=task.to_dict() if hasattr(task, 'to_dict') else {"task_id": task_id},
-                secretary_url=f"http://127.0.0.1:{self.state.api_port}",
-                runtime=None,
-            )
-            self._local_pm_agent = pm
-            logger.info("[F3.3] 本机 PM 已启动: %s", pm.pm_id[:8])
-        except Exception as e:
-            logger.error("[F3.3] 本机接管失败: %s", e)
+        """Dispatch only a still-unclaimed pending task through the shared path."""
+        from .task_submission import dispatch_task
+        task = self.db.get_task(task_id)
+        if task and task.status == "pending" and not task.pm_agent_id:
+            return dispatch_task(self, task)
 
     def _try_periodic_report(self):
         """优化12: 定期汇报 — 当有活跃任务时, 生成简报推送到 Web UI 和 Bot。
@@ -1818,37 +1589,11 @@ class StationController:
         return False
 
     def _dispatch_next_task_to_worker(self, worker_host):
-        """F3.1: 将队列中下一个 pending 任务派发到指定 Worker。"""
-        all_tasks = self.db.list_tasks()
-        pending = [t for t in all_tasks if getattr(t, 'status', '') == 'pending']
-        if not pending:
-            return
-
-        task = pending[0]
-        task_id = getattr(task, 'task_id', '')
-        ip = getattr(worker_host, 'ip', '')
-        port = getattr(worker_host, 'api_port', 0)
-
-        if not ip or not port:
-            return
-
-        # 修复 (任务③): 远程 PM 回报地址用本机对目标可达的 IP, 非 127.0.0.1
-        from .host_info import pick_reachable_ip
-        reach_ip = pick_reachable_ip(ip)
-        sec_url = (
-            f"http://{reach_ip}:{self.state.api_port}"
-            if reach_ip else f"http://127.0.0.1:{self.state.api_port}"
-        )
-        try:
-            resp = http_post(
-                f"http://{ip}:{port}/role/start-pm",
-                json={"task_id": task_id, "secretary_url": sec_url},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                logger.info("[自动扩容] 任务 %s 已派发到 %s", task_id[:8], ip)
-        except Exception as e:
-            logger.debug("[自动扩容] 派发失败: %s", e)
+        """Atomically claim queued work before starting its preassigned remote PM."""
+        from .task_submission import dispatch_task
+        pending = [t for t in self.db.list_tasks() if t.status == "pending" and not t.pm_agent_id]
+        if pending:
+            return dispatch_task(self, pending[0], target=worker_host)
 
     # ── S1: API Key 加密自动分发 ────────────────────────────
 

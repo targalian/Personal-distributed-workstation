@@ -13,6 +13,7 @@ import uuid as _uuid
 import requests as http_requests
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from .http_retry import auth_headers
 from .logger import get_logger
@@ -78,9 +79,10 @@ def build_worker_routes(controller) -> APIRouter:
         set_report_target_global(
             secretary_url,
             token=get_mesh_auth_token() or get_mesh_token())
-        result = controller._local_start_pm(task_id, secretary_url, task_data)
+        result = await run_in_threadpool(controller._local_start_pm, task_id, secretary_url, task_data,
+                                         pm_id=payload.get("pm_id", ""))
         if not result.get("ok"):
-            raise HTTPException(status_code=409, detail=result.get("message", "启动失败"))
+            raise HTTPException(status_code=409, detail=result)
         return result
 
     @router.post("/role/stop-pm")

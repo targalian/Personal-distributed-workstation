@@ -9,14 +9,12 @@ Secretary 激活后可用 (未激活返回 503):
   - 任务记忆 (task_memory) 存储与统计
 """
 import time
-import uuid as _uuid
 
-import requests as http_requests
 
 from fastapi import APIRouter, HTTPException
 
-from .protocol import AgentCard, Task
-from .http_retry import auth_headers
+from .protocol import AgentCard
+from starlette.concurrency import run_in_threadpool
 from .logger import get_logger
 from .station_routes_common import _broadcast, check_secretary
 
@@ -69,15 +67,7 @@ def build_task_routes(controller) -> APIRouter:
 
     @router.post("/api/tasks")
     async def submit_task(payload: dict):
-        """提交新任务 — 创建 Task 记录并分配 PM Agent。
-
-        新流程 (PM Agent 架构):
-        1. 创建 Task 记录 (status=pending, pm_agent_id="")
-        2. 选择合适 work_station (按评级/在线状态)
-        3. POST 到目标 Worker /role/start-pm (携带 task_id, secretary_url)
-        4. 更新 Task.pm_agent_id, status=running
-        5. WebSocket 广播 task_submitted + pm_registered
-        """
+        """Persist task ownership before starting the PM; share chat submission logic."""
         check_secretary(controller)
         project_manager = controller.project_manager
         project_id = payload.get("project_id", "")
@@ -85,154 +75,11 @@ def build_task_routes(controller) -> APIRouter:
             if not project_manager.check_budget(project_id):
                 raise HTTPException(status_code=402, detail="项目预算已起支或已暂停,无法提交任务")
 
-        # 1. 创建 Task 记录
-        task = Task(
-            task_id=f"task-{_uuid.uuid4().hex[:12]}",
-            name=payload.get("name", ""),
-            description=payload.get("description", ""),
-            input_data=payload.get("input_data", {}),
-            created_by=payload.get("created_by", "user"),
-            project_id=project_id,
-            status="pending",
-        )
-        db.save_task(task)
-        await _broadcast(state, "task_submitted", task.to_dict())
-        controller.bot_gateway.notify("task_submitted", {
-            "name": task.name, "task_id": task.task_id[:8],
-        })
-
-        # 2. 选择合适的 work_station (按评级排序, 取在线最高评级)
-        from .protocol import PMAgent
-        hosts = db.list_hosts()
-        online_hosts = [h for h in hosts if h.online and h.device_id != state.device_id]
-        # 如果没有在线 Worker, 使用本机
-        if not online_hosts:
-            online_hosts = [h for h in hosts if h.online]
-
-        if not online_hosts:
-            task.status = "failed"
-            task.output_data = {"error": "无可用 work_station"}
-            db.save_task(task)
-            return task.to_dict()
-
-        # 按评级排序 (S > A > B > C > D)
-        tier_order = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "": 0}
-        online_hosts.sort(
-            key=lambda h: tier_order.get(h.rating_tier, 0),
-            reverse=True,
-        )
-        target_host = online_hosts[0]
-
-        # 3. 构造 Secretary URL: 本机派发用 localhost; 远程派发在回退分支重建可达地址
-        secretary_url = f"http://127.0.0.1:{state.api_port}"
-
-        # 4. 优先本机派发 (内嵌 Worker, 无需网络往返)
-        if controller.secretary_active and controller.chat_runtime:
-            result = controller._local_start_pm(task.task_id, secretary_url, task.to_dict())
-            if result.get("ok"):
-                pm_id = result["pm_id"]
-                task.pm_agent_id = pm_id
-                task.status = "running"
-                db.save_task(task)
-                pm_agent = PMAgent(
-                    pm_id=pm_id,
-                    agent_name=f"PM-{pm_id[:8]}",
-                    task_id=task.task_id,
-                    project_id=project_id,
-                    device_id=state.device_id,
-                    hostname=state.device_name,
-                    ip="127.0.0.1",
-                    api_port=state.api_port,
-                    status="starting",
-                )
-                db.upsert_pm_agent(pm_agent)
-                controller._pm_worker_map[pm_id] = {
-                    "ip": "127.0.0.1",
-                    "api_port": state.api_port,
-                    "device_id": state.device_id,
-                    "local": True,
-                }
-                await _broadcast(state, "pm_registered", {
-                    "pm_id": pm_id, "task_id": task.task_id,
-                    "device_id": state.device_id, "device_name": state.device_name,
-                })
-                controller.bot_gateway.notify("pm_registered", {
-                    "pm_id": pm_id[:12], "task": task.name, "station": state.device_name,
-                })
-                await _broadcast(state, "task_updated", task.to_dict())
-                return task.to_dict()
-            else:
-                logger.warning("本机 PM 启动失败: %s, 尝试远程派发", result.get('message'))
-
-        # 5. 回退: POST 到远程 Worker 启动 PM Agent
-        target_ip = target_host.ip
-        if target_host.device_id == state.device_id:
-            target_ip = "127.0.0.1"
-        # 修复 (任务③): 远程 PM 必须回报到本机 Secretary — 127.0.0.1 在
-        # 远端会打到远端自己的 Station, 导致进度上报丢失; 选本机与目标
-        # 同网段的可达 IP (无同网段时回退首个非虚拟 IP)
-        from .host_info import pick_reachable_ip
-        reach_ip = pick_reachable_ip(target_ip)
-        remote_secretary_url = (
-            f"http://{reach_ip}:{state.api_port}" if reach_ip else secretary_url
-        )
-        try:
-            resp = http_requests.post(
-                f"http://{target_ip}:{target_host.api_port}/role/start-pm",
-                json={
-                    "task_id": task.task_id,
-                    "secretary_url": remote_secretary_url,
-                    "task_data": task.to_dict(),
-                },
-                headers=auth_headers(),
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                pm_data = resp.json()
-                pm_id = pm_data.get("pm_id", "")
-                task.pm_agent_id = pm_id
-                task.status = "running"
-                db.save_task(task)
-
-                pm_agent = PMAgent(
-                    pm_id=pm_id,
-                    agent_name=f"PM-{pm_id[:8]}",
-                    task_id=task.task_id,
-                    project_id=project_id,
-                    device_id=target_host.device_id,
-                    hostname=target_host.hostname or target_host.device_name,
-                    ip=target_ip,
-                    api_port=target_host.api_port,
-                    status="starting",
-                )
-                db.upsert_pm_agent(pm_agent)
-                controller._pm_worker_map[pm_id] = {
-                    "ip": target_ip,
-                    "api_port": target_host.api_port,
-                    "device_id": target_host.device_id,
-                }
-
-                await _broadcast(state, "pm_registered", {
-                    "pm_id": pm_id,
-                    "task_id": task.task_id,
-                    "device_id": target_host.device_id,
-                    "device_name": target_host.device_name,
-                })
-                controller.bot_gateway.notify("pm_registered", {
-                    "pm_id": pm_id[:12], "task": task.name,
-                    "station": target_host.device_name or target_host.hostname,
-                })
-            else:
-                task.status = "failed"
-                task.output_data = {"error": f"PM 启动失败: {resp.text}"}
-                db.save_task(task)
-        except Exception as e:
-            task.status = "failed"
-            task.output_data = {"error": f"PM 启动异常: {e}"}
-            db.save_task(task)
-
-        await _broadcast(state, "task_updated", task.to_dict())
-        return task.to_dict()
+        return await run_in_threadpool(
+            controller.submit_task_from_chat,
+            name=payload.get("name", ""), description=payload.get("description", ""),
+            input_data=payload.get("input_data", {}), created_by=payload.get("created_by", "user"),
+            priority=payload.get("priority", "normal"), project_id=project_id)
 
     @router.get("/api/tasks")
     async def list_tasks(status: str = None, limit: int = 50):
@@ -400,9 +247,12 @@ def build_task_routes(controller) -> APIRouter:
         })
 
         # Bot 推送
-        controller.bot_gateway.notify("task_delivered", {
-            "name": task_name, "task_id": task_id[:12] if task_id else "",
-        })
+        try:
+            controller.bot_gateway.notify("task_delivered", {
+                "name": task_name, "task_id": task_id[:12] if task_id else "",
+            })
+        except Exception as exc:
+            logger.warning("交付已保存，但通知发送失败: %s", exc)
 
         logger.info("PM %s 交付物已接收: %s", pm_id[:12], task_name)
         return {"ok": True, "task_id": task_id, "message": "交付物已接收, 等待 Boss 验收"}

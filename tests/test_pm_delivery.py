@@ -55,6 +55,12 @@ def assert_no_success(execution):
     execution.agent._record_task_memory.assert_not_called()
 
 
+def test_notification_error_does_not_reject_persisted_delivery(execution):
+    execution.controller.bot_gateway.notify.side_effect = RuntimeError("notification unavailable")
+    assert execution.agent.deliver_result('task', 'description', '真实保存产物', [])
+    assert execution.db.get_task('task-test').output_data['_delivery']['deliverable'] == '真实保存产物'
+
+
 @pytest.mark.parametrize('response', [
     {'content': '[模型调用失败] 降级链不可用'},
     {'content': '  [LLM 调用失败] timeout'},

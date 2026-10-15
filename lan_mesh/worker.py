@@ -342,53 +342,22 @@ class WorkerAgent:
 
     # ── PM Agent 管理 (内嵌模块) ───────────────────────────────────
 
-    def start_pm(self, task_id: str, secretary_url: str, task_data: dict = None) -> dict:
-        """在本 Worker 上启动 PM Agent 接管指定任务。
-
-        Args:
-            task_id: 任务 ID
-            secretary_url: Secretary API 地址 (用于上报状态/进度)
-            task_data: 任务详情 (可选, 由 Secretary 传入)
-
-        Returns:
-            {ok, pm_id} 或 {ok: False, message}
-        """
-        if self.state.pm_agent and self.state.pm_agent._running:
-            return {"ok": False, "message": "PM Agent 已在运行"}
-
-        if not self.state.agent_runtime:
-            return {"ok": False, "message": "Agent 运行时未初始化"}
-
-        import uuid as _uuid
-        pm_id = f"pm-{_uuid.uuid4().hex[:12]}"
-
-        # 如果未提供 task_data, 从 Secretary 获取
+    def start_pm(self, task_id: str, secretary_url: str, task_data: dict = None,
+                 pm_id: str = "") -> dict:
+        """Start only the PM identity assigned by the Secretary, with durable deduplication."""
+        from .pm_start import start_pm_once
+        from .http_retry import http_get
+        def lookup(task_id):
+            response = http_get(f"{secretary_url.rstrip('/')}/api/tasks/{task_id}", timeout=5, retries=0)
+            return response.json() if response is not None and response.status_code == 200 else None
         if not task_data:
-            try:
-                import requests as _req
-                resp = _req.get(f"{secretary_url.rstrip('/')}/api/tasks/{task_id}", timeout=5)
-                if resp.status_code == 200:
-                    task_data = resp.json()
-            except Exception as e:
-                return {"ok": False, "message": f"获取任务详情失败: {e}"}
-
-        if not task_data:
-            return {"ok": False, "message": "无法获取任务详情"}
-
-        # 创建 PM Agent 实例
-        self.state.pm_agent = ProjectManagerAgent(
-            pm_id=pm_id,
-            agent_runtime=self.state.agent_runtime,
-            secretary_url=secretary_url,
-            device_id=self.state.device_id,
-            device_name=self.state.device_name,
-        )
-
-        # 启动任务 (异步)
-        self.state.pm_agent.start_task(task_data)
-        logger.info("PM Agent 已启动: %s, 任务: %s", pm_id, task_id)
-
-        return {"ok": True, "pm_id": pm_id, "device_id": self.state.device_id}
+            task_data = lookup(task_id)
+        return start_pm_once(
+            pm_id=pm_id or (task_data or {}).get("pm_agent_id", ""), task_id=task_id,
+            secretary_url=secretary_url, task_data=task_data, runtime=self.state.agent_runtime,
+            device_id=self.state.device_id, device_name=self.state.device_name,
+            receipt_path=self.data_dir / "worker-pm-starts.sqlite3",
+            current=lambda: self.state.pm_agent, assign=lambda pm: setattr(self.state, "pm_agent", pm), lookup=lookup)
 
     def stop_pm(self) -> dict:
         """停止本 Worker 上的 PM Agent。"""

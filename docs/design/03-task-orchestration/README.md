@@ -13,9 +13,11 @@
 | pm_dispatcher.py | PM 分发器 — 团队创建与子任务分发 |
 | pm_monitor.py | PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证 |
 | pm_planner.py | PM 规划器 — 任务分析与分解 |
+| pm_start.py | Start a preassigned PM once, after verifying its persisted task ownership. |
 | pm_state.py | PM Agent 共享状态容器 |
 | project.py | 项目管理与预算控制 — Phase 3 项目隔离核心 |
 | task.py | 任务 DAG 管理 — 子任务依赖图与拓扑排序 (增强版: 条件边 + 动态路由 + 图序列化) |
+| task_submission.py | Shared task submission: persist PM ownership before any local or remote execution. |
 | task_templates.py | F2.4: 任务模板库 — 预置常见任务 DAG |
 <!-- /AUTO:module-list -->
 ---
@@ -87,6 +89,7 @@ Worker → 结果聚合（显式状态机 + Checkpoint, 借鉴 LangGraph Supervi
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-15 | iter-46 | 统一聊天/网页/队列派发，先事务登记任务与 PM 再启动；PM 启动持久化去重；掉线保留归属，不盲目迁移 |
 | 2026-10-15 | iter-45 | 按执行编号核对远端回执，HTTP 异常不本地重做；PM 轮询原站点结果；并发终态只消费一次，旧回调不能推动新尝试 |
 | 2026-10-15 | iter-44 | 校验计划依赖；本地与远端失败恢复有界；最终失败阻塞未完成任务；未知超时不自动再执行；拒绝部分结果聚合 |
 | 2026-10-15 | iter-42 | 多任务派发后保留监控；本地回退按依赖执行并注册成员；停止事件阻止晚到结果和后续派发，唤醒澄清与监控 |
@@ -129,3 +132,16 @@ iter-45 补充执行编号、旧回调隔离和远端回执查询，并取消普
 Station 不再将结果投递给可能无关的本机 PM，执行端先持久化结果，再由拥有该尝试的 PM 查询。旧同步 Worker 的原请求结果可兼容；旧异步 Station 不提供身份回执，立即以结果未知终止并提示升级和核实；需升级后使用，不能保证混合版本运行中的任务完成。升级应在无在途任务时进行，已有在途结果需核实。
 
 回执去重范围是同一节点同一执行编号；不同编号的失败重试仍可能重复工具的部分副作用，不能称为整个任务恰好执行一次。PM 端尝试表仍在内存，PM 自身重启后尚无检查点续跑；取消仍不能强制终止远端外部操作。
+
+
+## PM 启动与任务归属（iter-46）
+
+`task_submission.py` 统一聊天、项目描述、网页与自动队列的派发。create_task_once 防止相同 task_id 并发覆盖；bind_task_pm 在同一 SQLite 事务中将 pending 任务绑定到预分配 PM 并登记 starting 记录。只有抢占成功者能发起启动，映射和对话线程在执行之前建立；返回时重新读取任务，避免快速失败、完成或验收被旧 running 快照覆盖。无主机记录但本机 Runtime 可用时仍可本机执行。
+
+`pm_start.py` 在 Station/Worker 共用启动门控：接收预分配 pm_id，核对 Secretary 当前任务仍由该 PM 拥有且为 running，再启动 Runtime。独立启动回执库持久化请求指纹与首次结果；同请求重复不创建第二个 PM，不同内容拒绝；进程变化后的旧记录标为结果未知，禁止自动重启。单进程锁保护本机 PM 选择/赋值，所有启动均在 HTTP 事件循环外执行，避免远端回查 Secretary 时阻塞任务 API。
+
+启动 POST 不重试，丢失或错误响应仅查询原节点 `/role/pm-status`，匹配 PM 与 task_id 才确认。未知状态保留任务 running、PM unknown、任务输出诊断，不当作可安全重派；后续有效 PM 状态上报清除诊断。明确未执行的拒绝标记 failed。未绑定的任务不接受交付，移除过去为了兼容早上报而放宽 PM 归属的例外。
+
+掉线不证明执行结束：孤立 PM 保留任务归属、标记 unknown，不清空 PM、不重新派发。已完成、失败、暂停、取消任务不受掉线诊断覆盖。没有增加 PM 重启续跑、远程取消确认或工具副作用回滚；启动之后但进度尚未上报时的崩溃仍需核实。自动队列只接管未绑定的 pending 任务。
+
+启动回执库：Station 主库旁 `<主库名>-pm-starts.sqlite3`，Worker 为 `~/.lan_mesh/worker-pm-starts.sqlite3`。备份恢复应保留这些记录，不可通过删库强行重试。升级须在无在途任务时进行，新启动协议要求执行节点支持预分配 PM 和任务归属校验。

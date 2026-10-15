@@ -89,3 +89,8 @@ subprocess 隔离执行 Agent 生成代码（非 eval）：超时保护（默认
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
 | 2026-08-16 | iter-27 后 | 初建 |
+
+
+## Worker PM 启动（iter-46）
+
+WorkerAgent.start_pm 使用 pm_start.py 共用门控与持久化启动回执，不再自行生成与 Secretary 不一致的 PM 编号。启动前经带节点认证的 GET 查询 Secretary 任务当前归属和状态；启动端点在线程池内执行，避免回查和启动阻塞事件循环。重复启动返回原回执，进程变化后的旧启动禁止自动重新执行；pm-status 返回 task_id，供响应丢失后的只读核实。详见 03 域 PM 启动章节。

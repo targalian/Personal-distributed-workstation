@@ -67,6 +67,8 @@ MAPPING = {
     "lan_mesh/pm_monitor.py": "03-task-orchestration",
     "lan_mesh/pm_planner.py": "03-task-orchestration",
     "lan_mesh/pm_state.py": "03-task-orchestration",
+    "lan_mesh/pm_start.py": "03-task-orchestration",
+    "lan_mesh/task_submission.py": "03-task-orchestration",
     "lan_mesh/task_templates.py": "03-task-orchestration",
     "lan_mesh/project.py": "03-task-orchestration",
     # 04-execution-engine — Worker/Agent/工具/技能
@@ -121,6 +123,7 @@ MAPPING = {
     "tests/test_pm_lifecycle.py": "10-test-loop",
     "tests/test_execution_receipts.py": "10-test-loop",
     "tests/test_pm_transport.py": "10-test-loop",
+    "tests/test_pm_start.py": "10-test-loop",
     "tests/test_delivery_replay.py": "10-test-loop",
     "test_bug/project_brief_browser.py": "10-test-loop",
     "test_bug/run_loop.py": "10-test-loop",
