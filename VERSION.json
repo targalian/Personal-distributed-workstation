@@ -1,7 +1,7 @@
 {
-  "version": "0.34.3",
-  "commit": "a49ec0d",
+  "version": "0.34.4",
+  "commit": "3ccc890",
   "released_at": "2026-10-15",
-  "note": "Persist delivery and review changes atomically; preserve acceptance across retries and stale task writes; align chat review states",
+  "note": "Bound subtask recovery; stop incomplete plans on terminal failure or unknown timeout; persist and display failure diagnostics",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }
