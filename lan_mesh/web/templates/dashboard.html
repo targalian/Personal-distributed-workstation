@@ -1085,6 +1085,9 @@ function taskExecutionPanel(task){
     <p style="font-size:13px">按任务归属查询原节点，不会重启或重派任务。节点不可达、记录缺失或 PM 停止，都不代表外部工具没有执行。</p>
     <button class="btn sm" data-execution-check>核实原节点</button>
     <div class="task-execution-result" role="status" aria-live="polite" style="margin-top:10px;font-size:13px;white-space:pre-wrap"></div>
+    <button class="btn sm" data-recovery-check style="margin-top:12px">核实恢复条件</button>
+    <button class="btn sm" data-recovery-next style="margin-top:12px" hidden>继续核实剩余步骤</button>
+    <div class="task-recovery-result" role="status" aria-live="polite" style="margin-top:10px;font-size:13px;white-space:pre-wrap"></div>
   </div>`;
 }
 async function retryTaskControl(taskId,action,panel){
@@ -1124,6 +1127,32 @@ async function checkTaskExecution(taskId, panel){
       '本次只读取节点证据；任务状态与验收结论保持原记录。'].filter(Boolean).join('\n');
   }catch(error){if(panel.isConnected)output.textContent='核实失败：'+error.message+'。请检查连接后重试。';}
   finally{if(panel.isConnected){button.disabled=false;button.textContent='再次核实原节点';}}
+}
+async function checkTaskRecovery(taskId,panel,offset=0,revision=null){
+  const button=panel.querySelector('[data-recovery-check]');
+  const next=panel.querySelector('[data-recovery-next]');
+  const output=panel.querySelector('.task-recovery-result');
+  if(button.disabled)return;
+  const previous=revision!==null?output.textContent:'';
+  next.hidden=true;
+  button.disabled=true;button.textContent='核实中…';output.textContent='正在读取执行现场并查询原执行回执，请稍候。';
+  try{
+    const query=revision!==null?`?offset=${offset}&expected_revision=${revision}`:'';
+    const response=await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/recovery-check${query}`);
+    const result=await response.json();
+    if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'查询失败');
+    if(result.task_id!==taskId)throw new Error('查询返回了其他任务');
+    if(!panel.isConnected)return;
+    const labels={evidence_complete:'执行证据已收集，尚未授权恢复',partial:'分批核实结果；请结合各批待处理项判断',review_required:'存在待处理项',running:'原 PM 仍在运行',changed:'查询期间任务变化',missing:'未找到执行现场',unavailable:'暂时无法核实',mismatch:'节点或任务归属不匹配'};
+    output.textContent=[result.state==='partial'?previous:'',labels[result.state]||'结果待核实',result.revision?`依据执行现场 v${result.revision}`:'',
+      ...(result.steps||[]).map(step=>`${step.name}：${step.message}${step.execution_id?'（执行编号 '+step.execution_id+'）':''}`),
+      ...(result.blockers||[]).map(message=>'待处理：'+message),
+      '本次只读取原执行证据，不启动任务、不生成新执行编号、不修改检查点。当前尚不支持 PM 重启续跑。'].filter(Boolean).join('\n');
+    if(Number.isInteger(result.next_offset)&&result.next_offset>=0&&Number.isInteger(result.revision)){
+      next.hidden=false;next.onclick=()=>checkTaskRecovery(taskId,panel,result.next_offset,result.revision);
+    }
+  }catch(error){if(panel.isConnected)output.textContent='恢复核实失败：'+error.message+'。可稍后重试。';}
+  finally{if(panel.isConnected){button.disabled=false;button.textContent='再次核实恢复条件';}}
 }
 async function showTaskDetail(id){
   const t=allTasks.find(x=>x.task_id===id);if(!t)return;
@@ -1165,6 +1194,7 @@ async function showTaskDetail(id){
   });
   if(checkPanel){
     checkPanel.querySelector('[data-execution-check]').addEventListener('click',()=>checkTaskExecution(id,checkPanel));
+    checkPanel.querySelector('[data-recovery-check]').addEventListener('click',()=>checkTaskRecovery(id,checkPanel));
     const retry=checkPanel.querySelector('[data-control-retry]');
     if(retry)retry.addEventListener('click',()=>retryTaskControl(id,t.output_data._pm_control.action,checkPanel));
   }

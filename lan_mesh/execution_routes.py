@@ -7,7 +7,7 @@ from typing import Callable
 from fastapi import APIRouter, HTTPException
 from starlette.concurrency import run_in_threadpool
 
-from .execution_receipts import ExecutionReceipts
+from .execution_receipts import ExecutionReceipts, read_execution_receipt
 from .logger import get_logger
 
 logger = get_logger("execution")
@@ -81,7 +81,7 @@ def build_execution_routes(execute: Callable, receipt_path: Path | Callable, syn
 
     @router.get("/tasks/executions/{execution_id}")
     def execution_status(execution_id: str):
-        receipt = get_store().get(execution_id)
+        receipt = read_execution_receipt(receipt_path() if callable(receipt_path) else receipt_path, execution_id)
         if receipt is None:
             raise HTTPException(status_code=404, detail="未找到执行回执；不能据此认定原请求未执行")
         return receipt

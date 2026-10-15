@@ -241,3 +241,7 @@ iter-46 同时隔离交付保存后的 Bot 通知异常：通知失败记录告�
 ## PM 检查点查询（iter-52）
 
 原节点核实沿用 `/role/pm-starts/{pm_id}` 和 `/api/tasks/{task_id}/execution-check`，增加 checkpoint 摘要及当前实例 checkpoint_error 标记。节点从启动数据库只读加载，按 PM/任务/设备匹配；Secretary 校验原节点归属后只转发指定摘要字段，任务查询期间变化则丢弃检查点摘要。新增表位于启动数据库，不改变中央任务库 schema v5。
+
+## 恢复条件接口（iter-53）
+
+Station/Worker 新增 GET `/role/pm-recovery/{pm_id}`，Secretary 新增 GET `/api/tasks/{task_id}/recovery-check`；根据持久化归属读取原节点。任务/节点身份变化丢弃结果；已有终态、交付、停止或替代任务提示冲突。字段白名单不传原始结果。分批参数 offset/expected_revision 透传到原节点；无恢复启动副作用。

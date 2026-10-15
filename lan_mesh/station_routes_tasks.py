@@ -147,6 +147,15 @@ def build_task_routes(controller) -> APIRouter:
             return JSONResponse(result, status_code=200 if result.get("confirmed") else 202)
         raise HTTPException(status_code=409, detail=result.get("message", "暂停失败"))
 
+    @router.get("/api/tasks/{task_id}/recovery-check")
+    async def assess_task_recovery(task_id: str, offset: int = 0, expected_revision: int | None = None):
+        check_secretary(controller)
+        from .pm_recovery import assess_task_recovery
+        try:
+            return await run_in_threadpool(assess_task_recovery, controller, task_id, offset, expected_revision)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
     @router.delete("/api/tasks/{task_id}")
     async def delete_task(task_id: str):
         """彻底删除任务及关联 PM Agent 记录。若任务仍在运行, 先取消再删除。"""

@@ -32,6 +32,7 @@
 | tests/test_pm_delivery.py | Delivery outcomes must reflect persisted acknowledgements, not child progress or model errors. |
 | tests/test_pm_inspection.py | Verify original-node inspection survives restart and never redispatches or rewrites results. |
 | tests/test_pm_lifecycle.py | Exercise PM worker and monitor threads through completion and cooperative stop. |
+| tests/test_pm_recovery.py | Recovery evidence must use original identities and never dispatch or overwrite state. |
 | tests/test_pm_start.py | Verify task/PM registration precedes execution and startup retries never create another PM. |
 | tests/test_pm_transport.py | Exercise lost dispatch responses, receipt polling and concurrent stale callbacks. |
 | tests/test_project_brief.py | Artifact correctness: graph integrity, concurrency, isolation, and chat integration. |
@@ -153,3 +154,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 ## iter-52 检查点验证
 
 `test_pm_checkpoint.py` 验证实际 PM 线程的执行前落盘、依赖输出释放顺序、直接执行编号、交付请求与确认、重试历史、澄清问题/回复、并发尝试、版本/进程防覆盖与故障停止。独立子进程在工具入口突然退出后，原检查点和启动记录可查询且不会重新启动。扩展原节点 Station/Worker 本机 HTTP 查询和备份恢复回归。模型与工具执行为模拟，不作为真实多机或自动续跑验收。
+
+## iter-53 回执核实验证
+
+`test_pm_recovery.py` 覆盖五项执行身份/节点校验、缺失与重定向、模型错误、未知本地执行、未审阅回执、时间预算/固定版本分批、停止/时限/交付/替代冲突与查询期间变化。真实本机HTTP串联Secretary→Station/Worker PM节点→原执行节点，数据库字节与任务记录保持原样、执行函数未调用。Chrome覆盖逐项提示、分批继续、转义、重试、迟到隔离与桌面手机。

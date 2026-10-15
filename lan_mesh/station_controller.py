@@ -581,6 +581,11 @@ class StationController:
             return {"running": False}
         return self._local_pm_agent.get_status()
 
+    def _local_assess_pm_recovery(self, pm_id: str, task_id: str, offset: int = 0, expected_revision: int | None = None) -> dict:
+        from .pm_recovery import assess_pm_recovery
+        return assess_pm_recovery(self.db.path.with_name(self.db.path.stem + "-pm-starts.sqlite3"),
+                                  pm_id, task_id, self.state.device_id, self._local_pm_status, offset=offset, expected_revision=expected_revision)
+
     def _local_create_subagent(self, agent_name: str, skills: list,
                                task_description: str = "", system_prompt: str = "",
                                preferred_agent_id: str = "") -> dict:

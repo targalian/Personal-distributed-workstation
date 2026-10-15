@@ -96,6 +96,10 @@ def build_worker_routes(controller) -> APIRouter:
     async def local_pm_status():
         return controller._local_pm_status()
 
+    @router.get("/role/pm-recovery/{pm_id}")
+    async def assess_pm_recovery(pm_id: str, task_id: str, offset: int = 0, expected_revision: int | None = None):
+        return await run_in_threadpool(controller._local_assess_pm_recovery, pm_id, task_id, offset, expected_revision)
+
     @router.post("/pm/create-subagent")
     async def local_create_subagent(payload: dict):
         """在本机为 PM 创建子 Agent。"""

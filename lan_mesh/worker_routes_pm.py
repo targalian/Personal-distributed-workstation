@@ -93,6 +93,12 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
             return {"running": False, "role_manager": "unavailable"}
         return role_manager.get_pm_status()
 
+    @router.get("/role/pm-recovery/{pm_id}")
+    async def assess_pm_recovery(pm_id: str, task_id: str, offset: int = 0, expected_revision: int | None = None):
+        if not role_manager:
+            raise HTTPException(status_code=503, detail="角色管理未初始化")
+        return await run_in_threadpool(role_manager.assess_pm_recovery, pm_id, task_id, offset, expected_revision)
+
     # ── PM 子 Agent 端点 (PM 调用, 在目标 Worker 创建子 Agent) ──
 
     @router.post("/pm/create-subagent")

@@ -16,6 +16,7 @@
 | pm_inspection.py | Read original-node PM evidence without dispatching work or changing task state. |
 | pm_monitor.py | PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证 |
 | pm_planner.py | PM 规划器 — 任务分析与分解 |
+| pm_recovery.py | Read checkpoint and original execution receipts to assess recovery without running work. |
 | pm_start.py | Start a preassigned PM once, after verifying its persisted task ownership. |
 | pm_state.py | PM Agent 共享状态容器 |
 | project.py | 项目管理与预算控制 — Phase 3 项目隔离核心 |
@@ -183,3 +184,9 @@ Secretary重新激活只表示观察中断，不能证明本机或远端PM已经
 PM 协调器、分发器、监控器在关键边界调用持久化：执行前保存编号和完整请求，接受输出后保存再释放后继，聚合和交付前后分开记录。写盘失败设置停止事件并停止调度；查询可显示当前实例的写盘失败标记。取消发生在编号登记后、请求发送前时再次检查停止状态。
 
 这提供检查点证据，不开放续跑；未来需实现新实例授权、旧执行隔离与回执对账，才能安全复用已完成输出和继续未开始步骤。详细说明见 ../../pm-checkpoints.md。
+
+## 恢复前回执核实（iter-53）
+
+`pm_recovery.py` 读取当前 PM 的检查点，逐项区分已接受输出与未审阅的成功回执。本地未知执行不重做；远端按持久化地址先读 `/info` 校验设备，再按原执行编号读回执并核对五项身份。计划校验、停止/交付/时限、原任务替代关系都纳入核实；读后再次核对检查点版本和中央任务状态。
+
+网络查询有时间预算，使用 offset/expected_revision 继续分批；版本变化丢弃旧结果。结果不修改检查点、不启动PM，也不构成恢复授权。下一步是原执行退出证明、原子接管与执行恢复，不能以增加核实页面替代真正的续跑实现。

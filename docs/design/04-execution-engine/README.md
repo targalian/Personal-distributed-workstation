@@ -102,3 +102,7 @@ Worker 的 `inspect_pm_start` 读取 `worker-pm-starts.sqlite3`，与 Station �
 ## iter-49：按身份停止 PM
 
 Worker `control_pm` 与 Station 共用停止验证器，不再对无身份请求直接操作当前 PM。`/role/pm-control`、旧 stop/cancel/pause 路径均校验节点和任务身份。停止确认表示 PM 设置停止信号；正在运行的工具不强制终止，晚到执行结果由 PM 停止边界和 Secretary 事务隔离。PM 状态查询携带当前实例的控制回执以恢复丢失响应。
+
+## 执行回执只读查询（iter-53）
+
+`read_execution_receipt` 以只读 SQLite 查询既有执行记录；GET `/tasks/executions/{execution_id}` 不再调用创建存储的 get_store。缺失库/表/记录返回404，不能据此判断原请求未执行。POST仍先持久化claim再运行；同进程未完成回执为started，进程变化为unknown。

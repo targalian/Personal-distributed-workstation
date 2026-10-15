@@ -396,6 +396,11 @@ class WorkerAgent:
             return {"running": False}
         return self.state.pm_agent.get_status()
 
+    def assess_pm_recovery(self, pm_id: str, task_id: str, offset: int = 0, expected_revision: int | None = None) -> dict:
+        from .pm_recovery import assess_pm_recovery
+        return assess_pm_recovery(self.data_dir / "worker-pm-starts.sqlite3", pm_id,
+                                  task_id, self.state.device_id, self.get_pm_status, offset=offset, expected_revision=expected_revision)
+
     def create_subagent(self, agent_name: str, skills: list, task_description: str = "",
                         system_prompt: str = "", preferred_agent_id: str = "") -> dict:
         """在本 Worker 上为 PM 创建子 Agent (新 AgentRuntime 实例)。

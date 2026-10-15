@@ -347,6 +347,83 @@ def verify_pm_checkpoint(page, output):
     page.set_viewport_size({'width':1680,'height':1100})
 
 
+def verify_recovery_assessment(page, output):
+    """Query persisted result evidence through the real recovery API, without execution."""
+    from lan_mesh.pm_checkpoint import PMCheckpoints
+    from lan_mesh.pm_recovery import assess_pm_recovery
+    from lan_mesh.pm_state import PMState
+    task=Task(task_id='recovery-assessment-task',name='恢复前逐项核实原执行')
+    controller.db.save_task(task)
+    controller.db.bind_task_pm(PMAgent(pm_id='assessment-pm',task_id=task.task_id,
+        device_id=controller.state.device_id,hostname='原节点',ip='127.0.0.1',api_port=12345))
+    path=Path(folder.name)/'assessment.sqlite3'
+    st=PMState();st.task=task.to_dict();st.phase='monitoring'
+    name='B <img src=x onerror=alert(1)>'
+    st.plan={'pattern':'orchestrator','decomposition':[{'name':'A'},{'name':name,'depends_on':['A']},{'name':'C','depends_on':[name]}]}
+    st.subtask_outputs={'A':{'private':'内部输出不可出现在摘要'}}
+    identity={'subtask_id':'original-execution-B','parent_task_id':task.task_id,'pm_id':'assessment-pm','reporter_id':'worker','name':name}
+    st.execution_attempts={name:{**identity,'phase':'processing','station':{},
+        'received_result':{**identity,'task_name':name,'status':'completed','output':{'summary':'原始产物'}}}}
+    store=PMCheckpoints(path,owner='old-process')
+    store.save('assessment-pm',task.task_id,controller.state.device_id,st.snapshot(),0)
+    controller._local_assess_pm_recovery=lambda pm_id,task_id,**kwargs:assess_pm_recovery(path,pm_id,task_id,controller.state.device_id,lambda:{},**kwargs)
+    current=controller.db.get_task(task.task_id).to_dict();before=path.read_bytes()
+    page.evaluate('(task)=>{allTasks=[task];showTaskDetail(task.task_id)}',current)
+    page.locator('[data-recovery-check]').click()
+    page.wait_for_function("document.querySelector('.task-recovery-result').textContent.includes('执行证据已收集')")
+    result=page.locator('.task-recovery-result').inner_text()
+    assert '尚需 PM 质量检查' in result and '检查点未登记执行请求' in result
+    assert '原始产物' not in result and '内部输出' not in result
+    assert page.locator('#modal img').count()==0 and path.read_bytes()==before
+    page.wait_for_function("document.querySelectorAll('#toast-container .toast').length===0")
+    page.screenshot(path=str(output/'pm_recovery_assessment_desktop.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    assert page.locator('#modal').evaluate('(el)=>el.scrollWidth<=el.clientWidth+1')
+    page.screenshot(path=str(output/'pm_recovery_assessment_mobile.png'),full_page=True)
+    endpoint='**/api/tasks/recovery-assessment-task/recovery-check'
+    page.route(endpoint,lambda r:r.fulfill(status=503,json={'detail':'暂时无法查询原节点'}),times=1)
+    page.locator('[data-recovery-check]').click()
+    page.wait_for_function("document.querySelector('.task-recovery-result').textContent.includes('恢复核实失败')")
+    assert page.locator('[data-recovery-check]').is_enabled()
+    # Continue a budget-limited page using the same checkpoint revision.
+    st.execution_attempts[name].pop('received_result')
+    st.execution_attempts[name]['station']={'ip':'127.0.0.1','api_port':12345,'device_id':'executor'}
+    store.save('assessment-pm',task.task_id,controller.state.device_id,st.snapshot(),1)
+    def paged_assess(pm_id,task_id,**kwargs):
+        return assess_pm_recovery(path,pm_id,task_id,controller.state.device_id,lambda:{},budget=0,**kwargs)
+    controller._local_assess_pm_recovery=paged_assess
+    page.locator('[data-recovery-check]').click()
+    page.wait_for_function("!document.querySelector('[data-recovery-next]').hidden")
+    # The next page is still at the same revision; query only changes the read budget.
+    import lan_mesh.pm_recovery as recovery_module
+    original_get=recovery_module.http_get
+    recovery_module.http_get=lambda url,**kwargs:Mock(status_code=200,json=lambda:{'device_id':'executor'} if url.endswith('/info') else {**identity,'status':'completed','output':{'summary':'private'}})
+    controller._local_assess_pm_recovery=lambda pm_id,task_id,**kwargs:assess_pm_recovery(path,pm_id,task_id,controller.state.device_id,lambda:{},**kwargs)
+    try:
+        page.locator('[data-recovery-next]').click()
+        page.wait_for_function("document.querySelector('.task-recovery-result').textContent.includes('original-execution-B')")
+        assert 'A：成功输出已保存' in page.locator('.task-recovery-result').inner_text()
+        assert 'C：检查点未登记执行请求' in page.locator('.task-recovery-result').inner_text()
+        assert page.locator('[data-recovery-next]').is_hidden()
+    finally:
+        recovery_module.http_get=original_get
+    before=path.read_bytes()
+    # A delayed answer must not replace a different task's result panel.
+    controller._local_assess_pm_recovery=paged_assess
+    held=[]
+    page.route(endpoint,lambda r:held.append(r),times=1)
+    page.locator('[data-recovery-check]').click()
+    page.wait_for_function("document.querySelector('[data-recovery-check]').disabled")
+    other=Task(task_id='assessment-other',name='另一个任务',pm_agent_id='another-pm')
+    page.evaluate('(task)=>{allTasks.push(task);showTaskDetail(task.task_id)}',other.to_dict())
+    response=client.get('/api/tasks/recovery-assessment-task/recovery-check')
+    held.pop().fulfill(status=response.status_code,json=response.json())
+    page.wait_for_load_state('networkidle')
+    assert page.locator('.task-recovery-result').inner_text()==''
+    assert path.read_bytes()==before and controller.db.get_task(task.task_id).to_dict()==current
+    page.evaluate('closeOverlayForce()');page.set_viewport_size({'width':1680,'height':1100})
+
+
 def accept_all_suggestions(page):
     """Review and explicitly accept a candidate without relying on automatic writes."""
     page.locator('#project-brief-panel [data-tab="review"]').click()
@@ -707,7 +784,7 @@ with sync_playwright() as p:
             r.fulfill(status=200,body=file.read_bytes(),content_type='text/css' if path.endswith('.css') else 'application/javascript' if path.endswith('.js') else 'application/json');return
         if path=='/api/station/roles':r.fulfill(status=200,json={'secretary':'active'});return
         if path.startswith(('/api/conversations', '/api/tasks/')) or path=='/api/secretary/chat':
-            response=client.request(req.method,path,content=req.post_data,headers={'content-type':'application/json'})
+            response=client.request(req.method,path+('?' + urlparse(req.url).query if urlparse(req.url).query else ''),content=req.post_data,headers={'content-type':'application/json'})
             if path=='/api/secretary/chat' and response.status_code==200:
                 for ws in sockets:ws.send(json.dumps({'type':'chat_reply','data':response.json()}))
             r.fulfill(status=response.status_code,body=response.content,headers=dict(response.headers));return
@@ -861,6 +938,7 @@ with sync_playwright() as p:
     verify_restart_recovery(page,output)
     verify_task_resubmission(page,output)
     verify_pm_checkpoint(page,output)
+    verify_recovery_assessment(page,output)
     assert not errors,errors
     # UI-036: test unified editing history against isolated conversations and the real API.
     history_id=chat.create_conversation('编辑历史测试')['id']
@@ -920,3 +998,4 @@ print("PASS: cancel/pause intent versus PM confirmation, explicit retry, retaine
 print("PASS: restart recovery, legacy interrupted protection, stale resubmit rejection, original callback clearing, desktop/mobile; real task/PM API and temporary SQLite")
 print("PASS: resubmission preserves inputs, lost response and repeated clicks reuse one replacement, source links, server race rejection, desktop/mobile; real API/SQLite, simulated PM")
 print("PASS: persistent PM checkpoint evidence, completed/uncertain/unstarted counts, no raw outputs, write failure and legacy missing records, desktop/mobile; real API/SQLite")
+print("PASS: recovery evidence versus saved output, original execution identity, read-only API/checkpoint, escaping, query retry and late-result isolation, desktop/mobile")

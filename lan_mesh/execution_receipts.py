@@ -10,6 +10,27 @@ from pathlib import Path
 PROCESS_OWNER = f"{os.getpid()}-{uuid.uuid4().hex}"
 
 
+def _view_receipt(row, owner: str) -> dict:
+    result = json.loads(row["result"]) if row["result"] is not None else {
+        "status": "started" if row["owner"] == owner else "unknown",
+        "error": "" if row["owner"] == owner else "执行进程已变化，结果待核实；禁止自动重执行",
+    }
+    return {**result, **json.loads(row["identity"])}
+
+
+def read_execution_receipt(path: Path, execution_id: str, owner: str = PROCESS_OWNER) -> dict | None:
+    """Read an existing receipt without creating a directory, database or claim."""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    with closing(sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True, timeout=5)) as conn:
+        conn.row_factory = sqlite3.Row
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='execution_receipts'").fetchone():
+            return None
+        row = conn.execute("SELECT * FROM execution_receipts WHERE execution_id=?", (execution_id,)).fetchone()
+        return _view_receipt(row, owner) if row else None
+
+
 class ExecutionReceipts:
     """A claim survives restart; an unfinished claim must never be executed again."""
 
@@ -30,11 +51,7 @@ class ExecutionReceipts:
         return conn
 
     def _view(self, row) -> dict:
-        result = json.loads(row["result"]) if row["result"] is not None else {
-            "status": "started" if row["owner"] == self.owner else "unknown",
-            "error": "" if row["owner"] == self.owner else "执行进程已变化，结果待核实；禁止自动重执行",
-        }
-        return {**result, **json.loads(row["identity"])}
+        return _view_receipt(row, self.owner)
 
     def claim(self, payload: dict) -> tuple[bool, dict]:
         """Atomically claim an ID, or return its immutable matching receipt."""
