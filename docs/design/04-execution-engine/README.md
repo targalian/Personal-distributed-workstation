@@ -106,3 +106,7 @@ Worker `control_pm` 与 Station 共用停止验证器，不再对无身份请求
 ## 执行回执只读查询（iter-53）
 
 `read_execution_receipt` 以只读 SQLite 查询既有执行记录；GET `/tasks/executions/{execution_id}` 不再调用创建存储的 get_store。缺失库/表/记录返回404，不能据此判断原请求未执行。POST仍先持久化claim再运行；同进程未完成回执为started，进程变化为unknown。
+
+## 恢复中的执行边界（iter-54）
+
+恢复后的 PM 不重新派发已有执行编号。远端轮询先核对原设备身份，再读取原回执；缺失不当作未执行。本地已开始但无返回结果拒绝续跑。新工具调用前重新验证恢复授权、停止意图和原时限；已有在途工具不强制终止。Station 与 Worker 共用恢复实现，真实本机 HTTP 验证原回执到依赖步骤的交付链路，实际模型仍模拟。

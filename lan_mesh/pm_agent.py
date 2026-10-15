@@ -38,6 +38,7 @@ class ProjectManagerAgent:
         self._checkpoint_store = None
         self._checkpoint_revision = 0
         self._checkpoint_error = False
+        self._resume_authorization = None
         self._state.persist = self.checkpoint
 
         # ── 子组件 ──
@@ -171,61 +172,7 @@ class ProjectManagerAgent:
             # 阶段 2: 执行
             pattern = plan.get("pattern", "single")
             if pattern == "single":
-                self.report_status("executing", collaboration_mode="single")
-                if not plan.get("decomposition"):
-                    plan["decomposition"] = [{
-                        "name": task.get("name", "执行"),
-                        "skill": "code_generation",
-                        "depends_on": [],
-                        "description": task.get("description", ""),
-                    }]
-                self.sync_subtasks()
-                with st.lock:
-                    st.direct_execution = {"execution_id": str(uuid.uuid4()), "state": "active"}
-                    if not self.checkpoint("executing_single"):
-                        return
-                result = self._planner.execute_directly(task)
-                if st.stop_event.is_set():
-                    return
-                with st.lock:
-                    st.direct_execution.update(state="returned", result=result)
-                    if not self.checkpoint():
-                        return
-
-                # 校验: 如果执行结果是错误信息, 不能当作完成交付
-                summary = result.get("summary", "")
-                if result.get("status") == "failed" or summary.startswith(("[未配置", "[LLM 调用失败", "[模型调用失败")):
-                    error_msg = summary or "执行失败"
-                    logger.error("[%s] 任务执行失败 (LLM 错误): %s", self.pm_id[:8], error_msg)
-                    self.report_status("failed")
-                    self.report_progress(0.0, "failed", error_msg)
-                    return
-
-                with st.lock:
-                    for sub in plan.get("decomposition", []):
-                        st.subtask_outputs[sub.get("name", "")] = result
-                    st.direct_execution["state"] = "completed"
-                    if not self.checkpoint("executed_single"):
-                        return
-                self.sync_subtasks()
-
-                # 构建交付物并上报 (修复: single 模式也必须创建交付记录)
-                task_name = task.get("name", "")
-                task_desc = task.get("description", "")
-                deliverable = result.get("summary", "")
-                # 尝试从 runtime 结果中提取完整代码
-                full_output = st.subtask_outputs.get(plan["decomposition"][0].get("name", ""), {})
-                if isinstance(full_output, dict) and full_output.get("summary"):
-                    deliverable = full_output["summary"]
-                subtask_results = [{"name": s.get("name", ""), "status": "completed", "output": result}
-                                   for s in plan.get("decomposition", [])]
-                if not self.deliver_result(task_name, task_desc, deliverable, subtask_results):
-                    self.report_status("failed")
-                    self.report_progress(0.0, "failed", "交付未获 Secretary 确认，请核实交付记录后处理")
-                    return
-
-                self.report_status("completed", task_list=[{"name": task_name, "status": "completed"}])
-                self.report_progress(1.0, "completed", f"任务完成: {result.get('summary', '')[:100]}")
+                self._execute_single(task, plan)
             else:
                 self.report_status("executing", collaboration_mode=pattern,
                                    task_list=plan.get("decomposition", []))
@@ -247,6 +194,91 @@ class ProjectManagerAgent:
         finally:
             if not keep_monitoring:
                 self._running = False
+
+    def execution_allowed(self) -> bool:
+        """Recovered instances recheck live authorization before new effects."""
+        if self._state.stop_event.is_set():
+            return False
+        if self._resume_authorization is None:
+            return True
+        try:
+            if self._monitor.is_global_timed_out():
+                raise ValueError("原任务时限已耗尽")
+            self._resume_authorization()
+            return True
+        except Exception as exc:
+            logger.warning("[%s] 恢复授权失效，停止后续执行: %s", self.pm_id[:8], exc)
+            self._signal_stop("recovery_blocked")
+            return False
+
+    def _execute_single(self, task: dict, plan: dict):
+        st = self._state
+        self.report_status("executing", collaboration_mode="single")
+        if not plan.get("decomposition"):
+            plan["decomposition"] = [{
+                "name": task.get("name", "执行"),
+                "skill": "code_generation",
+                "depends_on": [],
+                "description": task.get("description", ""),
+            }]
+        self.sync_subtasks()
+        if not self.execution_allowed():
+            return
+        existing = st.direct_execution if st.recovery else {}
+        names = [sub["name"] for sub in plan["decomposition"]]
+        if st.recovery and all(name in st.subtask_outputs for name in names):
+            result = st.subtask_outputs[names[0]]
+        elif existing.get("state") == "returned":
+            result = existing["result"]
+        elif existing:
+            raise ValueError("本地直接执行结果未知，禁止重复执行")
+        else:
+            with st.lock:
+                st.direct_execution = {"execution_id": str(uuid.uuid4()), "state": "active"}
+                if not self.checkpoint("executing_single"):
+                    return
+            result = self._planner.execute_directly(task)
+            if st.stop_event.is_set():
+                return
+            with st.lock:
+                st.direct_execution.update(state="returned", result=result)
+                if not self.checkpoint():
+                    return
+
+        # 校验: 如果执行结果是错误信息, 不能当作完成交付
+        summary = result.get("summary", "")
+        if result.get("status") == "failed" or summary.startswith(("[未配置", "[LLM 调用失败", "[模型调用失败")):
+            error_msg = summary or "执行失败"
+            logger.error("[%s] 任务执行失败 (LLM 错误): %s", self.pm_id[:8], error_msg)
+            self.report_status("failed")
+            self.report_progress(0.0, "failed", error_msg)
+            return
+
+        with st.lock:
+            for sub in plan.get("decomposition", []):
+                st.subtask_outputs[sub.get("name", "")] = result
+            st.direct_execution["state"] = "completed"
+            if not self.checkpoint("executed_single"):
+                return
+        self.sync_subtasks()
+
+        # 构建交付物并上报 (修复: single 模式也必须创建交付记录)
+        task_name = task.get("name", "")
+        task_desc = task.get("description", "")
+        deliverable = result.get("summary", "")
+        # 尝试从 runtime 结果中提取完整代码
+        full_output = st.subtask_outputs.get(plan["decomposition"][0].get("name", ""), {})
+        if isinstance(full_output, dict) and full_output.get("summary"):
+            deliverable = full_output["summary"]
+        subtask_results = [{"name": s.get("name", ""), "status": "completed", "output": result}
+                           for s in plan.get("decomposition", [])]
+        if not self.deliver_result(task_name, task_desc, deliverable, subtask_results):
+            self.report_status("failed")
+            self.report_progress(0.0, "failed", "交付未获 Secretary 确认，请核实交付记录后处理")
+            return
+
+        self.report_status("completed", task_list=[{"name": task_name, "status": "completed"}])
+        self.report_progress(1.0, "completed", f"任务完成: {result.get('summary', '')[:100]}")
 
     def receive_progress_report(self, report: dict):
         self._monitor.receive_progress_report(report)
@@ -462,6 +494,10 @@ class ProjectManagerAgent:
             "delivered_at": time.time(),
         }
 
+        if not self.execution_allowed():
+            return False
+        if self._state.delivery.get("payload"):
+            delivery = self._state.delivery["payload"]
         with self._state.lock:
             self._state.delivery = {"state": "prepared", "payload": delivery}
             if not self.checkpoint("delivering"):

@@ -85,6 +85,10 @@ def build_worker_routes(controller) -> APIRouter:
             raise HTTPException(status_code=409, detail=result)
         return result
 
+    @router.post("/role/resume-pm")
+    async def resume_pm(payload: dict):
+        return await run_in_threadpool(controller._local_resume_pm, payload)
+
     from .pm_control import build_pm_control_routes
     router.include_router(build_pm_control_routes(controller._local_control_pm))
 

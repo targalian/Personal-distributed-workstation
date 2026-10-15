@@ -112,8 +112,9 @@ def assess_pm_recovery(path: Path, pm_id: str, task_id: str, device_id: str, cur
         decomposition = plan.get("decomposition", [])
         if len(decomposition) > 150:
             raise ValueError("计划超出查询上限")
-        PMDispatcher._validate_plan(decomposition)
-        if not 0 <= offset < len(decomposition):
+        if decomposition:
+            PMDispatcher._validate_plan(decomposition)
+        if (decomposition and not 0 <= offset < len(decomposition)) or (not decomposition and offset != 0):
             raise ValueError("查询起点超出计划范围")
         result.update(revision=record["revision"], checkpoint_at=record["updated_at"],
                       offset=offset, next_offset=None, total_steps=len(decomposition))
@@ -123,7 +124,8 @@ def assess_pm_recovery(path: Path, pm_id: str, task_id: str, device_id: str, cur
             result["blockers"].append("检查点已有终态，请先核对任务与交付")
         if time.time() - snapshot["start_time"] > snapshot["global_timeout"]:
             result["blockers"].append("原任务全局时限已耗尽，不能直接重置时限")
-        if snapshot.get("delivery", {}).get("state") in ("sending", "acknowledged"):
+        if (snapshot.get("delivery", {}).get("state") == "acknowledged"
+                or (snapshot.get("delivery", {}).get("state") == "sending" and not snapshot.get("process_lease"))):
             result["blockers"].append("已有交付请求或确认，请先核对 Secretary 的交付与验收记录")
         deadline, nodes = time.monotonic() + max(0, min(budget, 8.0)), {}
         direct = snapshot.get("direct_execution", {})
@@ -152,6 +154,16 @@ def assess_pm_recovery(path: Path, pm_id: str, task_id: str, device_id: str, cur
         if (latest is None or latest["revision"] != record["revision"]
                 or (after.get("pm_id") == pm_id and after.get("running") is True)):
             return {**result, "state": "changed", "steps": [], "blockers": ["查询期间执行现场变化，请重新核实"]}
+        from .pm_lease import lease_identity
+        from .pm_resume import validate_snapshot
+        lease = lease_identity(path)
+        try:
+            validate_snapshot(snapshot, pm_id, task_id)
+            result["resume_supported"] = bool(lease["machine"] and snapshot.get("process_lease") == lease)
+            if not result["resume_supported"]:
+                result["resume_message"] = "该现场缺少原进程排除凭据，或已迁移；不能直接续跑"
+        except (ValueError, KeyError, TypeError) as exc:
+            result["resume_message"] = str(exc)
         unresolved = any(s["state"] not in ("saved_completed", "receipt_completed", "unstarted") for s in result["steps"])
         result["state"] = "review_required" if unresolved or result["blockers"] else "evidence_complete"
         if offset or result["next_offset"] is not None:
@@ -182,13 +194,14 @@ def assess_task_recovery(controller, task_id: str, offset: int = 0, expected_rev
         if (not isinstance(evidence, dict) or evidence.get("format") != 1 or evidence.get("pm_id") != pm.pm_id
                 or evidence.get("task_id") != task_id or evidence.get("device_id") != pm.device_id):
             return {**result, "state": "mismatch", "blockers": ["返回的节点或任务归属不匹配"]}
-        allowed = ("state", "revision", "checkpoint_at", "checked_at", "blockers", "offset", "next_offset", "total_steps")
+        allowed = ("state", "revision", "checkpoint_at", "checked_at", "blockers", "offset", "next_offset", "total_steps", "resume_message")
         if (evidence.get("state") not in ("unavailable", "missing", "running", "changed", "mismatch", "review_required", "evidence_complete", "partial")
                 or not isinstance(evidence.get("steps"), list) or len(evidence["steps"]) > 150
                 or not isinstance(evidence.get("blockers"), list)
                 or any(not isinstance(item, str) for item in evidence["blockers"])):
             raise ValueError("恢复核实响应格式错误")
         result.update({k: evidence[k] for k in allowed if k in evidence})
+        result["resume_supported"] = evidence.get("resume_supported") is True
         for step in evidence["steps"]:
             if (not isinstance(step, dict) or step.get("state") not in STEP_MESSAGES
                     or not isinstance(step.get("name"), str) or not isinstance(step.get("execution_id"), str)):
@@ -209,6 +222,8 @@ def assess_task_recovery(controller, task_id: str, offset: int = 0, expected_rev
         result["blockers"].append("任务已有交付或停止意图，请先核对业务记录")
     if controller.db._get_conn().execute("SELECT 1 FROM task_resubmissions WHERE source_task_id=?", (task_id,)).fetchone():
         result["blockers"].append("原任务已有替代任务，不能同时恢复原执行")
+    if result["blockers"]:
+        result["resume_supported"] = False
     if result["blockers"] and result["state"] == "evidence_complete":
         result["state"] = "review_required"
     return result

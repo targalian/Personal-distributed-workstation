@@ -33,6 +33,7 @@
 | tests/test_pm_inspection.py | Verify original-node inspection survives restart and never redispatches or rewrites results. |
 | tests/test_pm_lifecycle.py | Exercise PM worker and monitor threads through completion and cooperative stop. |
 | tests/test_pm_recovery.py | Recovery evidence must use original identities and never dispatch or overwrite state. |
+| tests/test_pm_resume.py | Exercise process death, atomic recovery and original execution reuse through delivery. |
 | tests/test_pm_start.py | Verify task/PM registration precedes execution and startup retries never create another PM. |
 | tests/test_pm_transport.py | Exercise lost dispatch responses, receipt polling and concurrent stale callbacks. |
 | tests/test_project_brief.py | Artifact correctness: graph integrity, concurrency, isolation, and chat integration. |
@@ -158,3 +159,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 ## iter-53 回执核实验证
 
 `test_pm_recovery.py` 覆盖五项执行身份/节点校验、缺失与重定向、模型错误、未知本地执行、未审阅回执、时间预算/固定版本分批、停止/时限/交付/替代冲突与查询期间变化。真实本机HTTP串联Secretary→Station/Worker PM节点→原执行节点，数据库字节与任务记录保持原样、执行函数未调用。Chrome覆盖逐项提示、分批继续、转义、重试、迟到隔离与桌面手机。
+
+## 显式恢复与进程排除回归（iter-54）
+
+新增 test_pm_resume.py：真实子进程运行 A 后在依赖释放前退出，检查点恢复只执行 B 并交付原任务；独立活进程持锁拒绝接管。覆盖并发重复请求、版本/身份/业务授权、同进程排除、原时限、旧版/迁移/停止/待澄清、本地未知结果、写入及线程启动失败、原成功回报质量检查、聚合与交付请求复用。真实本机 Secretary→Station/Worker→执行节点验证在途原回执到依赖交付。Chrome UI-047 覆盖确认、错误重试、重复请求、晚到隔离及桌面手机；不代替真实模型/多机/72 小时验收。

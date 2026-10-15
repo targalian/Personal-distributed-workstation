@@ -830,6 +830,9 @@ class Database:
                                (task.task_id,)).fetchone()
             if row:
                 previous = json.loads(row["output_data"]) or {}
+                if "_pm_resume" in previous:
+                    task.output_data = {**(task.output_data or {}), "_pm_resume": previous["_pm_resume"]}
+                    task.pm_agent_id = self.get_task(task.task_id).pm_agent_id
                 if "_pm_recovery" in previous:
                     task.output_data = {**(task.output_data or {}), "_pm_recovery": previous["_pm_recovery"]}
                     task.status = row["status"]

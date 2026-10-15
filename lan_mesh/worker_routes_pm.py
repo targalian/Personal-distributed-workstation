@@ -73,6 +73,12 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
             raise HTTPException(status_code=409, detail=result)
         return result
 
+    @router.post("/role/resume-pm")
+    async def resume_pm(payload: dict):
+        if not role_manager:
+            raise HTTPException(503, "角色管理未初始化")
+        return await run_in_threadpool(role_manager.resume_pm, payload)
+
     from .pm_control import build_pm_control_routes
     def control(payload: dict):
         if not role_manager:

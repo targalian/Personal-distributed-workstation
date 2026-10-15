@@ -64,6 +64,7 @@ class PMState:
     phase: str = "created"
     direct_execution: dict = field(default_factory=dict)
     delivery: dict = field(default_factory=dict)
+    recovery: dict = field(default_factory=dict)
     persist: Callable[[str], bool] = field(default=lambda phase="": True, repr=False)
 
     def snapshot(self) -> dict:
@@ -71,8 +72,20 @@ class PMState:
         names = ("phase", "plan", "task", "subtask_outputs", "pending_subtasks", "task_station", "task_agent",
                  "execution_attempts", "execution_history", "teams", "subagents", "retry_counts", "max_retries", "terminal_failures",
                  "blocked_subtasks", "global_timeout", "subtask_timeout", "start_time", "subtask_start_times",
-                 "clarification_response", "clarification_request", "clarification_timeout", "stop_reason", "direct_execution", "delivery")
+                 "clarification_response", "clarification_request", "clarification_timeout", "stop_reason", "direct_execution", "delivery", "recovery")
         return {"format": 1, **copy.deepcopy({name: getattr(self, name) for name in names}),
                 "dispatched": sorted(self.dispatched), "cross_station_attempted": sorted(self.cross_station_attempted),
                 "local_takeover_tasks": sorted(self.local_takeover_tasks),
                 "stopped": self.stop_event.is_set(), "monitoring_ready": self.monitoring_ready.is_set()}
+
+    def restore(self, snapshot: dict) -> None:
+        """Restore durable fields into the state already shared by all PM components."""
+        for name in self.snapshot():
+            if name in ("format", "stopped", "monitoring_ready") or name not in snapshot:
+                continue
+            value = copy.deepcopy(snapshot[name])
+            setattr(self, name, set(value) if isinstance(getattr(self, name), set) else value)
+        self.stop_event.clear()
+        self.monitoring_ready.clear()
+        if self.clarification_response:
+            self.clarification_event.set()

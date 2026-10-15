@@ -424,6 +424,102 @@ def verify_recovery_assessment(page, output):
     page.evaluate('closeOverlayForce()');page.set_viewport_size({'width':1680,'height':1100})
 
 
+def verify_pm_resume(page, output):
+    """Authorize and resume a saved dependency chain through actual task APIs."""
+    import threading
+    import lan_mesh.pm_agent as pm_module
+    from lan_mesh.pm_agent import ProjectManagerAgent
+    from lan_mesh.pm_checkpoint import PMCheckpoints
+    from lan_mesh.pm_lease import lease_identity
+    from lan_mesh.pm_recovery import assess_pm_recovery
+    from lan_mesh.pm_resume import resume_pm_once
+    from lan_mesh.pm_state import PMState
+    from lan_mesh.task_resume import resume_authorization
+    task=Task(task_id='resume-browser-task',name='恢复原任务：继续未完成步骤')
+    controller.db.save_task(task)
+    controller.db.bind_task_pm(PMAgent(pm_id='resume-browser-pm',task_id=task.task_id,
+        device_id=controller.state.device_id,hostname='原节点',ip='127.0.0.1',api_port=12345))
+    task=controller.db.get_task(task.task_id)
+    path=Path(folder.name)/'resume-browser.sqlite3'
+    st=PMState();st.task=task.to_dict();st.phase='monitoring'
+    st.plan={'pattern':'orchestrator','decomposition':[{'name':'A'},{'name':'B','depends_on':['A']}]}
+    st.subtask_outputs={'A':{'summary':'原有输出 A'}}
+    PMCheckpoints(path,owner='exited-browser-process',lease=lease_identity(path)).save(
+        'resume-browser-pm',task.task_id,controller.state.device_id,{**st.snapshot(),'secretary_url':'http://browser-secretary'},0)
+    active=[None];entered=threading.Event();release=threading.Event();executed=[]
+    runtime=Mock()
+    def execute(payload):
+        executed.append(payload['name']);entered.set()
+        assert release.wait(15)
+        return {'status':'completed','output':{'summary':'B 续跑完成'}}
+    runtime.execute.side_effect=execute
+    runtime._call_llm_with_routing.return_value={'content':'恢复后的完整交付物'}
+    old_init=ProjectManagerAgent.__init__;old_post=pm_module.http_post
+    def init(self,*args,**kwargs):
+        old_init(self,*args,**kwargs)
+        self._planner.load_skill=Mock()
+        self._dispatcher.get_available_stations=lambda:[]
+        self._distribute_artifacts=Mock();self._record_task_memory=Mock();self._monitor.poll_interval=0.01
+    ProjectManagerAgent.__init__=init
+    pm_module.http_post=lambda url,**kwargs:client.post('/api/'+url.split('/api/',1)[1],json=kwargs.get('json',{}))
+    controller._local_assess_pm_recovery=lambda pm_id,task_id,**kwargs:assess_pm_recovery(
+        path,pm_id,task_id,controller.state.device_id,lambda:active[0].get_status() if active[0] else {},**kwargs)
+    controller._local_resume_pm=lambda payload:resume_pm_once(payload=payload,receipt_path=path,runtime=runtime,
+        device_id=controller.state.device_id,device_name='原节点',current=lambda:active[0],
+        assign=lambda pm:active.__setitem__(0,pm),authorization=lambda tid,rid:resume_authorization(controller,tid,rid))
+    try:
+        page.evaluate('(task)=>{allTasks=[task];showTaskDetail(task.task_id)}',task.to_dict())
+        page.locator('[data-recovery-check]').click()
+        page.wait_for_function("!document.querySelector('[data-resume-task]').hidden")
+        assert '可申请恢复' in page.locator('.task-recovery-result').inner_text()
+        endpoint='**/api/tasks/resume-browser-task/resume'
+        page.route(endpoint,lambda r:r.fulfill(status=503,json={'detail':'原节点连接中断'}),times=1)
+        page.locator('[data-resume-task]').click()
+        page.wait_for_function("document.querySelector('.task-recovery-result').textContent.includes('恢复未获确认')")
+        assert page.locator('[data-resume-task]').is_enabled() and not executed
+        held=[]
+        page.route(endpoint,lambda r:held.append(r),times=1)
+        page.locator('[data-resume-task]').click()
+        page.wait_for_function("document.querySelector('[data-resume-task]').disabled")
+        assert page.locator('[data-recovery-check]').is_disabled()
+        route=held.pop();payload=route.request.post_data_json
+        assert payload=={'expected_revision':1}
+        response=client.post('/api/tasks/resume-browser-task/resume',json=payload)
+        assert response.status_code==200 and response.json()['ok']
+        assert entered.wait(3) and executed==['B']
+        route.fulfill(status=response.status_code,json=response.json())
+        page.wait_for_function("document.querySelector('.task-recovery-result').textContent.includes('已接管原执行现场')")
+        assert page.locator('[data-resume-task]').is_hidden()
+        repeat=client.post('/api/tasks/resume-browser-task/resume',json=payload).json()
+        assert repeat['ok'] and repeat['duplicate'] and executed==['B']
+        page.screenshot(path=str(output/'pm_resume_desktop.png'),full_page=True)
+        page.set_viewport_size({'width':390,'height':844})
+        assert page.locator('#modal').evaluate('(el)=>el.scrollWidth<=el.clientWidth+1')
+        page.screenshot(path=str(output/'pm_resume_mobile.png'),full_page=True)
+        release.set()
+        active[0]._thread.join(timeout=4);active[0]._progress_thread.join(timeout=4)
+        assert not active[0].running and controller.db.get_task(task.task_id).status=='completed'
+        assert active[0]._state.start_time==st.start_time and active[0]._state.subtask_outputs['A']==st.subtask_outputs['A']
+        # A late resume response cannot replace another task's panel.
+        page.evaluate('(task)=>{allTasks=[task];showTaskDetail(task.task_id)}',task.to_dict())
+        page.route(endpoint,lambda r:held.append(r),times=1)
+        page.evaluate("()=>{const p=document.querySelector('.task-execution-check');p.querySelector('[data-resume-task]').hidden=false;resumeOriginalTask('resume-browser-task',p,1)}")
+        page.wait_for_function("document.querySelector('[data-resume-task]').disabled")
+        other=Task(task_id='resume-other-task',name='另一个任务',pm_agent_id='other')
+        page.evaluate('(task)=>{allTasks.push(task);showTaskDetail(task.task_id)}',other.to_dict())
+        held.pop().fulfill(status=200,json=repeat)
+        page.wait_for_load_state('networkidle')
+        assert page.locator('.task-recovery-result').inner_text()==''
+    finally:
+        release.set()
+        if active[0]:
+            active[0].stop()
+            for thread in (active[0]._thread,active[0]._progress_thread):
+                if thread:thread.join(timeout=4)
+        ProjectManagerAgent.__init__=old_init;pm_module.http_post=old_post
+    page.evaluate('closeOverlayForce()');page.set_viewport_size({'width':1680,'height':1100})
+
+
 def accept_all_suggestions(page):
     """Review and explicitly accept a candidate without relying on automatic writes."""
     page.locator('#project-brief-panel [data-tab="review"]').click()
@@ -939,6 +1035,7 @@ with sync_playwright() as p:
     verify_task_resubmission(page,output)
     verify_pm_checkpoint(page,output)
     verify_recovery_assessment(page,output)
+    verify_pm_resume(page,output)
     assert not errors,errors
     # UI-036: test unified editing history against isolated conversations and the real API.
     history_id=chat.create_conversation('编辑历史测试')['id']
@@ -999,3 +1096,5 @@ print("PASS: restart recovery, legacy interrupted protection, stale resubmit rej
 print("PASS: resubmission preserves inputs, lost response and repeated clicks reuse one replacement, source links, server race rejection, desktop/mobile; real API/SQLite, simulated PM")
 print("PASS: persistent PM checkpoint evidence, completed/uncertain/unstarted counts, no raw outputs, write failure and legacy missing records, desktop/mobile; real API/SQLite")
 print("PASS: recovery evidence versus saved output, original execution identity, read-only API/checkpoint, escaping, query retry and late-result isolation, desktop/mobile")
+
+print("PASS: explicit PM recovery, version-bound authorization, original outputs and deadline, retry/deduplication, actual delivery, desktop/mobile and late-response isolation; simulated executor")

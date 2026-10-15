@@ -14,14 +14,17 @@
 | pm_control.py | Apply identity-bound PM stop requests and persist the distinction between intent and acknowledgment. |
 | pm_dispatcher.py | PM 分发器 — 团队创建与子任务分发 |
 | pm_inspection.py | Read original-node PM evidence without dispatching work or changing task state. |
+| pm_lease.py | Keep a process-lifetime lock on the original local PM database before execution. |
 | pm_monitor.py | PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证 |
 | pm_planner.py | PM 规划器 — 任务分析与分解 |
 | pm_recovery.py | Read checkpoint and original execution receipts to assess recovery without running work. |
+| pm_resume.py | Resume the original PM after process exclusion and a version-bound authorization. |
 | pm_start.py | Start a preassigned PM once, after verifying its persisted task ownership. |
 | pm_state.py | PM Agent 共享状态容器 |
 | project.py | 项目管理与预算控制 — Phase 3 项目隔离核心 |
 | task.py | 任务 DAG 管理 — 子任务依赖图与拓扑排序 (增强版: 条件边 + 动态路由 + 图序列化) |
 | task_resubmission.py | Transactional task resubmission with preserved inputs and durable source provenance. |
+| task_resume.py | Persist explicit, version-bound recovery authorization on the task's original PM. |
 | task_submission.py | Shared task submission: persist PM ownership before any local or remote execution. |
 | task_templates.py | F2.4: 任务模板库 — 预置常见任务 DAG |
 <!-- /AUTO:module-list -->
@@ -190,3 +193,9 @@ PM 协调器、分发器、监控器在关键边界调用持久化：执行前�
 `pm_recovery.py` 读取当前 PM 的检查点，逐项区分已接受输出与未审阅的成功回执。本地未知执行不重做；远端按持久化地址先读 `/info` 校验设备，再按原执行编号读回执并核对五项身份。计划校验、停止/交付/时限、原任务替代关系都纳入核实；读后再次核对检查点版本和中央任务状态。
 
 网络查询有时间预算，使用 offset/expected_revision 继续分批；版本变化丢弃旧结果。结果不修改检查点、不启动PM，也不构成恢复授权。下一步是原执行退出证明、原子接管与执行恢复，不能以增加核实页面替代真正的续跑实现。
+
+## 原进程排除与续跑（iter-54）
+
+正常启动通过 pm_lease.py 持有启动数据库旁的进程生命周期独占锁，检查点保留本机身份和原路径。pm_resume.py 复核显式授权、现场和原时限；PMCheckpoints.takeover 在锁保护下按版本原子更换所有者并记录请求。同一请求只读已有接管结果，不再启动线程。
+
+PMState.restore 恢复原计划、请求编号、输出和剩余时间语义；复用已接受输出，重放已持久化成功回报到质量检查，远端未知执行仅查询原回执，未开始步骤按依赖继续。已保存聚合及交付请求复用；规划前和已返回单任务支持继续。新副作用前复核授权，停止/预算/网络异常停止调度。仅原 Linux 主机原路径且带新版锁凭据支持；暂停/取消/终态、待澄清及本地在途结果未知不直接恢复。详见 ../../pm-checkpoints.md。

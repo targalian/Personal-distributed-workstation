@@ -156,6 +156,29 @@ def build_task_routes(controller) -> APIRouter:
         except KeyError:
             raise HTTPException(status_code=404, detail="任务不存在")
 
+    @router.post("/api/tasks/{task_id}/resume")
+    async def resume_task(task_id: str, payload: dict):
+        check_secretary(controller)
+        from .task_resume import request_task_resume
+        try:
+            result = await run_in_threadpool(request_task_resume, controller, task_id, payload.get("expected_revision"))
+            return JSONResponse(result, status_code=200 if result.get("ok") else 202)
+        except KeyError:
+            raise HTTPException(404, "任务不存在")
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+
+    @router.get("/api/tasks/{task_id}/resume-authorization")
+    async def get_resume_authorization(task_id: str, request_id: str):
+        check_secretary(controller)
+        from .task_resume import resume_authorization
+        try:
+            return await run_in_threadpool(resume_authorization, controller, task_id, request_id)
+        except KeyError:
+            raise HTTPException(404, "任务不存在")
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+
     @router.delete("/api/tasks/{task_id}")
     async def delete_task(task_id: str):
         """彻底删除任务及关联 PM Agent 记录。若任务仍在运行, 先取消再删除。"""
@@ -193,7 +216,7 @@ def build_task_routes(controller) -> APIRouter:
 
     # ── Graph Engine: DAG 图结构 / Checkpoint / 断点恢复 ──
     # 注: Orchestrator 已废弃 (能力由 PM 四件套接管), 图数据一律从
-    # DB checkpoint/子任务重建; 手工编辑图与 resume 随之下线。
+    # DB checkpoint/子任务重建; 手工编辑执行图下线；resume 已改为当前 PM 的显式检查点恢复。
 
     @router.get("/api/tasks/{task_id}/graph")
     async def get_task_graph(task_id: str):

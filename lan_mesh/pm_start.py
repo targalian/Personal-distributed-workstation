@@ -6,6 +6,7 @@ from typing import Callable
 from .execution_receipts import PROCESS_OWNER, ExecutionReceipts
 from .pm_agent import ProjectManagerAgent
 from .pm_checkpoint import PMCheckpoints
+from .pm_lease import acquire_pm_lease
 
 _START_LOCK = threading.RLock()
 
@@ -43,8 +44,9 @@ def start_pm_once(*, pm_id: str, task_id: str, secretary_url: str, task_data: di
                         or authoritative.get("task_id") != task_id or authoritative.get("status") != "running"):
                     result["message"] = "任务未授权该 PM 启动，或任务已停止"
                 else:
+                    lease = acquire_pm_lease(receipt_path)
                     pm = ProjectManagerAgent(pm_id, runtime, secretary_url, device_id, device_name)
-                    pm._checkpoint_store = PMCheckpoints(receipt_path)
+                    pm._checkpoint_store = PMCheckpoints(receipt_path, lease=lease)
                     assign(pm)
                     # start_task can raise after creating a thread. Do not claim
                     # that failure proves no execution occurred.

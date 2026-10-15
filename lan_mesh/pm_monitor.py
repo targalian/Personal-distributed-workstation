@@ -374,6 +374,8 @@ class PMMonitor:
 注意: score >= 6 则 accepted=true。只有明显缺陷才判定为不通过。"""
 
         try:
+            if not self._agent.execution_allowed():
+                return {"accepted": False, "score": 0, "issues": "恢复授权失效"}
             resp = self._runtime._call_llm_with_routing(
                 verify_prompt,
                 {"_model_preference": "", "_fallback_models": [], "description": "质量验证"}
@@ -429,33 +431,37 @@ class PMMonitor:
 
         logger.info("[%s] 开始聚合 %d 个子任务结果", self._pm_id[:8], len(subtask_results))
 
-        agg_prompt = build_aggregation_prompt(task_name, task_desc, subtask_results, st.plan)
-        if not st.persist("aggregating"):
+        if not self._agent.execution_allowed():
             return
-        try:
-            resp = self._runtime._call_llm_with_routing(
-                agg_prompt,
-                {"_model_preference": "", "_fallback_models": [], "description": "结果聚合"}
-            )
-            if st.stop_event.is_set():
+        aggregated = st.subtask_outputs.get("_aggregated")
+        if not aggregated:
+            agg_prompt = build_aggregation_prompt(task_name, task_desc, subtask_results, st.plan)
+            if not st.persist("aggregating"):
                 return
-            aggregated = resp.get("content", "")
-            if (resp.get("_error") or resp.get("error") or resp.get("model") == "none"
-                    or not isinstance(aggregated, str) or not aggregated.strip()
-                    or aggregated.lstrip().startswith(("[未配置", "[LLM 调用失败", "[模型调用失败"))):
-                raise ValueError(aggregated or "模型未返回有效聚合结果")
-        except Exception as e:
-            logger.error("[%s] LLM 聚合失败: %s", self._pm_id[:8], e)
-            self._agent.report_status("failed")
-            self._agent.report_progress(0.0, "failed", f"结果聚合失败: {e}", task_name=task_name)
-            self._agent.running = False
-            return
+            try:
+                resp = self._runtime._call_llm_with_routing(
+                    agg_prompt,
+                    {"_model_preference": "", "_fallback_models": [], "description": "结果聚合"}
+                )
+                if st.stop_event.is_set():
+                    return
+                aggregated = resp.get("content", "")
+                if (resp.get("_error") or resp.get("error") or resp.get("model") == "none"
+                        or not isinstance(aggregated, str) or not aggregated.strip()
+                        or aggregated.lstrip().startswith(("[未配置", "[LLM 调用失败", "[模型调用失败"))):
+                    raise ValueError(aggregated or "模型未返回有效聚合结果")
+            except Exception as e:
+                logger.error("[%s] LLM 聚合失败: %s", self._pm_id[:8], e)
+                self._agent.report_status("failed")
+                self._agent.report_progress(0.0, "failed", f"结果聚合失败: {e}", task_name=task_name)
+                self._agent.running = False
+                return
 
-        with st.lock:
-            st.subtask_outputs["_aggregated"] = aggregated
-            if not st.persist("aggregated"):
-                return
-        logger.info("[%s] 聚合完成, 结果长度: %d 字符", self._pm_id[:8], len(aggregated))
+            with st.lock:
+                st.subtask_outputs["_aggregated"] = aggregated
+                if not st.persist("aggregated"):
+                    return
+            logger.info("[%s] 聚合完成, 结果长度: %d 字符", self._pm_id[:8], len(aggregated))
 
         # 交付闭环
         if self._agent.deliver_result(task_name, task_desc, aggregated, subtask_results):

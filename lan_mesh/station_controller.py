@@ -544,6 +544,18 @@ class StationController:
             receipt_path=self.db.path.with_name(self.db.path.stem + "-pm-starts.sqlite3"),
             current=lambda: self._local_pm_agent, assign=lambda pm: setattr(self, "_local_pm_agent", pm), lookup=lookup)
 
+    def _local_resume_pm(self, payload: dict) -> dict:
+        from .pm_resume import resume_pm_once
+        from .task_resume import resume_authorization
+        # Local Secretary lookup is used only when this node owns the task.
+        task = self.db.get_task(payload.get("task_id", "")) if self.secretary_active else None
+        authorization = (lambda task_id, request_id: resume_authorization(self, task_id, request_id)) if task else None
+        return resume_pm_once(payload=payload,
+                              receipt_path=self.db.path.with_name(self.db.path.stem + "-pm-starts.sqlite3"),
+                              runtime=self.chat_runtime, device_id=self.state.device_id, device_name=self.state.device_name,
+                              current=lambda: self._local_pm_agent, assign=lambda pm: setattr(self, "_local_pm_agent", pm),
+                              authorization=authorization)
+
     def _local_stop_pm(self, payload: dict) -> dict:
         return self._local_control_pm({**payload, "action": "cancel"})
 

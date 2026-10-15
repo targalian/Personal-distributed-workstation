@@ -359,6 +359,12 @@ class WorkerAgent:
             receipt_path=self.data_dir / "worker-pm-starts.sqlite3",
             current=lambda: self.state.pm_agent, assign=lambda pm: setattr(self.state, "pm_agent", pm), lookup=lookup)
 
+    def resume_pm(self, payload: dict) -> dict:
+        from .pm_resume import resume_pm_once
+        return resume_pm_once(payload=payload, receipt_path=self.data_dir / "worker-pm-starts.sqlite3",
+                              runtime=self.state.agent_runtime, device_id=self.state.device_id, device_name=self.state.device_name,
+                              current=lambda: self.state.pm_agent, assign=lambda pm: setattr(self.state, "pm_agent", pm))
+
     def stop_pm(self, payload: dict) -> dict:
         return self.control_pm({**payload, "action": "cancel"})
 

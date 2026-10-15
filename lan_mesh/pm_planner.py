@@ -245,6 +245,8 @@ class PMPlanner:
             self._state.direct_execution["request"] = subtask
             if self._state.stop_event.is_set() or not self._state.persist():
                 return {"status": "failed", "summary": "检查点写入失败，未执行任务"}
+        if not self._agent.execution_allowed():
+            return {"status": "failed", "summary": "恢复授权失效，未执行任务"}
         result = self._runtime.execute(subtask)
         output = result.get("output", {})
         code_content = output.get("code", output.get("summary", "完成"))

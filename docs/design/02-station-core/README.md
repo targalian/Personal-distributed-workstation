@@ -245,3 +245,7 @@ iter-46 同时隔离交付保存后的 Bot 通知异常：通知失败记录告�
 ## 恢复条件接口（iter-53）
 
 Station/Worker 新增 GET `/role/pm-recovery/{pm_id}`，Secretary 新增 GET `/api/tasks/{task_id}/recovery-check`；根据持久化归属读取原节点。任务/节点身份变化丢弃结果；已有终态、交付、停止或替代任务提示冲突。字段白名单不传原始结果。分批参数 offset/expected_revision 透传到原节点；无恢复启动副作用。
+
+## 原任务恢复授权（iter-54）
+
+新增 task_resume.py：POST `/api/tasks/{task_id}/resume` 按检查点版本事务登记 `_pm_resume`，复核原归属、停止/交付、替代任务和预算；相同版本复用请求编号。授权历史保留，普通 save_task 不覆盖该字段及 PM 归属。GET `/api/tasks/{task_id}/resume-authorization` 对每次续跑执行前的请求重新验证。Station/Worker 共用 POST `/role/resume-pm`；原秘书地址来自检查点。中央库 schema 仍为 v5。

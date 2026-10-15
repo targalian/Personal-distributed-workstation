@@ -91,6 +91,15 @@ class PMDispatcher:
             if not st.persist("dispatching"):
                 return
 
+        # Recovery retains all existing execution IDs and accepted outputs.
+        with st.lock:
+            decomposition = [sub for sub in decomposition if sub["name"] not in st.subtask_outputs
+                             and sub["name"] not in st.execution_attempts and sub["name"] not in st.dispatched]
+        if not decomposition:
+            return
+        if not self._agent.execution_allowed():
+            return
+
         # 获取可用 work_station 列表
         stations = self.get_available_stations()
         if not stations:
@@ -202,6 +211,8 @@ class PMDispatcher:
 
     def _begin_attempt(self, name: str, task: dict, agent_id: str, station: dict) -> dict | None:
         st = self._state
+        if not self._agent.execution_allowed():
+            return None
         with st.lock:
             current = st.execution_attempts.get(name)
             if st.stop_event.is_set() or name in st.subtask_outputs:
@@ -240,6 +251,8 @@ class PMDispatcher:
             if self._state.stop_event.is_set() or not self._state.persist():
                 return
         try:
+            if not self._agent.execution_allowed():
+                return
             response = requests.post(
                 f"http://{station.get('ip', '')}:{station.get('api_port', 0)}/tasks/execute",
                 json=payload, headers=auth_headers(), timeout=15)
@@ -285,10 +298,19 @@ class PMDispatcher:
             if st.stop_event.is_set():
                 return
             station = attempt["station"]
+            host = station.get("ip", "")
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            base = f"http://{host}:{station.get('api_port', 0)}"
             try:
+                if st.recovery:
+                    info = requests.get(base + "/info",
+                                        headers=auth_headers(), timeout=3, allow_redirects=False)
+                    if info.status_code != 200 or info.json().get("device_id") != station.get("device_id"):
+                        continue
                 response = requests.get(
-                    f"http://{station.get('ip', '')}:{station.get('api_port', 0)}/tasks/executions/{attempt['subtask_id']}",
-                    headers=auth_headers(), timeout=3)
+                    f"{base}/tasks/executions/{attempt['subtask_id']}",
+                    headers=auth_headers(), timeout=3, allow_redirects=False)
                 if response.status_code == 200:
                     self._receive_receipt(attempt, response.json())
             except Exception as exc:
@@ -444,6 +466,8 @@ class PMDispatcher:
         logger.info("[%s] 本地执行子任务: %s (skill=%s)",
                    self._pm_id[:8], sub_name, sub.get("skill", ""))
         try:
+            if not self._agent.execution_allowed():
+                return
             result = self._runtime.execute(subtask)
         except Exception as exc:
             result = {"status": "failed", "error": str(exc), "output": {}}
