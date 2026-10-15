@@ -1,7 +1,7 @@
 {
-  "version": "0.34.6",
-  "commit": "b719feb",
+  "version": "0.34.7",
+  "commit": "c079bef",
   "released_at": "2026-10-15",
-  "note": "Bind task ownership before PM launch; unify submission; persist startup receipts; preserve fast terminal states and uncertain host outcomes",
+  "note": "离线备份与校验、新目录恢复；保留需求历史、交付验收及执行启动回执；411项单测通过，真实模型与多机验收待完成",
   "upgrade_hint": "无在途任务时升级所有参与节点：git pull && pip install -r requirements.txt 后重启；旧异步节点不支持执行回执，已有在途结果需先核实"
 }
