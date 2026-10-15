@@ -1,7 +1,7 @@
 {
-  "version": "0.34.0",
-  "commit": "62e3066",
+  "version": "0.34.1",
+  "commit": "3dc2112",
   "released_at": "2026-10-15",
-  "note": "Confirm saved project brief revisions before dispatch; preserve content snapshots and task references; show delivery and acceptance status",
+  "note": "Reject invalid aggregation output; require matching delivery acknowledgement before completion; isolate child progress from parent outcomes",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }
