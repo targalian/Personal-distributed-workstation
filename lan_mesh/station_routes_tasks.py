@@ -109,6 +109,15 @@ def build_task_routes(controller) -> APIRouter:
             return result
         raise HTTPException(status_code=409, detail=result.get("message", "取消失败"))
 
+    @router.get("/api/tasks/{task_id}/execution-check")
+    async def inspect_task_execution(task_id: str):
+        check_secretary(controller)
+        from .pm_inspection import inspect_task_pm
+        try:
+            return await run_in_threadpool(inspect_task_pm, controller, task_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
     @router.post("/api/tasks/{task_id}/pause")
     async def pause_task(task_id: str):
         """暂停指定任务及其 PM Agent。"""

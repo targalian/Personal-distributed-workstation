@@ -405,6 +405,11 @@ class WorkerAgent:
         self.state.pm_agent.receive_input(input_data)
         return {"ok": True, "pm_id": self.state.pm_agent.pm_id}
 
+    def inspect_pm_start(self, pm_id: str, task_id: str) -> dict:
+        from .pm_inspection import inspect_pm_start
+        return inspect_pm_start(self.data_dir / "worker-pm-starts.sqlite3", pm_id,
+                                task_id, self.state.device_id, self.get_pm_status())
+
     def get_pm_status(self) -> dict:
         """查询本 Worker 上的 PM Agent 运行状态。"""
         if not self.state.pm_agent:

@@ -6,6 +6,8 @@ A distributed personal AI workstation — organizes multiple heterogeneous hosts
 
 Offline backup and recovery: see [the backup guide](docs/backup-restore.md) for `scripts/backup_workstation.py create`, `verify`, and `restore`. Backups include task data, conversations, project description history and execution/startup receipts; restore first into a new directory for verification.
 
+Task execution uncertainty: see [the recovery guide](docs/task-recovery.md) for original-node inspection and next steps after disconnects or restarts.
+
 ## Project Structure
 
 ```

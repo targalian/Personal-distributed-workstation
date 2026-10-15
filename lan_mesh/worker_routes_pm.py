@@ -80,6 +80,12 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
             raise HTTPException(status_code=503, detail="角色管理未初始化")
         return role_manager.stop_pm()
 
+    @router.get("/role/pm-starts/{pm_id}")
+    async def inspect_pm_start(pm_id: str, task_id: str):
+        if not role_manager:
+            raise HTTPException(status_code=503, detail="角色管理未初始化")
+        return await run_in_threadpool(role_manager.inspect_pm_start, pm_id, task_id)
+
     @router.get("/role/pm-status")
     async def pm_status():
         """查询本 Worker 上的 PM Agent 运行状态。"""

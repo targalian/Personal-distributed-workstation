@@ -11,6 +11,7 @@
 | orchestrator.py | 任务编排引擎 — 已废弃, 降级为工具库 (iter-30 收敛裁定) |
 | pm_agent.py | PM Agent 协调器/门面 — 持有 Planner/Dispatcher/Monitor, 对外暴露统一接口。 |
 | pm_dispatcher.py | PM 分发器 — 团队创建与子任务分发 |
+| pm_inspection.py | Read original-node PM evidence without dispatching work or changing task state. |
 | pm_monitor.py | PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证 |
 | pm_planner.py | PM 规划器 — 任务分析与分解 |
 | pm_start.py | Start a preassigned PM once, after verifying its persisted task ownership. |
@@ -145,3 +146,9 @@ Station 不再将结果投递给可能无关的本机 PM，执行端先持久化
 掉线不证明执行结束：孤立 PM 保留任务归属、标记 unknown，不清空 PM、不重新派发。已完成、失败、暂停、取消任务不受掉线诊断覆盖。没有增加 PM 重启续跑、远程取消确认或工具副作用回滚；启动之后但进度尚未上报时的崩溃仍需核实。自动队列只接管未绑定的 pending 任务。
 
 启动回执库：Station 主库旁 `<主库名>-pm-starts.sqlite3`，Worker 为 `~/.lan_mesh/worker-pm-starts.sqlite3`。备份恢复应保留这些记录，不可通过删库强行重试。升级须在无在途任务时进行，新启动协议要求执行节点支持预分配 PM 和任务归属校验。
+
+## iter-48：原节点执行核实
+
+`pm_inspection.py` 读取持久化任务/PM 归属并查询原节点。`inspect_pm_start` 以 SQLite mode=ro 读取启动回执，结合当前 PM 的身份及 running 标志区分运行、停止、历史记录、启动拒绝和无记录；缺失数据库不创建。旧成功启动回执不能证明进程仍运行或任务完成。
+
+Secretary 只发一次带认证的 GET（5 秒超时，禁止重定向），校验节点/PM/任务/格式；任务在等待期间删除、换归属或改变状态时返回 changed。查询不依赖内存 `_pm_worker_map`，不写任务、回执或验收，不触发重派。不实现检查点恢复或强制停止。操作说明见 ../../task-recovery.md。

@@ -1026,7 +1026,7 @@ function renderTasks(){
     const hasDelivery=t.output_data&&t.output_data._delivery;
     const deliveryBadge=hasDelivery?`<span class="badge" style="background:${t.output_data._delivery.accepted===true?'var(--green)':t.output_data._delivery.accepted===false?'#e5533c':'var(--yellow)'};color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">${t.output_data._delivery.accepted===true?'✅ 已验收':t.output_data._delivery.accepted===false?'❌ 已退回':'📦 待验收'}</span>`:'';
     return `<div class="card task-card" onclick="toggleTaskExpand(this)">
-      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span>${deliveryBadge}</div></div>
+      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span>${taskExecutionIssue(t)&&t.status==='running'?'<span class="badge" style="color:var(--yellow)">结果待核实</span>':''}${deliveryBadge}</div></div>
       <div class="card-meta">${esc(t.description||'-')}<br>📊 ${done}/${sc} 子任务 (${pct}%) ${projName?'| 📁 '+esc(projName):''}${pmInfo}</div>
       <div class="pbar"><div class="pfill ${pct>=100?'low':'mid'}" style="width:${pct}%"></div></div>
       <div class="task-expand">${subRows||'<div class="subtask-row" style="color:var(--dim)">无子任务</div>'}
@@ -1042,6 +1042,39 @@ function openDagForTask(taskId){
   sel.value=taskId;
   loadDAGFromSelect();
 }
+function taskExecutionIssue(task){
+  const output=task.output_data||{};
+  return [output._pm_execution,output._pm_start].find(item=>item&&item.state==='unknown')||null;
+}
+function taskExecutionPanel(task){
+  const issue=taskExecutionIssue(task);
+  if(!task.pm_agent_id&&!issue)return '';
+  return `<div class="modal-sec task-execution-check" style="border:1px solid var(--yellow);border-radius:8px;padding:12px;overflow-wrap:anywhere">
+    <h3>${issue?'执行结果待核实':'执行核实'}</h3>
+    ${issue?`<p class="task-step-error">${esc(issue.message||'尚未收到明确执行结果')}</p>`:''}
+    <p style="font-size:13px">按任务归属查询原节点，不会重启或重派任务。节点不可达、记录缺失或 PM 停止，都不代表外部工具没有执行。</p>
+    <button class="btn sm" data-execution-check>核实原节点</button>
+    <div class="task-execution-result" role="status" aria-live="polite" style="margin-top:10px;font-size:13px;white-space:pre-wrap"></div>
+  </div>`;
+}
+async function checkTaskExecution(taskId, panel){
+  const button=panel.querySelector('[data-execution-check]');
+  const output=panel.querySelector('.task-execution-result');
+  if(button.disabled)return;
+  button.disabled=true;button.textContent='核实中…';output.textContent='正在查询原节点，请稍候。';
+  try{
+    const response=await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/execution-check`);
+    const data=await response.json();
+    if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'查询失败，请稍后重试');
+    if(data.task_id!==taskId)throw new Error('查询返回了其他任务，请刷新后重试');
+    if(!panel.isConnected)return;
+    const node=data.node;
+    output.textContent=[data.message||'结果待核实',node?`原节点：${node.name||node.device_id} (${node.ip}:${node.port})`:'',
+      `核实时间：${data.checked_at||'未知'}`,data.next_action||'',
+      '本次只读取节点证据；任务状态与验收结论保持原记录。'].filter(Boolean).join('\n');
+  }catch(error){if(panel.isConnected)output.textContent='核实失败：'+error.message+'。请检查连接后重试。';}
+  finally{if(panel.isConnected){button.disabled=false;button.textContent='再次核实原节点';}}
+}
 async function showTaskDetail(id){
   const t=allTasks.find(x=>x.task_id===id);if(!t)return;
   const stepLabels={pending:'等待执行',assigned:'已分配',running:'执行中',in_progress:'执行中',completed:'已完成',failed:'失败',blocked:'已阻塞',retrying:'重试中'};
@@ -1053,6 +1086,7 @@ async function showTaskDetail(id){
   document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>${esc(t.name)}</h2><p style="color:var(--dim);font-size:13px">${t.status} · ${fmtTime(t.created_at)}${t.completed_at?' → '+fmtTime(t.completed_at):''}</p>
   <div class="modal-sec"><h3>描述</h3><p style="font-size:14px">${esc(t.description||'-')}</p></div>
   ${deliverySec}
+  ${taskExecutionPanel(t)}
   <div class="modal-sec"><h3>子任务 (${(t.subtasks||[]).length})</h3>${steps||'<p style="color:var(--dim)">无子任务</p>'}</div>
   <div class="modal-sec"><h3>输出结果</h3>${out}</div>
   <div style="margin-top:18px;display:flex;gap:10px;justify-content:flex-end">
@@ -1060,6 +1094,8 @@ async function showTaskDetail(id){
     <button class="btn sm" onclick="closeOverlayForce()">关闭</button>
     <button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="deleteTask('${t.task_id}','${escJs(t.name||'')}')">🗑️ 删除任务</button>
   </div>`;
+  const checkPanel=document.querySelector('#modal .task-execution-check');
+  if(checkPanel)checkPanel.querySelector('[data-execution-check]').addEventListener('click',()=>checkTaskExecution(id,checkPanel));
   document.getElementById('overlay').classList.add('show');
 }
 async function deleteTask(taskId, name){
@@ -1090,7 +1126,8 @@ async function submitTask(){
     const r=await apiFetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:desc,project_id:proj})});
     if(r.status===402){const d=await r.json();showToast('预算超支: '+d.detail,'err');return;}
     const t=await r.json();document.getElementById('task-name').value='';document.getElementById('task-desc').value='';refreshTasks();
-    if(t.pm_agent_id){showToast(`✅ 任务已提交，PM: ${t.pm_agent_id.slice(0,12)}`,'ok');}
+    if(taskExecutionIssue(t)){showToast('任务已登记，启动结果待核实；请打开任务详情核实原节点','info');}
+    else if(t.pm_agent_id){showToast(`✅ 任务已提交，PM: ${t.pm_agent_id.slice(0,12)}`,'ok');}
     else if(t.status==='failed'){showToast(`❌ 任务提交失败: ${(t.output_data||{}).error||'未知错误'}`,'err');}
     else{showToast('✅ 任务已提交: '+t.task_id.slice(0,8),'ok');}
   }catch(e){showToast('提交失败: '+e.message,'err');}

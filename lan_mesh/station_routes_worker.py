@@ -97,6 +97,10 @@ def build_worker_routes(controller) -> APIRouter:
     async def local_pause_pm():
         return controller._local_pause_pm()
 
+    @router.get("/role/pm-starts/{pm_id}")
+    async def inspect_pm_start(pm_id: str, task_id: str):
+        return await run_in_threadpool(controller._local_inspect_pm_start, pm_id, task_id)
+
     @router.get("/role/pm-status")
     async def local_pm_status():
         return controller._local_pm_status()

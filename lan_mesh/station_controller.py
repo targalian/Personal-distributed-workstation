@@ -608,6 +608,12 @@ class StationController:
         except Exception as e:
             logger.debug("方案C 自动绑定 PM 线程失败 (non-critical): %s", e)
 
+    def _local_inspect_pm_start(self, pm_id: str, task_id: str) -> dict:
+        from .pm_inspection import inspect_pm_start
+        return inspect_pm_start(
+            self.db.path.with_name(self.db.path.stem + "-pm-starts.sqlite3"),
+            pm_id, task_id, self.state.device_id, self._local_pm_status())
+
     def _local_pm_status(self) -> dict:
         if not self._local_pm_agent:
             return {"running": False}

@@ -24,7 +24,7 @@ from lan_mesh.station_routes_briefs import build_brief_routes
 from lan_mesh.station_routes_chat import build_chat_routes
 from lan_mesh.station_routes_tasks import build_task_routes
 from lan_mesh.database import Database
-from lan_mesh.protocol import Task
+from lan_mesh.protocol import PMAgent, Task
 from tests.test_project_brief import document
 
 root=PROJECT_ROOT
@@ -51,6 +51,65 @@ function showToast(msg){window.lastToast=msg}
 document.querySelectorAll('.panel').forEach(p=>p.style.display=p.id==='panel-chat'?'block':'none');
 </script><script src="/static/project-brief.js"></script>''')
 errors=[]
+
+
+def verify_execution_inspection(page, output):
+    """Click the actual task UI against the inspection API and temporary startup DB."""
+    from lan_mesh.execution_receipts import ExecutionReceipts
+    from lan_mesh.pm_inspection import inspect_pm_start
+    controller.state.device_id='browser-node'
+    task=Task(task_id='inspection-task',name='执行结果待核实演示')
+    controller.db.save_task(task)
+    controller.db.bind_task_pm(PMAgent(pm_id='inspection-pm',task_id=task.task_id,
+        device_id='browser-node',hostname='<img src=x onerror=alert(1)>原节点',ip='127.0.0.1',api_port=12345,status='starting'))
+    controller.db.note_pm_start_issue('inspection-pm','节点掉线 <img src=x onerror=alert(1)>；请核实执行结果')
+    path=Path(folder.name)/'browser-starts.sqlite3'
+    store=ExecutionReceipts(path,owner='old-browser-process')
+    store.claim({'subtask_id':'inspection-pm','pm_id':'inspection-pm','parent_task_id':task.task_id})
+    store.finish('inspection-pm',{'status':'completed','output':{'ok':True}})
+    live={}
+    controller._local_inspect_pm_start=lambda pm_id,task_id: inspect_pm_start(path,pm_id,task_id,'browser-node',live)
+    snapshot=controller.db.get_task(task.task_id).to_dict()
+    page.evaluate('(task)=>{allTasks=[task];renderTasks();showTaskDetail(task.task_id)}',snapshot)
+    assert '结果待核实' in page.locator('#task-grid').inner_text()
+    assert '执行结果待核实' in page.locator('.task-execution-check').inner_text()
+    page.locator('[data-execution-check]').click()
+    page.wait_for_function("document.querySelector('.task-execution-result').textContent.includes('原节点有启动记录')")
+    assert '不支持 PM 重启续跑' in page.locator('.task-execution-result').inner_text()
+    assert page.locator('#modal img').count()==0
+    page.screenshot(path=str(output/'task_inspection_desktop.png'),full_page=True)
+    live.update(pm_id='inspection-pm',task_id=task.task_id,device_id='browser-node',running=True)
+    page.locator('[data-execution-check]').click()
+    page.wait_for_function("document.querySelector('.task-execution-result').textContent.includes('仍在运行')")
+    live['running']=False
+    page.locator('[data-execution-check]').click()
+    page.wait_for_function("document.querySelector('.task-execution-result').textContent.includes('PM 已停止')")
+    page.set_viewport_size({'width':390,'height':844})
+    page.locator('[data-execution-check]').scroll_into_view_if_needed()
+    assert page.locator('#modal').evaluate('(el)=>el.scrollWidth<=el.clientWidth+1')
+    page.screenshot(path=str(output/'task_inspection_mobile.png'),full_page=True)
+    # Server errors stay visible and permit another query.
+    endpoint='**/api/tasks/inspection-task/execution-check'
+    page.route(endpoint,lambda r:r.fulfill(status=503,json={'detail':'暂时无法连接'}),times=1)
+    page.locator('[data-execution-check]').click()
+    page.wait_for_function("document.querySelector('.task-execution-result').textContent.includes('核实失败')")
+    assert page.locator('[data-execution-check]').is_enabled()
+    # A slow result cannot modify a different task opened while it was in flight.
+    held=[]
+    page.route(endpoint,lambda r:held.append(r),times=1)
+    page.locator('[data-execution-check]').click()
+    page.wait_for_function("document.querySelector('[data-execution-check]').disabled")
+    assert held
+    other_task=Task(task_id='different-inspection-task',name='另一项任务',pm_agent_id='different-pm')
+    page.evaluate('(task)=>{allTasks.push(task);showTaskDetail(task.task_id)}',other_task.to_dict())
+    response=client.get('/api/tasks/inspection-task/execution-check')
+    held.pop().fulfill(status=response.status_code,json=response.json())
+    page.wait_for_load_state('networkidle')
+    assert page.locator('.task-execution-result').inner_text()==''
+    assert page.locator('[data-execution-check]').is_enabled()
+    assert controller.db.get_task(task.task_id).to_dict()==snapshot
+    page.evaluate('closeOverlayForce()')
+    page.set_viewport_size({'width':1680,'height':1100})
 
 
 def accept_all_suggestions(page):
@@ -562,6 +621,8 @@ with sync_playwright() as p:
     page.evaluate('closeOverlayForce()')
     page.set_viewport_size({'width':1680,'height':1100})
     assert not errors,errors
+    verify_execution_inspection(page,output)
+    assert not errors,errors
     # UI-036: test unified editing history against isolated conversations and the real API.
     history_id=chat.create_conversation('编辑历史测试')['id']
     untouched_id=chat.create_conversation('无编辑历史')['id']
@@ -612,3 +673,5 @@ print('PASS: AI review, selective adoption, saved document protection, proposal 
 print('PASS: revision history, persisted snapshots, comparison, restore as new version, dirty draft protection, concurrent save rejection, reload and desktop/mobile history; zero page errors')
 
 print('PASS: confirmed handoff, deduplication, frozen revision, task/delivery/acceptance APIs, dirty and stale guards, persistence, missing task, escaping, conversation isolation, desktop/mobile; simulated execution')
+
+print('PASS: original-node inspection, unknown/running/inactive evidence, retry after error, stale response isolation, read-only task state, escaped output and desktop/mobile; temporary SQLite and simulated PM state')

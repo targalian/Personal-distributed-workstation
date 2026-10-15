@@ -28,6 +28,7 @@
 | tests/test_execution_receipts.py | Verify durable execution claims, restart ambiguity and Station/Worker HTTP receipts. |
 | tests/test_local_checks.py | Verify local-loop failure propagation, environment isolation and offline reports. |
 | tests/test_pm_delivery.py | Delivery outcomes must reflect persisted acknowledgements, not child progress or model errors. |
+| tests/test_pm_inspection.py | Verify original-node inspection survives restart and never redispatches or rewrites results. |
 | tests/test_pm_lifecycle.py | Exercise PM worker and monitor threads through completion and cooperative stop. |
 | tests/test_pm_start.py | Verify task/PM registration precedes execution and startup retries never create another PM. |
 | tests/test_pm_transport.py | Exercise lost dispatch responses, receipt polling and concurrent stale callbacks. |
@@ -128,3 +129,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 报告默认写入 `.lan_mesh/local-checks.json`（不入库），含 UTC 时间、解释器、检查命令、结果、耗时及输出。该命令不自动修改开发迭代状态或在线验证 CSV；开发者根据证据单独记录完成项。在线模型、跨主机联调和真实浏览器验收仍须分别执行。
 
 本轮修复历史 `loop_status.json` 备注未转义引号导致的解析失败，并将状态保存时间改为带真实 UTC 时区的 ISO 时间。启动回归测试用临时项目及可控子进程覆盖依赖失败、路径空格、参数透传、异常退出和信号清理；真实服务启动另做冒烟验证。
+
+## iter-48 验证
+
+`tests/test_pm_inspection.py` 覆盖只读启动库、历史进程、当前 PM 身份、缺库不创建、重复查询不更改验收、Secretary 激活检查、远端版本/认证/重定向/错误响应及查询期间任务变化；真实本机 HTTP 联验 Station 与 Worker。浏览器脚本增加未知任务提示、核实按钮、失败重试、晚到结果隔离及桌面/手机截图，登记 UI-041。
