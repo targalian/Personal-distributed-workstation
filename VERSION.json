@@ -1,7 +1,7 @@
 {
-  "version": "0.34.5",
-  "commit": "f9ea78c",
+  "version": "0.34.6",
+  "commit": "b719feb",
   "released_at": "2026-10-15",
-  "note": "Persist execution receipts; poll the owning station after uncertain dispatch; deduplicate attempt callbacks and reject stale results",
+  "note": "Bind task ownership before PM launch; unify submission; persist startup receipts; preserve fast terminal states and uncertain host outcomes",
   "upgrade_hint": "无在途任务时升级所有参与节点：git pull && pip install -r requirements.txt 后重启；旧异步节点不支持执行回执，已有在途结果需先核实"
 }
