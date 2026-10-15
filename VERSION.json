@@ -1,7 +1,7 @@
 {
-  "version": "0.34.1",
-  "commit": "3dc2112",
+  "version": "0.34.2",
+  "commit": "c1128e2",
   "released_at": "2026-10-15",
-  "note": "Reject invalid aggregation output; require matching delivery acknowledgement before completion; isolate child progress from parent outcomes",
+  "note": "Keep PM monitoring active after dispatch; execute local dependencies in order; wake stopped tasks and reject late results",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }
