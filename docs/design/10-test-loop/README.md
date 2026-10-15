@@ -25,6 +25,7 @@
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_local_checks.py | Verify local-loop failure propagation, environment isolation and offline reports. |
 | tests/test_pm_delivery.py | Delivery outcomes must reflect persisted acknowledgements, not child progress or model errors. |
+| tests/test_pm_lifecycle.py | Exercise PM worker and monitor threads through completion and cooperative stop. |
 | tests/test_project_brief.py | Artifact correctness: graph integrity, concurrency, isolation, and chat integration. |
 | tests/test_startup.py | Launch the shell wrapper in temporary projects to verify errors, arguments and cleanup. |
 <!-- /AUTO:module-list -->
@@ -87,6 +88,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-15 | iter-42 | 新增实际 PM 工作/监控线程回归：依赖回退、晚到结果、停止、澄清唤醒、全局超时；API 验证终态保护 |
 | 2026-10-15 | iter-41 | 新增模型错误、HTTP/回执/写盘失败及真实任务库状态的交付验证，覆盖单任务与聚合路径 |
 | 2026-10-14 | iter-40 | 新增下发一致性、并发、磁盘异常及会话保护测试；UI-039 覆盖真实任务/交付接口和模拟执行 |
 | 2026-10-14 | iter-39 | 新增 5 项持久化历史后端测试及 UI-038 浏览器比较/恢复/冲突回归 |

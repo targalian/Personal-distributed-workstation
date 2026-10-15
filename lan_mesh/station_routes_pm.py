@@ -78,6 +78,10 @@ def build_pm_routes(controller) -> APIRouter:
             raise HTTPException(status_code=404, detail="PM Agent 不存在")
 
         status = payload.get("status", "")
+        task = db.get_task(pm.task_id) if pm.task_id else None
+        protected_status = task.status if task and task.status in ("cancelled", "paused") else pm.status
+        if protected_status in ("cancelled", "paused") and status != protected_status:
+            return {"ok": True, "pm_id": pm_id, "status": protected_status, "ignored": True}
         team_structure = payload.get("team_structure")
         task_list = payload.get("task_list")
         collaboration_mode = payload.get("collaboration_mode")

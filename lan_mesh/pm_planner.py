@@ -279,7 +279,8 @@ class PMPlanner:
 
             response = self._agent.request_clarification(question=question, timeout=120.0)
 
-            if not response or response.get("timed_out"):
+            if (not response or response.get("timed_out") or response.get("cancelled")
+                    or response.get("paused") or response.get("stopped")):
                 logger.info("[%s] 细化轮次%d 未收到回复, 继续执行", self._pm_id[:8], round_num + 1)
                 break
 

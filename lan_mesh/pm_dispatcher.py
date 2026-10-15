@@ -57,6 +57,8 @@ class PMDispatcher:
         decomposition = plan.get("decomposition", [])
         pattern = plan.get("pattern", "orchestrator")
         st = self._state
+        if st.stop_event.is_set():
+            return
 
         st.plan = plan
         st.task = task
@@ -65,8 +67,10 @@ class PMDispatcher:
         stations = self.get_available_stations()
         if not stations:
             logger.info("[%s] 无可用 work_station, 本地执行全部子任务", self._pm_id[:8])
-            for sub in decomposition:
-                self.execute_subtask_locally(task, sub)
+            with st.lock:
+                for sub in decomposition:
+                    st.pending_subtasks[sub["name"]] = {"sub": sub, "station": {}, "agent_info": {}}
+            self.try_dispatch_pending()
             return
 
         # 创建团队
@@ -87,6 +91,8 @@ class PMDispatcher:
         # 为每个子任务选择 work_station 并创建子 Agent
         station_idx = 0
         for sub in decomposition:
+            if st.stop_event.is_set():
+                return
             station = stations[station_idx % len(stations)]
             station_idx += 1
 
@@ -110,7 +116,8 @@ class PMDispatcher:
                 # 修复: 远程创建失败时回退到本地执行
                 logger.warning("[%s] 子任务 '%s' 远程创建子Agent失败, 回退本地执行",
                               self._pm_id[:8], sub_name)
-                self.execute_subtask_locally(task, sub)
+                with st.lock:
+                    st.pending_subtasks[sub_name] = {"sub": sub, "station": {}, "agent_info": {}}
                 continue
 
             if agent_info:
@@ -158,6 +165,7 @@ class PMDispatcher:
         st.teams[team_id] = team
         self._agent.report_team(team)
         self._agent.report_status("monitoring", team_structure=team)
+        self.try_dispatch_pending()
 
     # ── 分发子任务 ────────────────────────────────────────────────
 
@@ -169,6 +177,11 @@ class PMDispatcher:
         完成后通过 receive_subtask_result 回调 PM Monitor。
         分发失败时自动回退到本地执行。
         """
+        if self._state.stop_event.is_set():
+            return
+        if not station:
+            self.execute_subtask_locally(task, sub)
+            return
         ip = station.get("ip", "")
         port = station.get("api_port", 0)
         sub_name = sub.get("name", "")
@@ -230,6 +243,8 @@ class PMDispatcher:
     def try_dispatch_pending(self):
         """检查 pending 子任务, 如果所有依赖都已完成则注入结果并分发。"""
         st = self._state
+        if st.stop_event.is_set():
+            return
         with st.lock:
             if not st.pending_subtasks:
                 return
@@ -337,7 +352,17 @@ class PMDispatcher:
 
         修复: 执行完成后注入 Monitor 进度追踪, 触发依赖链分发和结果聚合。
         """
+        st = self._state
+        if st.stop_event.is_set():
+            return
         sub_name = sub.get("name", "")
+        agent_id = f"local-{self._pm_id}-{sub_name}"
+        with st.lock:
+            member = next((m for m in st.subagents.values() if m.get("current_task") == sub_name), None)
+            if member is None:
+                member = {"current_task": sub_name}
+                st.subagents[agent_id] = member
+            member.update(agent_id=agent_id, status="executing")
         sub_desc = sub.get("description", sub_name)
         input_data = dict(task.get("input_data", {}))
         if not input_data.get("requirement") and not input_data.get("description"):
@@ -356,6 +381,8 @@ class PMDispatcher:
         logger.info("[%s] 本地执行子任务: %s (skill=%s)",
                    self._pm_id[:8], sub_name, sub.get("skill", ""))
         result = self._runtime.execute(subtask)
+        if st.stop_event.is_set():
+            return
         status = "completed" if result.get("status") == "completed" else "failed"
         output = result.get("output", {})
 
@@ -364,7 +391,7 @@ class PMDispatcher:
             task_name=sub_name,
             status=status,
             output_data=output if isinstance(output, dict) else {"result": str(output)},
-            agent_id=f"local-{self._pm_id[:8]}",
+            agent_id=agent_id,
         )
 
         self._agent.report_progress(

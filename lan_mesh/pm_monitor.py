@@ -45,6 +45,7 @@ class PMMonitor:
         self._agent = agent
         self._dispatcher = dispatcher
         self._local_takeover_tasks = set()  # 防重入: PM本地接管中的子任务
+        self.poll_interval = 10.0
 
     # ── 进度轮询 ──────────────────────────────────────────────────
 
@@ -54,25 +55,36 @@ class PMMonitor:
         st = self._state
 
         while self._agent.running:
-            time.sleep(10)
+            if st.stop_event.wait(self.poll_interval) or not self._agent.running:
+                break
 
             # F1.3: 全局超时检测
             if self.is_global_timed_out():
                 logger.error("[%s] 全局任务超时 (%.0fs), 强制终止",
                             self._pm_id[:8], st.global_timeout)
                 self._agent.report_progress(0.0, "failed", f"全局超时 ({st.global_timeout}s)")
+                st.stop_reason = "failed"
+                st.stop_event.set()
+                st.clarification_event.set()
+                self._agent.report_status("failed")
                 self._agent.running = False
                 break
+
+            if not st.monitoring_ready.is_set():
+                continue
 
             # F1.3: 子任务超时检测
             self.check_subtask_timeouts()
 
             with st.lock:
-                if not st.subagents:
+                names = {sub.get("name", "") for sub in st.plan.get("decomposition", [])}
+                if not names:
                     continue
-                total = len(st.subagents)
-                completed = sum(1 for m in st.subagents.values() if m.get("status") == "completed")
-                failed = sum(1 for m in st.subagents.values() if m.get("status") == "failed")
+                total = len(names)
+                completed = sum(name in st.subtask_outputs for name in names)
+                failed = sum(name not in st.subtask_outputs and any(
+                    m.get("current_task") == name and m.get("status") == "failed"
+                    for m in st.subagents.values()) for name in names)
                 has_pending = bool(st.pending_subtasks)
 
             overall = completed / total if total > 0 else 0.0
@@ -95,6 +107,8 @@ class PMMonitor:
         优化5: 当子任务失败时, 触发接管策略。
         """
         st = self._state
+        if st.stop_event.is_set():
+            return
         reporter_id = report.get("reporter_id", "")
         task_name = report.get("task_name", "")
         status = report.get("status", "in_progress")
@@ -117,9 +131,6 @@ class PMMonitor:
             output = report.get("output", report.get("message", ""))
             # 本地接管成功的任务, 移出集合, 防止同名子任务后续失败被误判为已接管
             self._local_takeover_tasks.discard(task_name)
-            with st.lock:
-                st.subtask_outputs[task_name] = output
-
             # 优化6: 验证自检结果
             self_check = report.get("self_check", {})
             if not self_check:
@@ -134,6 +145,8 @@ class PMMonitor:
 
             # F2.5: 质量验证
             quality = self._verify_output_quality(task_name, output)
+            if st.stop_event.is_set():
+                return
             if quality and not quality.get("accepted", True):
                 logger.warning("[%s] 子任务 '%s' 质量未达标 (score=%.1f): %s",
                               self._pm_id[:8], task_name, quality.get("score", 0),
@@ -146,6 +159,9 @@ class PMMonitor:
                     self.handle_subagent_failure(task_name, f"质量验证未通过: {quality.get('issues', '')}")
                     return
 
+            with st.lock:
+                st.subtask_outputs[task_name] = output
+                st.subtask_start_times.pop(task_name, None)
             self._dispatcher.try_dispatch_pending()
 
         # 优化5: 任务失败时触发接管策略 (跳过已在本地接管中的任务, 防止无限递归)
@@ -205,6 +221,8 @@ class PMMonitor:
     def handle_subagent_failure(self, task_name: str, error_msg: str):
         """三级策略: 同站重试 → 换站重试 → PM 本地接管。"""
         st = self._state
+        if st.stop_event.is_set():
+            return
         with st.lock:
             retry_count = st.retry_counts.get(task_name, 0)
 
@@ -330,7 +348,7 @@ class PMMonitor:
     def aggregate_results(self):
         """收集所有子任务结果, 调用 LLM 聚合为最终交付物。"""
         st = self._state
-        if not st.plan or not st.task:
+        if st.stop_event.is_set() or not st.plan or not st.task:
             return
 
         decomposition = st.plan.get("decomposition", [])
@@ -361,6 +379,8 @@ class PMMonitor:
                 agg_prompt,
                 {"_model_preference": "", "_fallback_models": [], "description": "结果聚合"}
             )
+            if st.stop_event.is_set():
+                return
             aggregated = resp.get("content", "")
             if (resp.get("_error") or resp.get("error") or resp.get("model") == "none"
                     or not isinstance(aggregated, str) or not aggregated.strip()

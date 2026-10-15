@@ -30,6 +30,7 @@ class ProjectManagerAgent:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._progress_thread: Optional[threading.Thread] = None
+        self._started = False
 
         # ── 共享状态 ──
         self._state = PMState()
@@ -53,7 +54,12 @@ class ProjectManagerAgent:
 
     def start_task(self, task: dict):
         """接管任务，开始规划与执行 (异步)。"""
-        self._running = True
+        with self._state.lock:
+            if self._started or self._state.stop_event.is_set():
+                raise RuntimeError("PM 实例已接管过任务，请创建新实例")
+            self._started = True
+            self._state.task = task
+            self._running = True
 
         # 加载 multi-agent-architect skill
         self._planner.load_skill()
@@ -71,7 +77,15 @@ class ProjectManagerAgent:
         self._progress_thread.start()
 
     def stop(self):
-        self._running = False
+        self._signal_stop("stopped")
+
+    def _signal_stop(self, reason: str):
+        with self._state.lock:
+            self._state.stop_reason = reason
+            self._state.stop_event.set()
+            self._running = False
+            self._state.clarification_response = {"response": "", "choice": "", reason: True}
+            self._state.clarification_event.set()
 
     def get_status(self) -> dict:
         st = self._state
@@ -86,16 +100,23 @@ class ProjectManagerAgent:
     def _run_task(self, task: dict):
         st = self._state
         st.start_time = time.time()
+        keep_monitoring = False
         try:
+            if st.stop_event.is_set():
+                return
             if self._monitor.is_global_timed_out():
                 raise TimeoutError(f"全局任务超时 ({st.global_timeout}s)")
 
             # F2.3: 多轮任务细化
             task = self._planner.refine_requirements(task)
+            if st.stop_event.is_set():
+                return
 
             # 阶段 1: 规划
             self.report_status("planning")
             plan = self._planner.analyze_with_skill(task)
+            if st.stop_event.is_set():
+                return
             logger.info("[%s] 规划完成: 模式=%s, 子任务=%d",
                        self.pm_id[:8], plan.get('pattern', 'single'),
                        len(plan.get('decomposition', [])))
@@ -116,6 +137,8 @@ class ProjectManagerAgent:
                     }]
                 self.sync_subtasks()
                 result = self._planner.execute_directly(task)
+                if st.stop_event.is_set():
+                    return
 
                 # 校验: 如果执行结果是错误信息, 不能当作完成交付
                 summary = result.get("summary", "")
@@ -152,7 +175,11 @@ class ProjectManagerAgent:
                                    task_list=plan.get("decomposition", []))
                 self.sync_subtasks()
                 self._dispatcher.create_team_and_dispatch(task, plan)
+                if st.stop_event.is_set():
+                    return
                 self.report_status("monitoring")
+                keep_monitoring = True
+                st.monitoring_ready.set()
 
         except Exception as e:
             logger.error("[%s] 任务执行失败: %s", self.pm_id[:8], e)
@@ -160,7 +187,8 @@ class ProjectManagerAgent:
             self.report_progress(0.0, "failed", str(e))
 
         finally:
-            self._running = False
+            if not keep_monitoring:
+                self._running = False
 
     def receive_progress_report(self, report: dict):
         self._monitor.receive_progress_report(report)
@@ -184,16 +212,22 @@ class ProjectManagerAgent:
 
     def receive_input(self, input_data: dict):
         st = self._state
-        st.clarification_response = input_data
-        st.clarification_event.set()
+        with st.lock:
+            if st.stop_event.is_set():
+                return
+            st.clarification_response = input_data
+            st.clarification_event.set()
         logger.info("[%s] 收到 Boss 回复: %s", self.pm_id[:8], str(input_data)[:200])
 
     def request_clarification(self, question: str, options: list = None,
                               timeout: float = None) -> dict:
         """向 Boss 发起澄清请求, 阻塞等待回复。"""
         st = self._state
-        st.clarification_event.clear()
-        st.clarification_response = {}
+        with st.lock:
+            if st.stop_event.is_set():
+                return {st.stop_reason or "stopped": True}
+            st.clarification_event.clear()
+            st.clarification_response = {}
         self.report_status("awaiting_input",
                            task_list=[{"name": "请求决策", "status": "awaiting_input", "description": question}])
         self.report_progress(-1.0, "awaiting_input", question,
@@ -207,32 +241,31 @@ class ProjectManagerAgent:
                 pass
         actual_timeout = timeout if timeout is not None else st.clarification_timeout
         logger.info("[%s] 等待 Boss 决策 (超时=%ds): %s", self.pm_id[:8], actual_timeout, question[:120])
-        if not st.clarification_event.wait(timeout=actual_timeout):
+        signalled = st.clarification_event.wait(timeout=actual_timeout)
+        if st.stop_event.is_set():
+            return {st.stop_reason or "stopped": True}
+        if not signalled:
             logger.warning("[%s] 等待 Boss 决策超时, 使用默认策略继续", self.pm_id[:8])
             return {"response": "", "choice": "", "timed_out": True}
         self.report_status("executing")
         return st.clarification_response
 
     def cancel(self):
-        st = self._state
-        self._running = False
-        st.clarification_event.set()
-        st.clarification_response = {"response": "", "choice": "", "cancelled": True}
+        self._signal_stop("cancelled")
         self.report_status("cancelled")
         self.report_progress(0.0, "cancelled", "任务已被 Boss 取消")
         logger.info("[%s] 任务已取消", self.pm_id[:8])
 
     def pause(self):
-        st = self._state
-        self._running = False
-        st.clarification_event.set()
-        st.clarification_response = {"response": "", "choice": "", "paused": True}
+        self._signal_stop("paused")
         self.report_status("paused")
         self.report_progress(0.0, "paused", "任务已被 Boss 暂停")
         logger.info("[%s] 任务已暂停", self.pm_id[:8])
 
     def report_status(self, status: str, team_structure: dict = None,
                       task_list: list = None, collaboration_mode: str = None):
+        if self._state.stop_event.is_set() and status != self._state.stop_reason:
+            return
         try:
             payload = {"status": status}
             if team_structure is not None:
@@ -249,6 +282,8 @@ class ProjectManagerAgent:
             logger.warning("[%s] 上报状态失败: %s", self.pm_id[:8], e)
 
     def report_team(self, team: dict):
+        if self._state.stop_event.is_set():
+            return
         try:
             http_post(
                 f"{self.secretary_url}/api/pm/{self.pm_id}/teams",
@@ -260,6 +295,8 @@ class ProjectManagerAgent:
     def report_progress(self, progress: float, status: str, message: str,
                         reporter_id: str = "", reporter_type: str = "pm",
                         task_name: str = ""):
+        if self._state.stop_event.is_set() and status != self._state.stop_reason:
+            return
         try:
             http_post(
                 f"{self.secretary_url}/api/pm/{self.pm_id}/progress",
@@ -279,6 +316,8 @@ class ProjectManagerAgent:
             logger.warning("[%s] 上报进度失败: %s", self.pm_id[:8], e)
 
     def sync_subtasks(self):
+        if self._state.stop_event.is_set():
+            return
         try:
             subtasks = self._build_subtask_status()
             if not subtasks:
@@ -327,6 +366,8 @@ class ProjectManagerAgent:
     def deliver_result(self, task_name: str, task_desc: str,
                        aggregated: str, subtask_results: list) -> bool:
         """Return true only after Secretary acknowledges the matching task delivery."""
+        if self._state.stop_event.is_set():
+            return False
         summary = aggregated[:500] if len(aggregated) > 500 else aggregated
         completed_count = sum(1 for r in subtask_results if r.get("status") == "completed")
         total_count = len(subtask_results)
@@ -349,6 +390,8 @@ class ProjectManagerAgent:
         # Attempt to save the local artifact before the delivery request. An HTTP
         # timeout is an unknown outcome; do not record it as successful delivery.
         self._distribute_artifacts(task_name, aggregated)
+        if self._state.stop_event.is_set():
+            return False
         try:
             resp = http_post(
                 f"{self.secretary_url}/api/pm/{self.pm_id}/deliver",
@@ -365,6 +408,8 @@ class ProjectManagerAgent:
             logger.error("[%s] 交付物上报异常: %s", self.pm_id[:8], e)
             return False
 
+        if self._state.stop_event.is_set():
+            return False
         self._record_task_memory(task_name, task_desc, subtask_results)
         return True
 

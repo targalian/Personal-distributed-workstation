@@ -377,6 +377,8 @@ def build_task_routes(controller) -> APIRouter:
         task = db.get_task(task_id) if task_id else None
         if task is None:
             raise HTTPException(404, "交付对应的任务不存在")
+        if task.status in ("cancelled", "paused"):
+            raise HTTPException(409, "任务已取消或暂停，不接收晚到交付")
         # Local PM startup can report before its assigned ID is saved by the
         # submitting thread. Reject a conflicting assignment when one exists.
         if task.pm_agent_id and task.pm_agent_id != pm_id:

@@ -18,6 +18,9 @@ class PMState:
 
     # ── 线程安全锁 ──
     lock: threading.RLock = field(default_factory=threading.RLock)
+    stop_event: threading.Event = field(default_factory=threading.Event)
+    stop_reason: str = ""
+    monitoring_ready: threading.Event = field(default_factory=threading.Event)
 
     # ── 规划结果 ──
     plan: dict = field(default_factory=dict)

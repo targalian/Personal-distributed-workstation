@@ -168,7 +168,8 @@ def test_local_child_completion_does_not_complete_parent(execution):
 
 
 def test_progress_does_not_complete_parent_before_aggregation(execution, monkeypatch):
-    monkeypatch.setattr('lan_mesh.pm_monitor.time.sleep', lambda _: None)
+    execution.agent._monitor.poll_interval = 0.001
+    execution.agent._state.monitoring_ready.set()
     def aggregate():
         assert execution.db.get_task('task-test').status == 'running'
         assert not any(payload.get('status') == 'completed' for _, payload in execution.requests)
@@ -188,3 +189,45 @@ def test_delivery_endpoint_does_not_ack_unstored_content(execution, task_id, pm_
     assert response.status_code == status
     assert '_delivery' not in execution.db.get_task('task-test').output_data
     execution.controller.bot_gateway.notify.assert_not_called()
+
+
+@pytest.mark.parametrize('status', ['cancelled', 'paused'])
+def test_stopped_task_rejects_late_delivery_and_pm_status(execution, status):
+    execution.db.update_task_status('task-test', status)
+    execution.db.update_pm_status('pm-test', status)
+    response = execution.client.post('/api/pm/pm-test/deliver',
+                                     json={'task_id': 'task-test', 'deliverable': 'late output'})
+    assert response.status_code == 409
+    response = execution.client.post('/api/pm/pm-test/status', json={'status': 'completed'})
+    assert response.json()['ignored'] is True
+    assert execution.db.get_pm_agent('pm-test').status == status
+    assert execution.db.get_task('task-test').status == status
+    assert '_delivery' not in execution.db.get_task('task-test').output_data
+
+
+def test_threaded_local_plan_reaches_persisted_delivery(execution):
+    agent = execution.agent
+    agent._state.subtask_outputs.clear()
+    agent._state.subagents.clear()
+    agent._planner.load_skill = Mock()
+    agent._planner.refine_requirements = lambda task: task
+    agent._planner.analyze_with_skill = lambda task: {
+        'pattern': 'orchestrator', 'decomposition': [{'name': 'B', 'depends_on': ['A']}, {'name': 'A'}]}
+    agent._dispatcher.get_available_stations = lambda: []
+    execution.runtime.execute.return_value = {'status': 'completed', 'output': {'summary': 'done'}}
+    agent._monitor.poll_interval = 0.005
+    try:
+        agent.start_task(execution.task.to_dict())
+        agent._thread.join(timeout=5)
+        agent._progress_thread.join(timeout=5)
+        assert not agent._thread.is_alive() and not agent._progress_thread.is_alive()
+        task = execution.db.get_task('task-test')
+        assert task.status == 'completed'
+        assert task.output_data['_delivery']['deliverable'] == '经过聚合的完整交付内容'
+        assert [call.args[0]['name'] for call in execution.runtime.execute.call_args_list] == ['A', 'B']
+        assert sum(path.endswith('/deliver') for path, _ in execution.requests) == 1
+    finally:
+        agent.stop()
+        for thread in (agent._thread, agent._progress_thread):
+            if thread:
+                thread.join(timeout=1)
