@@ -1328,16 +1328,11 @@ class ChatHandler:
             return "当前没有待验收的任务交付物。"
 
         task_id = task.task_id
-        delivery = task.output_data.get("_delivery", {})
-        delivery["accepted"] = True
-        delivery["accepted_at"] = time.time()
-        task.output_data["_delivery"] = delivery
-        task.status = "completed"
-        self.controller.db.save_task(task)
+        self.controller.db.review_task_delivery(task_id, True)
 
         return (
             f"✅ 已验收任务「{task.name}」的交付物。\n"
-            f"任务状态已更新为 completed。"
+            f"任务状态已更新为 accepted。"
         )
 
     def _action_reject_delivery(self, message: str) -> str:
@@ -1347,10 +1342,6 @@ class ChatHandler:
             return "当前没有待退回的任务交付物。"
 
         task_id = task.task_id
-        delivery = task.output_data.get("_delivery", {})
-        delivery["accepted"] = False
-        delivery["rejected_at"] = time.time()
-
         # 提取退回原因
         reason = message
         for kw in ["退回", "重新做"]:
@@ -1361,24 +1352,12 @@ class ChatHandler:
         if not reason:
             reason = "Boss 未提供具体修改意见"
 
-        delivery["reject_reason"] = reason
-        task.output_data["_delivery"] = delivery
-        task.status = "running"  # 重新运行
-        self.controller.db.save_task(task)
-
-        # 通知 PM Agent (如果还在运行)
-        pm_id = task.pm_agent_id
-        if pm_id:
-            self.controller.inject_input_to_pm(pm_id, {
-                "response": f"[退回] {reason}",
-                "choice": "reject",
-                "task_name": task.name,
-            })
+        self.controller.db.review_task_delivery(task_id, False, reason)
 
         return (
             f"↩️ 已退回任务「{task.name}」的交付物。\n"
             f"退回原因: {reason}\n"
-            f"PM Agent 将收到修改意见并重新执行。"
+            f"修改意见已记录；请修改需求并确认新版本后重新下发。"
         )
 
     def _find_latest_delivered_task(self):

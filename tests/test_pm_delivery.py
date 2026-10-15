@@ -116,7 +116,9 @@ def test_delivery_ack_lost_after_commit_does_not_claim_success(execution, monkey
 
 
 def test_delivery_storage_failure_cannot_be_acknowledged(execution, monkeypatch):
-    monkeypatch.setattr(execution.db, 'save_task', Mock(side_effect=OSError('disk full')))
+    execution.db._get_conn().executescript(
+        "CREATE TRIGGER fail_delivery BEFORE UPDATE OF output_data ON tasks "
+        "BEGIN SELECT RAISE(ABORT, 'simulated disk failure'); END;")
     execution.agent._monitor.aggregate_results()
     assert_no_success(execution)
     assert '_delivery' not in execution.db.get_task('task-test').output_data

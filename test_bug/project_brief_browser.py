@@ -97,10 +97,13 @@ def verify_handoff(page, handoff_id, other_id, output):
     assert page.locator('.brief-content img').count()==0
     assert '需求依据：v1' in page.locator('.brief-content').inner_text()
     assert client.post(f'/api/tasks/{task_id}/accept').status_code==200
+    assert client.post('/api/pm/pm-browser/deliver',json=delivery).json()['duplicate'] is True
+    assert client.post('/api/pm/pm-browser/deliver',json={**delivery,'deliverable':'冲突的新产物'}).status_code==409
     page.locator('[data-action="handoffs-refresh"]').click()
     page.locator('[data-action="handoff-task"]').click()
     page.wait_for_function("document.querySelector('.brief-content').textContent.includes('验收状态：已验收')")
     assert client.post(f'/api/tasks/{task_id}/reject',json={'reason':'需要补充测试证据'}).status_code==200
+    assert client.post('/api/pm/pm-browser/deliver',json=delivery).json()['duplicate'] is True
     page.locator('[data-action="handoffs-refresh"]').click()
     page.locator('[data-action="handoff-task"]').click()
     page.wait_for_function("document.querySelector('.brief-content').textContent.includes('退回原因：需要补充测试证据')")

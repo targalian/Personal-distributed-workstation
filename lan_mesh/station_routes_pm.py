@@ -166,15 +166,13 @@ def build_pm_routes(controller) -> APIRouter:
             # 通过 pm_agent_id 查找对应任务并更新状态
             try:
                 conn = db._get_conn()
-                row = conn.execute(
-                    "SELECT task_id FROM tasks WHERE pm_agent_id = ? AND status = 'running'",
-                    (pm_id,)
-                ).fetchone()
-                if row:
-                    task_id = row["task_id"]
-                    new_status = "completed" if pm_status == "completed" else "failed"
-                    db.update_task_status(task_id, new_status)
-                    logger.info("任务 %s 状态同步: running → %s", task_id[:16], new_status)
+                cursor = conn.execute(
+                    "UPDATE tasks SET status = ? WHERE pm_agent_id = ? AND status = 'running'",
+                    (pm_status, pm_id),
+                )
+                conn.commit()
+                if cursor.rowcount:
+                    logger.info("PM %s 任务状态同步: running → %s", pm_id[:16], pm_status)
             except Exception as e:
                 logger.error("任务状态同步失败: %s", e)
 

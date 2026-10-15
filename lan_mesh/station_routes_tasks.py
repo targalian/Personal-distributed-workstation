@@ -374,30 +374,21 @@ def build_task_routes(controller) -> APIRouter:
         summary = payload.get("summary", "")
         subtask_stats = payload.get("subtask_stats", {})
 
-        task = db.get_task(task_id) if task_id else None
-        if task is None:
-            raise HTTPException(404, "交付对应的任务不存在")
-        if task.status in ("cancelled", "paused"):
-            raise HTTPException(409, "任务已取消或暂停，不接收晚到交付")
-        # Local PM startup can report before its assigned ID is saved by the
-        # submitting thread. Reject a conflicting assignment when one exists.
-        if task.pm_agent_id and task.pm_agent_id != pm_id:
-            raise HTTPException(409, "交付 PM 与任务当前关联的 PM 不一致")
         if not isinstance(deliverable, str) or not deliverable.strip():
             raise HTTPException(422, "交付内容不能为空")
-
-        # 存储交付物到 DB (追加到 task output_data)
-        if not task.output_data:
-            task.output_data = {}
-        task.output_data["_delivery"] = {
-            "pm_id": pm_id,
-            "deliverable": deliverable,
-            "summary": summary,
-            "subtask_stats": subtask_stats,
-            "delivered_at": payload.get("delivered_at", time.time()),
-            "accepted": None,  # 等待 Boss 验收
+        delivery = {
+            "pm_id": pm_id, "deliverable": deliverable, "summary": summary,
+            "subtask_stats": subtask_stats, "delivered_at": payload.get("delivered_at", time.time()),
         }
-        db.save_task(task)
+        try:
+            result = db.record_task_delivery(task_id, pm_id, delivery)
+        except KeyError as exc:
+            raise HTTPException(404, exc.args[0]) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if result["duplicate"]:
+            return {"ok": True, "task_id": task_id, **result,
+                    "message": "该交付已接收，保留现有验收结论"}
 
         # WebSocket 广播
         await _broadcast(state, "task_delivered", {
@@ -420,14 +411,12 @@ def build_task_routes(controller) -> APIRouter:
     async def accept_delivery(task_id: str):
         """Boss 验收交付物。"""
         check_secretary(controller)
-        task = db.get_task(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        if not task.output_data or "_delivery" not in task.output_data:
-            raise HTTPException(status_code=409, detail="该任务尚无交付物")
-        task.output_data["_delivery"]["accepted"] = True
-        task.status = "accepted"
-        db.save_task(task)
+        try:
+            db.review_task_delivery(task_id, True)
+        except KeyError as exc:
+            raise HTTPException(404, exc.args[0]) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
         await _broadcast(state, "task_updated", {"task_id": task_id, "status": "accepted"})
         logger.info("任务 %s 交付物已验收", task_id[:12])
         return {"ok": True, "message": "已验收"}
@@ -436,16 +425,13 @@ def build_task_routes(controller) -> APIRouter:
     async def reject_delivery(task_id: str, payload: dict = None):
         """Boss 退回交付物。"""
         check_secretary(controller)
-        task = db.get_task(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        if not task.output_data or "_delivery" not in task.output_data:
-            raise HTTPException(status_code=409, detail="该任务尚无交付物")
         reason = (payload or {}).get("reason", "")
-        task.output_data["_delivery"]["accepted"] = False
-        task.output_data["_delivery"]["reject_reason"] = reason
-        task.status = "rejected"
-        db.save_task(task)
+        try:
+            db.review_task_delivery(task_id, False, reason)
+        except KeyError as exc:
+            raise HTTPException(404, exc.args[0]) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
         await _broadcast(state, "task_updated", {"task_id": task_id, "status": "rejected"})
         logger.info("任务 %s 交付物被退回: %s", task_id[:12], reason[:100])
         return {"ok": True, "message": "已退回"}

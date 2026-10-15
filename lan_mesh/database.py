@@ -810,7 +810,22 @@ class Database:
     # ── Task CRUD ───────────────────────────────────────────────
 
     def save_task(self, task: Task):
-        """保存任务 (含子任务)。"""
+        """Save task fields without overwriting an existing delivery or its review."""
+        conn = self._get_conn()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT output_data, status FROM tasks WHERE task_id = ?",
+                               (task.task_id,)).fetchone()
+            if row:
+                previous = json.loads(row["output_data"]) or {}
+                if "_delivery" in previous:
+                    task.output_data = {**(task.output_data or {}), "_delivery": previous["_delivery"]}
+                    if row["status"] in ("accepted", "rejected", "cancelled", "paused"):
+                        task.status = row["status"]
+            self._save_task_fields(task)
+
+    def _save_task_fields(self, task: Task):
+        """Write within save_task's transaction; delivery writes use dedicated methods."""
         import json
         conn = self._get_conn()
         conn.execute("""
@@ -830,7 +845,57 @@ class Database:
             task.created_at, task.completed_at, task.created_by,
             task.project_id, task.pm_agent_id,
         ))
-        conn.commit()
+
+    def record_task_delivery(self, task_id: str, pm_id: str, delivery: dict) -> dict:
+        """Atomically save one immutable delivery, or acknowledge an identical retry."""
+        conn = self._get_conn()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self.get_task(task_id)
+            if task is None:
+                raise KeyError("交付对应的任务不存在")
+            if task.pm_agent_id and task.pm_agent_id != pm_id:
+                raise ValueError("交付 PM 与任务当前关联的 PM 不一致")
+            output = task.output_data or {}
+            existing = output.get("_delivery")
+            if existing is not None:
+                fields = ("pm_id", "deliverable", "summary", "subtask_stats")
+                if any(existing.get(key) != delivery.get(key) for key in fields):
+                    raise ValueError("任务已有不同交付，不能覆盖已审阅依据；请为修改后的需求创建新任务")
+                return {"duplicate": True, "accepted": existing.get("accepted")}
+            if task.status in ("cancelled", "paused"):
+                raise ValueError("任务已取消或暂停，不接收晚到交付")
+            output["_delivery"] = {**delivery, "pm_id": pm_id, "accepted": None}
+            conn.execute("UPDATE tasks SET output_data = ? WHERE task_id = ?",
+                         (json.dumps(output, ensure_ascii=False), task_id))
+        return {"duplicate": False, "accepted": None}
+
+    def review_task_delivery(self, task_id: str, accepted: bool, reason: str = "") -> str:
+        """Atomically review the stored delivery without rewriting other task fields."""
+        conn = self._get_conn()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self.get_task(task_id)
+            if task is None:
+                raise KeyError("任务不存在")
+            output = task.output_data or {}
+            if "_delivery" not in output:
+                raise ValueError("该任务尚无交付物")
+            delivery = output["_delivery"]
+            delivery["accepted"] = accepted
+            delivery["reviewed_at"] = time.time()
+            if accepted:
+                delivery["accepted_at"] = time.time()
+                delivery.pop("reject_reason", None)
+                delivery.pop("rejected_at", None)
+            else:
+                delivery["rejected_at"] = time.time()
+                delivery["reject_reason"] = reason
+                delivery.pop("accepted_at", None)
+            status = "accepted" if accepted else "rejected"
+            conn.execute("UPDATE tasks SET output_data = ?, status = ? WHERE task_id = ?",
+                         (json.dumps(output, ensure_ascii=False), status, task_id))
+        return status
 
     def get_task(self, task_id: str) -> Optional[Task]:
         """查询单个任务。"""
