@@ -8,16 +8,13 @@ PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证
 4. 失败接管 (三级策略: 同站重试 → 换站重试 → PM 本地接管)
 5. 质量验证 (F2.5 生成-验证器模式)
 6. 结果聚合 (优化4)
-7. 升级上报 (优化10)
+7. 最终失败与后续任务阻塞
 """
 import time
 import uuid
 from typing import Optional
 
-import requests
-
 from .agent_prompt import build_aggregation_prompt
-from .http_retry import auth_headers
 from .logger import get_logger
 from .pm_state import PMState
 
@@ -60,14 +57,9 @@ class PMMonitor:
 
             # F1.3: 全局超时检测
             if self.is_global_timed_out():
-                logger.error("[%s] 全局任务超时 (%.0fs), 强制终止",
+                logger.error("[%s] 全局任务超时 (%.0fs), 停止调度",
                             self._pm_id[:8], st.global_timeout)
-                self._agent.report_progress(0.0, "failed", f"全局超时 ({st.global_timeout}s)")
-                st.stop_reason = "failed"
-                st.stop_event.set()
-                st.clarification_event.set()
-                self._agent.report_status("failed")
-                self._agent.running = False
+                self._fail_task("全局超时", f"全局超时 ({st.global_timeout}s)，在途操作结果待核实")
                 break
 
             if not st.monitoring_ready.is_set():
@@ -75,6 +67,8 @@ class PMMonitor:
 
             # F1.3: 子任务超时检测
             self.check_subtask_timeouts()
+            if st.stop_event.is_set():
+                break
 
             with st.lock:
                 names = {sub.get("name", "") for sub in st.plan.get("decomposition", [])}
@@ -82,19 +76,15 @@ class PMMonitor:
                     continue
                 total = len(names)
                 completed = sum(name in st.subtask_outputs for name in names)
-                failed = sum(name not in st.subtask_outputs and any(
-                    m.get("current_task") == name and m.get("status") == "failed"
-                    for m in st.subagents.values()) for name in names)
                 has_pending = bool(st.pending_subtasks)
 
             overall = completed / total if total > 0 else 0.0
             self._agent.report_progress(overall, "in_progress",
                                         f"整体进度: {completed}/{total} 子任务完成")
 
-            # 优化4: 全部子任务完成 (含 failed) 且无 pending, 触发结果聚合
+            # Only verified success can satisfy dependencies and enter aggregation.
             if not _aggregated and not has_pending:
-                finished = completed + failed
-                if finished >= total and total > 0:
+                if completed == total and total > 0:
                     _aggregated = True
                     self.aggregate_results()
 
@@ -114,6 +104,8 @@ class PMMonitor:
         status = report.get("status", "in_progress")
 
         with st.lock:
+            if task_name in st.subtask_outputs:
+                return
             # 支持 member_id 或 agent_id 查找 (Station 内嵌模式传 agent_id)
             target = st.subagents.get(reporter_id)
             if not target:
@@ -129,8 +121,6 @@ class PMMonitor:
         # 优化1: 任务完成时存储输出并尝试分发依赖链
         if status == "completed" and task_name:
             output = report.get("output", report.get("message", ""))
-            # 本地接管成功的任务, 移出集合, 防止同名子任务后续失败被误判为已接管
-            self._local_takeover_tasks.discard(task_name)
             # 优化6: 验证自检结果
             self_check = report.get("self_check", {})
             if not self_check:
@@ -151,29 +141,17 @@ class PMMonitor:
                 logger.warning("[%s] 子任务 '%s' 质量未达标 (score=%.1f): %s",
                               self._pm_id[:8], task_name, quality.get("score", 0),
                               quality.get("issues", "")[:150])
-                with st.lock:
-                    retry_count = st.retry_counts.get(task_name, 0)
-                if retry_count < st.max_retries:
-                    with st.lock:
-                        st.subtask_outputs.pop(task_name, None)
-                    self.handle_subagent_failure(task_name, f"质量验证未通过: {quality.get('issues', '')}")
-                    return
+                self.handle_subagent_failure(task_name, f"质量验证未通过: {quality.get('issues', '')}")
+                return
 
+            self._local_takeover_tasks.discard(task_name)
             with st.lock:
                 st.subtask_outputs[task_name] = output
                 st.subtask_start_times.pop(task_name, None)
             self._dispatcher.try_dispatch_pending()
 
-        # 优化5: 任务失败时触发接管策略 (跳过已在本地接管中的任务, 防止无限递归)
         if status == "failed" and task_name:
-            if task_name in self._local_takeover_tasks:
-                logger.error("[%s] 子任务 '%s' 本地接管后仍失败, 放弃重试",
-                            self._pm_id[:8], task_name)
-                self._local_takeover_tasks.discard(task_name)
-            else:
-                error_msg = report.get("message", "未知错误")
-                logger.error("[%s] 子任务 '%s' 失败: %s", self._pm_id[:8], task_name, error_msg[:200])
-                self.handle_subagent_failure(task_name, error_msg)
+            self.handle_subagent_failure(task_name, report.get("message", "未知错误"))
 
         # 同步子任务状态到 Secretary
         self._agent.sync_subtasks()
@@ -195,7 +173,7 @@ class PMMonitor:
         return (time.time() - self._state.start_time) > self._state.global_timeout
 
     def check_subtask_timeouts(self):
-        """F1.3: 检测子任务超时, 触发失败接管。"""
+        """Stop on unknown timeout outcomes instead of duplicating execution."""
         st = self._state
         now = time.time()
         timed_out = []
@@ -212,84 +190,126 @@ class PMMonitor:
                         break
 
         for task_name in timed_out:
-            logger.warning("[%s] 子任务 '%s' 超时 (%.0fs), 触发接管",
-                          self._pm_id[:8], task_name, st.subtask_timeout)
-            self.handle_subagent_failure(task_name, f"子任务超时 ({st.subtask_timeout}s)")
+            # A timeout does not prove the old attempt stopped. Re-executing it
+            # could repeat tool side effects on another host.
+            self._fail_task(task_name, f"子任务超时 ({st.subtask_timeout}s)，执行结果待核实，不自动重试")
+            break
 
-    # ── 优化5: 失败接管 ───────────────────────────────────────────
+    def _fail_task(self, task_name: str, error_msg: str):
+        """Stop the plan and persist why incomplete tasks cannot continue."""
+        st = self._state
+        with st.lock:
+            if st.stop_event.is_set():
+                return
+            st.terminal_failures[task_name] = error_msg
+            st.subtask_outputs.pop(task_name, None)
+            for sub in st.plan.get("decomposition", []):
+                name = sub.get("name", "")
+                if name != task_name and name not in st.subtask_outputs:
+                    st.blocked_subtasks[name] = f"任务因 {task_name} 失败而停止：{error_msg}"
+            st.pending_subtasks.clear()
+            st.subtask_start_times.clear()
+            st.stop_reason = "failed"
+            st.stop_event.set()
+            st.clarification_event.set()
+            self._agent.running = False
+        self._agent.sync_subtasks()
+        self._agent.report_status("failed")
+        self._agent.report_progress(0.0, "failed", f"子任务 {task_name} 失败：{error_msg}", task_name=task_name)
+
+    def _retry_task(self, sub: dict, error_msg: str) -> dict:
+        st = self._state
+        name = sub["name"]
+        with st.lock:
+            st.retry_counts[name] = st.retry_counts.get(name, 0) + 1
+            st.subtask_outputs.pop(name, None)
+            st.subtask_start_times[name] = time.time()
+            for member in st.subagents.values():
+                if member.get("current_task") == name:
+                    member["status"] = "retrying"
+            inputs = {**st.task.get("input_data", {}),
+                      "_retry_context": {"attempt": st.retry_counts[name], "previous_error": error_msg[:500]},
+                      "_dependency_outputs": {dep: st.subtask_outputs[dep] for dep in sub.get("depends_on", [])
+                                              if dep in st.subtask_outputs}}
+        return {**st.task, "input_data": inputs}
+
+    def _retry_elsewhere(self, task: dict, sub: dict, original_station: dict) -> bool:
+        """Attempt one other station; creation failures fall through to local takeover."""
+        st = self._state
+        name = sub["name"]
+        try:
+            stations = self._dispatcher.get_available_stations()
+            other = next((station for station in stations
+                          if station.get("device_id") != original_station.get("device_id")), None)
+            if not other or st.stop_event.is_set():
+                return False
+            agent_id = f"sub-{uuid.uuid4().hex[:10]}"
+            prompt = self._dispatcher._build_subagent_prompt_for_sub(task, sub, st.plan, agent_id, name)
+            info = self._dispatcher._create_subagent_on_station(
+                other, name, [sub.get("skill", "code_generation")], sub.get("description", ""),
+                system_prompt=prompt, preferred_agent_id=agent_id)
+            if not info or st.stop_event.is_set():
+                return False
+            with st.lock:
+                st.task_station[name] = other
+                st.task_agent[name] = info
+                for member in st.subagents.values():
+                    if member.get("current_task") == name:
+                        member.update(agent_id=info.get("agent_id", agent_id), status="retrying")
+            self._dispatcher.dispatch_subtask(other, info, task, sub, plan=st.plan)
+            return True
+        except Exception as exc:
+            logger.warning("[%s] 换站重试准备失败: %s", self._pm_id[:8], exc)
+            return False
 
     def handle_subagent_failure(self, task_name: str, error_msg: str):
-        """三级策略: 同站重试 → 换站重试 → PM 本地接管。"""
+        """Bounded recovery: same executor, one other station, then one local takeover."""
         st = self._state
-        if st.stop_event.is_set():
-            return
         with st.lock:
-            retry_count = st.retry_counts.get(task_name, 0)
-
-        decomposition = st.plan.get("decomposition", []) if st.plan else []
-        sub = None
-        for d in decomposition:
-            if d.get("name") == task_name:
-                sub = d
-                break
-        if not sub:
-            logger.warning("[%s] 失败子任务 '%s' 未在 plan 中找到, 跳过接管", self._pm_id[:8], task_name)
+            if st.stop_event.is_set():
+                return
+            sub = next((sub for sub in st.plan.get("decomposition", []) if sub.get("name") == task_name), None)
+            if task_name in self._local_takeover_tasks:
+                self._local_takeover_tasks.discard(task_name)
+                action, task = "fail", None
+            elif sub is None:
+                return
+            else:
+                station = st.task_station.get(task_name, {})
+                info = st.task_agent.get(task_name, {})
+                if st.retry_counts.get(task_name, 0) < st.max_retries:
+                    action = "retry"
+                elif not station:
+                    action = "fail"
+                elif task_name not in st.cross_station_attempted:
+                    st.cross_station_attempted.add(task_name)
+                    action = "cross"
+                else:
+                    self._local_takeover_tasks.add(task_name)
+                    action = "local"
+                task = self._retry_task(sub, error_msg) if action != "fail" else None
+        if action == "fail":
+            self._fail_task(task_name, error_msg)
             return
-
-        original_station = st.task_station.get(task_name, {})
-        original_agent = st.task_agent.get(task_name, {})
-
-        # 策略1: 同站重试
-        if retry_count < st.max_retries:
-            with st.lock:
-                st.retry_counts[task_name] = retry_count + 1
-            logger.info("[%s] 同站重试 '%s' (第 %d 次)", self._pm_id[:8], task_name, retry_count + 1)
-            agent_id = original_agent.get("agent_id", "")
-            if agent_id and original_station:
-                task = dict(st.task)
-                input_data = dict(task.get("input_data", {}))
-                input_data["_retry_context"] = {
-                    "attempt": retry_count + 1,
-                    "previous_error": error_msg[:500],
-                }
-                task["input_data"] = input_data
-                self._dispatcher.dispatch_subtask(original_station, original_agent, task, sub, plan=st.plan)
-            return
-
-        # 策略2: 换站重试
-        stations = self._dispatcher.get_available_stations()
-        other_stations = [s for s in stations
-                          if s.get("device_id") != original_station.get("device_id")]
-        if other_stations:
-            new_station = other_stations[0]
-            logger.info("[%s] 换站重试 '%s' → %s",
-                       self._pm_id[:8], task_name,
-                       new_station.get('device_name', new_station.get('ip', '')))
-            with st.lock:
-                st.retry_counts[task_name] = retry_count + 1
-
-            new_agent_id = f"sub-{uuid.uuid4().hex[:10]}"
-            agent_name = sub.get("name", "worker")
-            skill = sub.get("skill", "code_generation")
-            system_prompt = self._dispatcher._build_subagent_prompt_for_sub(
-                st.task, sub, st.plan, new_agent_id, agent_name
-            )
-            new_agent_info = self._dispatcher._create_subagent_on_station(
-                new_station, agent_name, [skill], sub.get("description", ""),
-                system_prompt=system_prompt,
-                preferred_agent_id=new_agent_id,
-            )
-            if new_agent_info:
-                st.task_station[task_name] = new_station
-                st.task_agent[task_name] = new_agent_info
-                self._dispatcher.dispatch_subtask(new_station, new_agent_info, st.task, sub, plan=st.plan)
-            return
-
-        # 策略3: PM 本地接管 (最终回退, 失败后不再递归)
-        logger.info("[%s] PM 本地接管子任务 '%s'", self._pm_id[:8], task_name)
-        self._local_takeover_tasks.add(task_name)
-        self._dispatcher.execute_subtask_locally(st.task, sub)
-        self._report_escalation(task_name, error_msg, sub)
+        try:
+            if action == "retry":
+                if station and info.get("agent_id"):
+                    self._dispatcher.dispatch_subtask(station, info, task, sub, plan=st.plan)
+                else:
+                    self._dispatcher.execute_subtask_locally(task, sub)
+                return
+            if action == "cross":
+                if self._retry_elsewhere(task, sub, station):
+                    return
+                with st.lock:
+                    if st.stop_event.is_set() or task_name in self._local_takeover_tasks:
+                        return
+                    self._local_takeover_tasks.add(task_name)
+                    task = self._retry_task(sub, error_msg)
+            self._dispatcher.execute_subtask_locally(task, sub)
+        except Exception as exc:
+            self._local_takeover_tasks.discard(task_name)
+            self._fail_task(task_name, f"重试执行异常：{exc}")
 
     # ── F2.5: 质量验证器 ───────────────────────────────────────
 
@@ -352,6 +372,11 @@ class PMMonitor:
             return
 
         decomposition = st.plan.get("decomposition", [])
+        missing = [sub.get("name", "") for sub in decomposition
+                   if sub.get("name", "") not in st.subtask_outputs]
+        if missing:
+            self._fail_task(missing[0], "缺少成功的子任务输出，不能生成成功交付")
+            return
         task_name = st.task.get("name", "")
         task_desc = st.task.get("description", "")
 
@@ -404,44 +429,3 @@ class PMMonitor:
             self._agent.report_status("failed")
             self._agent.report_progress(0.0, "failed", "交付未获 Secretary 确认，请核实交付记录后处理", task_name=task_name)
         self._agent.running = False
-
-    # ── 优化10: 升级上报 ──────────────────────────────────────────
-
-    def _report_escalation(self, task_name: str, error_msg: str, sub: dict):
-        """三级接管全失败后, 上报 escalated 状态到 Secretary。"""
-        st = self._state
-        escalation = {
-            "pm_id": self._pm_id,
-            "task_id": st.task.get("task_id", ""),
-            "task_name": st.task.get("name", ""),
-            "failed_subtask": task_name,
-            "error": error_msg[:500],
-            "retry_count": st.retry_counts.get(task_name, 0),
-            "options": [
-                "忽略此子任务, 继续执行其他部分",
-                "降低质量要求, 用简化方案重试",
-                "手动指定一台主机重试",
-                "放弃整个任务",
-            ],
-            "escalated_at": time.time(),
-        }
-
-        self._agent.report_status("escalated")
-        self._agent.report_progress(
-            -2.0, "escalated",
-            f"子任务 '{task_name}' 三级接管全失败: {error_msg[:200]}",
-            reporter_type="pm_escalation",
-            task_name=task_name,
-        )
-
-        try:
-            requests.post(
-                f"{self._secretary_url}/api/pm/{self._pm_id}/status",
-                json={"status": "escalated", "escalation": escalation},
-                headers=auth_headers(),
-                timeout=5,
-            )
-        except Exception:
-            pass
-
-        logger.warning("[%s] 子任务 '%s' 已上报 escalated, 等待 Boss 决策", self._pm_id[:8], task_name)

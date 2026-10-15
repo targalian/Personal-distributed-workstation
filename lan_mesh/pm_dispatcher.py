@@ -11,6 +11,7 @@ PM 分发器 — 团队创建与子任务分发
 import time
 import threading
 import uuid
+from graphlib import TopologicalSorter, CycleError
 from typing import Optional
 
 import requests
@@ -46,6 +47,27 @@ class PMDispatcher:
 
     # ── 团队创建与分发 ────────────────────────────────────────────
 
+    @staticmethod
+    def _validate_plan(decomposition: list):
+        if not decomposition or not isinstance(decomposition, list):
+            raise ValueError("多任务计划必须包含子任务")
+        if any(not isinstance(sub, dict) or not isinstance(sub.get("name"), str)
+               or not sub["name"].strip() for sub in decomposition):
+            raise ValueError("子任务名称必须为非空字符串")
+        names = {sub["name"] for sub in decomposition}
+        if len(names) != len(decomposition):
+            raise ValueError("子任务名称不能重复")
+        graph = {}
+        for sub in decomposition:
+            deps = sub.get("depends_on", [])
+            if not isinstance(deps, list) or any(not isinstance(dep, str) or dep not in names for dep in deps):
+                raise ValueError(f"子任务 {sub['name']} 的前置依赖不存在或格式错误")
+            graph[sub["name"]] = deps
+        try:
+            tuple(TopologicalSorter(graph).static_order())
+        except CycleError as exc:
+            raise ValueError("子任务计划存在循环依赖") from exc
+
     def create_team_and_dispatch(self, task: dict, plan: dict):
         """根据规划创建团队并分发子任务 (依赖感知拓扑排序)。
 
@@ -55,6 +77,7 @@ class PMDispatcher:
         3. 有依赖的子任务暂存为 pending, 等前序完成后自动注入结果并分发
         """
         decomposition = plan.get("decomposition", [])
+        self._validate_plan(decomposition)
         pattern = plan.get("pattern", "orchestrator")
         st = self._state
         if st.stop_event.is_set():
@@ -230,7 +253,7 @@ class PMDispatcher:
                 raise RuntimeError(f"HTTP {resp.status_code}")
         except requests.exceptions.ReadTimeout:
             # 超时无法确认远端状态 (旧版同步端点可能仍在执行), 不能本地回退
-            # 否则同一子任务会被执行两份; 交由 Monitor 超时保护接管
+            # 否则同一子任务会被执行两份; 交由 Monitor 超时后停止调度并提示核实
             logger.warning("[%s] 分发子任务 '%s' 超时未确认, 远端可能仍在执行, 等待超时保护",
                            self._pm_id[:8], sub_name)
         except Exception as e:
@@ -380,11 +403,20 @@ class PMDispatcher:
 
         logger.info("[%s] 本地执行子任务: %s (skill=%s)",
                    self._pm_id[:8], sub_name, sub.get("skill", ""))
-        result = self._runtime.execute(subtask)
+        try:
+            result = self._runtime.execute(subtask)
+        except Exception as exc:
+            result = {"status": "failed", "error": str(exc), "output": {}}
         if st.stop_event.is_set():
             return
         status = "completed" if result.get("status") == "completed" else "failed"
         output = result.get("output", {})
+        if isinstance(output, dict):
+            text = output.get("code", output.get("summary", ""))
+            if (output.get("error") or output.get("_error")
+                    or isinstance(text, str) and text.lstrip().startswith(
+                        ("[未配置", "[LLM 调用失败", "[模型调用失败"))):
+                status = "failed"
 
         # 注入 Monitor 进度追踪 (触发依赖链分发 + 结果聚合)
         self._agent.receive_subtask_result(
@@ -392,6 +424,8 @@ class PMDispatcher:
             status=status,
             output_data=output if isinstance(output, dict) else {"result": str(output)},
             agent_id=agent_id,
+            error=str(result.get("error") or output.get("error") or output.get("code") or output.get("summary") or "执行失败")
+            if status == "failed" and isinstance(output, dict) else "",
         )
 
         self._agent.report_progress(

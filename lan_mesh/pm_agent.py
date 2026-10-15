@@ -194,7 +194,7 @@ class ProjectManagerAgent:
         self._monitor.receive_progress_report(report)
 
     def receive_subtask_result(self, task_name: str, status: str,
-                               output_data: dict, agent_id: str = ""):
+                               output_data: dict, agent_id: str = "", error: str = ""):
         """接收本机子 Agent 执行结果，转化为进度报告注入 Monitor。
 
         Station 内嵌模式下，子任务执行完成后由 station_controller 调用此方法，
@@ -206,7 +206,7 @@ class ProjectManagerAgent:
             "status": status,
             "progress": 1.0 if status == "completed" else 0.0,
             "output": output_data,
-            "message": f"子任务 {task_name} {status}",
+            "message": error or f"子任务 {task_name} {status}",
         }
         self._monitor.receive_progress_report(report)
 
@@ -316,7 +316,7 @@ class ProjectManagerAgent:
             logger.warning("[%s] 上报进度失败: %s", self.pm_id[:8], e)
 
     def sync_subtasks(self):
-        if self._state.stop_event.is_set():
+        if self._state.stop_event.is_set() and self._state.stop_reason != "failed":
             return
         try:
             subtasks = self._build_subtask_status()
@@ -340,7 +340,11 @@ class ProjectManagerAgent:
         with st.lock:
             for sub in decomposition:
                 name = sub.get("name", "")
-                if name in st.subtask_outputs:
+                if name in st.terminal_failures:
+                    status = "failed"
+                elif name in st.blocked_subtasks:
+                    status = "blocked"
+                elif name in st.subtask_outputs:
                     status = "completed"
                 else:
                     status = "pending"
@@ -360,6 +364,7 @@ class ProjectManagerAgent:
                     "required_skill": sub.get("skill", ""),
                     "depends_on": sub.get("depends_on", []),
                     "status": status,
+                    "error": st.terminal_failures.get(name, st.blocked_subtasks.get(name, "")),
                 })
         return result
 

@@ -230,6 +230,7 @@ def build_pm_routes(controller) -> APIRouter:
                 "required_skill": sub.get("required_skill", prev.get("required_skill", "")),
                 "depends_on": sub.get("depends_on", prev.get("depends_on", [])),
                 "status": sub.get("status", prev.get("status", "pending")),
+                "error": sub.get("error", prev.get("error", "")),
                 "assigned_agent_id": prev.get("assigned_agent_id", ""),
             }
             merged.append(item)

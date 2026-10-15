@@ -233,3 +233,42 @@ def test_threaded_local_plan_reaches_persisted_delivery(execution):
         for thread in (agent._thread, agent._progress_thread):
             if thread:
                 thread.join(timeout=1)
+
+
+def test_final_failure_persists_blocked_dependencies_without_delivery(execution):
+    agent = execution.agent
+    agent._state.subtask_outputs.clear()
+    agent._state.subagents.clear()
+    agent._planner.load_skill = Mock()
+    agent._planner.refine_requirements = lambda task: task
+    agent._planner.analyze_with_skill = lambda task: {
+        'pattern': 'orchestrator', 'decomposition': [{'name': 'B', 'depends_on': ['A']}, {'name': 'A'}]}
+    agent._dispatcher.get_available_stations = lambda: []
+    execution.runtime.execute.return_value = {'status': 'failed', 'error': '实际失败原因', 'output': {}}
+    agent._monitor.poll_interval = 0.005
+    try:
+        agent.start_task(execution.task.to_dict())
+        agent._thread.join(timeout=5)
+        agent._progress_thread.join(timeout=5)
+        assert not agent._thread.is_alive() and not agent._progress_thread.is_alive()
+        task = execution.db.get_task('task-test')
+        assert task.status == 'failed'
+        assert '_delivery' not in task.output_data
+        subtasks = {sub['name']: sub for sub in task.subtasks}
+        assert subtasks['A']['status'] == 'failed' and '实际失败原因' in subtasks['A']['error']
+        assert subtasks['B']['status'] == 'blocked'
+        assert 'A' in subtasks['B']['error']
+        assert execution.runtime.execute.call_count == 3
+    finally:
+        agent.stop()
+        for thread in (agent._thread, agent._progress_thread):
+            if thread:
+                thread.join(timeout=1)
+
+
+def test_incomplete_results_cannot_be_aggregated_into_success(execution):
+    execution.agent._state.plan['decomposition'].append({'name': 'missing'})
+    execution.agent._monitor.aggregate_results()
+    execution.runtime._call_llm_with_routing.assert_not_called()
+    assert execution.db.get_task('task-test').status == 'failed'
+    assert '_delivery' not in execution.db.get_task('task-test').output_data

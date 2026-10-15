@@ -1640,7 +1640,7 @@ class TestPMMonitor:
         mon._state.global_timeout = 3600.0
         assert mon.is_global_timed_out() is True
 
-    def test_check_subtask_timeouts_marks_failed_and_retries(self):
+    def test_check_subtask_timeouts_fails_without_duplicate_execution(self):
         import time
         from lan_mesh.pm_state import PMState
         st = PMState()
@@ -1654,9 +1654,9 @@ class TestPMMonitor:
         mon.check_subtask_timeouts()
         assert "A" not in st.subtask_start_times
         assert st.subagents["m1"]["status"] == "failed"
-        # 首次失败走同站重试
-        assert st.retry_counts["A"] == 1
-        assert mon._dispatcher.calls and mon._dispatcher.calls[0][0] == "dispatch_subtask"
+        assert st.stop_event.is_set()
+        assert "待核实" in st.terminal_failures["A"]
+        assert not mon._dispatcher.calls
 
     def test_failure_strategy1_same_station_retry(self):
         from lan_mesh.pm_state import PMState
@@ -1696,12 +1696,12 @@ class TestPMMonitor:
         disp._create_subagent_on_station = lambda *a, **k: None  # 创建失败
         mon = self._monitor(state=st, dispatcher=disp)
         mon.handle_subagent_failure("A", "boom")
-        assert st.retry_counts["A"] == 2
-        # 创建失败 → 不分发, 也不本地接管 (等下一轮)
+        assert st.retry_counts["A"] == 3
+        # Failed station creation falls through immediately to one local takeover.
         assert not any(c[0] == "dispatch_subtask" for c in disp.calls)
-        assert not any(c[0] == "execute_subtask_locally" for c in disp.calls)
+        assert sum(c[0] == "execute_subtask_locally" for c in disp.calls) == 1
 
-    def test_failure_strategy3_local_takeover_and_escalation(self):
+    def test_failure_strategy3_local_takeover_does_not_claim_failure_early(self):
         from lan_mesh.pm_state import PMState
         st = PMState()
         st.max_retries = 1
@@ -1715,9 +1715,8 @@ class TestPMMonitor:
         mon.handle_subagent_failure("A", "boom")
         assert "A" in mon._local_takeover_tasks
         assert any(c[0] == "execute_subtask_locally" for c in disp.calls)
-        # escalated 上报
-        assert any(c[0] == "report_status" and c[1][0] == "escalated"
-                   for c in mon._agent.calls)
+        assert not any(c[0] == "report_status" and c[1][0] in ("escalated", "failed")
+                       for c in mon._agent.calls)
 
     def test_receive_progress_completed_stores_output_and_dispatches(self, monkeypatch):
         from lan_mesh.pm_monitor import PMMonitor

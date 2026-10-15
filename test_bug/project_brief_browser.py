@@ -543,6 +543,25 @@ with sync_playwright() as p:
     assert page.locator('[data-field="title"]').input_value()=='加载中输入的修改'
     assert 'v8 · 已同步' in page.locator('.brief-status').inner_text()
     assert not errors,errors
+    # UI-040: terminal diagnostics remain readable and escaped on desktop/mobile.
+    failure_reason='模型调用失败；已用尽重试。<img src=x onerror=alert(1)>\n'+'trace_'*40
+    failed_task=Task(name='失败诊断演示',status='failed',subtasks=[
+        {'name':'生成实现','status':'failed','error':failure_reason},
+        {'name':'运行验证','status':'blocked','error':'任务因生成实现失败而停止；尚未执行。'},
+    ])
+    page.evaluate('(task)=>{allTasks=[task];showTaskDetail(task.task_id)}',failed_task.to_dict())
+    assert '[失败]' in page.locator('#modal').inner_text()
+    assert '[已阻塞]' in page.locator('#modal').inner_text()
+    assert failure_reason in page.locator('.task-step-error').first.inner_text()
+    assert page.locator('#modal img').count()==0
+    page.screenshot(path=str(output/'task_failure_desktop.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    assert page.locator('.task-step-error').first.is_visible()
+    assert page.locator('#modal').evaluate('(el)=>el.scrollWidth<=el.clientWidth+1')
+    page.screenshot(path=str(output/'task_failure_mobile.png'),full_page=True)
+    page.evaluate('closeOverlayForce()')
+    page.set_viewport_size({'width':1680,'height':1100})
+    assert not errors,errors
     # UI-036: test unified editing history against isolated conversations and the real API.
     history_id=chat.create_conversation('编辑历史测试')['id']
     untouched_id=chat.create_conversation('无编辑历史')['id']

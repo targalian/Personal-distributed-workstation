@@ -208,3 +208,103 @@ def test_monitor_does_not_aggregate_while_dispatch_still_builds_team(pm):
         release.set()
     join_task(pm)
     assert sum(url.endswith('/deliver') for url, _ in pm.test_calls) == 1
+
+
+@pytest.mark.parametrize('failure', ['result', 'exception', 'model_error'])
+def test_local_failure_retries_are_bounded_and_dependents_stop(pm, failure):
+    if failure == 'exception':
+        pm.runtime.execute.side_effect = RuntimeError('执行异常')
+    elif failure == 'model_error':
+        pm.runtime.execute.return_value = {'status': 'completed', 'output': {'code': '[模型调用失败] offline'}}
+    else:
+        pm.runtime.execute.return_value = {'status': 'failed', 'error': '执行失败', 'output': {}}
+    pm.start_task(task())
+    join_task(pm)
+    assert pm.runtime.execute.call_count == 3
+    assert {call.args[0]['name'] for call in pm.runtime.execute.call_args_list} == {'A'}
+    assert 'A' in pm._state.terminal_failures
+    assert 'B' in pm._state.blocked_subtasks
+    assert not pm._state.pending_subtasks
+    assert not any(url.endswith('/deliver') for url, _ in pm.test_calls)
+    snapshot = {item['name']: item for item in pm._build_subtask_status()}
+    assert snapshot['A']['status'] == 'failed'
+    assert snapshot['B']['status'] == 'blocked' and snapshot['B']['error']
+
+
+def test_successful_retry_unblocks_dependency_without_failure_escalation(pm):
+    pm.runtime.execute.side_effect = [
+        {'status': 'failed', 'error': 'temporary', 'output': {}},
+        {'status': 'completed', 'output': {'summary': 'A'}},
+        {'status': 'completed', 'output': {'summary': 'B'}},
+    ]
+    pm.start_task(task())
+    join_task(pm)
+    assert [call.args[0]['name'] for call in pm.runtime.execute.call_args_list] == ['A', 'A', 'B']
+    assert pm._state.retry_counts['A'] == 1
+    assert sum(url.endswith('/deliver') for url, _ in pm.test_calls) == 1
+    assert not any(payload.get('status') == 'escalated' for _, payload in pm.test_calls)
+
+
+def test_quality_rejection_after_retry_budget_never_publishes_output(pm):
+    pm._monitor._verify_output_quality = lambda *args: {'accepted': False, 'score': 2, 'issues': '缺少要求'}
+    pm.start_task(task())
+    join_task(pm)
+    assert pm.runtime.execute.call_count == 3
+    assert not pm._state.subtask_outputs
+    assert '质量验证' in pm._state.terminal_failures['A']
+    assert not any(url.endswith('/deliver') for url, _ in pm.test_calls)
+
+
+@pytest.mark.parametrize('succeeds', [False, True])
+def test_remote_recovery_uses_one_other_station_then_one_local_takeover(pm, monkeypatch, succeeds):
+    pm._planner.analyze_with_skill = lambda task: {'pattern': 'orchestrator', 'decomposition': [{'name': 'A'}]}
+    pm._dispatcher.get_available_stations = lambda: [
+        {'device_id': 's1', 'ip': '127.0.0.1', 'api_port': 1},
+        {'device_id': 's2', 'ip': '127.0.0.1', 'api_port': 2}]
+    pm._dispatcher._create_subagent_on_station = lambda *args, **kw: {'agent_id': kw['preferred_agent_id']}
+    remote = Mock(return_value=Mock(status_code=200, json=lambda: {'status': 'failed', 'output': {'error': 'remote failed'}}))
+    monkeypatch.setattr('lan_mesh.pm_dispatcher.requests.post', remote)
+    if not succeeds:
+        pm.runtime.execute.return_value = {'status': 'failed', 'error': 'local failed', 'output': {}}
+    pm.start_task(task())
+    join_task(pm)
+    assert remote.call_count == 4  # Initial + two same-station retries + one other station.
+    assert pm.runtime.execute.call_count == 1
+    assert pm._state.cross_station_attempted == {'A'}
+    assert bool(pm._state.terminal_failures) is not succeeds
+    assert sum(url.endswith('/deliver') for url, _ in pm.test_calls) == int(succeeds)
+    assert not any(payload.get('status') == 'escalated' for _, payload in pm.test_calls)
+
+
+@pytest.mark.parametrize('plan', [[], [{'name': 'A'}, {'name': 'A'}],
+                                 [{'name': 'A', 'depends_on': ['missing']}],
+                                 [{'name': 'A', 'depends_on': ['B']}, {'name': 'B', 'depends_on': ['A']}],
+                                 [{'name': ''}]])
+def test_invalid_dependency_plan_fails_before_execution(pm, plan):
+    pm._planner.analyze_with_skill = lambda task: {'pattern': 'orchestrator', 'decomposition': plan}
+    pm.start_task(task())
+    join_task(pm)
+    pm.runtime.execute.assert_not_called()
+    assert not any(url.endswith('/deliver') for url, _ in pm.test_calls)
+    assert any(payload.get('status') == 'failed' for _, payload in pm.test_calls)
+
+
+def test_subtask_timeout_does_not_start_another_attempt(pm):
+    import time
+    pm.running = True
+    pm._state.plan = {'decomposition': [{'name': 'A'}, {'name': 'B', 'depends_on': ['A']}]}
+    pm._state.subtask_timeout = 1
+    pm._state.subtask_start_times['A'] = time.time() - 10
+    pm._monitor.check_subtask_timeouts()
+    pm.runtime.execute.assert_not_called()
+    assert pm._state.stop_event.is_set()
+    assert '待核实' in pm._state.terminal_failures['A']
+
+
+def test_completed_subtask_ignores_duplicate_or_late_failure(pm):
+    pm._state.subtask_outputs['A'] = {'summary': 'verified'}
+    pm.receive_subtask_result('A', 'failed', {'error': 'late'}, 'old-worker')
+    pm.receive_subtask_result('A', 'completed', {'summary': 'duplicate'}, 'old-worker')
+    pm.runtime.execute.assert_not_called()
+    assert pm._state.subtask_outputs['A'] == {'summary': 'verified'}
+    assert not pm._state.retry_counts

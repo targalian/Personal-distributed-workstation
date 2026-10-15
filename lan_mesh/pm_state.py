@@ -40,6 +40,9 @@ class PMState:
     # ── 失败接管 ──
     retry_counts: dict = field(default_factory=dict)       # task_name → 已重试次数
     max_retries: int = 2
+    cross_station_attempted: set = field(default_factory=set)
+    terminal_failures: dict = field(default_factory=dict)
+    blocked_subtasks: dict = field(default_factory=dict)
 
     # ── 超时保护 ──
     global_timeout: float = 3600.0

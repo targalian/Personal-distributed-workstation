@@ -86,6 +86,9 @@
   .task-step{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px}
   .step-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
   .step-dot.pending{background:var(--dim)}.step-dot.assigned{background:var(--yellow)}.step-dot.completed{background:var(--green)}.step-dot.failed{background:var(--red)}
+  .step-dot.blocked{background:var(--dim)}.step-dot.retrying{background:var(--yellow)}
+  .task-step-content{min-width:0;overflow-wrap:anywhere}
+  .task-step-error{color:var(--red);white-space:pre-wrap;margin-top:4px}
   /* ── 项目工作台 (多维合一) ── */
   .ws-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap}
   .ws-proj-picker{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 16px;transition:border-color .2s}
@@ -1041,7 +1044,8 @@ function openDagForTask(taskId){
 }
 async function showTaskDetail(id){
   const t=allTasks.find(x=>x.task_id===id);if(!t)return;
-  let steps=(t.subtasks||[]).map(s=>`<div class="task-step"><span class="step-dot ${s.status}"></span><span>${esc(s.name||s.description||'子任务')} <span style="color:var(--dim)">[${s.status}]</span>${s.assigned_agent_id?' → '+esc(s.assigned_agent_id.slice(0,8)):''}</span></div>`).join('');
+  const stepLabels={pending:'等待执行',assigned:'已分配',running:'执行中',in_progress:'执行中',completed:'已完成',failed:'失败',blocked:'已阻塞',retrying:'重试中'};
+  let steps=(t.subtasks||[]).map(s=>`<div class="task-step"><span class="step-dot ${Object.hasOwn(stepLabels,s.status)?s.status:'pending'}"></span><div class="task-step-content">${esc(s.name||s.description||'子任务')} <span style="color:var(--dim)">[${esc(stepLabels[s.status]||s.status||'未知')}]</span>${s.assigned_agent_id?' → '+esc(s.assigned_agent_id.slice(0,8)):''}${s.error?`<div class="task-step-error">${esc(s.error)}</div>`:''}</div></div>`).join('');
   let out=t.output_data&&Object.keys(t.output_data).length?`<pre style="max-height:200px;overflow:auto">${esc(JSON.stringify(t.output_data,null,2))}</pre>`:'<p style="color:var(--dim)">暂无输出</p>';
   const d=t.output_data&&t.output_data._delivery;
   const deliverySec=d?`<div class="modal-sec" style="border:1px solid var(--yellow);border-radius:8px;padding:12px"><h3>📦 交付物 ${d.accepted===true?'<span style="color:var(--green)">(已验收)</span>':d.accepted===false?'<span style="color:#e5533c">(已退回)</span>':'<span style="color:var(--yellow)">(待验收)</span>'}</h3><p style="font-size:13px;white-space:pre-wrap;max-height:150px;overflow:auto">${esc(d.summary||d.deliverable||'').slice(0,500)}</p><button class="btn sm primary" onclick="closeOverlayForce();showDelivery('${t.task_id}')">查看完整交付物</button></div>`:'';
