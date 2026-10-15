@@ -22,6 +22,7 @@
 | test_bug/test_checklist.csv | UI 变更清单 (UI-0xx 编号) |
 | test_bug/ui_change_log.py | Loop Engineering — UI 改动待检登记工具 |
 | test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
+| tests/test_backup.py | Restore real task, brief and receipt stores; reject corrupt or unsafe backup archives. |
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_delivery_replay.py | Concurrent delivery retries must preserve the reviewed artifact and acceptance decision. |
 | tests/test_execution_receipts.py | Verify durable execution claims, restart ambiguity and Station/Worker HTTP receipts. |
@@ -92,6 +93,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-15 | iter-47 | 新增备份恢复真实存储联验、WAL、损坏归档、源变化、路径/链接保护、恢复中断及CLI回归 |
 | 2026-10-15 | iter-46 | 新增快速完成/失败/验收、事务回滚、并发提交与启动去重、旧启动/掉线保护；真实 HTTP 联验三类 PM 启动与响应丢失 |
 | 2026-10-15 | iter-45 | 新增持久化执行回执并发/重启/磁盘故障；真实本机 HTTP 验证 Station/Worker 响应丢失后依赖链完成；并发旧回调不重复重试 |
 | 2026-10-15 | iter-44 | 本地/远端有界恢复、质量拒绝、依赖失败、计划校验和未知超时回归；线程+API验证失败诊断落库；Chrome验证错误转义及桌面手机展示 |

@@ -1,0 +1,59 @@
+# 工作站备份与恢复
+
+适用于 v0.34.7 起的离线备份。命令从项目目录运行，Python 使用项目虚拟环境。Linux 示例中的 `.venv/bin/python` 在 Windows 换成 `.venv\Scripts\python.exe`。
+
+## 1. 核对范围
+
+先列出实际备份路径，不会创建归档：
+
+```bash
+.venv/bin/python scripts/backup_workstation.py create /外部备份目录/workstation.zip --plan
+```
+
+默认读取配置确定主库与共享目录，收集用户状态目录 `~/.lan_mesh`、两种角色的共享目录、主库旁执行/启动回执，以及存在的项目 `.env`、resources.yaml、model_pool.yaml。状态目录内已包含 Worker 回执、配置及节点身份；共享目录内包含会话、PM 线程、项目描述修订、待审阅建议、下发记录和交付文件。
+
+启动时用了自定义 `--config`、`--shared` 或数据库路径，备份时也要指定。例如：
+
+```bash
+.venv/bin/python scripts/backup_workstation.py create /外部备份目录/workstation.zip \
+  --config /数据/config.yaml --db /数据/tasks.sqlite3 \
+  --shared /数据/shared --worker-shared /数据/worker-shared \
+  --extra-file /额外配置/tool-settings.json --plan
+```
+
+`--state-dir` 指定待备份的用户状态目录，并不会改变程序的运行目录。显式指定的缺失文件/目录会报错。状态目录内的 `station.lock`、`logs`、`backups` 不复制；额外指定的文件即使位于这些目录仍会收集。代码、虚拟环境、云端对象、外部工具工作目录和只存在于进程环境中的 API Key 不自动收集，需要另行保存。共享目录内的代码和产物会完整收集，不能假定大目录自动过滤。
+
+## 2. 创建并校验
+
+停止所有会写入这些数据的 Station、Worker、远端共享盘使用者和外部工具。进程检查只是本机辅助检测，无法替代停止所有写入。确认后移除 `--plan`，添加 `--offline-confirmed`：
+
+```bash
+.venv/bin/python scripts/backup_workstation.py create /外部备份目录/workstation.zip --offline-confirmed
+.venv/bin/python scripts/backup_workstation.py verify /外部备份目录/workstation.zip
+```
+
+自定义路径应沿用第 1 步相同参数。目标父目录须已存在，归档不能放在备份源内部，已有同名文件不会覆盖。默认上限为 10 GiB / 100000 文件；超限明确失败。符号链接和非普通文件拒绝打包，不会静默漏掉链接指向的数据。
+
+归档使用 SHA-256 清单校验每个文件；SQLite 通过 backup API 生成包含已提交 WAL 内容的独立快照，再执行 integrity_check；不复制 WAL/SHM 到恢复结果。备份前后核对源内容及目录，检测到变化就失败。已提交项目描述历史引用缺少对应版本文件也会失败。
+
+归档可能包含明文密钥和节点身份，工具不会输出其内容。Linux 上归档权限为 600；恢复目录为 700，普通文件 600，可执行文件 700。Windows 访问控制需由存放目录的 ACL 提供。归档没有加密或签名：摘要用于发现损坏，不能证明来源可信。
+
+## 3. 恢复演练
+
+```bash
+.venv/bin/python scripts/backup_workstation.py restore /外部备份目录/workstation.zip /恢复演练/workstation
+```
+
+目标父目录须存在，目标目录本身必须不存在。先完整校验归档，再创建新目录，绝不覆盖正在使用的原数据。恢复结果包含 `manifest.json` 与 `恢复说明.md`，列出每个备份根对应的原路径；原路径只用于说明，不会被归档自动写入。
+
+恢复中途写盘失败会保留 `RESTORE_INCOMPLETE`，此目录不可用于切换。换一个新目录重试。成功时确认任务验收结论、项目描述修订、待审阅建议、下发记录及执行回执均能读取；重复下发或重复执行编号不得产生第二份任务。当前测试已用真实存储层完成上述演练，未替用户覆盖实际生产数据。
+
+## 4. 切换与回退
+
+停止服务和外部写入，先对当前数据做新备份。根据 `恢复说明.md` 将各恢复根的内容复制到对应原路径；单文件根只复制该文件。主库、会话、执行回执、启动回执应恢复同一批次，切勿把旧目录中的 `*-wal`、`*-shm` 覆盖到恢复快照，也不要混用两个备份批次。
+
+随后使用原配置启动并检查会话、需求版本、验收和回执。更换路径时还需修改配置中的主库及共享目录；更换机器时需核对节点身份及凭据，不能让两台活跃节点共享恢复出的同一身份。出现问题时停止服务，使用切换前的新备份按同样流程回退。
+
+数据恢复不是在途任务续跑。执行回执中原进程未完成的记录会显示 unknown；PM 启动记录来自旧进程时禁止自动重启。尤其是恢复较早备份，备份之后发生的工具副作用和执行编号可能不在归档中，必须先核实，不能通过删除回执库或盲目重新下发消除未知状态。
+
+当前仍是每节点离线备份，不提供多节点同时快照、热备、定时备份或自动原位切换。多机恢复需协调同一停止写入窗口，保留各节点的回执与身份。

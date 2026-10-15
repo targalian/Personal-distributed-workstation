@@ -59,6 +59,7 @@ MAPPING = {
     "lan_mesh/station_routes_worker.py": "02-station-core",
     "lan_mesh/singleton.py": "02-station-core",
     "lan_mesh/database.py": "02-station-core",
+    "lan_mesh/backup.py": "02-station-core",
     # 03-task-orchestration — 任务编排与 PM
     "lan_mesh/task.py": "03-task-orchestration",
     "lan_mesh/orchestrator.py": "03-task-orchestration",
@@ -124,6 +125,7 @@ MAPPING = {
     "tests/test_execution_receipts.py": "10-test-loop",
     "tests/test_pm_transport.py": "10-test-loop",
     "tests/test_pm_start.py": "10-test-loop",
+    "tests/test_backup.py": "10-test-loop",
     "tests/test_delivery_replay.py": "10-test-loop",
     "test_bug/project_brief_browser.py": "10-test-loop",
     "test_bug/run_loop.py": "10-test-loop",
@@ -144,6 +146,7 @@ MAPPING = {
     ".githooks/": ("10-test-loop", "commit-msg / pre-push / post-merge 钩子"),
     # 11-scripts-subprojects — 运维脚本/技能库/独立子项目
     "scripts/sync_docs.py": "11-scripts-subprojects",
+    "scripts/backup_workstation.py": "11-scripts-subprojects",
     "scripts/update_version.py": "11-scripts-subprojects",
     "scripts/check_environment.py": "11-scripts-subprojects",
     "scripts/sync_push.ps1": ("11-scripts-subprojects",

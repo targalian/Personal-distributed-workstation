@@ -4,6 +4,8 @@ A distributed personal AI workstation — organizes multiple heterogeneous hosts
 
 > 中文文档请见 Gitee 仓库的 master 分支。
 
+Offline backup and recovery: see [the backup guide](docs/backup-restore.md) for `scripts/backup_workstation.py create`, `verify`, and `restore`. Backups include task data, conversations, project description history and execution/startup receipts; restore first into a new directory for verification.
+
 ## Project Structure
 
 ```

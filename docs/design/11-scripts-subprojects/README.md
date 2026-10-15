@@ -8,6 +8,7 @@
 | 文件/目录 | 职责一句话 |
 |---|---|
 | quicklan-main/ | 独立子项目: Tauri + React 桌面文件共享应用 |
+| scripts/backup_workstation.py | Create, verify or restore an offline workstation backup without overwriting live data. |
 | scripts/check_environment.py | Validate startup dependencies and imports without contacting a package index. |
 | scripts/start_workstation.bat | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/start_workstation.ps1 | 跨平台一键启动 Station (bat/ps1/sh) |
@@ -78,6 +79,12 @@ React + TypeScript 前端、Rust/Tauri 后端的桌面文件共享应用。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-15 | iter-47 | 新增 backup_workstation.py create/verify/restore 与路径预览，提供配置覆盖和恢复映射说明 |
 | 2026-10-13 | iter-35 | Unix 启动器保留异常环境、检查完整依赖、隔离 ROS 路径、监督 Worker 生命周期；统一 Python 3.10+ |
 | 2026-08-16 | iter-30 补③ | P2 #10: VERSION.json 自动化 (update_version.py 幂等同步 + sync_push 推送前自动调用提交) |
 | 2026-08-16 | iter-27 后 | 初建 |
+
+
+## scripts/backup_workstation.py — 离线备份与恢复
+
+create --plan 列出当前配置推导的根目录与文件；create --offline-confirmed 在停止写入后打包，verify 完整校验，restore 只恢复到新目录。支持 --config / --db / --shared / --worker-shared / --state-dir / --extra-file。运行时依赖项目虚拟环境，错误返回非零，不输出凭据内容。恢复目录提供原路径映射；原位切换与回退按 [备份恢复说明](../../backup-restore.md) 操作。
