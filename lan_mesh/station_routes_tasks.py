@@ -12,6 +12,7 @@ import time
 
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 
 from .protocol import AgentCard
 from starlette.concurrency import run_in_threadpool
@@ -101,12 +102,12 @@ def build_task_routes(controller) -> APIRouter:
     async def cancel_task(task_id: str):
         """取消指定任务及其 PM Agent。"""
         check_secretary(controller)
-        result = controller.cancel_task(task_id)
+        result = await run_in_threadpool(controller.cancel_task, task_id)
         if result.get("ok"):
             await _broadcast(state, "task_cancelled", {
                 "task_id": task_id, "message": result.get("message", ""),
             })
-            return result
+            return JSONResponse(result, status_code=200 if result.get("confirmed") else 202)
         raise HTTPException(status_code=409, detail=result.get("message", "取消失败"))
 
     @router.get("/api/tasks/{task_id}/execution-check")
@@ -122,12 +123,12 @@ def build_task_routes(controller) -> APIRouter:
     async def pause_task(task_id: str):
         """暂停指定任务及其 PM Agent。"""
         check_secretary(controller)
-        result = controller.pause_task(task_id)
+        result = await run_in_threadpool(controller.pause_task, task_id)
         if result.get("ok"):
             await _broadcast(state, "task_paused", {
                 "task_id": task_id, "message": result.get("message", ""),
             })
-            return result
+            return JSONResponse(result, status_code=200 if result.get("confirmed") else 202)
         raise HTTPException(status_code=409, detail=result.get("message", "暂停失败"))
 
     @router.delete("/api/tasks/{task_id}")
@@ -137,8 +138,17 @@ def build_task_routes(controller) -> APIRouter:
         task = db.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
-        if task.status in ("running", "monitoring"):
-            controller.cancel_task(task_id)
+        control = (task.output_data or {}).get("_pm_control", {})
+        if control and control.get("state") != "confirmed":
+            raise HTTPException(status_code=409, detail="原节点尚未确认停止，请先核实或重发停止请求；保留任务记录")
+        if task.status in ("running", "monitoring", "planning", "executing"):
+            result = await run_in_threadpool(controller.cancel_task, task_id)
+            if not result.get("confirmed"):
+                raise HTTPException(status_code=409, detail="原节点尚未确认停止，保留任务记录；请核实后再删除")
+        try:
+            ok = db.delete_task(task_id, require_stopped=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
         if task.pm_agent_id and task.pm_agent_id in controller._pm_worker_map:
             del controller._pm_worker_map[task.pm_agent_id]
         # 联动清理: 从对话中解绑 PM 线程
@@ -151,10 +161,6 @@ def build_task_routes(controller) -> APIRouter:
                     ch.detach_pm_thread(conv_id, pm_id)
                 # 清理 PM 线程消息 (内存 + JSONL 文件)
                 ch.delete_pm_thread(pm_id)
-            # 清理本机 PM Agent 残留 (含子 Agent 与线程)
-            if getattr(controller, '_local_pm_agent', None) and controller._local_pm_agent.pm_id == pm_id:
-                controller._local_stop_pm()
-        ok = db.delete_task(task_id)
         if ok:
             await _broadcast(state, "task_deleted", {"task_id": task_id, "name": task.name})
             return {"ok": True, "message": f"任务 '{task.name}' 已删除"}

@@ -818,6 +818,11 @@ class Database:
                                (task.task_id,)).fetchone()
             if row:
                 previous = json.loads(row["output_data"]) or {}
+                if "_pm_control" in previous:
+                    task.output_data = {**(task.output_data or {}), "_pm_control": previous["_pm_control"]}
+                    task.status = row["status"]
+                    current = self.get_task(task.task_id)
+                    task.pm_agent_id = current.pm_agent_id
                 if "_delivery" in previous:
                     task.output_data = {**(task.output_data or {}), "_delivery": previous["_delivery"]}
                     if row["status"] in ("accepted", "rejected", "cancelled", "paused"):
@@ -961,6 +966,57 @@ class Database:
             pm_agent_id=row["pm_agent_id"] if "pm_agent_id" in row.keys() else "",
         )
 
+    def begin_task_control(self, task_id: str, action: str) -> Task:
+        """Persist stop intent before contacting a PM; preserve delivery and terminal results."""
+        import uuid
+        if action not in ("cancel", "pause"):
+            raise ValueError("不支持的停止操作")
+        conn = self._get_conn()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self.get_task(task_id)
+            if task is None:
+                raise KeyError("任务不存在")
+            data = task.output_data or {}
+            if task.status in ("completed", "accepted", "rejected", "failed") or "_delivery" in data:
+                raise ValueError("任务已有终态或交付，请先核对产物与验收结论")
+            if task.status == "cancelled" and action == "pause":
+                raise ValueError("任务已登记取消，不能改为暂停")
+            previous = data.get("_pm_control", {})
+            if previous.get("action") == action:
+                return task
+            status = "cancelled" if action == "cancel" else "paused"
+            data["_pm_control"] = {
+                "request_id": uuid.uuid4().hex, "action": action,
+                "state": "pending" if task.pm_agent_id else "confirmed",
+                "scope": "pm_cooperative" if task.pm_agent_id else "not_dispatched",
+                "requested_at": time.time(),
+                "message": "停止意图已登记，等待原节点确认" if task.pm_agent_id else "任务已停止，尚未派发到 PM",
+            }
+            conn.execute("UPDATE tasks SET status=?,output_data=? WHERE task_id=?",
+                         (status, json.dumps(data, ensure_ascii=False), task_id))
+            conn.execute("UPDATE pm_agents SET status=?,updated_at=? WHERE pm_id=? AND task_id=?",
+                         ("unknown", time.time(), task.pm_agent_id, task_id))
+            task.status, task.output_data = status, data
+        return task
+
+    def finish_task_control(self, task_id: str, request_id: str, confirmed: bool, message: str) -> None:
+        """Only the current request can acknowledge a stop; confirmation cannot regress."""
+        conn = self._get_conn()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self.get_task(task_id)
+            data = task.output_data if task else {}
+            control = data.get("_pm_control", {})
+            if control.get("request_id") != request_id or control.get("state") == "confirmed":
+                return
+            control.update(state="confirmed" if confirmed else "unknown", message=message, checked_at=time.time())
+            conn.execute("UPDATE tasks SET output_data=? WHERE task_id=?",
+                         (json.dumps(data, ensure_ascii=False), task_id))
+            if confirmed:
+                conn.execute("UPDATE pm_agents SET status=?,updated_at=? WHERE pm_id=? AND task_id=?",
+                             (task.status, time.time(), task.pm_agent_id, task_id))
+
     def update_task_status(self, task_id: str, status: str):
         """更新任务状态 (用于取消/暂停)。"""
         conn = self._get_conn()
@@ -970,13 +1026,21 @@ class Database:
         )
         conn.commit()
 
-    def delete_task(self, task_id: str) -> bool:
-        """彻底删除任务及关联的 PM Agent 和 Checkpoint 记录。"""
+    def delete_task(self, task_id: str, require_stopped: bool = False) -> bool:
+        """Delete task records; interactive deletion must retain unresolved stop evidence."""
         conn = self._get_conn()
-        conn.execute("DELETE FROM pm_agents WHERE task_id = ?", (task_id,))
-        conn.execute("DELETE FROM graph_checkpoints WHERE task_id = ?", (task_id,))
-        cursor = conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
-        conn.commit()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self.get_task(task_id)
+            if require_stopped and task:
+                control = (task.output_data or {}).get("_pm_control", {})
+                if (task.status in ("running", "monitoring", "planning", "executing")
+                        or (control and control.get("state") != "confirmed")
+                        or (task.pm_agent_id and task.status in ("paused", "cancelled") and not control)):
+                    raise ValueError("原节点尚未确认停止，保留任务记录；请核实后再删除")
+            conn.execute("DELETE FROM pm_agents WHERE task_id = ?", (task_id,))
+            conn.execute("DELETE FROM graph_checkpoints WHERE task_id = ?", (task_id,))
+            cursor = conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
         return cursor.rowcount > 0
 
     def delete_pm_agent(self, pm_id: str) -> bool:
@@ -1367,6 +1431,9 @@ class Database:
         params.append(pm_id)
         with conn:
             conn.execute("BEGIN IMMEDIATE")
+            protected = conn.execute("SELECT status FROM tasks WHERE pm_agent_id=? AND status IN ('cancelled','paused')", (pm_id,)).fetchone()
+            if protected and status != protected["status"]:
+                return
             conn.execute(f"UPDATE pm_agents SET {', '.join(sets)} WHERE pm_id = ?", params)
             if status in ("planning", "executing", "monitoring", "awaiting_input", "completed", "failed"):
                 row = conn.execute("SELECT task_id,output_data FROM tasks WHERE pm_agent_id=?", (pm_id,)).fetchone()

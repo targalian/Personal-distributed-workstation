@@ -96,6 +96,7 @@ class ProjectManagerAgent:
             "running": self._running,
             "teams": len(st.teams),
             "subagents": len(st.subagents),
+            "control_receipt": dict(getattr(self, "_control_receipt", {})),
         }
 
     def _run_task(self, task: dict):

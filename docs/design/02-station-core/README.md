@@ -219,3 +219,9 @@ iter-46 同时隔离交付保存后的 Bot 通知异常：通知失败记录告�
 ## iter-48：任务核实 API
 
 `GET /api/tasks/{task_id}/execution-check` 在线程池中读取原节点证据。内嵌 Worker 新增 `GET /role/pm-starts/{pm_id}?task_id=...`，与独立 Worker 共用只读查询。保留原 `/role/pm-status` 行为；沿用已有 Secretary 激活检查与 mesh 认证，查询不修改持久化状态。
+
+## iter-49：停止事务与接口语义
+
+数据库 `begin_task_control` 先保存停止意图并保护已有交付/终态，PM记录保持unknown直到确认；`finish_task_control` 仅接受当前请求编号，已确认不降级。普通任务保存保留 `_pm_control` 及归属，PM 状态更新在同一事务内再次检查停止状态。交互删除事务保留运行中或停止未确认记录。无数据库 schema 迁移。
+
+取消/暂停路由在线程池执行并返回 200（确认）或 202（待核实）；不能操作终态返回409。Station 和 Worker 装配同一控制路由，旧路径保留但必须提供身份。

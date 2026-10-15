@@ -566,28 +566,12 @@ class StationController:
             receipt_path=self.db.path.with_name(self.db.path.stem + "-pm-starts.sqlite3"),
             current=lambda: self._local_pm_agent, assign=lambda pm: setattr(self, "_local_pm_agent", pm), lookup=lookup)
 
-    def _local_stop_pm(self) -> dict:
-        """停止本机 PM Agent。"""
-        if not self._local_pm_agent:
-            return {"ok": False, "message": "PM Agent 未运行"}
-        self._local_pm_agent.cancel()
-        pm_id = self._local_pm_agent.pm_id
-        self._local_pm_agent = None
-        self._local_sub_agents.clear()
-        logger.info("本机 PM Agent 已停止: %s", pm_id)
-        return {"ok": True, "pm_id": pm_id}
+    def _local_stop_pm(self, payload: dict) -> dict:
+        return self._local_control_pm({**payload, "action": "cancel"})
 
-    def _local_cancel_pm(self) -> dict:
-        if not self._local_pm_agent:
-            return {"ok": False, "message": "PM Agent 未运行"}
-        self._local_pm_agent.cancel()
-        return {"ok": True, "pm_id": self._local_pm_agent.pm_id}
-
-    def _local_pause_pm(self) -> dict:
-        if not self._local_pm_agent:
-            return {"ok": False, "message": "PM Agent 未运行"}
-        self._local_pm_agent.pause()
-        return {"ok": True, "pm_id": self._local_pm_agent.pm_id}
+    def _local_control_pm(self, payload: dict) -> dict:
+        from .pm_control import control_pm
+        return control_pm(lambda: self._local_pm_agent, self.state.device_id, payload)
 
     def _local_inject_input(self, input_data: dict) -> dict:
         if not self._local_pm_agent or not self._local_pm_agent._running:
@@ -721,115 +705,12 @@ class StationController:
     # ── 优化8: 取消/暂停任务 ──
 
     def cancel_task(self, task_id: str) -> dict:
-        """取消指定任务及对应的 PM Agent。
-
-        Args:
-            task_id: 任务 ID
-
-        Returns:
-            {ok: bool, message: str}
-        """
-        task = self.db.get_task(task_id)
-        if not task:
-            return {"ok": False, "message": f"任务 {task_id} 不存在"}
-
-        pm_id = task.pm_agent_id
-        if not pm_id:
-            # 任务尚未分配 PM, 直接取消
-            self.db.update_task_status(task_id, "cancelled")
-            return {"ok": True, "message": "任务已取消 (未分配 PM)"}
-
-        worker = self._pm_worker_map.get(pm_id)
-        if not worker:
-            # Worker 信息丢失, 标记取消
-            self.db.update_task_status(task_id, "cancelled")
-            self.db.update_pm_status(pm_id, "cancelled")
-            return {"ok": True, "message": "任务已标记取消 (Worker 信息丢失)"}
-
-        # 本机 PM 直接取消
-        if worker.get("local"):
-            self._local_cancel_pm()
-            self.db.update_task_status(task_id, "cancelled")
-            self.db.update_pm_status(pm_id, "cancelled")
-            logger.info("本机任务已取消: %s", task_id)
-            self.bot_gateway.notify("task_cancelled", {"task_id": task_id, "name": task.name})
-            return {"ok": True, "message": "任务已取消"}
-
-        ip = worker.get("ip", "")
-        port = worker.get("api_port", 0)
-        if not ip or not port:
-            return {"ok": False, "message": "Worker 地址信息不完整"}
-
-        try:
-            resp = http_post(
-                f"http://{ip}:{port}/role/cancel-pm",
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                self.db.update_task_status(task_id, "cancelled")
-                self.db.update_pm_status(pm_id, "cancelled")
-                logger.info("任务已取消: %s", task_id)
-                self.bot_gateway.notify("task_cancelled", {
-                    "task_id": task_id, "name": task.name,
-                })
-                return {"ok": True, "message": "任务已取消"}
-            else:
-                return {"ok": False, "message": f"Worker 返回错误: {resp.text[:200]}"}
-        except Exception as e:
-            return {"ok": False, "message": f"取消失败: {e}"}
+        from .pm_control import request_task_control
+        return request_task_control(self, task_id, "cancel")
 
     def pause_task(self, task_id: str) -> dict:
-        """暂停指定任务及对应的 PM Agent。
-
-        Args:
-            task_id: 任务 ID
-
-        Returns:
-            {ok: bool, message: str}
-        """
-        task = self.db.get_task(task_id)
-        if not task:
-            return {"ok": False, "message": f"任务 {task_id} 不存在"}
-
-        pm_id = task.pm_agent_id
-        if not pm_id:
-            return {"ok": False, "message": "任务尚未分配 PM Agent"}
-
-        worker = self._pm_worker_map.get(pm_id)
-        if not worker:
-            return {"ok": False, "message": "PM Agent 的 Worker 信息未找到"}
-
-        # 本机 PM 直接暂停
-        if worker.get("local"):
-            self._local_pause_pm()
-            self.db.update_task_status(task_id, "paused")
-            self.db.update_pm_status(pm_id, "paused")
-            logger.info("本机任务已暂停: %s", task_id)
-            self.bot_gateway.notify("task_paused", {"task_id": task_id, "name": task.name})
-            return {"ok": True, "message": "任务已暂停"}
-
-        ip = worker.get("ip", "")
-        port = worker.get("api_port", 0)
-        if not ip or not port:
-            return {"ok": False, "message": "Worker 地址信息不完整"}
-
-        try:
-            resp = http_post(
-                f"http://{ip}:{port}/role/pause-pm",
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                self.db.update_task_status(task_id, "paused")
-                self.db.update_pm_status(pm_id, "paused")
-                logger.info("任务已暂停: %s", task_id)
-                self.bot_gateway.notify("task_paused", {
-                    "task_id": task_id, "name": task.name,
-                })
-                return {"ok": True, "message": "任务已暂停"}
-            else:
-                return {"ok": False, "message": f"Worker 返回错误: {resp.text[:200]}"}
-        except Exception as e:
-            return {"ok": False, "message": f"暂停失败: {e}"}
+        from .pm_control import request_task_control
+        return request_task_control(self, task_id, "pause")
 
     # ── Bot 通道管理 ───────────────────────────────────────────────
 

@@ -1222,7 +1222,7 @@ class ChatHandler:
 
         result = self.controller.cancel_task(task_id)
         if result.get("ok"):
-            return f"✅ {result.get('message', '任务已取消')}"
+            return f"{'✅' if result.get('confirmed') else '⏳'} {result.get('message', '停止请求已登记')}"
         return f"❌ 取消失败: {result.get('message', '未知错误')}"
 
     def _action_pause_task(self, message: str) -> str:
@@ -1242,7 +1242,7 @@ class ChatHandler:
 
         result = self.controller.pause_task(task_id)
         if result.get("ok"):
-            return f"⏸️ {result.get('message', '任务已暂停')}"
+            return f"{'⏸️' if result.get('confirmed') else '⏳'} {result.get('message', '停止请求已登记')}"
         return f"❌ 暂停失败: {result.get('message', '未知错误')}"
 
     def _extract_task_id_from_message(self, message: str) -> str:

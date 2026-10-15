@@ -98,3 +98,7 @@ WorkerAgent.start_pm 使用 pm_start.py 共用门控与持久化启动回执，�
 ## iter-48：Worker 启动记录查询
 
 Worker 的 `inspect_pm_start` 读取 `worker-pm-starts.sqlite3`，与 Station 使用相同 PM 核实逻辑。查询端点 `/role/pm-starts/{pm_id}` 必须携带 task_id，并在线程池中读取。当前 PM 已替换或进程重启时，历史成功启动只返回结果未知，不自动重建 Agent。
+
+## iter-49：按身份停止 PM
+
+Worker `control_pm` 与 Station 共用停止验证器，不再对无身份请求直接操作当前 PM。`/role/pm-control`、旧 stop/cancel/pause 路径均校验节点和任务身份。停止确认表示 PM 设置停止信号；正在运行的工具不强制终止，晚到执行结果由 PM 停止边界和 Secretary 事务隔离。PM 状态查询携带当前实例的控制回执以恢复丢失响应。

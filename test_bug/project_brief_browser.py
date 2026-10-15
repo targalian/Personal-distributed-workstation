@@ -112,6 +112,70 @@ def verify_execution_inspection(page, output):
     page.set_viewport_size({'width':1680,'height':1100})
 
 
+def verify_task_control(page, output):
+    """Verify accepted stop intent versus actual PM acknowledgment through the real API."""
+    from lan_mesh.pm_agent import ProjectManagerAgent
+    from lan_mesh.pm_control import control_pm, request_task_control
+    page.on('dialog',lambda dialog:dialog.accept())
+    holder=SimpleNamespace(pm=None)
+    controller._queue_ws_broadcast=Mock()
+    controller._pm_worker_map={}
+    controller._local_control_pm=lambda payload:control_pm(lambda:holder.pm,'browser-node',payload)
+    controller.cancel_task=lambda task_id:request_task_control(controller,task_id,'cancel')
+    controller.pause_task=lambda task_id:request_task_control(controller,task_id,'pause')
+    def task_list_route(r):
+        response=client.get('/api/tasks')
+        r.fulfill(status=response.status_code,json=response.json())
+    page.route('**/api/tasks',task_list_route)
+    def prepare(task_id,pm_id):
+        task=Task(task_id=task_id,name='停止确认演示')
+        controller.db.save_task(task)
+        controller.db.bind_task_pm(PMAgent(pm_id=pm_id,task_id=task_id,device_id='browser-node',
+            hostname='原节点',ip='127.0.0.1',api_port=12345,status='starting'))
+        return controller.db.get_task(task_id)
+    task=prepare('control-task','control-pm')
+    page.evaluate('(task)=>{allTasks=[task];showTaskDetail(task.task_id)}',task.to_dict())
+    page.locator('#modal button',has_text='取消任务').click()
+    page.wait_for_function("allTasks.some(t=>t.task_id==='control-task'&&t.output_data._pm_control)")
+    page.evaluate("showTaskDetail('control-task')")
+    assert '取消已登记 · 停止待核实' in page.locator('#modal').inner_text()
+    assert page.locator('[data-control-retry]').is_visible()
+    assert page.locator('#task-grid .card',has_text='停止确认演示').get_by_text('重新提交').count()==0
+    page.screenshot(path=str(output/'task_control_unknown_desktop.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    page.locator('[data-control-retry]').scroll_into_view_if_needed()
+    assert page.locator('#modal').evaluate('(el)=>el.scrollWidth<=el.clientWidth+1')
+    page.screenshot(path=str(output/'task_control_unknown_mobile.png'),full_page=True)
+    assert client.delete('/api/tasks/control-task').status_code==409
+    pm=ProjectManagerAgent('control-pm',Mock(),'http://unused','browser-node')
+    pm._state.task={'task_id':'control-task'}
+    pm.running=True
+    holder.pm=pm
+    request_id=controller.db.get_task('control-task').output_data['_pm_control']['request_id']
+    page.locator('[data-control-retry]').click()
+    page.wait_for_function("document.querySelector('#modal').textContent.includes('已取消 · PM 已确认')")
+    assert page.locator('[data-control-retry]').count()==0
+    assert '在途模型和工具仍需核实' in page.locator('#modal').inner_text()
+    assert not pm.running and pm._state.stop_event.is_set()
+    assert controller.db.get_task('control-task').output_data['_pm_control']['request_id']==request_id
+    page.set_viewport_size({'width':1680,'height':1100})
+    page.screenshot(path=str(output/'task_control_confirmed_desktop.png'),full_page=True)
+    # The pause button uses the same acknowledgment contract.
+    task=prepare('pause-control-task','pause-control-pm')
+    pm=ProjectManagerAgent('pause-control-pm',Mock(),'http://unused','browser-node')
+    pm._state.task={'task_id':task.task_id}
+    pm.running=True
+    holder.pm=pm
+    page.evaluate('(task)=>{allTasks.push(task);showTaskDetail(task.task_id)}',task.to_dict())
+    page.locator('#modal button',has_text='暂停').click()
+    page.wait_for_function("allTasks.some(t=>t.task_id==='pause-control-task'&&t.output_data._pm_control?.state==='confirmed')")
+    page.evaluate("showTaskDetail('pause-control-task')")
+    assert '已暂停 · PM 已确认' in page.locator('#modal').inner_text()
+    assert pm._state.stop_reason=='paused'
+    page.evaluate('closeOverlayForce()')
+    page.unroute('**/api/tasks',task_list_route)
+
+
 def accept_all_suggestions(page):
     """Review and explicitly accept a candidate without relying on automatic writes."""
     page.locator('#project-brief-panel [data-tab="review"]').click()
@@ -622,6 +686,7 @@ with sync_playwright() as p:
     page.set_viewport_size({'width':1680,'height':1100})
     assert not errors,errors
     verify_execution_inspection(page,output)
+    verify_task_control(page,output)
     assert not errors,errors
     # UI-036: test unified editing history against isolated conversations and the real API.
     history_id=chat.create_conversation('编辑历史测试')['id']
@@ -675,3 +740,5 @@ print('PASS: revision history, persisted snapshots, comparison, restore as new v
 print('PASS: confirmed handoff, deduplication, frozen revision, task/delivery/acceptance APIs, dirty and stale guards, persistence, missing task, escaping, conversation isolation, desktop/mobile; simulated execution')
 
 print('PASS: original-node inspection, unknown/running/inactive evidence, retry after error, stale response isolation, read-only task state, escaped output and desktop/mobile; temporary SQLite and simulated PM state')
+
+print("PASS: cancel/pause intent versus PM confirmation, explicit retry, retained task on unknown stop, original request ID, disabled resubmit, desktop/mobile; real API and cooperative PM instance")

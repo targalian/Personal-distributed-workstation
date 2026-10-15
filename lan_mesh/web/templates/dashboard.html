@@ -870,8 +870,8 @@ function connectWS(){
     if(msg.type==='hosts'||msg.type==='heartbeat'||msg.type==='host_registered')refreshHosts();
     if(msg.type==='task_submitted'||msg.type==='task_updated'||msg.type==='task_deleted')refreshTasks();
     if(msg.type==='task_delivered'){showToast(`📦 任务「${msg.data.task_name||''}」已交付，等待验收`,'ok');refreshTasks();}
-    if(msg.type==='task_cancelled'){showToast(`🚫 任务已取消: ${msg.data.message||''}`,'info');refreshTasks();refreshPMAgents();}
-    if(msg.type==='task_paused'){showToast(`⏸️ 任务已暂停: ${msg.data.message||''}`,'info');refreshTasks();}
+    if(msg.type==='task_cancelled'){showToast(msg.data.message||'取消请求状态已更新','info');refreshTasks();refreshPMAgents();}
+    if(msg.type==='task_paused'){showToast(msg.data.message||'暂停请求状态已更新','info');refreshTasks();}
     if(msg.type==='agent_registered')refreshAgents();
     if(msg.type==='project_created'||msg.type==='project_updated'||msg.type==='project_archived')refreshProjects();
     if(msg.type==='secretary_activated'){secretaryActive=true;updateSecretaryUI();document.getElementById('role-badge').textContent='Station + Secretary';document.getElementById('role-badge').style.color='var(--green)';document.getElementById('role-badge').style.borderColor='var(--green)';}
@@ -1021,12 +1021,12 @@ function renderTasks(){
     const projName=t.project_id?projNameById(t.project_id):'';
     const subRows=subs.map(s=>`<div class="subtask-row"><span class="step-dot ${s.status}"></span><span style="flex:1">${esc(s.name||s.description||'子任务')}</span><span style="color:var(--dim)">[${s.status}]</span>${s.assigned_agent_id?'<span style="color:var(--dim)"> → '+esc(s.assigned_agent_id.slice(0,8))+'</span>':''}</div>`).join('');
     const canCancel=['running','monitoring','planning','executing'].includes(t.status);
-    const canResubmit=t.status==='interrupted'||t.status==='failed'||t.status==='cancelled';
+    const canResubmit=!taskControlPending(t)&&(t.status==='interrupted'||t.status==='failed'||t.status==='cancelled');
     const actionBtns=(canCancel?`<button class="btn sm" style="background:#e5a33c;color:#fff;border:none" onclick="event.stopPropagation();pauseTask('${t.task_id}','${escJs(t.name||'')}')">&#10074;&#10074; 暂停</button><button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="event.stopPropagation();cancelTask('${t.task_id}','${escJs(t.name||'')}')">&#9724; 取消</button>`:'')+(canResubmit?`<button class="btn sm primary" onclick="event.stopPropagation();resubmitTask('${t.task_id}')">🔄 重新提交</button>`:'');
     const hasDelivery=t.output_data&&t.output_data._delivery;
     const deliveryBadge=hasDelivery?`<span class="badge" style="background:${t.output_data._delivery.accepted===true?'var(--green)':t.output_data._delivery.accepted===false?'#e5533c':'var(--yellow)'};color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">${t.output_data._delivery.accepted===true?'✅ 已验收':t.output_data._delivery.accepted===false?'❌ 已退回':'📦 待验收'}</span>`:'';
     return `<div class="card task-card" onclick="toggleTaskExpand(this)">
-      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span>${taskExecutionIssue(t)&&t.status==='running'?'<span class="badge" style="color:var(--yellow)">结果待核实</span>':''}${deliveryBadge}</div></div>
+      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${esc(taskStatusText(t))}</span>${taskExecutionIssue(t)&&t.status==='running'?'<span class="badge" style="color:var(--yellow)">结果待核实</span>':''}${deliveryBadge}</div></div>
       <div class="card-meta">${esc(t.description||'-')}<br>📊 ${done}/${sc} 子任务 (${pct}%) ${projName?'| 📁 '+esc(projName):''}${pmInfo}</div>
       <div class="pbar"><div class="pfill ${pct>=100?'low':'mid'}" style="width:${pct}%"></div></div>
       <div class="task-expand">${subRows||'<div class="subtask-row" style="color:var(--dim)">无子任务</div>'}
@@ -1042,20 +1042,47 @@ function openDagForTask(taskId){
   sel.value=taskId;
   loadDAGFromSelect();
 }
+function taskControlPending(task){
+  const control=(task.output_data||{})._pm_control;
+  return !!control&&control.state!=='confirmed';
+}
+function taskStatusText(task){
+  const control=(task.output_data||{})._pm_control;
+  if(!control)return task.status;
+  const action=control.action==='pause'?'暂停':'取消';
+  return taskControlPending(task)?`${action}已登记 · 停止待核实`:`已${action} · ${control.scope==='not_dispatched'?'尚未派发':'PM 已确认'}`;
+}
 function taskExecutionIssue(task){
   const output=task.output_data||{};
   return [output._pm_execution,output._pm_start].find(item=>item&&item.state==='unknown')||null;
 }
 function taskExecutionPanel(task){
   const issue=taskExecutionIssue(task);
-  if(!task.pm_agent_id&&!issue)return '';
+  const control=(task.output_data||{})._pm_control;
+  if(!task.pm_agent_id&&!issue&&!control)return '';
   return `<div class="modal-sec task-execution-check" style="border:1px solid var(--yellow);border-radius:8px;padding:12px;overflow-wrap:anywhere">
-    <h3>${issue?'执行结果待核实':'执行核实'}</h3>
+    <h3>${taskControlPending(task)?'停止结果待核实':issue?'执行结果待核实':'执行核实'}</h3>
+    ${control?`<p class="task-control-message">${esc(control.message||'停止结果待核实')}</p>`:''}
+    ${taskControlPending(task)?'<button class="btn sm" data-control-retry>重发停止请求</button>':''}
     ${issue?`<p class="task-step-error">${esc(issue.message||'尚未收到明确执行结果')}</p>`:''}
     <p style="font-size:13px">按任务归属查询原节点，不会重启或重派任务。节点不可达、记录缺失或 PM 停止，都不代表外部工具没有执行。</p>
     <button class="btn sm" data-execution-check>核实原节点</button>
     <div class="task-execution-result" role="status" aria-live="polite" style="margin-top:10px;font-size:13px;white-space:pre-wrap"></div>
   </div>`;
+}
+async function retryTaskControl(taskId,action,panel){
+  const button=panel.querySelector('[data-control-retry]');
+  if(button.disabled)return;
+  button.disabled=true;button.textContent='发送中…';
+  try{
+    const response=await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/${action==='pause'?'pause':'cancel'}`,{method:'POST'});
+    const result=await response.json();
+    if(!response.ok)throw new Error(result.detail||'停止请求失败');
+    await refreshTasks();
+    if(panel.isConnected)showTaskDetail(taskId);
+    showToast(result.message||'请核实停止结果',result.confirmed?'ok':'info');
+  }catch(error){if(panel.isConnected)panel.querySelector('.task-execution-result').textContent='停止请求失败：'+error.message;}
+  finally{if(panel.isConnected){button.disabled=false;button.textContent='重发停止请求';}}
 }
 async function checkTaskExecution(taskId, panel){
   const button=panel.querySelector('[data-execution-check]');
@@ -1083,7 +1110,7 @@ async function showTaskDetail(id){
   const d=t.output_data&&t.output_data._delivery;
   const deliverySec=d?`<div class="modal-sec" style="border:1px solid var(--yellow);border-radius:8px;padding:12px"><h3>📦 交付物 ${d.accepted===true?'<span style="color:var(--green)">(已验收)</span>':d.accepted===false?'<span style="color:#e5533c">(已退回)</span>':'<span style="color:var(--yellow)">(待验收)</span>'}</h3><p style="font-size:13px;white-space:pre-wrap;max-height:150px;overflow:auto">${esc(d.summary||d.deliverable||'').slice(0,500)}</p><button class="btn sm primary" onclick="closeOverlayForce();showDelivery('${t.task_id}')">查看完整交付物</button></div>`:'';
   const canAct=['running','monitoring','planning','executing'].includes(t.status);
-  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>${esc(t.name)}</h2><p style="color:var(--dim);font-size:13px">${t.status} · ${fmtTime(t.created_at)}${t.completed_at?' → '+fmtTime(t.completed_at):''}</p>
+  document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>${esc(t.name)}</h2><p style="color:var(--dim);font-size:13px">${esc(taskStatusText(t))} · ${fmtTime(t.created_at)}${t.completed_at?' → '+fmtTime(t.completed_at):''}</p>
   <div class="modal-sec"><h3>描述</h3><p style="font-size:14px">${esc(t.description||'-')}</p></div>
   ${deliverySec}
   ${taskExecutionPanel(t)}
@@ -1095,7 +1122,11 @@ async function showTaskDetail(id){
     <button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="deleteTask('${t.task_id}','${escJs(t.name||'')}')">🗑️ 删除任务</button>
   </div>`;
   const checkPanel=document.querySelector('#modal .task-execution-check');
-  if(checkPanel)checkPanel.querySelector('[data-execution-check]').addEventListener('click',()=>checkTaskExecution(id,checkPanel));
+  if(checkPanel){
+    checkPanel.querySelector('[data-execution-check]').addEventListener('click',()=>checkTaskExecution(id,checkPanel));
+    const retry=checkPanel.querySelector('[data-control-retry]');
+    if(retry)retry.addEventListener('click',()=>retryTaskControl(id,t.output_data._pm_control.action,checkPanel));
+  }
   document.getElementById('overlay').classList.add('show');
 }
 async function deleteTask(taskId, name){
@@ -1134,15 +1165,15 @@ async function submitTask(){
   finally{if(btn){btn.disabled=false;btn.textContent='📤 提交任务';}}
 }
 async function cancelTask(taskId,name){
-  if(!confirm(`确定取消任务「${name}」？PM Agent 将被停止。`))return;
+  if(!confirm(`确定取消任务「${name}」？将请求原 PM 停止后续调度；在途模型和工具仍需核实。`))return;
   try{const r=await apiFetch(`/api/tasks/${taskId}/cancel`,{method:'POST'});
-    if(r.ok){showToast(`任务「${name}」已取消`,'info');refreshTasks();refreshPMAgents();}
+    if(r.ok){const d=await r.json();showToast(d.message||'取消请求已登记',d.confirmed?'ok':'info');refreshTasks();refreshPMAgents();}
     else{const d=await r.json();showToast('取消失败: '+(d.detail||'未知错误'),'err');}
   }catch(e){showToast('取消请求异常: '+e.message,'err');}
 }
 async function pauseTask(taskId,name){
   try{const r=await apiFetch(`/api/tasks/${taskId}/pause`,{method:'POST'});
-    if(r.ok){showToast(`任务「${name}」已暂停`,'info');refreshTasks();}
+    if(r.ok){const d=await r.json();showToast(d.message||'暂停请求已登记',d.confirmed?'ok':'info');refreshTasks();}
     else{const d=await r.json();showToast('暂停失败: '+(d.detail||'未知错误'),'err');}
   }catch(e){showToast('暂停请求异常: '+e.message,'err');}
 }
@@ -1178,6 +1209,8 @@ async function rejectDelivery(taskId){
 }
 async function resubmitTask(taskId){
   const t=allTasks.find(x=>x.task_id===taskId);if(!t)return;
+  if(taskControlPending(t)){showToast('原节点尚未确认停止，请先核实','err');return;}
+  if((t.output_data||{})._pm_control&&!confirm('重新提交会创建新任务。请先确认旧任务的在途工具已经结束，并核对已有产物，继续吗？'))return;
   try{
     const r=await apiFetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:t.name,description:t.description||'',project_id:t.project_id||''})});
     if(r.ok){const nt=await r.json();showToast(`✅ 任务已重新提交: ${nt.task_id.slice(0,8)}`,'ok');refreshTasks();}

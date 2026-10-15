@@ -359,32 +359,12 @@ class WorkerAgent:
             receipt_path=self.data_dir / "worker-pm-starts.sqlite3",
             current=lambda: self.state.pm_agent, assign=lambda pm: setattr(self.state, "pm_agent", pm), lookup=lookup)
 
-    def stop_pm(self) -> dict:
-        """停止本 Worker 上的 PM Agent。"""
-        if not self.state.pm_agent:
-            return {"ok": False, "message": "PM Agent 未运行"}
+    def stop_pm(self, payload: dict) -> dict:
+        return self.control_pm({**payload, "action": "cancel"})
 
-        self.state.pm_agent.cancel()
-        pm_id = self.state.pm_agent.pm_id
-        self.state.pm_agent = None
-        # 清理子 Agent
-        self.state.sub_agents.clear()
-        logger.info("PM Agent 已停止: %s", pm_id)
-        return {"ok": True, "pm_id": pm_id}
-
-    def cancel_pm(self) -> dict:
-        """取消 PM Agent (保留实例, 标记取消)。"""
-        if not self.state.pm_agent:
-            return {"ok": False, "message": "PM Agent 未运行"}
-        self.state.pm_agent.cancel()
-        return {"ok": True, "pm_id": self.state.pm_agent.pm_id}
-
-    def pause_pm(self) -> dict:
-        """暂停 PM Agent。"""
-        if not self.state.pm_agent:
-            return {"ok": False, "message": "PM Agent 未运行"}
-        self.state.pm_agent.pause()
-        return {"ok": True, "pm_id": self.state.pm_agent.pm_id}
+    def control_pm(self, payload: dict) -> dict:
+        from .pm_control import control_pm
+        return control_pm(lambda: self.state.pm_agent, self.state.device_id, payload)
 
     def inject_pm_input(self, input_data: dict) -> dict:
         """向 PM Agent 注入来自 Secretary/Boss 的回复输入。

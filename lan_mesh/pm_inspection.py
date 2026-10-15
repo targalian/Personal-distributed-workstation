@@ -42,6 +42,7 @@ def inspect_pm_start(path: Path, pm_id: str, task_id: str, device_id: str, curre
             return {**result, "state": "mismatch"}
         if isinstance(current.get("running"), bool):
             result["state"] = "running" if current["running"] else "inactive"
+            result["control_receipt"] = current.get("control_receipt", {})
             return result
     # A successful launch receipt is not evidence that the PM survived restart.
     output = (receipt or {}).get("output", {})

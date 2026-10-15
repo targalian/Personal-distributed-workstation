@@ -10,6 +10,7 @@
 |---|---|
 | orchestrator.py | 任务编排引擎 — 已废弃, 降级为工具库 (iter-30 收敛裁定) |
 | pm_agent.py | PM Agent 协调器/门面 — 持有 Planner/Dispatcher/Monitor, 对外暴露统一接口。 |
+| pm_control.py | Apply identity-bound PM stop requests and persist the distinction between intent and acknowledgment. |
 | pm_dispatcher.py | PM 分发器 — 团队创建与子任务分发 |
 | pm_inspection.py | Read original-node PM evidence without dispatching work or changing task state. |
 | pm_monitor.py | PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证 |
@@ -152,3 +153,9 @@ Station 不再将结果投递给可能无关的本机 PM，执行端先持久化
 `pm_inspection.py` 读取持久化任务/PM 归属并查询原节点。`inspect_pm_start` 以 SQLite mode=ro 读取启动回执，结合当前 PM 的身份及 running 标志区分运行、停止、历史记录、启动拒绝和无记录；缺失数据库不创建。旧成功启动回执不能证明进程仍运行或任务完成。
 
 Secretary 只发一次带认证的 GET（5 秒超时，禁止重定向），校验节点/PM/任务/格式；任务在等待期间删除、换归属或改变状态时返回 changed。查询不依赖内存 `_pm_worker_map`，不写任务、回执或验收，不触发重派。不实现检查点恢复或强制停止。操作说明见 ../../task-recovery.md。
+
+## iter-49：PM 停止意图与确认
+
+`pm_control.py` 将用户停止意图与原节点确认分离：Secretary 事务写入 `_pm_control` 并设置 paused/cancelled 以拦截派发和晚到结果，再按持久化归属发送一次含节点/PM/任务/动作/请求编号的 POST。失败只读核实，不自动重发；用户重发沿用请求编号。旧节点不回退无身份接口。
+
+接收端与启动共用 `_START_LOCK`，在 PM 状态锁内核对身份并发出协作式停止信号，确认范围为 pm_cooperative；无同步回调，避免阻塞 Secretary 事件循环。晚到暂停不能覆盖取消。节点回执仅存当前 PM 实例，Secretary 确认持久化；节点重启后无法核实的回执保留未知。没有工具级强杀或暂停后续跑。

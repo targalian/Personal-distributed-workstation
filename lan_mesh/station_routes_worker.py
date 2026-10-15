@@ -85,17 +85,8 @@ def build_worker_routes(controller) -> APIRouter:
             raise HTTPException(status_code=409, detail=result)
         return result
 
-    @router.post("/role/stop-pm")
-    async def local_stop_pm():
-        return controller._local_stop_pm()
-
-    @router.post("/role/cancel-pm")
-    async def local_cancel_pm():
-        return controller._local_cancel_pm()
-
-    @router.post("/role/pause-pm")
-    async def local_pause_pm():
-        return controller._local_pause_pm()
+    from .pm_control import build_pm_control_routes
+    router.include_router(build_pm_control_routes(controller._local_control_pm))
 
     @router.get("/role/pm-starts/{pm_id}")
     async def inspect_pm_start(pm_id: str, task_id: str):

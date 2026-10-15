@@ -73,12 +73,12 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
             raise HTTPException(status_code=409, detail=result)
         return result
 
-    @router.post("/role/stop-pm")
-    async def stop_pm():
-        """停止本 Worker 上的 PM Agent。"""
+    from .pm_control import build_pm_control_routes
+    def control(payload: dict):
         if not role_manager:
-            raise HTTPException(status_code=503, detail="角色管理未初始化")
-        return role_manager.stop_pm()
+            return {"ok": False, "message": "角色管理未初始化"}
+        return role_manager.control_pm(payload)
+    router.include_router(build_pm_control_routes(control))
 
     @router.get("/role/pm-starts/{pm_id}")
     async def inspect_pm_start(pm_id: str, task_id: str):
@@ -181,21 +181,5 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
         if not result.get("ok"):
             raise HTTPException(status_code=409, detail=result.get("message", "注入失败"))
         return result
-
-    # ── 优化8: PM 控制端点 ──
-
-    @router.post("/role/cancel-pm")
-    async def cancel_pm():
-        """取消本 Worker 上的 PM Agent 任务。"""
-        if not role_manager:
-            raise HTTPException(status_code=503, detail="角色管理未初始化")
-        return role_manager.cancel_pm()
-
-    @router.post("/role/pause-pm")
-    async def pause_pm():
-        """暂停本 Worker 上的 PM Agent 任务。"""
-        if not role_manager:
-            raise HTTPException(status_code=503, detail="角色管理未初始化")
-        return role_manager.pause_pm()
 
     return router

@@ -27,6 +27,7 @@
 | tests/test_delivery_replay.py | Concurrent delivery retries must preserve the reviewed artifact and acceptance decision. |
 | tests/test_execution_receipts.py | Verify durable execution claims, restart ambiguity and Station/Worker HTTP receipts. |
 | tests/test_local_checks.py | Verify local-loop failure propagation, environment isolation and offline reports. |
+| tests/test_pm_control.py | Verify stop intent, original-PM identity and acknowledgment under races and transport loss. |
 | tests/test_pm_delivery.py | Delivery outcomes must reflect persisted acknowledgements, not child progress or model errors. |
 | tests/test_pm_inspection.py | Verify original-node inspection survives restart and never redispatches or rewrites results. |
 | tests/test_pm_lifecycle.py | Exercise PM worker and monitor threads through completion and cooperative stop. |
@@ -133,3 +134,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 ## iter-48 验证
 
 `tests/test_pm_inspection.py` 覆盖只读启动库、历史进程、当前 PM 身份、缺库不创建、重复查询不更改验收、Secretary 激活检查、远端版本/认证/重定向/错误响应及查询期间任务变化；真实本机 HTTP 联验 Station 与 Worker。浏览器脚本增加未知任务提示、核实按钮、失败重试、晚到结果隔离及桌面/手机截图，登记 UI-041。
+
+## iter-49 验证
+
+`tests/test_pm_control.py` 覆盖节点/PM/任务/请求身份、旧无参数接口拒绝、晚到暂停、响应丢失只读确认、重发复用编号、事务保护与交付竞争、未确认删除保护、通知/磁盘故障。真实本机HTTP与PM线程联验Station/Worker：运行时仍阻塞时已经确认协作停止，释放后不继续依赖任务或交付。Chrome验证确认框、未知提示、重发、暂停、手机布局及快捷重提保护。
