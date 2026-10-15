@@ -136,7 +136,7 @@ def test_invalid_ai_output_keeps_previous_document(chat):
 def test_explicit_handoff_uses_full_markdown(chat):
     cid = chat._active_conv_id
     chat.briefs.save(cid, document(), 0)
-    chat.controller.submit_task_from_chat = Mock(return_value={'status': 'pending'})
+    chat.controller.submit_task_from_chat = Mock(side_effect=lambda **kw: {'task_id': kw['task_id'], 'status': 'pending'})
     chat._get_task_memory_hint = Mock(return_value='')
     chat._action_submit_task('下发项目描述')
     kwargs = chat.controller.submit_task_from_chat.call_args.kwargs
@@ -148,7 +148,7 @@ def test_chat_handoff_cannot_replace_reviewed_document(chat):
     cid = chat._active_conv_id
     reviewed = {**document(), 'title': 'Boss 已审阅的版本'}
     chat.briefs.save(cid, reviewed, 0)
-    chat.controller.submit_task_from_chat = Mock(return_value={'status': 'pending'})
+    chat.controller.submit_task_from_chat = Mock(side_effect=lambda **kw: {'task_id': kw['task_id'], 'status': 'pending'})
     chat._get_task_memory_hint = Mock(return_value='')
     result = chat.chat('下发项目描述', cid)
     assert result['action_taken'] == 'submit_task'
@@ -275,7 +275,7 @@ def test_handoff_does_not_include_unaccepted_suggestion(chat):
     cid = chat._active_conv_id
     chat.briefs.save(cid, document(), 0)
     chat.briefs.propose(cid, {**document(), 'title': '未采纳的标题'}, 1)
-    chat.controller.submit_task_from_chat = Mock(return_value={'status': 'pending'})
+    chat.controller.submit_task_from_chat = Mock(side_effect=lambda **kw: {'task_id': kw['task_id'], 'status': 'pending'})
     chat._get_task_memory_hint = Mock(return_value='')
     chat.chat('下发项目描述', cid)
     assert chat.controller.submit_task_from_chat.call_args.kwargs['name'] == '协作工作台'
@@ -372,3 +372,146 @@ def test_history_api_diff_restore_conflicts_and_isolation(chat):
     assert client.get('/api/conversations/missing/brief/history').status_code == 404
     chat.controller.secretary_active = False
     assert client.get(base+'/history').status_code == 503
+
+
+def test_handoff_freezes_document_and_links_task_before_dispatch(chat):
+    from lan_mesh.brief_handoff import BriefHandoff
+    cid = chat._active_conv_id
+    saved = chat.briefs.save(cid, document(), 0)
+    def submit(**kwargs):
+        pending = chat.brief_handoffs.get(cid, 1)
+        assert pending['status'] == 'prepared'
+        assert pending['task_id'] == kwargs['task_id']
+        assert kwargs['input_data']['_brief']['sha256'] == pending['sha256']
+        return {'task_id': kwargs['task_id'], 'status': 'running', 'pm_agent_id': 'pm-test'}
+    chat.controller.submit_task_from_chat = Mock(side_effect=submit)
+    first = chat.brief_handoffs.dispatch(cid, 1)
+    assert first['status'] == 'submitted' and first['task_status'] == 'running'
+    assert first['markdown'] == saved['markdown']
+    assert chat.brief_handoffs.dispatch(cid, 1) == first
+    chat.controller.submit_task_from_chat.assert_called_once()
+    chat.briefs.save(cid, {**document(), 'title': '后续改稿'}, 1)
+    persisted = BriefHandoff(chat.briefs, chat.controller).get(cid, 1)
+    assert persisted['title'] == '协作工作台' and persisted['markdown'] == saved['markdown']
+    assert 'document' not in chat.brief_handoffs.list(cid)[0]
+
+
+def test_handoff_failures_never_dispatch_without_record_or_retry_unknown_result(chat, monkeypatch):
+    cid = chat._active_conv_id
+    chat.briefs.save(cid, document(), 0)
+    chat.controller.submit_task_from_chat = Mock(side_effect=TimeoutError('unknown outcome'))
+    original = chat.brief_handoffs._write
+    monkeypatch.setattr(chat.brief_handoffs, '_write', Mock(side_effect=OSError('full')))
+    with pytest.raises(OSError):
+        chat.brief_handoffs.dispatch(cid, 1)
+    chat.controller.submit_task_from_chat.assert_not_called()
+    monkeypatch.setattr(chat.brief_handoffs, '_write', original)
+    result = chat.brief_handoffs.dispatch(cid, 1)
+    assert result['status'] == 'uncertain'
+    assert chat.brief_handoffs.dispatch(cid, 1)['task_id'] == result['task_id']
+    chat.controller.submit_task_from_chat.assert_called_once()
+
+
+def test_concurrent_handoff_only_one_dispatch_and_stale_revision_rejected(chat):
+    cid = chat._active_conv_id
+    chat.briefs.save(cid, document(), 0)
+    chat.controller.submit_task_from_chat = Mock(side_effect=lambda **kw: {'task_id': kw['task_id'], 'status': 'pending'})
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: chat.brief_handoffs.dispatch(cid, 1), range(2)))
+    assert results[0]['task_id'] == results[1]['task_id']
+    chat.controller.submit_task_from_chat.assert_called_once()
+    with pytest.raises(RevisionConflict):
+        chat.brief_handoffs.dispatch(cid, 0)
+
+
+def test_chat_handoff_uses_request_conversation_and_rejects_edit_during_llm(chat):
+    cid = chat._active_conv_id
+    other = chat.create_conversation('其他项目')['id']
+    chat.briefs.save(cid, document(), 0)
+    chat.briefs.save(other, {**document(), 'title': '其他会话'}, 0)
+    chat.controller.submit_task_from_chat = Mock(side_effect=lambda **kw: {'task_id': kw['task_id'], 'status': 'pending'})
+    def switch_during_reply(*_):
+        chat._active_conv_id = other
+        return {'content': '收到'}
+    chat.runtime._call_llm_with_routing.side_effect = switch_during_reply
+    chat.chat('下发项目描述', cid)
+    assert chat.controller.submit_task_from_chat.call_args.kwargs['name'] == '协作工作台'
+    assert chat.brief_handoffs.list(other) == []
+    chat.controller.submit_task_from_chat.reset_mock()
+    def edit_during_reply(*_):
+        chat.briefs.save(other, {**document(), 'title': '尚未审阅的新稿'}, 1)
+        return {'content': '收到'}
+    chat.runtime._call_llm_with_routing.side_effect = edit_during_reply
+    result = chat.chat('下发项目描述', other)
+    assert '重新审阅' in result['reply']
+    chat.controller.submit_task_from_chat.assert_not_called()
+
+
+def test_real_controller_persists_brief_reference_even_when_no_worker(chat, tmp_path):
+    from lan_mesh.database import Database
+    from lan_mesh.station_controller import StationController
+    cid = chat._active_conv_id
+    chat.briefs.save(cid, document(), 0)
+    controller = SimpleNamespace(db=Database(str(tmp_path / 'tasks.sqlite3')),
+                                 state=SimpleNamespace(device_id='self'), _queue_ws_broadcast=Mock())
+    chat.controller.db = controller.db
+    chat.controller.submit_task_from_chat = lambda **kw: StationController.submit_task_from_chat(controller, **kw)
+    result = chat.brief_handoffs.dispatch(cid, 1)
+    task = controller.db.get_task(result['task_id'])
+    assert task.input_data['_brief']['conv_id'] == cid
+    assert task.input_data['_brief']['revision'] == 1
+    assert task.status == 'failed'
+    assert result['task_status'] == 'failed'
+    assert '无可用' in result['error']
+    task.status = 'delivered'
+    controller.db.save_task(task)
+    assert chat.brief_handoffs.get(cid, 1)['task_status'] == 'delivered'
+    controller.db.delete_task(task.task_id)
+    assert chat.brief_handoffs.get(cid, 1)['task_status'] == 'unavailable'
+    assert chat.brief_handoffs.get(cid, 1)['markdown'].startswith('# 协作工作台')
+
+
+def test_handoff_api_confirmation_conflict_and_isolation(chat):
+    app = FastAPI()
+    app.include_router(build_brief_routes(chat.controller))
+    client = TestClient(app)
+    cid = chat._active_conv_id
+    base = f'/api/conversations/{cid}/brief/handoffs'
+    assert client.post(base, json={'expected_revision': 0}).status_code == 422
+    chat.briefs.save(cid, document(), 0)
+    chat.controller.submit_task_from_chat = Mock(side_effect=lambda **kw: {'task_id': kw['task_id'], 'status': 'pending'})
+    assert client.post(base, json={'expected_revision': 0}).status_code == 409
+    first = client.post(base, json={'expected_revision': 1}).json()
+    assert first['status'] == 'submitted'
+    assert client.post(base, json={'expected_revision': 1}).json()['id'] == first['id']
+    assert client.get(base).json()['handoffs'][0]['task_id'] == first['task_id']
+    assert client.get(base+'/1').json()['markdown'].startswith('# 协作工作台')
+    assert client.get(base+'/2').status_code == 404
+    assert client.get('/api/conversations/missing/brief/handoffs').status_code == 404
+
+
+def test_handoff_final_write_failure_keeps_task_reference_and_prevents_redispatch(chat, tmp_path, monkeypatch):
+    from lan_mesh.database import Database
+    from lan_mesh.protocol import Task
+    cid = chat._active_conv_id
+    chat.briefs.save(cid, document(), 0)
+    chat.controller.db = Database(str(tmp_path / 'tasks.sqlite3'))
+    def submit(**kw):
+        task = Task(task_id=kw['task_id'], name=kw['name'], description=kw['description'],
+                    input_data=kw['input_data'], status='running')
+        chat.controller.db.save_task(task)
+        return task.to_dict()
+    chat.controller.submit_task_from_chat = Mock(side_effect=submit)
+    write = chat.brief_handoffs._write
+    def fail_final(conv_id, record):
+        if record['status'] != 'prepared':
+            raise OSError('disk full after dispatch')
+        write(conv_id, record)
+    monkeypatch.setattr(chat.brief_handoffs, '_write', fail_final)
+    with pytest.raises(OSError):
+        chat.brief_handoffs.dispatch(cid, 1)
+    record = chat.brief_handoffs.dispatch(cid, 1)
+    assert record['status'] == 'prepared'
+    assert record['task_status'] == 'running'
+    assert chat.controller.db.get_task(record['task_id']).input_data['_brief']['revision'] == 1
+    chat.controller.submit_task_from_chat.assert_called_once()

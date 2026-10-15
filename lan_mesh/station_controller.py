@@ -541,7 +541,7 @@ class StationController:
             pass
 
     def submit_task_from_chat(self, name: str, description: str, created_by: str = "secretary",
-                              priority: str = "normal") -> dict:
+                              priority: str = "normal", task_id: str = "", input_data: dict | None = None) -> dict:
         """从秘书对话直接提交任务并分配 PM Agent。
 
         与 station_api.submit_task() 逻辑一致, 但同步执行。
@@ -552,12 +552,17 @@ class StationController:
         """
         from .protocol import Task, PMAgent
 
+        if task_id:
+            existing = self.db.get_task(task_id)
+            if existing is not None:
+                return existing.to_dict()
         task = Task(
-            task_id=f"task-{uuid.uuid4().hex[:12]}",
+            task_id=task_id or f"task-{uuid.uuid4().hex[:12]}",
             name=name,
             description=description,
             created_by=created_by,
             status="pending",
+            input_data=dict(input_data or {}),
         )
         # 优化13: 记录优先级到 input_data
         task.input_data = task.input_data or {}

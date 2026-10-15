@@ -10,18 +10,23 @@ window.ProjectBriefUI = (() => {
   const copy = value => JSON.parse(JSON.stringify(value));
   const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const statuses = {discussion:'待讨论',proposed:'建议',confirmed:'已确认'};
+  const taskStatus = value => ({pending:'待执行',running:'执行中',completed:'已完成',failed:'失败',
+    delivered:'已交付',accepted:'已验收',rejected:'已退回',paused:'已暂停',cancelled:'已取消',
+    unknown:'待核实',unavailable:'记录不可用（尚未创建或已删除）'}[value]||value);
   panel.tabIndex=-1;
   panel.innerHTML = `<div class="brief-toolbar"><strong>项目描述.md</strong>
     <button class="btn" data-action="generate">从对话整理</button><button class="btn primary" data-action="save">保存</button>
     <button class="btn" data-action="export">导出 .md</button><button class="btn" data-action="reload">重新加载</button>
     <button class="btn" data-action="undo" title="撤销（Ctrl/Cmd+Z）" disabled>撤销</button>
     <button class="btn" data-action="redo" title="重做（Ctrl/Cmd+Shift+Z 或 Ctrl+Y）" disabled>重做</button>
+    <button class="btn" data-action="dispatch">确认并下发</button>
     </div><div class="brief-status" role="status" aria-live="polite"></div>
     <div class="brief-tabs" role="tablist" aria-label="项目描述视图">
       <button class="btn" role="tab" data-tab="document">文档</button><button class="btn" role="tab" data-tab="graph">需求 DAG</button>
       <button class="btn" role="tab" data-tab="preview">Markdown 预览</button>
       <button class="btn" role="tab" data-tab="review">AI 建议</button>
       <button class="btn" role="tab" data-tab="history">版本历史</button>
+      <button class="btn" role="tab" data-tab="handoffs">下发记录</button>
     </div><div class="brief-content"></div>`;
   const content = panel.querySelector('.brief-content');
   const status = panel.querySelector('.brief-status');
@@ -49,7 +54,7 @@ window.ProjectBriefUI = (() => {
     }
     editGroup={state,element,time:now};state.redo=[];
   }
-  function changed() { state.dirty=!same(state.document,state.savedDocument); remember(); summary(); historyButtons(); }
+  function changed() { state.dirty=!same(state.document,state.savedDocument); remember(); summary(); historyButtons();panel.querySelector('[data-action="dispatch"]').disabled=!state.revision||state.dirty; }
   function travel(action) {
     editGroup=null;
     const source=state[action],destination=state[action==='undo'?'redo':'undo'];
@@ -121,9 +126,10 @@ window.ProjectBriefUI = (() => {
   }
   function render() {
     summary(); historyButtons();panel.querySelectorAll('[data-tab]').forEach(el=>el.setAttribute('aria-selected',el.dataset.tab===tab));
+    panel.querySelector('[data-action="dispatch"]').disabled=!state?.revision||state.dirty;
     panel.querySelector('[data-tab="review"]').textContent=state?.proposal?`AI 建议 (${state.proposal.changes.length})`:'AI 建议';
     if(!state){content.innerHTML='<div class="brief-empty">与秘书讨论项目背景、需求和想法，内容将整理到这里。<br>文档、模块框图与依赖关系可以共同编辑。</div>';return;}
-    if(tab==='document')renderDocument(); else if(tab==='graph')renderGraph(); else if(tab==='review')renderReview(); else if(tab==='history')renderHistory(); else renderPreview();
+    if(tab==='document')renderDocument(); else if(tab==='graph')renderGraph(); else if(tab==='review')renderReview(); else if(tab==='history')renderHistory(); else if(tab==='handoffs')renderHandoffs(); else renderPreview();
   }
   function renderDocument() {
     const opened=new Set([...content.querySelectorAll('details[open] textarea')].map(el=>el.dataset.section));
@@ -209,6 +215,34 @@ window.ProjectBriefUI = (() => {
     current.historyList=more?[...(current.historyList||[]),...data.revisions]:data.revisions;
     current.historyNext=data.next_before;
     if(target===cid&&token===requestId&&state===current&&tab==='history')renderHistory();
+  }
+  async function loadHandoffs() {
+    const current=state,target=cid,token=requestId;
+    const data=await(await request('/handoffs')).json();current.handoffs=data.handoffs;
+    if(target===cid&&token===requestId&&state===current&&tab==='handoffs')renderHandoffs();
+  }
+  function renderHandoffs() {
+    const records=state.handoffs||[];
+    const labels={prepared:'下发已登记，结果待核实',submitted:'已关联任务',uncertain:'结果待核实，不会自动重试'};
+    content.innerHTML='<p class="brief-hint">每个已保存版本下发一次。确认记录保留当时的内容和任务 ID；之后改稿不改变执行依据。遇到结果待核实，请先在任务面板按 ID 检查，避免重复执行。</p><button class="btn" data-action="handoffs-refresh">刷新记录</button>'+
+      records.map(record=>`<details class="brief-change" open><summary>v${record.revision} · ${escape(record.title)}</summary>
+        <p>${escape(labels[record.status]||record.status)} · 任务状态：${escape(taskStatus(record.task_status))}</p>
+        <p>任务 ID：<code>${escape(record.task_id)}</code></p><p>确认时间：${escape(new Date(record.confirmed_at*1000).toLocaleString())}</p>
+        ${record.error?`<p class="brief-review-warning">${escape(record.error)}</p>`:''}
+        <button class="btn" data-action="handoff-view" data-revision="${record.revision}">查看下发依据</button>
+        <button class="btn" data-action="handoff-task" data-task="${escape(record.task_id)}">查看任务与产物</button></details>`).join('')+
+      (!records.length?'<p class="brief-empty">暂无下发记录。先保存项目描述，再点击「确认并下发」。</p>':'')+
+      (state.handoffDetail?`<details open><summary>下发依据 v${state.handoffDetail.revision}</summary><pre>${escape(state.handoffDetail.markdown)}</pre></details>`:'');
+  }
+  async function dispatchBrief() {
+    if(state.dirty||!state.revision)throw new Error('请先保存并审阅当前内容，再下发。');
+    if(!confirm(`确认下发已保存的项目描述 v${state.revision}「${state.document.title}」给 PM 执行？未采纳的 AI 建议不包含在内。`))return;
+    const target=cid,token=requestId;
+    const result=await(await request('/handoffs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_revision:state.revision})})).json();
+    if(target===cid&&token===requestId){
+      tab='handoffs';render();await loadHandoffs();
+      if(target===cid&&token===requestId)note(`项目描述 v${result.revision} 已登记 · 任务 ${result.task_id} · ${taskStatus(result.task_status)}`);
+    }
   }
   async function inspectHistory(revision) {
     const current=state,target=cid,token=requestId;
@@ -387,11 +421,11 @@ window.ProjectBriefUI = (() => {
   panel.addEventListener('click',async event=>{
     const target=event.target.closest('button');if(!target||busy)return;
     editGroup=null;
-    if(target.dataset.tab){tab=target.dataset.tab;render();if(tab==='history'&&state)try{await loadHistory();}catch(error){note(error.message);}return;}
+    if(target.dataset.tab){tab=target.dataset.tab;render();if(state)try{if(tab==='history')await loadHistory();if(tab==='handoffs')await loadHandoffs();}catch(error){note(error.message);}return;}
     const action=target.dataset.action;if(!action||!state)return;
     if(action==='generate'&&state.proposal){tab='review';render();note('请先采纳或忽略现有建议，再重新整理。');return;}
     try{
-      if(['save','generate','export','reload','review-apply','review-discard','history-refresh','history-more','history-view','history-restore'].includes(action)){
+      if(['save','generate','export','reload','review-apply','review-discard','history-refresh','history-more','history-view','history-restore','dispatch','handoffs-refresh','handoff-view','handoff-task'].includes(action)){
         busy=true;panel.setAttribute('aria-busy','true');panel.inert=true;
         if(action==='save')await save();
         if(action==='generate'){const id=cid,token=requestId;await save();if(id!==cid||token!==requestId)return;note('正在整理修改建议…');const data=await(await request('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_revision:state.revision})})).json();if(id===cid&&token===requestId){tab='review';accept(data,state);}}
@@ -400,6 +434,28 @@ window.ProjectBriefUI = (() => {
         if(action==='history-refresh'||action==='history-more')await loadHistory(action==='history-more');
         if(action==='history-view')await inspectHistory(content.querySelector('[data-history-choice]').value);
         if(action==='history-restore')await restoreHistory();
+        if(action==='dispatch')await dispatchBrief();
+        if(action==='handoffs-refresh')await loadHandoffs();
+        if(action==='handoff-view'){
+          const current=state,id=cid,token=requestId;const data=await(await request(`/handoffs/${target.dataset.revision}`)).json();
+          current.handoffDetail=data;if(id===cid&&token===requestId&&state===current)renderHandoffs();
+        }
+        if(action==='handoff-task'){
+          const id=cid,token=requestId;
+          const response=await apiFetch(`/api/tasks/${encodeURIComponent(target.dataset.task)}`);
+          if(!response.ok)throw new Error('任务记录不可用，请核实任务是否尚未创建或已被删除。');
+          const task=await response.json();if(id!==cid||token!==requestId)return;
+          summary();
+          const result=task.output_data||{},delivery=result._delivery;
+          const acceptance=!delivery?'尚未交付':delivery.accepted===true?'已验收':delivery.accepted===false?'已退回':'待验收';
+          content.innerHTML=`<button class="btn" data-action="handoffs-refresh">返回下发记录</button>
+            <h3>${escape(task.name)}</h3><p>任务 ${escape(task.task_id)} · ${escape(taskStatus(task.status))}</p>
+            <p>关联 PM：${escape(task.pm_agent_id||'尚未分配')}</p><p>需求依据：v${escape(task.input_data?._brief?.revision||'未知')}</p>
+            <p>验收状态：${acceptance}</p>
+            ${delivery?.reject_reason?`<p>退回原因：${escape(delivery.reject_reason)}</p>`:''}
+            ${delivery?.summary?`<p>交付摘要：${escape(delivery.summary)}</p>`:''}
+            <h4>交付内容／执行结果</h4><pre>${escape(delivery?.deliverable||result.summary||result.error||'尚无交付内容，请到任务面板查看进度和验收操作。')}</pre>`;
+        }
         if(action==='export'){if(state.dirty)download(markdown());else download(await(await request('/markdown')).text());}
         if(action==='reload'){if(!state.dirty||confirm('重新加载将替换本地未保存修改。建议先导出草稿，是否继续？')){drafts.delete(cid);state=null;await open(cid);}}
       }else if(action==='review-all'||action==='review-none'){

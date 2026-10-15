@@ -22,6 +22,9 @@ from fastapi.testclient import TestClient
 from lan_mesh.chat_handler import ChatHandler
 from lan_mesh.station_routes_briefs import build_brief_routes
 from lan_mesh.station_routes_chat import build_chat_routes
+from lan_mesh.station_routes_tasks import build_task_routes
+from lan_mesh.database import Database
+from lan_mesh.protocol import Task
 from tests.test_project_brief import document
 
 root=PROJECT_ROOT
@@ -32,11 +35,14 @@ runtime._call_llm_with_routing.return_value={'content':json.dumps({'reply':'已�
 chat=ChatHandler(runtime,controller,shared_folder=SimpleNamespace(path=folder.name))
 controller.chat_handler=chat
 controller.state=SimpleNamespace(ws_clients=set())
+controller.db=Database(str(Path(folder.name)/'tasks.sqlite3'))
+controller.discovery=Mock()
+controller.bot_gateway=Mock()
 chat._build_status_context=lambda: ''
 chat._auto_title=Mock()
 cid=chat._active_conv_id
 other=chat.create_conversation('第二个项目')['id']
-app=FastAPI();app.include_router(build_brief_routes(controller));app.include_router(build_chat_routes(controller));client=TestClient(app)
+app=FastAPI();app.include_router(build_brief_routes(controller));app.include_router(build_chat_routes(controller));app.include_router(build_task_routes(controller));client=TestClient(app)
 html=(root/'lan_mesh/web/templates/dashboard.html').read_text()
 html=re.sub(r'<script>.*?</script>','',html,flags=re.S)
 html=html.replace('<script src="/static/project-brief.js"></script>', '''<script>
@@ -53,6 +59,86 @@ def accept_all_suggestions(page):
     page.wait_for_selector('[data-action="review-all"]')
     page.locator('[data-action="review-all"]').click()
     page.locator('[data-action="review-apply"]').click()
+
+
+def verify_handoff(page, handoff_id, other_id, output):
+    """Use real brief/task APIs and SQLite, with task execution replaced by a fixture."""
+    def submit(**kw):
+        task=Task(task_id=kw['task_id'], name=kw['name'], description=kw['description'],
+                  input_data=kw['input_data'], status='running', pm_agent_id='pm-browser')
+        controller.db.save_task(task)
+        return task.to_dict()
+    controller.submit_task_from_chat=Mock(side_effect=submit)
+    chat.briefs.save(handoff_id, document(), 0)
+    chat.briefs.propose(handoff_id, {**document(), 'title':'未采纳建议'}, 1)
+    page.reload()
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',handoff_id)
+    page.locator('[data-action="dispatch"]').click()
+    page.wait_for_selector('[data-action="handoff-view"]')
+    record=chat.brief_handoffs.get(handoff_id,1)
+    task_id=record['task_id']
+    assert record['title']=='协作工作台'
+    assert controller.db.get_task(task_id).input_data['_brief']['revision']==1
+    page.locator('[data-action="dispatch"]').click()
+    page.wait_for_function("document.querySelector('#project-brief-panel').getAttribute('aria-busy')==='false'")
+    assert controller.submit_task_from_chat.call_count==1
+    page.locator('[data-action="handoff-view"]').click()
+    page.wait_for_selector('.brief-content pre')
+    assert '协作工作台' in page.locator('.brief-content pre').inner_text()
+    assert '未采纳建议' not in page.locator('.brief-content pre').inner_text()
+    page.screenshot(path=str(output/'project_brief_handoffs_desktop.png'),full_page=True)
+    # Real delivery/accept/reject routes persist results in SQLite.
+    delivery={'task_id':task_id,'task_name':'协作工作台','deliverable':'<img src=x onerror=alert(1)>交付文件与验证结果',
+              'summary':'模拟执行的交付摘要'}
+    assert client.post('/api/pm/pm-browser/deliver',json=delivery).status_code==200
+    page.locator('[data-action="handoff-task"]').click()
+    page.wait_for_function("document.querySelector('.brief-content').textContent.includes('验收状态：待验收')")
+    assert '交付文件与验证结果' in page.locator('.brief-content pre').inner_text()
+    assert page.locator('.brief-content img').count()==0
+    assert '需求依据：v1' in page.locator('.brief-content').inner_text()
+    assert client.post(f'/api/tasks/{task_id}/accept').status_code==200
+    page.locator('[data-action="handoffs-refresh"]').click()
+    page.locator('[data-action="handoff-task"]').click()
+    page.wait_for_function("document.querySelector('.brief-content').textContent.includes('验收状态：已验收')")
+    assert client.post(f'/api/tasks/{task_id}/reject',json={'reason':'需要补充测试证据'}).status_code==200
+    page.locator('[data-action="handoffs-refresh"]').click()
+    page.locator('[data-action="handoff-task"]').click()
+    page.wait_for_function("document.querySelector('.brief-content').textContent.includes('退回原因：需要补充测试证据')")
+    page.screenshot(path=str(output/'project_brief_delivery_desktop.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    page.locator('#project-brief-panel').scroll_into_view_if_needed()
+    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+    assert page.locator('.brief-content').evaluate('(e)=>e.scrollWidth<=e.clientWidth')
+    page.screenshot(path=str(output/'project_brief_handoffs_mobile.png'),full_page=True)
+    page.set_viewport_size({'width':1680,'height':1100})
+    # Editing a draft disables dispatch; saved changes leave prior evidence intact.
+    page.locator('[data-tab="document"]').click()
+    page.locator('[data-field="title"]').fill('改稿后的项目')
+    assert page.locator('[data-action="dispatch"]').is_disabled()
+    page.locator('[data-action="save"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v2 · 已同步')")
+    assert chat.brief_handoffs.get(handoff_id,1)['title']=='协作工作台'
+    # A concurrent save forces review of the current version before dispatch.
+    chat.briefs.save(handoff_id,{**document(),'title':'其他页面的新版本'},2)
+    page.locator('[data-action="dispatch"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('重新审阅')")
+    assert controller.submit_task_from_chat.call_count==1
+    page.reload()
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',handoff_id)
+    page.locator('[data-tab="handoffs"]').click()
+    page.wait_for_selector('[data-action="handoff-view"]')
+    assert task_id in page.locator('.brief-content').inner_text()
+    # Deleted task records are not presented as a stale execution status.
+    controller.db.delete_task(task_id)
+    page.locator('[data-action="handoffs-refresh"]').click()
+    page.wait_for_function("document.querySelector('.brief-content').textContent.includes('记录不可用（尚未创建或已删除）')")
+    page.locator('[data-action="handoff-task"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('任务记录不可用')")
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',other_id)
+    page.locator('[data-tab="handoffs"]').click()
+    page.wait_for_selector('.brief-empty')
+    assert page.locator('[data-action="handoff-view"]').count()==0
+    assert not errors,errors
 
 
 def verify_revision_history(page, revision_id, output):
@@ -323,7 +409,7 @@ with sync_playwright() as p:
             file=root/'lan_mesh/web'/path.lstrip('/')
             r.fulfill(status=200,body=file.read_bytes(),content_type='text/css' if path.endswith('.css') else 'application/javascript' if path.endswith('.js') else 'application/json');return
         if path=='/api/station/roles':r.fulfill(status=200,json={'secretary':'active'});return
-        if path.startswith('/api/conversations') or path=='/api/secretary/chat':
+        if path.startswith(('/api/conversations', '/api/tasks/')) or path=='/api/secretary/chat':
             response=client.request(req.method,path,content=req.post_data,headers={'content-type':'application/json'})
             if path=='/api/secretary/chat' and response.status_code==200:
                 for ws in sockets:ws.send(json.dumps({'type':'chat_reply','data':response.json()}))
@@ -495,8 +581,12 @@ document.querySelectorAll('.panel').forEach(p=>p.style.display=p.id==='panel-cha
     chat.briefs.save(revision_id,document(),0)
     chat.briefs.save(revision_id,{**document(),'title':'第二版内容'},1)
     verify_revision_history(page,revision_id,output)
+    handoff_id=chat.create_conversation('需求下发追溯')['id']
+    verify_handoff(page,handoff_id,untouched_id,output)
     assert not errors,errors
     browser.close()
 print('PASS: generation, nested DAG, drag, editing, cycle guard, grouped typing, document/graph undo/redo, save history, clean state, 50-step bound, isolation, conflict reload, external revision, export, mobile, dashboard chat + WebSocket, delayed load/save; zero page errors')
 print('PASS: AI review, selective adoption, saved document protection, proposal persistence, draft-preserving discard, stale proposal guard, undo after acceptance, escaped HTML, desktop/mobile diff; zero page errors')
 print('PASS: revision history, persisted snapshots, comparison, restore as new version, dirty draft protection, concurrent save rejection, reload and desktop/mobile history; zero page errors')
+
+print('PASS: confirmed handoff, deduplication, frozen revision, task/delivery/acceptance APIs, dirty and stale guards, persistence, missing task, escaping, conversation isolation, desktop/mobile; simulated execution')

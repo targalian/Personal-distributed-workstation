@@ -16,6 +16,7 @@ from typing import Optional
 
 from .logger import get_logger
 from .project_brief import BriefStore, brief_instructions, parse_brief_reply
+from .brief_handoff import BriefHandoff
 from .role_cards import render_secretary_prompt
 
 logger = get_logger("chat_handler")
@@ -107,6 +108,7 @@ class ChatHandler:
         self._shared_folder = shared_folder
         self._max_history = 50
         self.briefs = BriefStore(self._get_conv_dir())
+        self.brief_handoffs = BriefHandoff(self.briefs, controller)
 
         # ── 多对话状态 ──
         self._conv_index: list[dict] = []       # [{id, title, project_id, pm_threads, created_at, updated_at}]
@@ -238,7 +240,8 @@ class ChatHandler:
         action_taken = ""
         action_result = ""
         if action:
-            action_result = self._execute_action(action, message)
+            action_result = self._execute_action(action, message, conv_id=cid,
+                                                 brief_revision=current_brief["revision"])
             if action_result:
                 reply_text += f"\n\n📋 **操作结果**: {action_result}"
                 action_taken = action
@@ -941,7 +944,8 @@ class ChatHandler:
                 return action
         return ""
 
-    def _execute_action(self, action: str, message: str) -> str:
+    def _execute_action(self, action: str, message: str, conv_id: str = "",
+                        brief_revision: int | None = None) -> str:
         """执行检测到的操作。
 
         Args:
@@ -965,7 +969,7 @@ class ChatHandler:
             elif action == "deactivate_secretary":
                 return self._action_deactivate_secretary()
             elif action == "submit_task":
-                return self._action_submit_task(message)
+                return self._action_submit_task(message, conv_id, brief_revision)
             elif action == "cancel_task":
                 return self._action_cancel_task(message)
             elif action == "pause_task":
@@ -1008,13 +1012,18 @@ class ChatHandler:
             pass
         return {"name": message[:20], "description": message}
 
-    def _action_submit_task(self, message: str) -> str:
+    def _action_submit_task(self, message: str, conv_id: str = "",
+                            brief_revision: int | None = None) -> str:
         """从对话直接提交任务并分配 PM Agent (优化13: 支持优先级)。"""
         if message.strip().rstrip("。！!") == "下发项目描述":
-            current = self.briefs.get(self._active_conv_id)
-            if not current["revision"]:
-                return "请先整理并保存项目描述，再下发给 PM。"
-            task_info = {"name": current["document"]["title"], "description": current["markdown"]}
+            cid = conv_id or self._active_conv_id
+            revision = self.briefs.get(cid)["revision"] if brief_revision is None else brief_revision
+            record = self.brief_handoffs.dispatch(cid, revision)
+            status = record.get("task_status", "unknown")
+            hint = "下发结果待核实，不会自动重复创建任务。" if record["status"] != "submitted" else "下发记录已保存。"
+            return (f"项目描述 v{record['revision']}：{hint}\n"
+                    f"任务ID: {record['task_id']}\n任务状态: {status}"
+                    + (f"\n原因: {record['error']}" if record.get("error") else ""))
         else:
             task_info = self._parse_task_from_message(message)
         name = task_info.get("name", "")

@@ -81,6 +81,26 @@ def build_brief_routes(controller):
     def list_history(conv_id: str, before_revision: int | None = Query(default=None, ge=1)):
         return handler(conv_id).briefs.history(conv_id, before_revision)
 
+    @router.get("/handoffs")
+    def list_handoffs(conv_id: str):
+        return {"handoffs": handler(conv_id).brief_handoffs.list(conv_id)}
+
+    @router.get("/handoffs/{revision}")
+    def get_handoff(conv_id: str, revision: int):
+        try:
+            return handler(conv_id).brief_handoffs.get(conv_id, revision)
+        except KeyError as exc:
+            raise HTTPException(404, "下发记录不存在") from exc
+
+    @router.post("/handoffs")
+    def dispatch_brief(conv_id: str, payload: RestoreBrief):
+        try:
+            return handler(conv_id).brief_handoffs.dispatch(conv_id, payload.expected_revision)
+        except RevisionConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
     @router.get("/history/{revision}")
     def get_revision(conv_id: str, revision: int):
         from .brief_review import brief_changes

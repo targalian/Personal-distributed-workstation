@@ -3,10 +3,10 @@
 .brief-panel{flex:1.5;min-width:0;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);height:calc(100vh - 180px);min-height:560px;overflow:hidden}
 .brief-toolbar{padding:12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)}
 .brief-toolbar strong{font-size:15px;margin-right:auto}.brief-toolbar .btn{font-size:12px;padding:6px 9px}
-.brief-status{font-size:12px;color:var(--dim);padding:8px 12px;border-bottom:1px solid var(--border);line-height:1.6;min-height:36px}
+.brief-status{font-size:12px;color:var(--dim);padding:8px 12px;border-bottom:1px solid var(--border);line-height:1.6;min-height:36px;overflow-wrap:anywhere}
 .brief-status.dirty{color:var(--yellow)}
 .brief-tabs{display:flex;gap:6px;padding:8px 12px}.brief-tabs button[aria-selected=true]{background:var(--accent);color:white}
-.brief-content{flex:1;min-height:0;overflow:auto;padding:12px}.brief-content label{display:block;font-size:12px;color:var(--dim);margin-bottom:10px}
+.brief-content{flex:1;min-height:0;overflow:auto;padding:12px;overflow-wrap:anywhere}.brief-content label{display:block;font-size:12px;color:var(--dim);margin-bottom:10px}
 .brief-content input,.brief-content textarea,.brief-content select{display:block;width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:5px;font:inherit}
 .brief-content textarea{min-height:90px;resize:vertical;line-height:1.6}.brief-content summary{font-size:13px;cursor:pointer;padding:10px 0;color:var(--text)}
 .brief-content details{border-bottom:1px solid var(--border)}.brief-content pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.7}

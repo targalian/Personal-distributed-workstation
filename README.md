@@ -310,3 +310,9 @@ The document and DAG share Undo/Redo controls with up to 50 steps per conversati
 **版本历史** keeps saved document snapshots on the server. Compare a previous revision with the current saved document, inspect its Markdown, and restore it as a new revision. Older snapshots remain intact. Existing installations start their history from the latest document available at upgrade time.
 
 See the [1.0 readiness criteria](docs/1.0-readiness.md) for release scope, verified capabilities, and remaining real-model, multi-host, recovery, and deployment checks.
+
+### Confirmed project-description handoffs
+
+Save and review a project description, then select **确认并下发**. Each saved revision is dispatched once. The handoff records its content, revision and task ID before dispatch. Later edits do not change that task's requirements. **下发记录** shows the saved evidence, current task status, deliverable and acceptance result. Pending AI suggestions are excluded; stale versions and unsaved drafts must be reviewed first.
+
+An uncertain outcome is not retried automatically. Inspect the linked task before saving a new revision for another dispatch. This protection assumes one active Secretary; real-model execution, multi-host recovery and the remaining release gates are tracked in [1.0 readiness](docs/1.0-readiness.md).

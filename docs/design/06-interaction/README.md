@@ -8,6 +8,7 @@
 | 文件/目录 | 职责一句话 |
 |---|---|
 | bot_gateway.py | Bot 网关 — 手机消息通道 |
+| brief_handoff.py | Persist confirmed project descriptions before dispatch and prevent duplicate handoffs. |
 | brief_review.py | Build reviewable AI changes and merge an explicit selection without breaking graphs. |
 | chat_handler.py | 秘书聊天处理器 — Web 端对话接口 |
 | project_brief.py | Conversation-scoped project specification; Markdown and DAG share one source. |
@@ -58,6 +59,7 @@ Keyboard（PM 决策交互）。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-14 | iter-40 | 确认版本与任务关联；先持久化下发快照、同版本去重、会话及版本保护、任务和验收追溯 |
 | 2026-10-14 | iter-39 | 保存/采纳保留独立历史快照，原子发布索引，分页查询、版本比较与恢复为新版本 |
 | 2026-10-14 | iter-38 | AI 回复与整理生成持久化建议，差异审阅后逐项采纳；原稿、版本冲突和 PM 下发保护 |
 | 2026-10-10 | 项目描述工作区 | 新增对话产物、三层需求 DAG、版本保存、Markdown 导出与集成验证 |

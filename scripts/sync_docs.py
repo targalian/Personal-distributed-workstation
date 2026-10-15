@@ -90,6 +90,7 @@ MAPPING = {
     "lan_mesh/chat_handler.py": "06-interaction",
     "lan_mesh/project_brief.py": "06-interaction",
     "lan_mesh/brief_review.py": "06-interaction",
+    "lan_mesh/brief_handoff.py": "06-interaction",
     "lan_mesh/bot_gateway.py": "06-interaction",
     "lan_mesh/role_cards.py": "06-interaction",
     # 07-data-sync — 共享/云同步/主机信息
