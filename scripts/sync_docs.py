@@ -129,6 +129,7 @@ MAPPING = {
     "tests/test_pm_start.py": "10-test-loop",
     "tests/test_pm_inspection.py": "10-test-loop",
     "tests/test_pm_control.py": "10-test-loop",
+    "tests/test_restart_recovery.py": "10-test-loop",
     "tests/test_backup.py": "10-test-loop",
     "tests/test_delivery_replay.py": "10-test-loop",
     "test_bug/project_brief_browser.py": "10-test-loop",

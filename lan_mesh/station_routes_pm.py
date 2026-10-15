@@ -167,7 +167,7 @@ def build_pm_routes(controller) -> APIRouter:
             try:
                 conn = db._get_conn()
                 cursor = conn.execute(
-                    "UPDATE tasks SET status = ? WHERE pm_agent_id = ? AND status = 'running'",
+                    "UPDATE tasks SET status = ? WHERE pm_agent_id = ? AND status IN ('running','monitoring','planning','executing','awaiting_input')",
                     (pm_status, pm_id),
                 )
                 conn.commit()

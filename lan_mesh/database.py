@@ -818,6 +818,10 @@ class Database:
                                (task.task_id,)).fetchone()
             if row:
                 previous = json.loads(row["output_data"]) or {}
+                if "_pm_recovery" in previous:
+                    task.output_data = {**(task.output_data or {}), "_pm_recovery": previous["_pm_recovery"]}
+                    task.status = row["status"]
+                    task.pm_agent_id = self.get_task(task.task_id).pm_agent_id
                 if "_pm_control" in previous:
                     task.output_data = {**(task.output_data or {}), "_pm_control": previous["_pm_control"]}
                     task.status = row["status"]
@@ -852,6 +856,37 @@ class Database:
             self._save_pm_agent_fields(pm)
             conn.execute("UPDATE tasks SET pm_agent_id=?, status='running' WHERE task_id=?", (pm.pm_id, pm.task_id))
         return True
+
+    def mark_tasks_for_recovery(self) -> int:
+        """Mark uncertain executions without inferring that another process has stopped."""
+        conn = self._get_conn()
+        marked = 0
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute("""SELECT task_id,status,pm_agent_id,output_data FROM tasks
+                WHERE status IN ('running','monitoring','planning','executing','awaiting_input','interrupted')""").fetchall()
+            for row in rows:
+                output = json.loads(row["output_data"]) or {}
+                # A received artifact and a stop intent remain authoritative.
+                if "_delivery" in output or "_pm_control" in output:
+                    continue
+                if "_pm_recovery" not in output:
+                    output["_pm_recovery"] = {
+                        "state": "unknown", "original_status": row["status"], "observed_at": time.time(),
+                        "message": "秘书重新激活，原执行结果待核实；原节点可能仍在运行，不自动重派",
+                    }
+                    if "_interrupted" in output:
+                        output["_pm_recovery"]["legacy_interruption"] = output.pop("_interrupted")
+                # Old startup code marked remotely running PMs interrupted. Keep
+                # their binding and allow the original PM to finish reporting.
+                status = "running" if row["status"] == "interrupted" and row["pm_agent_id"] else row["status"]
+                conn.execute("UPDATE tasks SET status=?,output_data=? WHERE task_id=?",
+                             (status, json.dumps(output, ensure_ascii=False), row["task_id"]))
+                conn.execute("""UPDATE pm_agents SET status='unknown',updated_at=? WHERE pm_id=? AND task_id=?
+                    AND status NOT IN ('completed','failed','cancelled','paused')""",
+                             (time.time(), row["pm_agent_id"], row["task_id"]))
+                marked += 1
+        return marked
 
     def note_pm_start_issue(self, pm_id: str, message: str, uncertain: bool = True, startup_only: bool = True) -> None:
         """Record a startup issue only while no runtime status has superseded startup."""
@@ -913,6 +948,7 @@ class Database:
                 return {"duplicate": True, "accepted": existing.get("accepted")}
             if task.status in ("cancelled", "paused"):
                 raise ValueError("任务已取消或暂停，不接收晚到交付")
+            output.pop("_pm_recovery", None)
             output["_delivery"] = {**delivery, "pm_id": pm_id, "accepted": None}
             conn.execute("UPDATE tasks SET output_data = ? WHERE task_id = ?",
                          (json.dumps(output, ensure_ascii=False), task_id))
@@ -985,13 +1021,14 @@ class Database:
             previous = data.get("_pm_control", {})
             if previous.get("action") == action:
                 return task
+            dispatched = bool(task.pm_agent_id) or task.status != "pending" or bool(data.get("_pm_recovery"))
             status = "cancelled" if action == "cancel" else "paused"
             data["_pm_control"] = {
                 "request_id": uuid.uuid4().hex, "action": action,
-                "state": "pending" if task.pm_agent_id else "confirmed",
-                "scope": "pm_cooperative" if task.pm_agent_id else "not_dispatched",
+                "state": "pending" if dispatched else "confirmed",
+                "scope": "pm_cooperative" if dispatched else "not_dispatched",
                 "requested_at": time.time(),
-                "message": "停止意图已登记，等待原节点确认" if task.pm_agent_id else "任务已停止，尚未派发到 PM",
+                "message": "停止意图已登记，等待原节点确认" if dispatched else "任务已停止，尚未派发到 PM",
             }
             conn.execute("UPDATE tasks SET status=?,output_data=? WHERE task_id=?",
                          (status, json.dumps(data, ensure_ascii=False), task_id))
@@ -1036,6 +1073,8 @@ class Database:
                 control = (task.output_data or {}).get("_pm_control", {})
                 if (task.status in ("running", "monitoring", "planning", "executing")
                         or (control and control.get("state") != "confirmed")
+                        or ((task.output_data or {}).get("_pm_recovery") and control.get("state") != "confirmed")
+                        or (task.status == "interrupted" and task.pm_agent_id and control.get("state") != "confirmed")
                         or (task.pm_agent_id and task.status in ("paused", "cancelled") and not control)):
                     raise ValueError("原节点尚未确认停止，保留任务记录；请核实后再删除")
             conn.execute("DELETE FROM pm_agents WHERE task_id = ?", (task_id,))
@@ -1439,12 +1478,13 @@ class Database:
                 row = conn.execute("SELECT task_id,output_data FROM tasks WHERE pm_agent_id=?", (pm_id,)).fetchone()
                 if row:
                     output = json.loads(row["output_data"]) or {}
-                    changed = "_pm_start" in output or "_pm_execution" in output
+                    changed = any(key in output for key in ("_pm_start", "_pm_execution", "_pm_recovery"))
                     messages = [(output.get(key) or {}).get("message") for key in ("_pm_start", "_pm_execution")]
                     if output.get("error") in messages:
                         output.pop("error", None)
                     output.pop("_pm_start", None)
                     output.pop("_pm_execution", None)
+                    output.pop("_pm_recovery", None)
                     if changed:
                         conn.execute("UPDATE tasks SET output_data=? WHERE task_id=?",
                                      (json.dumps(output, ensure_ascii=False), row["task_id"]))

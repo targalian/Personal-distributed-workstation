@@ -298,6 +298,8 @@ class StationController:
         if self.bot_gateway:
             self.bot_gateway.set_chat_handler(self.chat_handler)
 
+        # Mark old executions before accepting new submissions or PM callbacks.
+        self._recover_stale_tasks()
         self.secretary_active = True
         # BUG-004 fix: 统一状态源 — 激活时同步设置 host_id/port
         self.secretary_host_id = self.state.device_id
@@ -309,9 +311,6 @@ class StationController:
                              name="station-secret-align", daemon=True).start()
         except Exception as e:
             logger.warning("[F1] 激活后密钥对齐启动失败: %s", e)
-
-        # 任务断点恢复: 将上次运行中断的任务标记为 interrupted
-        self._recover_stale_tasks()
 
         return {
             "ok": True,
@@ -358,32 +357,11 @@ class StationController:
         return {"ok": True, "message": "Secretary 已停用"}
 
     def _recover_stale_tasks(self):
-        """任务断点恢复: 将上次运行中断的任务标记为 interrupted。
-
-        系统重启后, 之前处于 running/monitoring/planning/executing 的任务
-        其 PM Agent 进程已不存在, 无法继续执行。
-        将这些任务标记为 interrupted, 用户可在 UI 中看到并决定重新提交或删除。
-        """
-        stale_statuses = ("running", "monitoring", "planning", "executing")
-        recovered = 0
-        for status in stale_statuses:
-            try:
-                tasks = self.db.list_tasks(status=status, limit=100)
-                for task in tasks:
-                    task.status = "interrupted"
-                    if not task.output_data:
-                        task.output_data = {}
-                    task.output_data["_interrupted"] = {
-                        "reason": "系统重启, PM Agent 进程已丢失",
-                        "original_status": status,
-                        "interrupted_at": time.time(),
-                    }
-                    self.db.save_task(task)
-                    recovered += 1
-            except Exception as e:
-                logger.warning("恢复中断任务失败 (status=%s): %s", status, e)
-        if recovered:
-            logger.info("任务断点恢复: %d 个中断任务已标记为 interrupted", recovered)
+        """Preserve original ownership; Secretary restart does not prove PM loss."""
+        count = self.db.mark_tasks_for_recovery()
+        if count:
+            logger.info("秘书重新激活: %d 个任务等待核实原节点，未重派", count)
+        return count
 
     # ── Secretary 自动选举 ─────────────────────────────────────
 

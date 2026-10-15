@@ -23,6 +23,7 @@ from lan_mesh.chat_handler import ChatHandler
 from lan_mesh.station_routes_briefs import build_brief_routes
 from lan_mesh.station_routes_chat import build_chat_routes
 from lan_mesh.station_routes_tasks import build_task_routes
+from lan_mesh.station_routes_pm import build_pm_routes
 from lan_mesh.database import Database
 from lan_mesh.protocol import PMAgent, Task
 from tests.test_project_brief import document
@@ -42,7 +43,7 @@ chat._build_status_context=lambda: ''
 chat._auto_title=Mock()
 cid=chat._active_conv_id
 other=chat.create_conversation('第二个项目')['id']
-app=FastAPI();app.include_router(build_brief_routes(controller));app.include_router(build_chat_routes(controller));app.include_router(build_task_routes(controller));client=TestClient(app)
+app=FastAPI();app.include_router(build_brief_routes(controller));app.include_router(build_chat_routes(controller));app.include_router(build_task_routes(controller));app.include_router(build_pm_routes(controller));client=TestClient(app)
 html=(root/'lan_mesh/web/templates/dashboard.html').read_text()
 html=re.sub(r'<script>.*?</script>','',html,flags=re.S)
 html=html.replace('<script src="/static/project-brief.js"></script>', '''<script>
@@ -174,6 +175,50 @@ def verify_task_control(page, output):
     assert pm._state.stop_reason=='paused'
     page.evaluate('closeOverlayForce()')
     page.unroute('**/api/tasks',task_list_route)
+
+
+def verify_restart_recovery(page, output):
+    """Keep legacy interrupted tasks protected and reject a stale resubmit button."""
+    task=Task(task_id='recovery-task',name='重启待核实演示')
+    controller.db.save_task(task)
+    controller.db.bind_task_pm(PMAgent(pm_id='recovery-pm',task_id=task.task_id,device_id='remote',
+        hostname='远端继续运行的节点',ip='127.0.0.1',api_port=12345,status='executing'))
+    controller.db.update_task_status(task.task_id,'interrupted')
+    legacy=controller.db.get_task(task.task_id).to_dict()
+    page.evaluate('(task)=>{allTasks=[task];renderTasks();showTaskDetail(task.task_id)}',legacy)
+    assert page.locator('#task-grid .card',has_text=task.name).get_by_text('重新提交').count()==0
+    assert '原节点执行情况仍需核实' in page.locator('.task-execution-check').inner_text()
+    assert client.delete('/api/tasks/recovery-task').status_code==409
+    controller.db.mark_tasks_for_recovery()
+    recovered=controller.db.get_task(task.task_id).to_dict()
+    page.evaluate('(task)=>{allTasks=[task];renderTasks();showTaskDetail(task.task_id)}',recovered)
+    assert '原节点可能仍在运行' in page.locator('.task-execution-check').inner_text()
+    page.wait_for_function("document.querySelectorAll('#toast-container .toast').length===0")
+    page.screenshot(path=str(output/'task_recovery_desktop.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    assert page.locator('#modal').evaluate('(el)=>el.scrollWidth<=el.clientWidth+1')
+    page.screenshot(path=str(output/'task_recovery_mobile.png'),full_page=True)
+    # An old tab with cached failure must re-read the current task before cloning it.
+    attempted=[]
+    def forbid_submit(r):
+        if r.request.method=='POST':attempted.append(r.request.post_data)
+        r.fulfill(status=409,json={'detail':'unexpected submission'})
+    page.route('**/api/tasks',forbid_submit)
+    page.evaluate('(task)=>{allTasks=[{...task,status:"failed",output_data:{}}]}',recovered)
+    page.evaluate("resubmitTask('recovery-task')")
+    assert not attempted
+    assert controller.db.get_task(task.task_id).pm_agent_id=='recovery-pm'
+    page.unroute('**/api/tasks',forbid_submit)
+    # Only an original-PM runtime callback clears the pending execution observation.
+    response=client.post('/api/pm/recovery-pm/status',json={'status':'executing'})
+    assert response.status_code==200
+    current=controller.db.get_task(task.task_id).to_dict()
+    assert '_pm_recovery' not in current['output_data']
+    page.evaluate('(task)=>{allTasks=[task];showTaskDetail(task.task_id)}',current)
+    assert '秘书重新激活' not in page.locator('.task-execution-check').inner_text()
+    assert current['status']=='running'
+    page.evaluate('closeOverlayForce()')
+    page.set_viewport_size({'width':1680,'height':1100})
 
 
 def accept_all_suggestions(page):
@@ -687,6 +732,7 @@ with sync_playwright() as p:
     assert not errors,errors
     verify_execution_inspection(page,output)
     verify_task_control(page,output)
+    verify_restart_recovery(page,output)
     assert not errors,errors
     # UI-036: test unified editing history against isolated conversations and the real API.
     history_id=chat.create_conversation('编辑历史测试')['id']
@@ -742,3 +788,5 @@ print('PASS: confirmed handoff, deduplication, frozen revision, task/delivery/ac
 print('PASS: original-node inspection, unknown/running/inactive evidence, retry after error, stale response isolation, read-only task state, escaped output and desktop/mobile; temporary SQLite and simulated PM state')
 
 print("PASS: cancel/pause intent versus PM confirmation, explicit retry, retained task on unknown stop, original request ID, disabled resubmit, desktop/mobile; real API and cooperative PM instance")
+
+print("PASS: restart recovery, legacy interrupted protection, stale resubmit rejection, original callback clearing, desktop/mobile; real task/PM API and temporary SQLite")

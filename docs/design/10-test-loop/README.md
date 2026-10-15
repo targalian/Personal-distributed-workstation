@@ -34,6 +34,7 @@
 | tests/test_pm_start.py | Verify task/PM registration precedes execution and startup retries never create another PM. |
 | tests/test_pm_transport.py | Exercise lost dispatch responses, receipt polling and concurrent stale callbacks. |
 | tests/test_project_brief.py | Artifact correctness: graph integrity, concurrency, isolation, and chat integration. |
+| tests/test_restart_recovery.py | Preserve remote execution ownership and committed results across Secretary restart. |
 | tests/test_startup.py | Launch the shell wrapper in temporary projects to verify errors, arguments and cleanup. |
 <!-- /AUTO:module-list -->
 ---
@@ -138,3 +139,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 ## iter-49 验证
 
 `tests/test_pm_control.py` 覆盖节点/PM/任务/请求身份、旧无参数接口拒绝、晚到暂停、响应丢失只读确认、重发复用编号、事务保护与交付竞争、未确认删除保护、通知/磁盘故障。真实本机HTTP与PM线程联验Station/Worker：运行时仍阻塞时已经确认协作停止，释放后不继续依赖任务或交付。Chrome验证确认框、未知提示、重发、暂停、手机布局及快捷重提保护。
+
+## iter-50 验证
+
+`tests/test_restart_recovery.py` 覆盖本机/远端及多种活动状态、125条任务无分页遗漏、已交付/验收/停止不变、旧interrupted兼容、陈旧保存保护、原PM回报清理、写失败事务回滚和缺失PM不能假确认停止。真实HTTP服务退出重建期间，独立Python进程重新打开数据库标记恢复，原PM线程存活并最终完成一次交付。

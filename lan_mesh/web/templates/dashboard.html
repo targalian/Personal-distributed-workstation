@@ -1021,12 +1021,12 @@ function renderTasks(){
     const projName=t.project_id?projNameById(t.project_id):'';
     const subRows=subs.map(s=>`<div class="subtask-row"><span class="step-dot ${s.status}"></span><span style="flex:1">${esc(s.name||s.description||'子任务')}</span><span style="color:var(--dim)">[${s.status}]</span>${s.assigned_agent_id?'<span style="color:var(--dim)"> → '+esc(s.assigned_agent_id.slice(0,8))+'</span>':''}</div>`).join('');
     const canCancel=['running','monitoring','planning','executing'].includes(t.status);
-    const canResubmit=!taskControlPending(t)&&(t.status==='interrupted'||t.status==='failed'||t.status==='cancelled');
+    const canResubmit=canResubmitTask(t);
     const actionBtns=(canCancel?`<button class="btn sm" style="background:#e5a33c;color:#fff;border:none" onclick="event.stopPropagation();pauseTask('${t.task_id}','${escJs(t.name||'')}')">&#10074;&#10074; 暂停</button><button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="event.stopPropagation();cancelTask('${t.task_id}','${escJs(t.name||'')}')">&#9724; 取消</button>`:'')+(canResubmit?`<button class="btn sm primary" onclick="event.stopPropagation();resubmitTask('${t.task_id}')">🔄 重新提交</button>`:'');
     const hasDelivery=t.output_data&&t.output_data._delivery;
     const deliveryBadge=hasDelivery?`<span class="badge" style="background:${t.output_data._delivery.accepted===true?'var(--green)':t.output_data._delivery.accepted===false?'#e5533c':'var(--yellow)'};color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">${t.output_data._delivery.accepted===true?'✅ 已验收':t.output_data._delivery.accepted===false?'❌ 已退回':'📦 待验收'}</span>`:'';
     return `<div class="card task-card" onclick="toggleTaskExpand(this)">
-      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${esc(taskStatusText(t))}</span>${taskExecutionIssue(t)&&t.status==='running'?'<span class="badge" style="color:var(--yellow)">结果待核实</span>':''}${deliveryBadge}</div></div>
+      <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${esc(taskStatusText(t))}</span>${taskExecutionIssue(t)&&!taskControlPending(t)?'<span class="badge" style="color:var(--yellow)">结果待核实</span>':''}${deliveryBadge}</div></div>
       <div class="card-meta">${esc(t.description||'-')}<br>📊 ${done}/${sc} 子任务 (${pct}%) ${projName?'| 📁 '+esc(projName):''}${pmInfo}</div>
       <div class="pbar"><div class="pfill ${pct>=100?'low':'mid'}" style="width:${pct}%"></div></div>
       <div class="task-expand">${subRows||'<div class="subtask-row" style="color:var(--dim)">无子任务</div>'}
@@ -1046,15 +1046,22 @@ function taskControlPending(task){
   const control=(task.output_data||{})._pm_control;
   return !!control&&control.state!=='confirmed';
 }
+function canResubmitTask(task){
+  if(taskControlPending(task))return false;
+  const confirmed=(task.output_data||{})._pm_control?.state==='confirmed';
+  if(!confirmed&&(taskExecutionIssue(task)||(task.status==='interrupted'&&task.pm_agent_id)))return false;
+  return ['interrupted','failed','cancelled'].includes(task.status);
+}
 function taskStatusText(task){
   const control=(task.output_data||{})._pm_control;
-  if(!control)return task.status;
+  if(!control)return taskExecutionIssue(task)?'执行待核实':task.status;
   const action=control.action==='pause'?'暂停':'取消';
   return taskControlPending(task)?`${action}已登记 · 停止待核实`:`已${action} · ${control.scope==='not_dispatched'?'尚未派发':'PM 已确认'}`;
 }
 function taskExecutionIssue(task){
   const output=task.output_data||{};
-  return [output._pm_execution,output._pm_start].find(item=>item&&item.state==='unknown')||null;
+  return [output._pm_recovery,output._pm_execution,output._pm_start].find(item=>item&&item.state==='unknown')
+    ||(task.status==='interrupted'&&task.pm_agent_id?{state:'unknown',message:'旧记录标为中断，原节点执行情况仍需核实。'}:null);
 }
 function taskExecutionPanel(task){
   const issue=taskExecutionIssue(task);
@@ -1208,8 +1215,10 @@ async function rejectDelivery(taskId){
   }catch(e){showToast('请求异常: '+e.message,'err');}
 }
 async function resubmitTask(taskId){
-  const t=allTasks.find(x=>x.task_id===taskId);if(!t)return;
-  if(taskControlPending(t)){showToast('原节点尚未确认停止，请先核实','err');return;}
+  let t=allTasks.find(x=>x.task_id===taskId);if(!t)return;
+  try{const response=await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}`);if(!response.ok)throw new Error('无法读取当前任务');t=await response.json();}
+  catch(error){showToast('请刷新任务后重试：'+error.message,'err');return;}
+  if(!canResubmitTask(t)){showToast('任务尚不允许重新提交，请先核实原节点及当前结果','err');return;}
   if((t.output_data||{})._pm_control&&!confirm('重新提交会创建新任务。请先确认旧任务的在途工具已经结束，并核对已有产物，继续吗？'))return;
   try{
     const r=await apiFetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:t.name,description:t.description||'',project_id:t.project_id||''})});
