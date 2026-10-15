@@ -232,7 +232,7 @@ class PMPlanner:
         if not input_data.get("requirement") and not input_data.get("description"):
             input_data["requirement"] = task_desc
         subtask = {
-            "subtask_id": str(uuid.uuid4()),
+            "subtask_id": self._state.direct_execution.get("execution_id") or str(uuid.uuid4()),
             "parent_task_id": task.get("task_id", ""),
             "name": task.get("name", ""),
             "description": task_desc,
@@ -241,6 +241,10 @@ class PMPlanner:
             "model_preference": "",
             "fallback_models": [],
         }
+        with self._state.lock:
+            self._state.direct_execution["request"] = subtask
+            if self._state.stop_event.is_set() or not self._state.persist():
+                return {"status": "failed", "summary": "检查点写入失败，未执行任务"}
         result = self._runtime.execute(subtask)
         output = result.get("output", {})
         code_content = output.get("code", output.get("summary", "完成"))

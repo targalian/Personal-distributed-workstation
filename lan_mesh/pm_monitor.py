@@ -41,7 +41,7 @@ class PMMonitor:
         self._state = state
         self._agent = agent
         self._dispatcher = dispatcher
-        self._local_takeover_tasks = set()  # 防重入: PM本地接管中的子任务
+        self._local_takeover_tasks = state.local_takeover_tasks
         self.poll_interval = 10.0
 
     # ── 进度轮询 ──────────────────────────────────────────────────
@@ -119,6 +119,9 @@ class PMMonitor:
             if status in ("completed", "failed", "unknown"):
                 # Reserve this terminal result before quality checks or retry.
                 attempt["phase"] = "processing"
+                attempt["received_result"] = dict(report)
+                if not st.persist():
+                    return
             # 支持 member_id 或 agent_id 查找 (Station 内嵌模式传 agent_id)
             target = st.subagents.get(reporter_id)
             if not target:
@@ -157,14 +160,16 @@ class PMMonitor:
                 self.handle_subagent_failure(task_name, f"质量验证未通过: {quality.get('issues', '')}")
                 return
 
-            self._local_takeover_tasks.discard(task_name)
             with st.lock:
+                self._local_takeover_tasks.discard(task_name)
                 if st.stop_event.is_set():
                     return
                 st.subtask_outputs[task_name] = output
                 if attempt:
                     attempt["phase"] = "done"
                 st.subtask_start_times.pop(task_name, None)
+                if not st.persist():
+                    return
             self._dispatcher.try_dispatch_pending()
 
         if status == "failed" and task_name:
@@ -232,6 +237,7 @@ class PMMonitor:
             st.stop_event.set()
             st.clarification_event.set()
             self._agent.running = False
+            st.persist("failed")
         self._agent.sync_subtasks()
         self._agent.report_status("failed")
         self._agent.report_progress(0.0, "failed", f"子任务 {task_name} 失败：{error_msg}", task_name=task_name)
@@ -310,6 +316,8 @@ class PMMonitor:
                     self._local_takeover_tasks.add(task_name)
                     action = "local"
                 task = self._retry_task(sub, error_msg) if action != "fail" else None
+            if not st.persist():
+                return
         if action == "fail":
             self._fail_task(task_name, error_msg)
             return
@@ -330,7 +338,8 @@ class PMMonitor:
                     task = self._retry_task(sub, error_msg)
             self._dispatcher.execute_subtask_locally(task, sub)
         except Exception as exc:
-            self._local_takeover_tasks.discard(task_name)
+            with st.lock:
+                self._local_takeover_tasks.discard(task_name)
             self._fail_task(task_name, f"重试执行异常：{exc}")
 
     # ── F2.5: 质量验证器 ───────────────────────────────────────
@@ -421,6 +430,8 @@ class PMMonitor:
         logger.info("[%s] 开始聚合 %d 个子任务结果", self._pm_id[:8], len(subtask_results))
 
         agg_prompt = build_aggregation_prompt(task_name, task_desc, subtask_results, st.plan)
+        if not st.persist("aggregating"):
+            return
         try:
             resp = self._runtime._call_llm_with_routing(
                 agg_prompt,
@@ -440,7 +451,10 @@ class PMMonitor:
             self._agent.running = False
             return
 
-        st.subtask_outputs["_aggregated"] = aggregated
+        with st.lock:
+            st.subtask_outputs["_aggregated"] = aggregated
+            if not st.persist("aggregated"):
+                return
         logger.info("[%s] 聚合完成, 结果长度: %d 字符", self._pm_id[:8], len(aggregated))
 
         # 交付闭环

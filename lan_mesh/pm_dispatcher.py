@@ -11,6 +11,7 @@ PM 分发器 — 团队创建与子任务分发
 import time
 import threading
 import uuid
+import copy
 from graphlib import TopologicalSorter, CycleError
 from typing import Optional
 
@@ -84,8 +85,11 @@ class PMDispatcher:
         if st.stop_event.is_set():
             return
 
-        st.plan = plan
-        st.task = task
+        with st.lock:
+            st.plan = plan
+            st.task = task
+            if not st.persist("dispatching"):
+                return
 
         # 获取可用 work_station 列表
         stations = self.get_available_stations()
@@ -186,7 +190,10 @@ class PMDispatcher:
                     t.start()
 
         # 上报团队结构到 Secretary
-        st.teams[team_id] = team
+        with st.lock:
+            st.teams[team_id] = team
+            if not st.persist():
+                return
         self._agent.report_team(team)
         self._agent.report_status("monitoring", team_structure=team)
         self.try_dispatch_pending()
@@ -201,11 +208,15 @@ class PMDispatcher:
                 return None
             if current and current["phase"] in ("active", "processing"):
                 return None
+            if current:
+                st.execution_history[current["subtask_id"]] = copy.deepcopy(current)
             attempt = {"subtask_id": str(uuid.uuid4()), "parent_task_id": task.get("task_id", ""),
                        "pm_id": self._pm_id, "reporter_id": agent_id, "name": name,
                        "station": dict(station), "phase": "active"}
             st.execution_attempts[name] = attempt
             st.subtask_start_times[name] = time.time()
+            if not st.persist():
+                return None
             return attempt
 
     def dispatch_subtask(self, station: dict, agent_info: dict, task: dict,
@@ -224,6 +235,10 @@ class PMDispatcher:
         payload = {key: attempt[key] for key in ("subtask_id", "parent_task_id", "pm_id", "reporter_id", "name")}
         payload.update(description=sub.get("description", ""), required_skill=sub.get("skill", "code_generation"),
                        input_data=inputs, model_preference="", fallback_models=[])
+        with self._state.lock:
+            attempt["request"] = payload
+            if self._state.stop_event.is_set() or not self._state.persist():
+                return
         try:
             response = requests.post(
                 f"http://{station.get('ip', '')}:{station.get('api_port', 0)}/tasks/execute",
@@ -421,6 +436,10 @@ class PMDispatcher:
             "model_preference": "",
             "fallback_models": [],
         }
+        with st.lock:
+            attempt["request"] = subtask
+            if st.stop_event.is_set() or not st.persist():
+                return
 
         logger.info("[%s] 本地执行子任务: %s (skill=%s)",
                    self._pm_id[:8], sub_name, sub.get("skill", ""))

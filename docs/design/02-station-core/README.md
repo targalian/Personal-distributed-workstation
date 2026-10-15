@@ -237,3 +237,7 @@ iter-46 同时隔离交付保存后的 Bot 通知异常：通知失败记录告�
 数据库升级至 schema v5，新增独立 `task_resubmissions` 表，记录唯一来源/替代任务、时间、原任务快照及副作用确认。任务删除不级联删除此表；完整 SQLite 备份自然包含映射。`bind_task_pm` 支持事务内验证回调，在保存 PM 归属前复核重提来源和预算。
 
 `POST /api/tasks/{id}/resubmit` 返回 `{task, duplicate, source_task_id}`；任务列表和详情增加只读 `resubmission` 来源/替代编号，从持久化映射生成，不信任提交输入。秘书未激活返回 503；不存在 404、预算不允许 402、状态冲突 409。普通 `/api/tasks` 新建接口保持原语义。
+
+## PM 检查点查询（iter-52）
+
+原节点核实沿用 `/role/pm-starts/{pm_id}` 和 `/api/tasks/{task_id}/execution-check`，增加 checkpoint 摘要及当前实例 checkpoint_error 标记。节点从启动数据库只读加载，按 PM/任务/设备匹配；Secretary 校验原节点归属后只转发指定摘要字段，任务查询期间变化则丢弃检查点摘要。新增表位于启动数据库，不改变中央任务库 schema v5。

@@ -91,6 +91,15 @@ def test_real_original_node_http_read_survives_both_processes_losing_memory(cont
         receipt_path = remote.data_dir / "worker-pm-starts.sqlite3"
         app.include_router(build_pm_routes(remote))
     record(receipt_path, {"ok": True, "uncertain": False, "process_owner": "old-process"})
+    from lan_mesh.pm_checkpoint import PMCheckpoints
+    from lan_mesh.pm_state import PMState
+    snapshot = PMState()
+    snapshot.task = {"task_id": "task-test"}
+    snapshot.plan = {"decomposition": [{"name": "A"}, {"name": "B"}]}
+    snapshot.subtask_outputs = {"A": {"private": "raw artifact"}}
+    snapshot.execution_attempts = {"B": {"phase": "active"}}
+    snapshot.phase = "monitoring"
+    PMCheckpoints(receipt_path, owner="old-process").save("pm-test", "task-test", "remote", snapshot.snapshot(), 0)
     factory = Mock(side_effect=AssertionError("inspection must not start PM"))
     monkeypatch.setattr("lan_mesh.pm_start.ProjectManagerAgent", factory)
     with live_server(app) as port:
@@ -100,6 +109,8 @@ def test_real_original_node_http_read_survives_both_processes_losing_memory(cont
         answer = inspect_task_pm(controller, "task-test")
         assert answer["state"] == "unknown" and answer["startup_recorded"]
         assert answer["node"]["port"] == port
+        assert answer["checkpoint"]["completed"] == 1 and answer["checkpoint"]["uncertain"] == 1
+        assert "raw artifact" not in str(answer) and not answer["checkpoint"]["resume_supported"]
         assert controller.db.get_task("task-test").to_dict() == before
         factory.assert_not_called()
 

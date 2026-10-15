@@ -10,6 +10,7 @@
 |---|---|
 | orchestrator.py | 任务编排引擎 — 已废弃, 降级为工具库 (iter-30 收敛裁定) |
 | pm_agent.py | PM Agent 协调器/门面 — 持有 Planner/Dispatcher/Monitor, 对外暴露统一接口。 |
+| pm_checkpoint.py | Persist PM execution snapshots before side effects and expose read-only recovery evidence. |
 | pm_control.py | Apply identity-bound PM stop requests and persist the distinction between intent and acknowledgment. |
 | pm_dispatcher.py | PM 分发器 — 团队创建与子任务分发 |
 | pm_inspection.py | Read original-node PM evidence without dispatching work or changing task state. |
@@ -174,3 +175,11 @@ Secretary重新激活只表示观察中断，不能证明本机或远端PM已经
 创建事务校验终态、交付、执行未知、PM 失败证据和停止确认；PM 绑定事务再次校验原任务与项目预算，普通待执行队列也不能绕过。响应丢失后重发无需重新创建；记录中替代任务已删除则拒绝。每个失败替代任务可成为下一次重提的来源。原任务删去而替代任务仍 pending 时禁止继续派发，需人工核实。
 
 这不是 PM 检查点恢复，不证明旧工具已停止，也不提供跨所有模型请求的预算预留。API 和浏览器验证使用模拟执行；真实模型和多机验收仍待完成。
+
+## PM 执行现场持久化（iter-52）
+
+`pm_checkpoint.py` 在原 PM 启动回执数据库中保存最新执行快照，以进程所有者和期望版本防止覆盖。`start_pm_once` 为生产 PM 注入存储；`PMState.snapshot` 排除线程锁/事件/回调，保留计划、原输入、执行请求与编号、结果、历史尝试、超时参数、澄清与交付状态。
+
+PM 协调器、分发器、监控器在关键边界调用持久化：执行前保存编号和完整请求，接受输出后保存再释放后继，聚合和交付前后分开记录。写盘失败设置停止事件并停止调度；查询可显示当前实例的写盘失败标记。取消发生在编号登记后、请求发送前时再次检查停止状态。
+
+这提供检查点证据，不开放续跑；未来需实现新实例授权、旧执行隔离与回执对账，才能安全复用已完成输出和继续未开始步骤。详细说明见 ../../pm-checkpoints.md。

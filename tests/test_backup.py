@@ -16,7 +16,9 @@ from lan_mesh.backup import create_backup, digest, restore_backup, verify_backup
 from lan_mesh.chat_handler import ChatHandler
 from lan_mesh.database import Database
 from lan_mesh.execution_receipts import ExecutionReceipts
+from lan_mesh.pm_checkpoint import PMCheckpoints, read_checkpoint
 from lan_mesh.pm_start import start_pm_once
+from lan_mesh.pm_state import PMState
 from lan_mesh.protocol import Task
 from lan_mesh.task_resubmission import prepare_resubmission
 from tests.test_project_brief import document
@@ -66,6 +68,24 @@ def dataset(tmp_path, monkeypatch):
     return SimpleNamespace(roots={"state": state, "shared": shared, "database_dir": data},
                            archive=tmp_path / "backup.zip", db=db, cid=cid, handoff=handoff, payload=payload,
                            pm_payload=pm_payload)
+
+
+def test_restore_preserves_pm_execution_snapshot_in_startup_database(dataset, tmp_path):
+    path = dataset.roots["database_dir"] / "main-pm-starts.sqlite3"
+    st = PMState()
+    st.task = {"task_id": "t"}
+    st.plan = {"decomposition": [{"name": "A"}, {"name": "B"}]}
+    st.subtask_outputs = {"A": "saved output"}
+    st.execution_attempts = {"B": {"subtask_id": "execution-B", "phase": "active"}}
+    snapshot = st.snapshot()
+    PMCheckpoints(path, owner="old-process").save("pm-restore", "t", "d", snapshot, 0)
+    create_backup(dataset.roots, dataset.archive, offline_confirmed=True)
+    destination = tmp_path / "restored"
+    restore_backup(dataset.archive, destination)
+    restored = destination / "database_dir/main-pm-starts.sqlite3"
+    assert read_checkpoint(restored, "pm-restore", "t", "d")["snapshot"] == snapshot
+    with pytest.raises(ValueError):
+        PMCheckpoints(restored, owner="new-process").save("pm-restore", "t", "d", snapshot, 1)
 
 
 def test_restore_preserves_resubmission_tombstone_and_frozen_source(dataset, tmp_path):

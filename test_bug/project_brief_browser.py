@@ -300,6 +300,53 @@ def verify_task_resubmission(page, output):
     page.set_viewport_size({'width':1680,'height':1100})
 
 
+def verify_pm_checkpoint(page, output):
+    """Show only durable recovery summaries through the actual inspection API."""
+    from lan_mesh.execution_receipts import ExecutionReceipts
+    from lan_mesh.pm_checkpoint import PMCheckpoints
+    from lan_mesh.pm_inspection import inspect_pm_start
+    from lan_mesh.pm_state import PMState
+    task=Task(task_id='checkpoint-task',name='PM进程退出后的执行现场')
+    controller.db.save_task(task)
+    controller.db.bind_task_pm(PMAgent(pm_id='checkpoint-pm',task_id=task.task_id,
+        device_id=controller.state.device_id,hostname='原执行节点',ip='127.0.0.1',api_port=12345))
+    path=Path(folder.name)/'checkpoint-starts.sqlite3'
+    ExecutionReceipts(path,owner='gone').claim({'subtask_id':'checkpoint-pm','pm_id':'checkpoint-pm','parent_task_id':task.task_id})
+    st=PMState()
+    st.task=task.to_dict()
+    st.plan={'decomposition':[{'name':'A'},{'name':'B'},{'name':'C'}]}
+    st.phase='monitoring'
+    st.subtask_outputs={'A':{'private':'不应出现在查询响应的原始产物'}}
+    st.execution_attempts={'B':{'phase':'active'}}
+    PMCheckpoints(path,owner='gone').save('checkpoint-pm',task.task_id,controller.state.device_id,st.snapshot(),0)
+    live={}
+    controller._local_inspect_pm_start=lambda pm_id,task_id:inspect_pm_start(path,pm_id,task_id,controller.state.device_id,live)
+    current=controller.db.get_task(task.task_id).to_dict()
+    page.evaluate('(task)=>{allTasks=[task];showTaskDetail(task.task_id)}',current)
+    page.locator('[data-execution-check]').click()
+    page.wait_for_function("document.querySelector('.task-execution-result').textContent.includes('执行现场 v1')")
+    text=page.locator('.task-execution-result').inner_text()
+    assert '已完成 1/3' in text and '执行待核实 1' in text and '未派发 1' in text
+    assert '不支持 PM 重启续跑' in text
+    assert '原始产物' not in client.get('/api/tasks/checkpoint-task/execution-check').text
+    page.wait_for_function("document.querySelectorAll('#toast-container .toast').length===0")
+    page.screenshot(path=str(output/'pm_checkpoint_desktop.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    assert page.locator('#modal').evaluate('(el)=>el.scrollWidth<=el.clientWidth+1')
+    page.screenshot(path=str(output/'pm_checkpoint_mobile.png'),full_page=True)
+    live.update(pm_id='checkpoint-pm',task_id=task.task_id,device_id=controller.state.device_id,
+                running=False,checkpoint_error=True)
+    page.locator('[data-execution-check]').click()
+    page.wait_for_function("document.querySelector('.task-execution-result').textContent.includes('检查点写入失败')")
+    # Querying an older node without a checkpoint remains useful, without claiming safety.
+    controller._local_inspect_pm_start=lambda pm_id,task_id:inspect_pm_start(Path(folder.name)/'missing-checkpoint.sqlite3',pm_id,task_id,controller.state.device_id,{})
+    page.locator('[data-execution-check]').click()
+    page.wait_for_function("document.querySelector('.task-execution-result').textContent.includes('未找到执行现场记录')")
+    assert controller.db.get_task(task.task_id).to_dict()==current
+    page.evaluate('closeOverlayForce()')
+    page.set_viewport_size({'width':1680,'height':1100})
+
+
 def accept_all_suggestions(page):
     """Review and explicitly accept a candidate without relying on automatic writes."""
     page.locator('#project-brief-panel [data-tab="review"]').click()
@@ -813,6 +860,7 @@ with sync_playwright() as p:
     verify_task_control(page,output)
     verify_restart_recovery(page,output)
     verify_task_resubmission(page,output)
+    verify_pm_checkpoint(page,output)
     assert not errors,errors
     # UI-036: test unified editing history against isolated conversations and the real API.
     history_id=chat.create_conversation('编辑历史测试')['id']
@@ -871,3 +919,4 @@ print("PASS: cancel/pause intent versus PM confirmation, explicit retry, retaine
 
 print("PASS: restart recovery, legacy interrupted protection, stale resubmit rejection, original callback clearing, desktop/mobile; real task/PM API and temporary SQLite")
 print("PASS: resubmission preserves inputs, lost response and repeated clicks reuse one replacement, source links, server race rejection, desktop/mobile; real API/SQLite, simulated PM")
+print("PASS: persistent PM checkpoint evidence, completed/uncertain/unstarted counts, no raw outputs, write failure and legacy missing records, desktop/mobile; real API/SQLite")

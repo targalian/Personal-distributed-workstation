@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .http_retry import http_get
+from .pm_checkpoint import inspect_checkpoint
 
 GUIDANCE = {
     "running": ("原节点 PM 仍在运行", "等待进度或交付；需要停止时使用暂停或取消，并核实在途工具是否结束。"),
@@ -25,7 +26,8 @@ GUIDANCE = {
 def inspect_pm_start(path: Path, pm_id: str, task_id: str, device_id: str, current: dict) -> dict:
     """Read a startup receipt and current PM; never create a receipt database."""
     result = {"format": 1, "pm_id": pm_id, "task_id": task_id, "device_id": device_id,
-              "state": "not_found", "startup_recorded": False}
+              "state": "not_found", "startup_recorded": False,
+              "checkpoint": inspect_checkpoint(path, pm_id, task_id, device_id)}
     receipt = None
     if path.is_file():
         with closing(sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True, timeout=5)) as conn:
@@ -43,6 +45,7 @@ def inspect_pm_start(path: Path, pm_id: str, task_id: str, device_id: str, curre
         if isinstance(current.get("running"), bool):
             result["state"] = "running" if current["running"] else "inactive"
             result["control_receipt"] = current.get("control_receipt", {})
+            result["checkpoint_error"] = current.get("checkpoint_error") is True
             return result
     # A successful launch receipt is not evidence that the PM survived restart.
     output = (receipt or {}).get("output", {})
@@ -86,11 +89,19 @@ def inspect_task_pm(controller, task_id: str) -> dict:
             else:
                 result["state"] = evidence.get("state") if evidence.get("state") in GUIDANCE else "unavailable"
                 result["startup_recorded"] = evidence.get("startup_recorded") is True
+                if isinstance(evidence.get("checkpoint"), dict):
+                    allowed = ("state", "revision", "updated_at", "phase", "completed", "uncertain", "unstarted",
+                               "failed", "total", "direct_state", "delivery_state", "stopped", "resume_supported")
+                    result["checkpoint"] = {key: evidence["checkpoint"][key] for key in allowed
+                                            if key in evidence["checkpoint"]}
+                result["checkpoint_error"] = evidence.get("checkpoint_error") is True
         except Exception:
             # Do not expose credentials or remote error bodies in diagnostics.
             result["state"] = "unavailable"
     latest = controller.db.get_task(task_id)
     if not latest or latest.pm_agent_id != task.pm_agent_id or latest.status != task.status:
         result["state"] = "changed"
+        result.pop("checkpoint", None)
+        result.pop("checkpoint_error", None)
     result["message"], result["next_action"] = GUIDANCE[result["state"]]
     return result

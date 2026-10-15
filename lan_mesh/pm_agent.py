@@ -4,6 +4,7 @@
 """
 import threading
 import time
+import uuid
 from typing import Optional
 
 from .http_retry import http_post, http_get
@@ -34,6 +35,10 @@ class ProjectManagerAgent:
 
         # ── 共享状态 ──
         self._state = PMState()
+        self._checkpoint_store = None
+        self._checkpoint_revision = 0
+        self._checkpoint_error = False
+        self._state.persist = self.checkpoint
 
         # ── 子组件 ──
         self._planner = PMPlanner(pm_id, agent_runtime, self._state, self)
@@ -52,6 +57,32 @@ class ProjectManagerAgent:
     def running(self, value: bool):
         self._running = value
 
+    def checkpoint(self, phase: str = "") -> bool:
+        """Stop future scheduling if durable evidence cannot be written."""
+        st = self._state
+        with st.lock:
+            if self._checkpoint_error:
+                return False
+            if st.stop_event.is_set() and phase and phase != st.stop_reason:
+                return False
+            if phase:
+                st.phase = phase
+            if self._checkpoint_store is None:
+                return True  # Directly constructed test/legacy instances have no store.
+            try:
+                snapshot = {**st.snapshot(), "secretary_url": self.secretary_url, "device_name": self.device_name}
+                self._checkpoint_revision = self._checkpoint_store.save(
+                    self.pm_id, st.task.get("task_id", ""), self.device_id, snapshot, self._checkpoint_revision)
+                return True
+            except Exception as exc:
+                self._checkpoint_error = True
+                st.stop_reason = "checkpoint_failed"
+                st.stop_event.set()
+                st.clarification_event.set()
+                self._running = False
+                logger.error("[%s] 检查点写入失败，停止后续调度，原执行需核实: %s", self.pm_id[:8], exc)
+                return False
+
     def start_task(self, task: dict):
         """接管任务，开始规划与执行 (异步)。"""
         with self._state.lock:
@@ -60,6 +91,9 @@ class ProjectManagerAgent:
             self._started = True
             self._state.task = task
             self._running = True
+            self._state.start_time = time.time()
+            if not self.checkpoint("starting"):
+                raise RuntimeError("PM 检查点不可写，未启动工作线程")
 
         # 加载 multi-agent-architect skill
         self._planner.load_skill()
@@ -86,6 +120,7 @@ class ProjectManagerAgent:
             self._running = False
             self._state.clarification_response = {"response": "", "choice": "", reason: True}
             self._state.clarification_event.set()
+            self.checkpoint(reason if self._state.phase not in ("completed", "failed") else "")
 
     def get_status(self) -> dict:
         st = self._state
@@ -97,11 +132,11 @@ class ProjectManagerAgent:
             "teams": len(st.teams),
             "subagents": len(st.subagents),
             "control_receipt": dict(getattr(self, "_control_receipt", {})),
+            "checkpoint_error": self._checkpoint_error,
         }
 
     def _run_task(self, task: dict):
         st = self._state
-        st.start_time = time.time()
         keep_monitoring = False
         try:
             if st.stop_event.is_set():
@@ -110,12 +145,16 @@ class ProjectManagerAgent:
                 raise TimeoutError(f"全局任务超时 ({st.global_timeout}s)")
 
             # F2.3: 多轮任务细化
+            if not self.checkpoint("refining"):
+                return
             task = self._planner.refine_requirements(task)
             if st.stop_event.is_set():
                 return
 
             # 阶段 1: 规划
             self.report_status("planning")
+            if not self.checkpoint("planning"):
+                return
             plan = self._planner.analyze_with_skill(task)
             if st.stop_event.is_set():
                 return
@@ -123,8 +162,11 @@ class ProjectManagerAgent:
                        self.pm_id[:8], plan.get('pattern', 'single'),
                        len(plan.get('decomposition', [])))
 
-            st.plan = plan
-            st.task = task
+            with st.lock:
+                st.plan = plan
+                st.task = task
+                if not self.checkpoint("planned"):
+                    return
 
             # 阶段 2: 执行
             pattern = plan.get("pattern", "single")
@@ -138,9 +180,17 @@ class ProjectManagerAgent:
                         "description": task.get("description", ""),
                     }]
                 self.sync_subtasks()
+                with st.lock:
+                    st.direct_execution = {"execution_id": str(uuid.uuid4()), "state": "active"}
+                    if not self.checkpoint("executing_single"):
+                        return
                 result = self._planner.execute_directly(task)
                 if st.stop_event.is_set():
                     return
+                with st.lock:
+                    st.direct_execution.update(state="returned", result=result)
+                    if not self.checkpoint():
+                        return
 
                 # 校验: 如果执行结果是错误信息, 不能当作完成交付
                 summary = result.get("summary", "")
@@ -151,8 +201,12 @@ class ProjectManagerAgent:
                     self.report_progress(0.0, "failed", error_msg)
                     return
 
-                for sub in plan.get("decomposition", []):
-                    st.subtask_outputs[sub.get("name", "")] = result
+                with st.lock:
+                    for sub in plan.get("decomposition", []):
+                        st.subtask_outputs[sub.get("name", "")] = result
+                    st.direct_execution["state"] = "completed"
+                    if not self.checkpoint("executed_single"):
+                        return
                 self.sync_subtasks()
 
                 # 构建交付物并上报 (修复: single 模式也必须创建交付记录)
@@ -181,7 +235,9 @@ class ProjectManagerAgent:
                     return
                 self.report_status("monitoring")
                 keep_monitoring = True
-                st.monitoring_ready.set()
+                with st.lock:
+                    st.monitoring_ready.set()
+                    self.checkpoint("monitoring")
 
         except Exception as e:
             logger.error("[%s] 任务执行失败: %s", self.pm_id[:8], e)
@@ -222,6 +278,8 @@ class ProjectManagerAgent:
             if st.stop_event.is_set():
                 return
             st.clarification_response = input_data
+            if not self.checkpoint():
+                return
             st.clarification_event.set()
         logger.info("[%s] 收到 Boss 回复: %s", self.pm_id[:8], str(input_data)[:200])
 
@@ -234,6 +292,10 @@ class ProjectManagerAgent:
                 return {st.stop_reason or "stopped": True}
             st.clarification_event.clear()
             st.clarification_response = {}
+            st.clarification_request = {"question": question, "options": options or [],
+                                        "timeout": timeout if timeout is not None else st.clarification_timeout}
+            if not self.checkpoint("awaiting_input"):
+                return {"checkpoint_failed": True}
         self.report_status("awaiting_input",
                            task_list=[{"name": "请求决策", "status": "awaiting_input", "description": question}])
         self.report_progress(-1.0, "awaiting_input", question,
@@ -271,6 +333,8 @@ class ProjectManagerAgent:
     def report_status(self, status: str, team_structure: dict = None,
                       task_list: list = None, collaboration_mode: str = None):
         if self._state.stop_event.is_set() and status != self._state.stop_reason:
+            return
+        if status in ("completed", "failed") and not self.checkpoint(status):
             return
         try:
             payload = {"status": status}
@@ -398,11 +462,20 @@ class ProjectManagerAgent:
             "delivered_at": time.time(),
         }
 
+        with self._state.lock:
+            self._state.delivery = {"state": "prepared", "payload": delivery}
+            if not self.checkpoint("delivering"):
+                return False
+
         # Attempt to save the local artifact before the delivery request. An HTTP
         # timeout is an unknown outcome; do not record it as successful delivery.
         self._distribute_artifacts(task_name, aggregated)
         if self._state.stop_event.is_set():
             return False
+        with self._state.lock:
+            self._state.delivery["state"] = "sending"
+            if not self.checkpoint():
+                return False
         try:
             resp = http_post(
                 f"{self.secretary_url}/api/pm/{self.pm_id}/deliver",
@@ -411,6 +484,10 @@ class ProjectManagerAgent:
             )
             ack = resp.json() if resp.status_code == 200 else {}
             if ack.get("ok") is True and ack.get("task_id") == delivery["task_id"]:
+                with self._state.lock:
+                    self._state.delivery["state"] = "acknowledged"
+                    if not self.checkpoint():
+                        return False
                 logger.info("[%s] 交付物已上报 Secretary", self.pm_id[:8])
             else:
                 logger.error("[%s] 交付物上报失败: HTTP %d", self.pm_id[:8], resp.status_code)

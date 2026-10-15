@@ -27,6 +27,7 @@
 | tests/test_delivery_replay.py | Concurrent delivery retries must preserve the reviewed artifact and acceptance decision. |
 | tests/test_execution_receipts.py | Verify durable execution claims, restart ambiguity and Station/Worker HTTP receipts. |
 | tests/test_local_checks.py | Verify local-loop failure propagation, environment isolation and offline reports. |
+| tests/test_pm_checkpoint.py | Verify durable PM boundaries, write-failure fencing and read-only restart evidence. |
 | tests/test_pm_control.py | Verify stop intent, original-PM identity and acknowledgment under races and transport loss. |
 | tests/test_pm_delivery.py | Delivery outcomes must reflect persisted acknowledgements, not child progress or model errors. |
 | tests/test_pm_inspection.py | Verify original-node inspection survives restart and never redispatches or rewrites results. |
@@ -148,3 +149,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 ## iter-51 重提验证
 
 `tests/test_task_resubmission.py` 覆盖真实 API/SQLite 并发、输入快照、准备进程退出后恢复、启动结果未知不重启、事务回滚、v4→v5 迁移、删除后去重、重提链条、预算和原任务交付在 PM 绑定前变化。`project_brief_browser.py` 增加真实网页操作与 API 验证，执行端模拟；不等同真实模型和多机验收。
+
+## iter-52 检查点验证
+
+`test_pm_checkpoint.py` 验证实际 PM 线程的执行前落盘、依赖输出释放顺序、直接执行编号、交付请求与确认、重试历史、澄清问题/回复、并发尝试、版本/进程防覆盖与故障停止。独立子进程在工具入口突然退出后，原检查点和启动记录可查询且不会重新启动。扩展原节点 Station/Worker 本机 HTTP 查询和备份恢复回归。模型与工具执行为模拟，不作为真实多机或自动续跑验收。
