@@ -1,7 +1,7 @@
 {
-  "version": "0.34.2",
-  "commit": "c1128e2",
+  "version": "0.34.3",
+  "commit": "a49ec0d",
   "released_at": "2026-10-15",
-  "note": "Keep PM monitoring active after dispatch; execute local dependencies in order; wake stopped tasks and reject late results",
+  "note": "Persist delivery and review changes atomically; preserve acceptance across retries and stale task writes; align chat review states",
   "upgrade_hint": "git pull && pip install -r requirements.txt 后重启节点"
 }
