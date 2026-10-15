@@ -370,7 +370,7 @@ class PMDispatcher:
         self._agent.report_progress(
             1.0 if status == "completed" else 0.0, status,
             f"子任务 {sub_name} {status}: {result.get('error', '')[:200]}",
-            reporter_type="pm", task_name=sub_name,
+            reporter_type="member", task_name=sub_name,
         )
 
     # ── Prompt 构建 ───────────────────────────────────────────────

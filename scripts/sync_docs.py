@@ -115,6 +115,7 @@ MAPPING = {
     # 10-test-loop — 测试与验证循环
     "tests/test_core.py": "10-test-loop",
     "tests/test_project_brief.py": "10-test-loop",
+    "tests/test_pm_delivery.py": "10-test-loop",
     "test_bug/project_brief_browser.py": "10-test-loop",
     "test_bug/run_loop.py": "10-test-loop",
     "test_bug/dev_loop.py": "10-test-loop",

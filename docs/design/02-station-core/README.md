@@ -166,6 +166,7 @@ skill_assignments、resource_usage_log、events 等。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-15 | iter-41 | 交付接口拒绝不存在任务、冲突 PM 和空内容；落库成功后才返回确认 |
 | 2026-10-14 | iter-40 | 下发接口传预分配任务 ID 和 input_data._brief；既有任务 ID 返回已有任务，任务库持久化需求依据 |
 | 2026-10-10 | 项目描述工作区 | 新增对话产物、三层需求 DAG、版本保存、Markdown 导出与集成验证 |
 | 2026-08-18 | iter-35 | E6: 主机级单实例守护 — ~/.lan_mesh/station.lock 锁仲裁 (同版本/更新实例取消启动, 旧版实例关闭接管, 僵尸锁覆盖, dev-reload 同版接管; 无锁时按端口占用者是否为工作站进程兜底清理旧版遗留) |
@@ -184,3 +185,5 @@ skill_assignments、resource_usage_log、events 等。
 由 station_api 装配，会话级读取、版本比较保存、模型整理与 Markdown 导出。结构和依赖由 project_brief.py 校验；详细接口见 [项目描述工作区](../06-interaction/项目描述工作区.md)。
 
 `submit_task_from_chat` 接受可选 `task_id` 和 `input_data`。确认下发由 BriefHandoff 先记录再调用；任务库沿用 JSON 字段保存 `_brief`，无 schema 迁移。已存在任务 ID 直接返回，不覆盖原数据。此检查并非数据库级并发去重；同版本派发由活跃 Secretary 的 BriefStore 锁与准备记录协调。
+
+交付接口在写入前检查任务存在（404）、已有 PM 关联不冲突（409）、非空字符串产物（422），保存成功后返回匹配任务 ID 的确认。为兼容内嵌 PM 启动期间的先上报后绑定，任务尚无 pm_agent_id 时仍允许上报；此例外不是严格的所有权鉴权。数据库写入失败不会返回成功。

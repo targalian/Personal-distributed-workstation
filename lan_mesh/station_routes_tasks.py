@@ -374,21 +374,28 @@ def build_task_routes(controller) -> APIRouter:
         summary = payload.get("summary", "")
         subtask_stats = payload.get("subtask_stats", {})
 
+        task = db.get_task(task_id) if task_id else None
+        if task is None:
+            raise HTTPException(404, "交付对应的任务不存在")
+        # Local PM startup can report before its assigned ID is saved by the
+        # submitting thread. Reject a conflicting assignment when one exists.
+        if task.pm_agent_id and task.pm_agent_id != pm_id:
+            raise HTTPException(409, "交付 PM 与任务当前关联的 PM 不一致")
+        if not isinstance(deliverable, str) or not deliverable.strip():
+            raise HTTPException(422, "交付内容不能为空")
+
         # 存储交付物到 DB (追加到 task output_data)
-        if task_id:
-            task = db.get_task(task_id)
-            if task:
-                if not task.output_data:
-                    task.output_data = {}
-                task.output_data["_delivery"] = {
-                    "pm_id": pm_id,
-                    "deliverable": deliverable,
-                    "summary": summary,
-                    "subtask_stats": subtask_stats,
-                    "delivered_at": payload.get("delivered_at", time.time()),
-                    "accepted": None,  # 等待 Boss 验收
-                }
-                db.save_task(task)
+        if not task.output_data:
+            task.output_data = {}
+        task.output_data["_delivery"] = {
+            "pm_id": pm_id,
+            "deliverable": deliverable,
+            "summary": summary,
+            "subtask_stats": subtask_stats,
+            "delivered_at": payload.get("delivered_at", time.time()),
+            "accepted": None,  # 等待 Boss 验收
+        }
+        db.save_task(task)
 
         # WebSocket 广播
         await _broadcast(state, "task_delivered", {

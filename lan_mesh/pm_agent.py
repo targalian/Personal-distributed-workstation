@@ -140,7 +140,10 @@ class ProjectManagerAgent:
                     deliverable = full_output["summary"]
                 subtask_results = [{"name": s.get("name", ""), "status": "completed", "output": result}
                                    for s in plan.get("decomposition", [])]
-                self.deliver_result(task_name, task_desc, deliverable, subtask_results)
+                if not self.deliver_result(task_name, task_desc, deliverable, subtask_results):
+                    self.report_status("failed")
+                    self.report_progress(0.0, "failed", "交付未获 Secretary 确认，请核实交付记录后处理")
+                    return
 
                 self.report_status("completed", task_list=[{"name": task_name, "status": "completed"}])
                 self.report_progress(1.0, "completed", f"任务完成: {result.get('summary', '')[:100]}")
@@ -322,8 +325,8 @@ class ProjectManagerAgent:
         return result
 
     def deliver_result(self, task_name: str, task_desc: str,
-                       aggregated: str, subtask_results: list):
-        """优化9: 交付闭环 — 上报 Secretary + 产物分发 + 任务记忆。"""
+                       aggregated: str, subtask_results: list) -> bool:
+        """Return true only after Secretary acknowledges the matching task delivery."""
         summary = aggregated[:500] if len(aggregated) > 500 else aggregated
         completed_count = sum(1 for r in subtask_results if r.get("status") == "completed")
         total_count = len(subtask_results)
@@ -343,21 +346,27 @@ class ProjectManagerAgent:
             "delivered_at": time.time(),
         }
 
+        # Attempt to save the local artifact before the delivery request. An HTTP
+        # timeout is an unknown outcome; do not record it as successful delivery.
+        self._distribute_artifacts(task_name, aggregated)
         try:
             resp = http_post(
                 f"{self.secretary_url}/api/pm/{self.pm_id}/deliver",
                 json=delivery,
                 timeout=10,
             )
-            if resp.status_code == 200:
+            ack = resp.json() if resp.status_code == 200 else {}
+            if ack.get("ok") is True and ack.get("task_id") == delivery["task_id"]:
                 logger.info("[%s] 交付物已上报 Secretary", self.pm_id[:8])
             else:
                 logger.error("[%s] 交付物上报失败: HTTP %d", self.pm_id[:8], resp.status_code)
+                return False
         except Exception as e:
             logger.error("[%s] 交付物上报异常: %s", self.pm_id[:8], e)
+            return False
 
-        self._distribute_artifacts(task_name, aggregated)
         self._record_task_memory(task_name, task_desc, subtask_results)
+        return True
 
     def _distribute_artifacts(self, task_name: str, content: str):
         """F3.2: 产物写入共享目录。"""

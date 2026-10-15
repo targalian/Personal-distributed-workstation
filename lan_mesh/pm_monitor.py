@@ -76,7 +76,7 @@ class PMMonitor:
                 has_pending = bool(st.pending_subtasks)
 
             overall = completed / total if total > 0 else 0.0
-            self._agent.report_progress(overall, "in_progress" if completed < total else "completed",
+            self._agent.report_progress(overall, "in_progress",
                                         f"整体进度: {completed}/{total} 子任务完成")
 
             # 优化4: 全部子任务完成 (含 failed) 且无 pending, 触发结果聚合
@@ -362,18 +362,28 @@ class PMMonitor:
                 {"_model_preference": "", "_fallback_models": [], "description": "结果聚合"}
             )
             aggregated = resp.get("content", "")
+            if (resp.get("_error") or resp.get("error") or resp.get("model") == "none"
+                    or not isinstance(aggregated, str) or not aggregated.strip()
+                    or aggregated.lstrip().startswith(("[未配置", "[LLM 调用失败", "[模型调用失败"))):
+                raise ValueError(aggregated or "模型未返回有效聚合结果")
         except Exception as e:
             logger.error("[%s] LLM 聚合失败: %s", self._pm_id[:8], e)
-            aggregated = f"[聚合失败] {e}"
-
-        self._agent.report_status("completed")
-        self._agent.report_progress(1.0, "completed", f"任务聚合完成: {task_name}", task_name=task_name)
+            self._agent.report_status("failed")
+            self._agent.report_progress(0.0, "failed", f"结果聚合失败: {e}", task_name=task_name)
+            self._agent.running = False
+            return
 
         st.subtask_outputs["_aggregated"] = aggregated
         logger.info("[%s] 聚合完成, 结果长度: %d 字符", self._pm_id[:8], len(aggregated))
 
         # 交付闭环
-        self._agent.deliver_result(task_name, task_desc, aggregated, subtask_results)
+        if self._agent.deliver_result(task_name, task_desc, aggregated, subtask_results):
+            self._agent.report_status("completed")
+            self._agent.report_progress(1.0, "completed", f"任务聚合完成: {task_name}", task_name=task_name)
+        else:
+            self._agent.report_status("failed")
+            self._agent.report_progress(0.0, "failed", "交付未获 Secretary 确认，请核实交付记录后处理", task_name=task_name)
+        self._agent.running = False
 
     # ── 优化10: 升级上报 ──────────────────────────────────────────
 

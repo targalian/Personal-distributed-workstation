@@ -1467,7 +1467,7 @@ class _RecordingAgent:
     def __getattr__(self, name):
         def _record(*args, **kwargs):
             self.calls.append((name, args, kwargs))
-            return None
+            return True if name == "deliver_result" else None
         return _record
 
 

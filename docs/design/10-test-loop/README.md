@@ -24,6 +24,7 @@
 | test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_local_checks.py | Verify local-loop failure propagation, environment isolation and offline reports. |
+| tests/test_pm_delivery.py | Delivery outcomes must reflect persisted acknowledgements, not child progress or model errors. |
 | tests/test_project_brief.py | Artifact correctness: graph integrity, concurrency, isolation, and chat integration. |
 | tests/test_startup.py | Launch the shell wrapper in temporary projects to verify errors, arguments and cleanup. |
 <!-- /AUTO:module-list -->
@@ -86,6 +87,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-15 | iter-41 | 新增模型错误、HTTP/回执/写盘失败及真实任务库状态的交付验证，覆盖单任务与聚合路径 |
 | 2026-10-14 | iter-40 | 新增下发一致性、并发、磁盘异常及会话保护测试；UI-039 覆盖真实任务/交付接口和模拟执行 |
 | 2026-10-14 | iter-39 | 新增 5 项持久化历史后端测试及 UI-038 浏览器比较/恢复/冲突回归 |
 | 2026-10-14 | iter-38 | 新增 7 项建议审阅后端回归及 UI-037 浏览器差异审阅场景 |
