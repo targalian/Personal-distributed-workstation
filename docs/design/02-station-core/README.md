@@ -92,6 +92,7 @@ WebSocket 通道。
 拆分前一致):
 | 模块 | 职责 | 可用性 |
 |---|---|---|
+| 2026-10-15 | iter-45 | Station 子任务执行与查询共用持久化回执路由；结果由原 PM 查询，不再误发给本机无关 PM |
 | station_routes_common.py | 限流/认证中间件与共享工具 (单一事实源) | — |
 | station_routes_basic.py | 健康/错误/角色/注册心跳/主机/Director | 始终 |
 | station_routes_tasks.py | Agent/任务/图/交付闭环/任务记忆 | Secretary |

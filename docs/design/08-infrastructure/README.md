@@ -11,6 +11,8 @@
 | config.py | 配置管理 - 基于 Pydantic 的强类型配置校验 |
 | error_tracker.py | F1.4: 本地错误聚合追踪 |
 | event_bus.py | Station 事件总线 (M5)。 |
+| execution_receipts.py | Persist execution claims and results so transport retries cannot start a second copy. |
+| execution_routes.py | Shared Station/Worker task execution endpoints with durable receipts and polling. |
 | host_rating.py | 主机评级系统 — 基于硬件配置自动计算能力等级 |
 | logger.py | LAN Mesh 结构化日志系统 |
 | preflight.py | 启动前自检模块 - 在程序启动时检查所有前置条件 |
@@ -84,3 +86,14 @@ secretary.py 删除 (P3)，Secretary 端路由由 station_routes_* 承担。
 |---|---|---|
 | 2026-08-16 | iter-31 | api.py 按端点域拆分 (275 行工厂 → 装配层 + worker_routes_basic/pm/p2p 三模块; 路由集合/顺序/行为不变) + 工厂签名类型标注补齐 |
 | 2026-08-16 | iter-27 后 | 初建 |
+
+
+## 执行回执（iter-45）
+
+`execution_receipts.py` 使用独立 SQLite 保存执行编号、请求摘要、身份字段、进程归属及结果。BEGIN IMMEDIATE 保证同一编号只有一个请求取得执行权；相同请求重复返回已有回执，编号对应不同内容返回 409。先提交记录，再启动运行时；写入记录失败不执行工具。结果只发布一次，结果写盘失败保留未知的在途记录，不能借重发再次执行。
+
+`execution_routes.py` 为 Station 和 Worker 提供 POST `/tasks/execute` 与 GET `/tasks/executions/{execution_id}`。Station 异步返回 started；独立 Worker 保留同步返回结果，但将执行移出事件循环，重复请求或状态查询不会被长任务阻塞。均使用现有节点认证中间件。名称、input_data 和 1–128 位安全字符的 subtask_id 必须有效，否则返回 400。结果中的运行时异常和模型错误统一为 failed。
+
+回执库按需初始化：Station 位于主数据库旁的 `<主库名>-executions.sqlite3`，Worker 默认为 `~/.lan_mesh/worker-executions.sqlite3`。没有修改主库 schema。已完成结果可跨进程读取；旧进程未完成的记录返回 unknown，不自动重新执行。返回 unknown 不证明旧进程或外部工具已结束。
+
+当前不自动清理回执，避免清理后重复编号再次执行；长期容量和清理策略待补。备份/迁移应包含回执库，不能仅恢复主库。去重只覆盖保留的同一回执库与相同执行编号，不提供跨主机数据库共识、PM 检查点续跑或外部工具副作用回滚。

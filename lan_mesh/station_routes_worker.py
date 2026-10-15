@@ -17,6 +17,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from .http_retry import auth_headers
 from .logger import get_logger
 from .station_routes_common import _broadcast
+from .execution_routes import build_execution_routes
 
 logger = get_logger("station_api")
 
@@ -29,6 +30,9 @@ def build_worker_routes(controller) -> APIRouter:
     db = controller.db
     state = controller.state
     discovery = controller.discovery
+    router.include_router(build_execution_routes(
+        lambda payload: controller._local_execute_task(payload),
+        lambda: db.path.with_name(db.path.stem + "-executions.sqlite3")))
 
     # ════════════════════════════════════════════════════════════
     #  P2P 主机间通讯辅助
@@ -134,38 +138,6 @@ def build_worker_routes(controller) -> APIRouter:
                 "status": info.get("status", "idle"),
             })
         return {"sub_agents": result, "total": len(result)}
-
-    @router.post("/tasks/execute")
-    async def local_execute_task(payload: dict):
-        """接收 PM Dispatcher 分发的子任务并在本机异步执行。
-
-        立即返回 {"status": "started"}，实际执行在后台线程完成，
-        执行完毕后通过 receive_subtask_result 回调 PM Monitor。
-
-        调用方校验 (M1): 必填字段缺失直接 400, 不进入执行线程。
-        """
-        name = str(payload.get("name", "")).strip()
-        input_data = payload.get("input_data")
-        if not name:
-            raise HTTPException(status_code=400, detail="缺少必填字段: name")
-        if input_data is None or not isinstance(input_data, dict):
-            raise HTTPException(status_code=400, detail="缺少必填字段: input_data")
-        if not payload.get("subtask_id"):
-            raise HTTPException(status_code=400, detail="缺少必填字段: subtask_id")
-
-        import threading as _threading
-
-        def _run():
-            try:
-                controller._local_execute_task(payload)
-            except Exception as e:
-                logger.error("本机子任务执行异常: %s", e)
-
-        _threading.Thread(
-            target=_run, daemon=True,
-            name=f"subtask-{payload.get('name', '')[:20]}",
-        ).start()
-        return {"status": "started", "name": payload.get("name", "")}
 
     # ════════════════════════════════════════════════════════════
     #  P2P 主机间通讯 (聊天 + 文件传输)

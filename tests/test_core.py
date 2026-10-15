@@ -1727,7 +1727,10 @@ class TestPMMonitor:
         monkeypatch.setattr(PMMonitor, "_verify_output_quality",
                             lambda self, tn, out: None)
         mon = self._monitor(state=st)
+        st.execution_attempts["A"] = {"phase": "active", "subtask_id": "attempt-A",
+                                      "pm_id": "pm-mon-1234", "parent_task_id": "task-A", "reporter_id": "m1"}
         mon.receive_progress_report({
+            "subtask_id": "attempt-A", "pm_id": "pm-mon-1234", "parent_task_id": "task-A",
             "reporter_id": "m1", "task_name": "A", "status": "completed",
             "output": "结果内容", "self_check": {"passed": True, "notes": "ok"},
             "progress": 1.0})
@@ -1742,7 +1745,10 @@ class TestPMMonitor:
                               "current_task": ""}
         mon = self._monitor(state=st)
         mon._local_takeover_tasks.add("A")
+        st.execution_attempts["A"] = {"phase": "active", "subtask_id": "attempt-A",
+                                      "pm_id": "pm-mon-1234", "parent_task_id": "task-A", "reporter_id": "m1"}
         mon.receive_progress_report({
+            "subtask_id": "attempt-A", "pm_id": "pm-mon-1234", "parent_task_id": "task-A",
             "reporter_id": "m1", "task_name": "A", "status": "failed",
             "message": "又挂了"})
         # 本地接管后仍失败 → 放弃重试, 移出接管集合
@@ -1758,7 +1764,10 @@ class TestPMMonitor:
         st.task_station["A"] = {"device_id": "s1"}
         st.task_agent["A"] = {"agent_id": "a1"}
         mon = self._monitor(state=st)
+        st.execution_attempts["A"] = {"phase": "active", "subtask_id": "attempt-A",
+                                      "pm_id": "pm-mon-1234", "parent_task_id": "task-A", "reporter_id": "m1"}
         mon.receive_progress_report({
+            "subtask_id": "attempt-A", "pm_id": "pm-mon-1234", "parent_task_id": "task-A",
             "reporter_id": "m1", "task_name": "A", "status": "failed",
             "message": "boom"})
         assert st.retry_counts["A"] == 1  # 走同站重试策略
@@ -1933,7 +1942,7 @@ class TestPMDispatcher:
         result_calls = [c for c in agent.calls if c[0] == "receive_subtask_result"]
         assert result_calls and result_calls[0][2]["status"] == "completed"
 
-    def test_dispatch_subtask_falls_back_locally_on_error(self, monkeypatch):
+    def test_dispatch_subtask_waits_for_receipt_on_transport_error(self, monkeypatch):
         import lan_mesh.pm_dispatcher as pd
 
         def boom(*a, **k):
@@ -1948,7 +1957,8 @@ class TestPMDispatcher:
             {"ip": "10.0.0.2", "api_port": 45470},
             {"agent_id": "a1"}, {"task_id": "t1", "input_data": {}},
             {"name": "A", "skill": "code_generation"})
-        assert disp.calls and disp.calls[0][0] == "execute_subtask_locally"
+        assert not disp.calls
+        assert disp._state.execution_attempts["A"]["phase"] == "active"
 
     def test_build_subagent_prompt_includes_context(self):
         from lan_mesh.pm_dispatcher import PMDispatcher

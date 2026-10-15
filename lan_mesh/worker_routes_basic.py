@@ -9,17 +9,20 @@ Worker 基础路由 — 本机信息/共享文件/任务执行 (iter-31 拆分�
 路由函数名/端点路径/行为与原 api.py create_worker_router 逐字一致。
 """
 from typing import Any, Callable, Optional
+from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from .shared_folder import SharedFolderManager
+from .execution_routes import build_execution_routes
 
 
 def build_basic_routes(
     collect_info_fn: Callable[[], Any],
     shared_folder: SharedFolderManager,
     agent_runtime: Optional[Any] = None,
+    receipt_path: Optional[Path] = None,
 ) -> APIRouter:
     """本机信息 / 共享文件 / 任务执行端点。"""
     router = APIRouter()
@@ -31,13 +34,14 @@ def build_basic_routes(
 
     # ── 任务执行端点 ─────────────────────────────────────
 
-    @router.post("/tasks/execute")
-    async def execute_task(payload: dict):
-        """接收 Secretary 分发的子任务并执行。"""
+    def execute_task(payload: dict):
         if not agent_runtime:
-            raise HTTPException(status_code=503, detail="Agent 运行时未初始化")
-        result = agent_runtime.execute(payload)
-        return result
+            return {"status": "failed", "error": "Agent 运行时未初始化", "output": {}}
+        return agent_runtime.execute(payload)
+
+    router.include_router(build_execution_routes(
+        execute_task, receipt_path or Path.home() / ".lan_mesh" / "worker-executions.sqlite3",
+        synchronous=True))
 
     @router.get("/agents/cli-status")
     async def cli_agent_status():

@@ -32,6 +32,7 @@ class PMState:
     dispatched: set = field(default_factory=set)           # 已分发的 task_name
     task_station: dict = field(default_factory=dict)       # task_name → station dict
     task_agent: dict = field(default_factory=dict)         # task_name → agent_info dict
+    execution_attempts: dict = field(default_factory=dict)  # task_name → current execution identity/phase
 
     # ── 团队 / 子 Agent ──
     teams: dict = field(default_factory=dict)              # team_id → team_info

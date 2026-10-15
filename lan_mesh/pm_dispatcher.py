@@ -20,6 +20,7 @@ from .agent_prompt import build_subagent_prompt, build_dispatch_context
 from .http_retry import auth_headers, http_get
 from .logger import get_logger
 from .pm_state import PMState
+from .execution_routes import normalize_result
 
 logger = get_logger("pm.dispatcher")
 
@@ -192,74 +193,91 @@ class PMDispatcher:
 
     # ── 分发子任务 ────────────────────────────────────────────────
 
+    def _begin_attempt(self, name: str, task: dict, agent_id: str, station: dict) -> dict | None:
+        st = self._state
+        with st.lock:
+            current = st.execution_attempts.get(name)
+            if st.stop_event.is_set() or name in st.subtask_outputs:
+                return None
+            if current and current["phase"] in ("active", "processing"):
+                return None
+            attempt = {"subtask_id": str(uuid.uuid4()), "parent_task_id": task.get("task_id", ""),
+                       "pm_id": self._pm_id, "reporter_id": agent_id, "name": name,
+                       "station": dict(station), "phase": "active"}
+            st.execution_attempts[name] = attempt
+            st.subtask_start_times[name] = time.time()
+            return attempt
+
     def dispatch_subtask(self, station: dict, agent_info: dict, task: dict,
                          sub: dict, plan: dict = None):
-        """向目标 work_station 的子 Agent 分发任务。
-
-        端点已改为异步 (立即返回 started), 实际执行在远程后台线程完成,
-        完成后通过 receive_subtask_result 回调 PM Monitor。
-        分发失败时自动回退到本地执行。
-        """
-        if self._state.stop_event.is_set():
-            return
+        """Dispatch once; uncertain responses are resolved by polling the original station."""
         if not station:
             self.execute_subtask_locally(task, sub)
             return
-        ip = station.get("ip", "")
-        port = station.get("api_port", 0)
-        sub_name = sub.get("name", "")
-
-        input_data = dict(task.get("input_data", {}))
+        name = sub.get("name", "")
+        attempt = self._begin_attempt(name, task, agent_info.get("agent_id", ""), station)
+        if attempt is None:
+            return
+        inputs = dict(task.get("input_data", {}))
         if plan:
-            dispatch_ctx = build_dispatch_context(task, sub, plan, self._pm_id)
-            input_data.update(dispatch_ctx)
-
+            inputs.update(build_dispatch_context(task, sub, plan, self._pm_id))
+        payload = {key: attempt[key] for key in ("subtask_id", "parent_task_id", "pm_id", "reporter_id", "name")}
+        payload.update(description=sub.get("description", ""), required_skill=sub.get("skill", "code_generation"),
+                       input_data=inputs, model_preference="", fallback_models=[])
         try:
-            resp = requests.post(
-                f"http://{ip}:{port}/tasks/execute",
-                json={
-                    "subtask_id": str(uuid.uuid4()),
-                    "parent_task_id": task.get("task_id", ""),
-                    "name": sub_name,
-                    "description": sub.get("description", ""),
-                    "required_skill": sub.get("skill", "code_generation"),
-                    "input_data": input_data,
-                    "model_preference": "",
-                    "fallback_models": [],
-                    "pm_id": self._pm_id,
-                    "reporter_id": agent_info.get("agent_id", ""),
-                },
-                headers=auth_headers(),
-                timeout=15,  # 新端点已异步, 应立即返回
-            )
-            if resp.status_code == 200:
-                body = resp.json()
-                if body.get("status") == "started":
-                    # 新端点 (station 内嵌): 已异步启动, 结果通过回调上报
-                    logger.info("[%s] 子任务 '%s' 已分发到 %s:%s (异步)",
-                                self._pm_id[:8], sub_name, ip, port)
-                else:
-                    # 旧端点 (独立 Worker): 同步执行完, 结果直接回注 Monitor
-                    logger.warning("[%s] 子任务 '%s' 由旧版端点同步执行完成, 结果回注",
-                                   self._pm_id[:8], sub_name)
-                    status = "completed" if body.get("status") == "completed" else "failed"
-                    self._agent.receive_subtask_result(
-                        task_name=sub_name,
-                        status=status,
-                        output_data=body.get("output", {}),
-                        agent_id=agent_info.get("agent_id", ""),
-                    )
-            else:
-                raise RuntimeError(f"HTTP {resp.status_code}")
-        except requests.exceptions.ReadTimeout:
-            # 超时无法确认远端状态 (旧版同步端点可能仍在执行), 不能本地回退
-            # 否则同一子任务会被执行两份; 交由 Monitor 超时后停止调度并提示核实
-            logger.warning("[%s] 分发子任务 '%s' 超时未确认, 远端可能仍在执行, 等待超时保护",
-                           self._pm_id[:8], sub_name)
-        except Exception as e:
-            logger.warning("[%s] 分发子任务 '%s' 失败: %s, 回退本地执行",
-                          self._pm_id[:8], sub_name, e)
-            self.execute_subtask_locally(task, sub)
+            response = requests.post(
+                f"http://{station.get('ip', '')}:{station.get('api_port', 0)}/tasks/execute",
+                json=payload, headers=auth_headers(), timeout=15)
+            if response.status_code != 200:
+                raise RuntimeError(f"HTTP {response.status_code}")
+            self._receive_receipt(attempt, response.json(), legacy_sync=True)
+        except Exception as exc:
+            # A connection reset, 5xx, invalid JSON or timeout can follow execution.
+            # Never move the work to another host without a terminal receipt.
+            logger.warning("[%s] 子任务 %s 派发未确认 (%s)，查询原站点执行回执", self._pm_id[:8], name, exc)
+            self._agent.report_progress(0.0, "in_progress", "派发未确认，正在核实原站点执行回执",
+                                        reporter_type="member", task_name=name)
+
+    def _receive_receipt(self, attempt: dict, receipt: dict, legacy_sync: bool = False):
+        if not isinstance(receipt, dict):
+            return
+        status = receipt.get("status")
+        if legacy_sync and status == "started" and "subtask_id" not in receipt:
+            self._agent.receive_subtask_result(
+                task_name=attempt["name"], status="unknown", output_data={},
+                agent_id=attempt["reporter_id"], execution_id=attempt["subtask_id"],
+                error="远端节点不支持执行回执，请升级节点并核实已发出的任务；不自动重试")
+            return
+        # Old synchronous Workers return a result on this exact request. Old async
+        # Stations cannot prove ownership; they must be upgraded before retrying.
+        legacy = legacy_sync and "subtask_id" not in receipt and status in ("completed", "failed")
+        if not legacy and any(receipt.get(key) != attempt[key] for key in (
+                "subtask_id", "parent_task_id", "pm_id", "reporter_id", "name")):
+            logger.warning("[%s] 忽略身份不匹配的执行回执: %s", self._pm_id[:8], attempt["subtask_id"])
+            return
+        if status in ("completed", "failed", "unknown"):
+            result = normalize_result(receipt) if status != "unknown" else receipt
+            self._agent.receive_subtask_result(
+                task_name=attempt["name"], status=result["status"], output_data=result.get("output", {}),
+                agent_id=attempt["reporter_id"], execution_id=attempt["subtask_id"], error=result.get("error", ""))
+
+    def poll_remote_results(self):
+        """Read execution receipts; GET retries never cause tool execution."""
+        st = self._state
+        with st.lock:
+            attempts = [dict(a) for a in st.execution_attempts.values() if a["station"] and a["phase"] == "active"]
+        for attempt in attempts:
+            if st.stop_event.is_set():
+                return
+            station = attempt["station"]
+            try:
+                response = requests.get(
+                    f"http://{station.get('ip', '')}:{station.get('api_port', 0)}/tasks/executions/{attempt['subtask_id']}",
+                    headers=auth_headers(), timeout=3)
+                if response.status_code == 200:
+                    self._receive_receipt(attempt, response.json())
+            except Exception as exc:
+                logger.debug("执行回执暂不可读: %s (%s)", attempt["subtask_id"], exc)
 
     # ── 依赖就绪分发 ──────────────────────────────────────────────
 
@@ -380,6 +398,9 @@ class PMDispatcher:
             return
         sub_name = sub.get("name", "")
         agent_id = f"local-{self._pm_id}-{sub_name}"
+        attempt = self._begin_attempt(sub_name, task, agent_id, {})
+        if attempt is None:
+            return
         with st.lock:
             member = next((m for m in st.subagents.values() if m.get("current_task") == sub_name), None)
             if member is None:
@@ -391,7 +412,7 @@ class PMDispatcher:
         if not input_data.get("requirement") and not input_data.get("description"):
             input_data["requirement"] = sub_desc
         subtask = {
-            "subtask_id": str(uuid.uuid4()),
+            "subtask_id": attempt["subtask_id"],
             "parent_task_id": task.get("task_id", ""),
             "name": sub_name,
             "description": sub_desc,
@@ -409,14 +430,8 @@ class PMDispatcher:
             result = {"status": "failed", "error": str(exc), "output": {}}
         if st.stop_event.is_set():
             return
-        status = "completed" if result.get("status") == "completed" else "failed"
-        output = result.get("output", {})
-        if isinstance(output, dict):
-            text = output.get("code", output.get("summary", ""))
-            if (output.get("error") or output.get("_error")
-                    or isinstance(text, str) and text.lstrip().startswith(
-                        ("[未配置", "[LLM 调用失败", "[模型调用失败"))):
-                status = "failed"
+        result = normalize_result(result)
+        status, output = result["status"], result["output"]
 
         # 注入 Monitor 进度追踪 (触发依赖链分发 + 结果聚合)
         self._agent.receive_subtask_result(
@@ -424,8 +439,7 @@ class PMDispatcher:
             status=status,
             output_data=output if isinstance(output, dict) else {"result": str(output)},
             agent_id=agent_id,
-            error=str(result.get("error") or output.get("error") or output.get("code") or output.get("summary") or "执行失败")
-            if status == "failed" and isinstance(output, dict) else "",
+            error=result["error"], execution_id=attempt["subtask_id"],
         )
 
         self._agent.report_progress(

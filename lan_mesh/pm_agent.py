@@ -194,7 +194,8 @@ class ProjectManagerAgent:
         self._monitor.receive_progress_report(report)
 
     def receive_subtask_result(self, task_name: str, status: str,
-                               output_data: dict, agent_id: str = "", error: str = ""):
+                               output_data: dict, agent_id: str = "", error: str = "",
+                               execution_id: str = ""):
         """接收本机子 Agent 执行结果，转化为进度报告注入 Monitor。
 
         Station 内嵌模式下，子任务执行完成后由 station_controller 调用此方法，
@@ -202,6 +203,9 @@ class ProjectManagerAgent:
         """
         report = {
             "reporter_id": agent_id,
+            "subtask_id": execution_id,
+            "pm_id": self.pm_id,
+            "parent_task_id": self._state.task.get("task_id", ""),
             "task_name": task_name,
             "status": status,
             "progress": 1.0 if status == "completed" else 0.0,

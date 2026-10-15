@@ -161,6 +161,7 @@ def test_single_execution_completion_depends_on_delivery(execution, monkeypatch,
 
 
 def test_local_child_completion_does_not_complete_parent(execution):
+    execution.agent._state.subtask_outputs.clear()
     execution.runtime.execute.return_value = {'status': 'completed', 'output': {'summary': '子任务完成'}}
     execution.agent.receive_subtask_result = Mock()
     execution.agent._dispatcher.execute_subtask_locally(execution.task.to_dict(), {'name': 'A'})

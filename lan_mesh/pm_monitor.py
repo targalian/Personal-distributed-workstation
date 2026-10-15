@@ -65,6 +65,10 @@ class PMMonitor:
             if not st.monitoring_ready.is_set():
                 continue
 
+            self._dispatcher.poll_remote_results()
+            if st.stop_event.is_set():
+                break
+
             # F1.3: 子任务超时检测
             self.check_subtask_timeouts()
             if st.stop_event.is_set():
@@ -104,8 +108,17 @@ class PMMonitor:
         status = report.get("status", "in_progress")
 
         with st.lock:
+            if st.stop_event.is_set():
+                return
             if task_name in st.subtask_outputs:
                 return
+            attempt = st.execution_attempts.get(task_name)
+            if not attempt or attempt["phase"] != "active" or any(report.get(key) != attempt[key] for key in (
+                    "subtask_id", "parent_task_id", "pm_id", "reporter_id")):
+                return
+            if status in ("completed", "failed", "unknown"):
+                # Reserve this terminal result before quality checks or retry.
+                attempt["phase"] = "processing"
             # 支持 member_id 或 agent_id 查找 (Station 内嵌模式传 agent_id)
             target = st.subagents.get(reporter_id)
             if not target:
@@ -146,12 +159,18 @@ class PMMonitor:
 
             self._local_takeover_tasks.discard(task_name)
             with st.lock:
+                if st.stop_event.is_set():
+                    return
                 st.subtask_outputs[task_name] = output
+                if attempt:
+                    attempt["phase"] = "done"
                 st.subtask_start_times.pop(task_name, None)
             self._dispatcher.try_dispatch_pending()
 
         if status == "failed" and task_name:
             self.handle_subagent_failure(task_name, report.get("message", "未知错误"))
+        elif status == "unknown" and task_name:
+            self._fail_task(task_name, report.get("message") or "执行结果待核实，不自动重试")
 
         # 同步子任务状态到 Secretary
         self._agent.sync_subtasks()
@@ -268,6 +287,9 @@ class PMMonitor:
         with st.lock:
             if st.stop_event.is_set():
                 return
+            attempt = st.execution_attempts.get(task_name)
+            if attempt:
+                attempt["phase"] = "done"
             sub = next((sub for sub in st.plan.get("decomposition", []) if sub.get("name") == task_name), None)
             if task_name in self._local_takeover_tasks:
                 self._local_takeover_tasks.discard(task_name)

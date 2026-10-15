@@ -19,6 +19,7 @@ broadcast_ws 及其专用 payload 模型) 已随 secretary.py 历史入口删除
 Secretary 端路由现由 station_routes_* 三件套承担。
 """
 from typing import Any, Callable, Optional
+from pathlib import Path
 
 from fastapi import APIRouter
 
@@ -33,6 +34,7 @@ def create_worker_router(
     shared_folder: SharedFolderManager,
     agent_runtime: Optional[Any] = None,   # AgentRuntime instance (optional, for task execution)
     role_manager: Optional[Any] = None,    # WorkerAgent instance (optional, for remote role management)
+    receipt_path: Optional[Path] = None,
 ) -> APIRouter:
     """创建 Worker 节点的 API 路由 (装配三个端点域子路由)。
 
@@ -40,7 +42,7 @@ def create_worker_router(
     pm (角色管理/PM/子 Agent) → p2p (消息接收)。
     """
     router = APIRouter()
-    router.include_router(build_basic_routes(collect_info_fn, shared_folder, agent_runtime))
+    router.include_router(build_basic_routes(collect_info_fn, shared_folder, agent_runtime, receipt_path))
     router.include_router(build_pm_routes(role_manager))
     router.include_router(build_p2p_routes())
     return router

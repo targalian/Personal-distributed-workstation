@@ -76,6 +76,7 @@ def test_remote_creation_failure_preserves_local_dependency_order(pm):
 def test_dispatch_thread_exit_keeps_monitor_waiting_for_remote_result(pm):
     registered = threading.Event()
     def dispatch(task, plan):
+        pm._dispatcher._begin_attempt("A", task, "worker", {})
         with pm._state.lock:
             pm._state.subagents['worker'] = {'agent_id': 'worker', 'current_task': 'A', 'status': 'busy'}
         registered.set()
@@ -86,7 +87,8 @@ def test_dispatch_thread_exit_keeps_monitor_waiting_for_remote_result(pm):
     pm._thread.join(timeout=1)
     assert not pm._thread.is_alive()
     assert pm.running and pm._progress_thread.is_alive()
-    pm.receive_subtask_result('A', 'completed', {'summary': 'remote done'}, 'worker')
+    pm.receive_subtask_result('A', 'completed', {'summary': 'remote done'}, 'worker',
+                              execution_id=pm._state.execution_attempts['A']['subtask_id'])
     join_task(pm)
     assert sum(url.endswith('/deliver') for url, _ in pm.test_calls) == 1
 

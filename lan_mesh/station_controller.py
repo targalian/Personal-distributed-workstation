@@ -841,18 +841,7 @@ class StationController:
             if sub_info:
                 sub_info["status"] = "idle"
 
-        # 执行完成后向 PM 上报
-        if self._local_pm_agent and self._local_pm_agent.running:
-            task_name = payload.get("name", "")
-            status = result.get("status", "failed")
-            output_data = result.get("output", {})
-            self._local_pm_agent.receive_subtask_result(
-                task_name=task_name,
-                status=status,
-                output_data=output_data,
-                agent_id=reporter_id,
-            )
-
+        # The execution endpoint persists the result; the owning PM polls its receipt.
         return result
 
     # ── 优化7: 反向沟通 ──
@@ -2007,6 +1996,7 @@ class StationController:
         worker_router = create_worker_router(
             collect_info_fn=self._collect_info,
             shared_folder=self.state.shared_folder,
+            receipt_path=self.db.path.with_name(self.db.path.stem + "-executions.sqlite3"),
         )
         app.include_router(worker_router)
 

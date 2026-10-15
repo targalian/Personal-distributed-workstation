@@ -24,9 +24,11 @@
 | test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_delivery_replay.py | Concurrent delivery retries must preserve the reviewed artifact and acceptance decision. |
+| tests/test_execution_receipts.py | Verify durable execution claims, restart ambiguity and Station/Worker HTTP receipts. |
 | tests/test_local_checks.py | Verify local-loop failure propagation, environment isolation and offline reports. |
 | tests/test_pm_delivery.py | Delivery outcomes must reflect persisted acknowledgements, not child progress or model errors. |
 | tests/test_pm_lifecycle.py | Exercise PM worker and monitor threads through completion and cooperative stop. |
+| tests/test_pm_transport.py | Exercise lost dispatch responses, receipt polling and concurrent stale callbacks. |
 | tests/test_project_brief.py | Artifact correctness: graph integrity, concurrency, isolation, and chat integration. |
 | tests/test_startup.py | Launch the shell wrapper in temporary projects to verify errors, arguments and cleanup. |
 <!-- /AUTO:module-list -->
@@ -89,6 +91,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-15 | iter-45 | 新增持久化执行回执并发/重启/磁盘故障；真实本机 HTTP 验证 Station/Worker 响应丢失后依赖链完成；并发旧回调不重复重试 |
 | 2026-10-15 | iter-44 | 本地/远端有界恢复、质量拒绝、依赖失败、计划校验和未知超时回归；线程+API验证失败诊断落库；Chrome验证错误转义及桌面手机展示 |
 | 2026-10-15 | iter-43 | 新增并发交付重放、验收/旧快照竞争、回滚及重启回归；Chrome验证重放后验收结论仍在 |
 | 2026-10-15 | iter-42 | 新增实际 PM 工作/监控线程回归：依赖回退、晚到结果、停止、澄清唤醒、全局超时；API 验证终态保护 |
