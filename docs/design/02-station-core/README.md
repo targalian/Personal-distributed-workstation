@@ -249,3 +249,7 @@ Station/Worker 新增 GET `/role/pm-recovery/{pm_id}`，Secretary 新增 GET `/a
 ## 原任务恢复授权（iter-54）
 
 新增 task_resume.py：POST `/api/tasks/{task_id}/resume` 按检查点版本事务登记 `_pm_resume`，复核原归属、停止/交付、替代任务和预算；相同版本复用请求编号。授权历史保留，普通 save_task 不覆盖该字段及 PM 归属。GET `/api/tasks/{task_id}/resume-authorization` 对每次续跑执行前的请求重新验证。Station/Worker 共用 POST `/role/resume-pm`；原秘书地址来自检查点。中央库 schema 仍为 v5。
+
+## 澄清继续点与回复确认（iter-55）
+
+Secretary 新增 GET `/api/pm/{pm_id}/clarification`；Station/Worker 新增 GET `/role/pm-clarification/{pm_id}?task_id=...`。读取持久化归属和原检查点，进度变化不使查询失效，归属变化仍拒绝；按最新停止/交付状态限制回复。输入 POST 在线程池执行，原节点确认落盘后才成功；不依赖 `_pm_worker_map`。

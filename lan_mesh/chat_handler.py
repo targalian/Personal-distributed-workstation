@@ -12,6 +12,7 @@
 """
 import re
 import time
+import threading
 from typing import Optional
 
 from .logger import get_logger
@@ -118,6 +119,7 @@ class ChatHandler:
         # ── 方案C: PM 线程 (L2 层) ──
         # pm_id → [{role, content, timestamp, ...}]  线程消息独立存储
         self._pm_thread_messages: dict[str, list] = {}
+        self._pm_reply_lock = threading.RLock()
 
         # 加载对话索引
         self._load_conv_index()
@@ -141,7 +143,7 @@ class ChatHandler:
     # ── 公开接口 ──────────────────────────────────────────────────
 
     def chat(self, message: str, conv_id: str = "", history: Optional[list] = None,
-             pm_thread_id: str = "") -> dict:
+             pm_thread_id: str = "", question_id: str = "") -> dict:
         """处理用户消息, 返回回复。
 
         Args:
@@ -164,8 +166,10 @@ class ChatHandler:
 
         # ── 方案C: L2 路由 — PM 线程内直接对话 ──
         if pm_thread_id:
-            result = self.send_to_pm_thread(cid, pm_thread_id, message)
+            result = self.send_to_pm_thread(cid, pm_thread_id, message, question_id=question_id)
             return {
+                "ok": result.get("ok", False),
+                "question_id": question_id,
                 "reply": result.get("reply", ""),
                 "action_taken": "pm_thread_direct",
                 "timestamp": result.get("timestamp", time.time()),
@@ -447,41 +451,26 @@ class ChatHandler:
 
     # ── 方案C: PM 线程消息 (L2 层存储) ─────────────────────
 
-    def send_to_pm_thread(self, conv_id: str, pm_id: str, message: str) -> dict:
-        """L2 路由: 用户在 PM 线程内直接发消息给 PM Agent。
-
-        跳过秘书 LLM, 直接注入到 PM 的 receive_input。
-        """
-        now = time.time()
-        # 记录用户消息到线程
-        user_msg = {"role": "user", "content": message, "timestamp": now, "layer": "L2"}
-        self._pm_thread_messages.setdefault(pm_id, []).append(user_msg)
-        self._save_thread_message_to_file(pm_id, user_msg)
-        self._trim_pm_thread(pm_id)
-
-        # 注入到 PM Agent
+    def send_to_pm_thread(self, conv_id: str, pm_id: str, message: str, question_id: str = "") -> dict:
+        """Send a reply to one captured question; acknowledge only after PM persistence."""
         result = self.controller.inject_input_to_pm(pm_id, {
-            "response": message,
-            "choice": message,
-            "source": "pm_thread",  # 标记来源为线程直发
-        })
-
+            "question_id": question_id, "response": message, "choice": message, "source": "pm_thread"})
+        now = time.time()
         if result.get("ok"):
-            # 记录系统确认消息
-            ack_msg = {
-                "role": "system",
-                "content": f"✅ 已发送给 PM Agent",
-                "timestamp": time.time(),
-                "layer": "L2",
-            }
-            self._pm_thread_messages[pm_id].append(ack_msg)
-            self._save_thread_message_to_file(pm_id, ack_msg)
-            self._trim_pm_thread(pm_id)
-            self.update_pm_thread_status(pm_id, "executing")
-            return {"ok": True, "reply": ack_msg["content"], "timestamp": now, "pm_id": pm_id}
-
-        return {"ok": False, "reply": f"❌ 发送失败: {result.get('message', '未知错误')}",
-                "timestamp": now, "pm_id": pm_id}
+            user_msg = {"role": "user", "content": message, "timestamp": now, "layer": "L2", "question_id": question_id}
+            ack_msg = {"role": "system", "content": result.get("message", "回复已保存"), "timestamp": now, "layer": "L2"}
+            with self._pm_reply_lock:
+                self.get_pm_thread_messages(pm_id)
+                recorded = any(m.get("role") == "user" and m.get("question_id") == question_id
+                               for m in self._pm_thread_messages[pm_id])
+                if not recorded:
+                    for msg in (user_msg, ack_msg):
+                        self._pm_thread_messages[pm_id].append(msg)
+                        self._save_thread_message_to_file(pm_id, msg)
+                    self._trim_pm_thread(pm_id)
+            return {"ok": True, "reply": ack_msg["content"], "timestamp": now, "pm_id": pm_id,
+                    "question_id": question_id, "duplicate": recorded}
+        return {"ok": False, "reply": result.get("message", "回复未获确认，请保留原文"), "timestamp": now, "pm_id": pm_id}
 
     def get_pm_thread_messages(self, pm_id: str, limit: int = 100) -> list[dict]:
         """获取 PM 线程的历史消息 (懒加载)。"""
@@ -523,11 +512,14 @@ class ChatHandler:
         except Exception:
             pass
 
-    def notify_pm_clarification(self, pm_id: str, question: str, options: list = None):
+    def notify_pm_clarification(self, pm_id: str, question: str, options: list = None, question_id: str = ""):
         """方案C 双写: PM 请求决策时同时写入 L1 通知 + L2 线程消息。
 
         由 station_api 的 /api/pm/{pm_id}/status 端点在检测到 awaiting_input 时调用。
         """
+        if question_id and any(m.get("question_id") == question_id for m in self.get_pm_thread_messages(pm_id)):
+            self.update_pm_thread_status(pm_id, "awaiting_input")
+            return
         now = time.time()
         options = options or []
 
@@ -538,6 +530,7 @@ class ChatHandler:
             "timestamp": now,
             "layer": "L2",
             "type": "clarification",
+            "question_id": question_id,
             "options": options,
         }
         self._pm_thread_messages.setdefault(pm_id, []).append(clarification_msg)
@@ -1304,13 +1297,19 @@ class ChatHandler:
         if not pm:
             return f"PM Agent {pm_id[:12]} 不存在"
 
+        from .pm_clarification import query_question
+        try:
+            question_id = query_question(self.controller, pm_id)["question_id"]
+        except Exception:
+            return "无法核实当前问题，请在任务详情查看原问题后回复"
         result = self.controller.inject_input_to_pm(pm_id, {
+            "question_id": question_id,
             "response": response_text,
             "choice": response_text,
         })
 
         if result.get("ok"):
-            return f"✅ 已将您的决策发送给 {pm.agent_name}: {response_text[:100]}"
+            return result.get("message", "回复已保存")
         return f"❌ 发送失败: {result.get('message', '未知错误')}"
 
     def _extract_pm_id_from_message(self, message: str) -> str:

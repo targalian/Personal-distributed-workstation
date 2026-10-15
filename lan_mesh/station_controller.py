@@ -564,10 +564,14 @@ class StationController:
         return control_pm(lambda: self._local_pm_agent, self.state.device_id, payload)
 
     def _local_inject_input(self, input_data: dict) -> dict:
-        if not self._local_pm_agent or not self._local_pm_agent._running:
-            return {"ok": False, "message": "PM Agent 未运行"}
-        self._local_pm_agent.receive_input(input_data)
-        return {"ok": True, "pm_id": self._local_pm_agent.pm_id}
+        if not self._local_pm_agent:
+            return {"ok": False, "message": "原 PM 未运行，请先核实并恢复原任务"}
+        return self._local_pm_agent.receive_input(input_data)
+
+    def _local_pm_question(self, pm_id: str, task_id: str) -> dict:
+        from .pm_clarification import inspect_question
+        return inspect_question(self.db.path.with_name(self.db.path.stem + "-pm-starts.sqlite3"),
+                                pm_id, task_id, self.state.device_id, lambda: self._local_pm_agent)
 
     def _auto_attach_pm_thread(self, pm_id: str, task_name: str, agent_name: str):
         """方案C: PM 启动后自动绑定到当前活跃对话的线程列表。"""
@@ -660,42 +664,8 @@ class StationController:
     # ── 优化7: 反向沟通 ──
 
     def inject_input_to_pm(self, pm_id: str, input_data: dict) -> dict:
-        """向指定 PM Agent 注入来自 Boss 的回复。
-
-        优先检查本机 PM, 否则 HTTP POST 到远程 Worker。
-        """
-        worker = self._pm_worker_map.get(pm_id)
-
-        # 本机 PM 直接调用
-        if worker and worker.get("local") and self._local_pm_agent:
-            result = self._local_inject_input(input_data)
-            if result.get("ok"):
-                logger.info("已注入回复到本机 PM %s", pm_id[:12])
-                return {"ok": True, "message": "回复已发送到 PM Agent"}
-            return result
-
-        if not worker:
-            return {"ok": False, "message": f"PM {pm_id[:12]} 的 Worker 信息未找到"}
-
-        ip = worker.get("ip", "")
-        port = worker.get("api_port", 0)
-        if not ip or not port:
-            return {"ok": False, "message": "Worker 地址信息不完整"}
-
-        try:
-            resp = http_post(
-                f"http://{ip}:{port}/pm/inject-input",
-                json=input_data,
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                result = resp.json()
-                logger.info("已注入回复到 PM %s", pm_id[:12])
-                return {"ok": True, "message": "回复已发送到 PM Agent"}
-            else:
-                return {"ok": False, "message": f"Worker 返回错误: {resp.text[:200]}"}
-        except Exception as e:
-            return {"ok": False, "message": f"注入失败: {e}"}
+        from .pm_clarification import route_answer
+        return route_answer(self, pm_id, input_data)
 
     # ── 优化8: 取消/暂停任务 ──
 

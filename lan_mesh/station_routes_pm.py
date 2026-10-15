@@ -102,6 +102,7 @@ def build_pm_routes(controller) -> APIRouter:
         if clarification_question:
             broadcast_data["clarification_question"] = clarification_question
             broadcast_data["clarification_options"] = payload.get("clarification_options", [])
+            broadcast_data["clarification_id"] = payload.get("clarification_id", "")
 
         # 方案C: awaiting_input 时双写 L1 通知 + L2 线程消息
         if status == "awaiting_input" and clarification_question:
@@ -110,6 +111,7 @@ def build_pm_routes(controller) -> APIRouter:
                 ch.notify_pm_clarification(
                     pm_id, clarification_question,
                     options=payload.get("clarification_options", []),
+                    question_id=payload.get("clarification_id", ""),
                 )
         elif status != "awaiting_input":
             # 非 awaiting 状态时同步更新线程状态
@@ -129,6 +131,7 @@ def build_pm_routes(controller) -> APIRouter:
             controller.bot_gateway.notify("pm_awaiting_input", {
                 "pm_id": pm_id,
                 "question": clarification_question,
+                "question_id": payload.get("clarification_id", ""),
                 "options": payload.get("clarification_options", []),
             })
 

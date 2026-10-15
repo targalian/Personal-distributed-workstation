@@ -520,6 +520,165 @@ def verify_pm_resume(page, output):
     page.evaluate('closeOverlayForce()');page.set_viewport_size({'width':1680,'height':1100})
 
 
+def verify_pm_clarification(page, output):
+    """Recover the same question, lose a saved reply ACK and finish via the actual UI/API."""
+    import time
+    import lan_mesh.pm_agent as pm_module
+    from lan_mesh.pm_agent import ProjectManagerAgent
+    from lan_mesh.pm_checkpoint import PMCheckpoints
+    from lan_mesh.pm_clarification import inspect_question, route_answer
+    from lan_mesh.pm_lease import lease_identity
+    from lan_mesh.pm_planner import PMPlanner
+    from lan_mesh.pm_recovery import assess_pm_recovery
+    from lan_mesh.pm_resume import resume_pm_once
+    from lan_mesh.pm_state import PMState
+    from lan_mesh.task_resume import resume_authorization
+    task = Task(task_id='question-browser-task', name='重启后继续需求澄清', description='做工具')
+    pm_id = 'question-browser-pm'
+    controller.db.save_task(task)
+    controller.db.bind_task_pm(PMAgent(pm_id=pm_id, task_id=task.task_id,
+        device_id=controller.state.device_id, hostname='原节点', ip='127.0.0.1', api_port=12345))
+    task = controller.db.get_task(task.task_id)
+    path = Path(folder.name)/'question-browser.sqlite3'
+    st = PMState();st.task=task.to_dict();st.phase='awaiting_input'
+    st.refinement={'format':1,'task':task.to_dict(),'description':'做工具','round':0,'context':[],'complete':False}
+    question = PMPlanner._generate_refinement_question('做工具',[],0)
+    st.clarification_request={'format':1,'question_id':'browser-original-question','question':question,'options':[],
+        'asked_at':time.time()-10,'timeout':120,'deadline':time.time()+120,
+        'continuation':{'kind':'refinement','round':0},'consumed':False}
+    PMCheckpoints(path,owner='exited-question-process',lease=lease_identity(path)).save(
+        pm_id,task.task_id,controller.state.device_id,{**st.snapshot(),'secretary_url':'http://browser-secretary'},0)
+    active=[None]
+    runtime=Mock()
+    runtime.execute.return_value={'status':'completed','output':{'summary':'两次回答后的产物'}}
+    runtime._call_llm_with_routing.return_value={'content':'澄清后完整交付'}
+    original_init=ProjectManagerAgent.__init__;original_post=pm_module.http_post
+    def init(self,*args,**kwargs):
+        original_init(self,*args,**kwargs)
+        self._planner.load_skill=Mock()
+        self._planner.analyze_with_skill=lambda task:{'pattern':'single','decomposition':[{'name':'工具'}]}
+        self._dispatcher.get_available_stations=lambda:[]
+        self._distribute_artifacts=Mock();self._record_task_memory=Mock();self._monitor.poll_interval=.01
+    ProjectManagerAgent.__init__=init
+    pm_module.http_post=lambda url,**kwargs:client.post('/api/'+url.split('/api/',1)[1],json=kwargs.get('json',{}))
+    controller._local_assess_pm_recovery=lambda pid,tid,**kwargs:assess_pm_recovery(
+        path,pid,tid,controller.state.device_id,lambda:active[0].get_status() if active[0] else {},**kwargs)
+    controller._local_resume_pm=lambda payload:resume_pm_once(payload=payload,receipt_path=path,runtime=runtime,
+        device_id=controller.state.device_id,device_name='原节点',current=lambda:active[0],
+        assign=lambda pm:active.__setitem__(0,pm),authorization=lambda tid,rid:resume_authorization(controller,tid,rid))
+    controller._local_pm_question=lambda pid,tid:inspect_question(path,pid,tid,controller.state.device_id,lambda:active[0])
+    controller._local_inject_input=lambda payload:active[0].receive_input(payload) if active[0] else {'ok':False,'message':'请先恢复原任务'}
+    controller.inject_input_to_pm=lambda pid,payload:route_answer(controller,pid,payload)
+    endpoint='**/api/pm/'+pm_id+'/inject-input'
+    def current():
+        response=client.get('/api/pm/'+pm_id+'/clarification')
+        assert response.status_code==200,response.text
+        return response.json()
+    def await_second():
+        end=time.monotonic()+4
+        while time.monotonic()<end:
+            q=current()
+            if q['question_id']!='browser-original-question' and q['can_reply']:return q
+            time.sleep(.01)
+        raise AssertionError('Second question did not become ready')
+    try:
+        page.evaluate('(task)=>{allTasks=[task];showTaskDetail(task.task_id)}',task.to_dict())
+        page.locator('[data-question-check]').click()
+        page.wait_for_function("document.querySelector('.task-question-result').textContent.includes('先核实恢复条件')")
+        assert page.locator('[data-question-send]').is_hidden() and active[0] is None
+        page.locator('[data-recovery-check]').click()
+        page.wait_for_function("!document.querySelector('[data-resume-task]').hidden")
+        page.locator('[data-resume-task]').click()
+        page.wait_for_function("document.querySelector('.task-recovery-result').textContent.includes('已接管原执行现场')")
+        page.locator('[data-question-check]').click()
+        page.wait_for_function("!document.querySelector('[data-question-send]').hidden")
+        assert current()['deadline']==st.clarification_request['deadline']
+        reply=page.locator('[data-question-answer]')
+        reply.fill('使用 Python')
+        page.route(endpoint,lambda r:r.fulfill(status=503,json={'detail':'节点暂时断开'}),times=1)
+        page.locator('[data-question-send]').click()
+        page.wait_for_function("document.querySelector('.task-question-result').textContent.includes('回复未获确认')")
+        assert reply.input_value()=='使用 Python' and not active[0]._state.clarification_response
+        saved=[]
+        def lose_ack(r):
+            response=client.post('/api/pm/'+pm_id+'/inject-input',json=r.request.post_data_json)
+            assert response.json()['ok'],response.text
+            saved.append(response.json())
+            r.fulfill(status=503,json={'detail':'已保存但确认丢失'})
+        page.route(endpoint,lose_ack,times=1)
+        page.locator('[data-question-send]').click()
+        page.wait_for_function("document.querySelector('.task-question-result').textContent.includes('已保存但确认丢失')")
+        second=await_second()
+        assert reply.input_value()=='使用 Python' and saved
+        assert reply.get_attribute('data-question-id')=='browser-original-question'
+        # Retry the same old reply, not the new question now waiting on the PM.
+        page.locator('[data-question-send]').click()
+        page.wait_for_function("document.querySelector('.task-question-result').textContent.includes('未重复应用')")
+        assert reply.input_value()=='' and not active[0]._state.clarification_response
+        reply.fill('尚未发送的旧草稿')
+        page.locator('[data-question-check]').click()
+        page.wait_for_function("document.querySelector('.task-question-result').textContent.includes('问题已变化')")
+        assert reply.get_attribute('data-question-id')=='browser-original-question'
+        assert reply.input_value()=='尚未发送的旧草稿'
+        reply.fill('')
+        page.locator('[data-question-check]').click()
+        page.wait_for_function("!document.querySelector('[data-question-send]').hidden")
+        assert reply.get_attribute('data-question-id')==second['question_id']
+        page.screenshot(path=str(output/'pm_clarification_desktop.png'),full_page=True)
+        page.set_viewport_size({'width':390,'height':844})
+        assert page.locator('#modal').evaluate('(el)=>el.scrollWidth<=el.clientWidth+1')
+        page.screenshot(path=str(output/'pm_clarification_mobile.png'),full_page=True)
+        # Thread draft stays attached to its captured question when a later WS event arrives.
+        page.evaluate('closeOverlayForce()');page.set_viewport_size({'width':1680,'height':1100})
+        conv_id=chat.create_conversation('澄清线程验收')['id']
+        chat.attach_pm_thread(conv_id,pm_id,task_name=task.name,agent_name='澄清 PM')
+        chat.notify_pm_clarification(pm_id,second['question'],question_id=second['question_id'])
+        page.locator('.tabs [data-tab="chat"]').click()
+        page.wait_for_load_state('networkidle')
+        page.evaluate('async args=>{_activeConvId=args.cid;_pmThreads=[{pm_id:args.pid,task_name:"澄清任务",status:"awaiting_input"}];_openThreadId=args.pid;await openPMThread(args.pid)}',{'cid':conv_id,'pid':pm_id})
+        thread=page.locator('#thread-input-'+pm_id)
+        thread.fill('需要测试')
+        page.screenshot(path=str(output/'pm_clarification_thread_desktop.png'),full_page=True)
+        page.set_viewport_size({'width':390,'height':844})
+        thread.scroll_into_view_if_needed()
+        assert page.locator('#thread-panel-'+pm_id).evaluate('(el)=>el.scrollWidth<=el.clientWidth+1')
+        assert page.locator('.thread-input-bar').evaluate('(el)=>el.scrollWidth<=el.clientWidth+1')
+        page.screenshot(path=str(output/'pm_clarification_thread_mobile.png'),full_page=True)
+        page.set_viewport_size({'width':1680,'height':1100})
+        page.evaluate('args=>onPMThreadStatusChange({pm_id:args.pid,status:"awaiting_input",clarification_id:"late-other-question",clarification_question:"迟到的其他问题",clarification_options:["别的选项"]})',{'pid':pm_id})
+        assert thread.input_value()=='需要测试' and thread.get_attribute('data-question-id')==second['question_id']
+        thread_endpoint='**/api/pm-threads/'+pm_id+'/messages'
+        page.route(thread_endpoint,lambda r:r.fulfill(status=503,json={'detail':'线程网络失败'}),times=1)
+        thread.press('Enter')
+        page.wait_for_function("document.querySelector('#thread-msgs-question-browser-pm').textContent.includes('线程网络失败')")
+        assert thread.input_value()=='需要测试' and not active[0]._state.clarification_response
+        thread.press('Enter')
+        page.wait_for_function("document.querySelector('#thread-input-question-browser-pm').value===''")
+        active[0]._thread.join(timeout=4);active[0]._progress_thread.join(timeout=4)
+        assert not active[0].running and controller.db.get_task(task.task_id).status=='completed'
+        assert runtime.execute.call_count==1
+        desc=active[0]._state.task['description']
+        assert desc.count('A1: 使用 Python')==1 and desc.count('A2: 需要测试')==1
+        # Late query results cannot populate another task's detail panel.
+        page.evaluate('(task)=>{allTasks=[task];showTaskDetail(task.task_id)}',task.to_dict())
+        held=[]
+        page.route('**/api/pm/'+pm_id+'/clarification',lambda r:held.append(r),times=1)
+        page.locator('[data-question-check]').click()
+        page.wait_for_function("document.querySelector('[data-question-check]').disabled")
+        other=Task(task_id='question-other',name='另一个任务',pm_agent_id='other')
+        page.evaluate('(task)=>{allTasks.push(task);showTaskDetail(task.task_id)}',other.to_dict())
+        held.pop().fulfill(status=200,json=current())
+        page.wait_for_load_state('networkidle')
+        assert page.locator('.task-question-result').inner_text()==''
+    finally:
+        if active[0]:
+            active[0].stop()
+            for thread in (active[0]._thread,active[0]._progress_thread):
+                if thread:thread.join(timeout=4)
+        ProjectManagerAgent.__init__=original_init;pm_module.http_post=original_post
+    page.evaluate('closeOverlayForce();closePMThread()');page.set_viewport_size({'width':1680,'height':1100})
+
+
 def accept_all_suggestions(page):
     """Review and explicitly accept a candidate without relying on automatic writes."""
     page.locator('#project-brief-panel [data-tab="review"]').click()
@@ -879,7 +1038,7 @@ with sync_playwright() as p:
             file=root/'lan_mesh/web'/path.lstrip('/')
             r.fulfill(status=200,body=file.read_bytes(),content_type='text/css' if path.endswith('.css') else 'application/javascript' if path.endswith('.js') else 'application/json');return
         if path=='/api/station/roles':r.fulfill(status=200,json={'secretary':'active'});return
-        if path.startswith(('/api/conversations', '/api/tasks/')) or path=='/api/secretary/chat':
+        if path.startswith(('/api/conversations', '/api/tasks/', '/api/pm/', '/api/pm-threads/')) or path=='/api/secretary/chat':
             response=client.request(req.method,path+('?' + urlparse(req.url).query if urlparse(req.url).query else ''),content=req.post_data,headers={'content-type':'application/json'})
             if path=='/api/secretary/chat' and response.status_code==200:
                 for ws in sockets:ws.send(json.dumps({'type':'chat_reply','data':response.json()}))
@@ -1036,6 +1195,7 @@ with sync_playwright() as p:
     verify_pm_checkpoint(page,output)
     verify_recovery_assessment(page,output)
     verify_pm_resume(page,output)
+    verify_pm_clarification(page,output)
     assert not errors,errors
     # UI-036: test unified editing history against isolated conversations and the real API.
     history_id=chat.create_conversation('编辑历史测试')['id']
@@ -1098,3 +1258,5 @@ print("PASS: persistent PM checkpoint evidence, completed/uncertain/unstarted co
 print("PASS: recovery evidence versus saved output, original execution identity, read-only API/checkpoint, escaping, query retry and late-result isolation, desktop/mobile")
 
 print("PASS: explicit PM recovery, version-bound authorization, original outputs and deadline, retry/deduplication, actual delivery, desktop/mobile and late-response isolation; simulated executor")
+
+print("PASS: clarification recovery keeps original question/deadline, saved reply ACK loss and retry, cross-question draft isolation, PM thread failure retention, actual delivery and late-response guard; real API/SQLite and simulated executor")

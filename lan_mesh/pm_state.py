@@ -60,6 +60,8 @@ class PMState:
     clarification_response: dict = field(default_factory=dict)
     clarification_request: dict = field(default_factory=dict)
     clarification_timeout: float = 600.0
+    refinement: dict = field(default_factory=dict)
+    clarification_history: dict = field(default_factory=dict)
 
     phase: str = "created"
     direct_execution: dict = field(default_factory=dict)
@@ -72,7 +74,7 @@ class PMState:
         names = ("phase", "plan", "task", "subtask_outputs", "pending_subtasks", "task_station", "task_agent",
                  "execution_attempts", "execution_history", "teams", "subagents", "retry_counts", "max_retries", "terminal_failures",
                  "blocked_subtasks", "global_timeout", "subtask_timeout", "start_time", "subtask_start_times",
-                 "clarification_response", "clarification_request", "clarification_timeout", "stop_reason", "direct_execution", "delivery", "recovery")
+                 "clarification_response", "clarification_request", "clarification_timeout", "refinement", "clarification_history", "stop_reason", "direct_execution", "delivery", "recovery")
         return {"format": 1, **copy.deepcopy({name: getattr(self, name) for name in names}),
                 "dispatched": sorted(self.dispatched), "cross_station_attempted": sorted(self.cross_station_attempted),
                 "local_takeover_tasks": sorted(self.local_takeover_tasks),

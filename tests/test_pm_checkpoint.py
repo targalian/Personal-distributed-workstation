@@ -295,7 +295,8 @@ def test_clarification_is_saved_before_wait_and_response_is_persisted(pm, tmp_pa
     try:
         assert requested.wait(1)
         assert saved(pm)["clarification_request"]["question"] == "使用哪个方案？"
-        pm.receive_input({"response": "方案A"})
+        pm.receive_input({"response": "方案A", "pm_id": pm.pm_id, "task_id": "task-life",
+                          "device_id": "self", "question_id": pm._state.clarification_request["question_id"]})
     finally:
         thread.join(timeout=3)
     assert not thread.is_alive() and result[0]["response"] == "方案A"

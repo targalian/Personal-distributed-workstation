@@ -267,41 +267,55 @@ class PMPlanner:
         仅当任务描述过短/模糊时触发 (描述 < 20 字且无 input_data)。
         最多 2 轮追问, 将 Boss 回复累积到 task description 中。
         """
-        desc = task.get("description", task.get("name", ""))
-        input_data = task.get("input_data", {})
+        st = self._state
+        with st.lock:
+            progress = st.refinement
+            if progress.get("complete"):
+                return dict(progress["result_task"])
+            if not progress:
+                desc = task.get("description", task.get("name", ""))
+                if len(desc) >= 20 or task.get("input_data", {}):
+                    return task
+                st.refinement = {"format": 1, "task": dict(task), "description": desc,
+                                 "round": 0, "context": [], "complete": False}
+                if not st.persist("refining"):
+                    return task
+            progress = st.refinement
 
-        if len(desc) >= 20 or input_data:
-            return task
-
-        logger.info("[%s] 任务描述模糊 (%d字), 尝试细化", self._pm_id[:8], len(desc))
-
-        max_rounds = 2
-        accumulated_context = []
-
-        for round_num in range(max_rounds):
-            question = self._generate_refinement_question(desc, accumulated_context, round_num)
+        while progress["round"] < 2:
+            round_num = progress["round"]
+            question = self._generate_refinement_question(progress["description"], progress["context"], round_num)
             if not question:
                 break
+            response = self._agent.request_clarification(question=question, timeout=120.0,
+                continuation={"kind": "refinement", "round": round_num}) or {}
+            if st.stop_event.is_set() or response.get("checkpoint_failed") or response.get("stopped"):
+                return task
+            answer = response.get("response", response.get("choice", "")) if response else ""
+            with st.lock:
+                if st.stop_event.is_set():
+                    return task
+                if answer:
+                    progress["context"].append(f"Q{round_num+1}: {question}\nA{round_num+1}: {answer}")
+                progress["round"] += 1
+                st.clarification_request["consumed"] = True
+                question_id = st.clarification_request.get("question_id")
+                if question_id:
+                    st.clarification_history[question_id] = {"request": dict(st.clarification_request), "response": dict(st.clarification_response)}
+                if not answer or response.get("timed_out"):
+                    break
+                if not st.persist("refining"):
+                    return task
 
-            response = self._agent.request_clarification(question=question, timeout=120.0)
-
-            if (not response or response.get("timed_out") or response.get("cancelled")
-                    or response.get("paused") or response.get("stopped")):
-                logger.info("[%s] 细化轮次%d 未收到回复, 继续执行", self._pm_id[:8], round_num + 1)
-                break
-
-            answer = response.get("response", response.get("choice", ""))
-            if answer:
-                accumulated_context.append(f"Q{round_num+1}: {question}\nA{round_num+1}: {answer}")
-
-        if accumulated_context:
-            enriched_desc = desc + "\n\n## 补充信息 (Boss 细化)\n" + "\n".join(accumulated_context)
-            task = dict(task)
-            task["description"] = enriched_desc
-            logger.info("[%s] 任务描述已细化: %d → %d 字",
-                       self._pm_id[:8], len(desc), len(enriched_desc))
-
-        return task
+        with st.lock:
+            result = dict(progress["task"])
+            if progress["context"]:
+                result["description"] = progress["description"] + "\n\n## 补充信息 (Boss 细化)\n" + "\n".join(progress["context"])
+            progress.update(complete=True, result_task=result)
+            st.task = result
+            if not st.persist("refined"):
+                return task
+            return result
 
     @staticmethod
     def _generate_refinement_question(desc: str, context: list, round_num: int) -> str:

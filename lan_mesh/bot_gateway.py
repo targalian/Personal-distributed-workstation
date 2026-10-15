@@ -424,7 +424,7 @@ class BotGateway:
             if event_type == "pm_awaiting_input" and ch.channel_type == "telegram":
                 options = data.get("options", [])
                 pm_id = data.get("pm_id", "")
-                self._send_telegram_with_keyboard(ch, message, pm_id, options)
+                self._send_telegram_with_keyboard(ch, message, pm_id, options, data.get("question_id", ""))
                 continue
 
             # ── 优化1: 通过聚合器发送 ──
@@ -513,7 +513,7 @@ class BotGateway:
                 raise RuntimeError(f"Telegram 返回 {resp.status_code}: {resp.text[:200]}")
 
     def _send_telegram_with_keyboard(self, channel: BotChannel, message: str,
-                                      pm_id: str, options: list):
+                                      pm_id: str, options: list, question_id: str = ""):
         """优化2: 发送带 Inline Keyboard 的 Telegram 消息 (PM 决策按钮)。"""
         if not channel.bot_token or not channel.chat_id:
             return
@@ -521,17 +521,11 @@ class BotGateway:
 
         # 构建 inline keyboard
         keyboard_rows = []
-        if options:
-            for opt in options[:6]:  # 最多 6 个选项
-                keyboard_rows.append([{
-                    "text": opt,
-                    "callback_data": f"decide:{pm_id}:{opt}"
-                }])
-        # 添加通用操作行
-        keyboard_rows.append([
-            {"text": "✅ 同意继续", "callback_data": f"decide:{pm_id}:approve"},
-            {"text": "❌ 放弃任务", "callback_data": f"decide:{pm_id}:abort"},
-        ])
+        if question_id:
+            for index, opt in enumerate(options[:6]):
+                callback = f"decideq:{pm_id}:{question_id}:{index}"
+                if len(callback.encode()) <= 64:
+                    keyboard_rows.append([{"text": opt, "callback_data": callback}])
 
         payload = {
             "chat_id": channel.chat_id,
@@ -617,7 +611,7 @@ class BotGateway:
     def _handle_callback_query(self, channel: BotChannel, callback_query: dict):
         """优化2: 处理 Inline Keyboard 按钮点击。
 
-        callback_data 格式: "decide:{pm_id}:{choice}"
+        callback_data 格式: "decideq:{pm_id}:{question_id}:{option_index}"
         """
         data = callback_query.get("data", "")
         chat_id = str(callback_query.get("message", {}).get("chat", {}).get("id", ""))
@@ -626,13 +620,25 @@ class BotGateway:
         # 应答 callback (消除按钮 loading 状态)
         self._answer_callback_query(channel, query_id)
 
-        if not data.startswith("decide:"):
+        if not data.startswith(("decide:", "decideq:")):
             return
-
-        parts = data.split(":", 2)
-        if len(parts) < 3:
+        question_id = ""
+        choice = ""
+        pm_id = ""
+        try:
+            if not data.startswith("decideq:"):
+                raise ValueError("旧按钮没有问题编号")
+            _, pm_id, question_id, index = data.split(":", 3)
+            from .pm_clarification import query_question
+            question = query_question(self._chat_handler.controller, pm_id)
+            if question.get("question_id") != question_id or not question.get("can_reply"):
+                raise ValueError("问题已变化或结束")
+            choice = question["options"][int(index)] if int(index) >= 0 else ""
+            if not choice:
+                raise ValueError("选项无效")
+        except Exception:
+            self._send_telegram(channel, "原问题无法核实或按钮已过期，请在工作站核实当前问题后回复。")
             return
-        _, pm_id, choice = parts
 
         logger.info("收到 Inline 决策: PM=%s, choice=%s (from %s)", pm_id[:12], choice, chat_id)
 
@@ -644,9 +650,10 @@ class BotGateway:
                     "response": choice,
                     "choice": choice,
                     "source": "telegram_inline",
+                    "question_id": question_id,
                 })
                 if result.get("ok"):
-                    ack = f"✅ 已将决策「{choice}」发送给 PM Agent"
+                    ack = result.get("message", "回复已保存")
                 else:
                     ack = f"❌ 发送失败: {result.get('message', '未知错误')}"
             except Exception as e:

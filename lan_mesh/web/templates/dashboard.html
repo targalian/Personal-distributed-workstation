@@ -293,10 +293,10 @@
   .thread-msg.system{align-self:center;background:transparent;color:var(--dim);font-size:11px;padding:2px 0}
   .thread-msg .t-meta{font-size:10px;opacity:.55;margin-top:3px}
   .thread-msg.clarification{border-color:var(--yellow);background:rgba(251,191,36,.06)}
-  .thread-input-bar{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--border);background:var(--surface2)}
-  .thread-input-bar input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:13px;outline:none}
+  .thread-input-bar{display:flex;flex-wrap:wrap;gap:8px;padding:10px 12px;border-top:1px solid var(--border);background:var(--surface2)}
+  .thread-input-bar input{flex:1 1 150px;min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:13px;outline:none}
   .thread-input-bar input:focus{border-color:var(--accent)}
-  .thread-input-bar .btn{padding:8px 16px;font-size:13px}
+  .thread-input-bar .btn{white-space:nowrap;padding:8px 16px;font-size:13px}
   .quick-chips{display:flex;gap:6px;flex-wrap:wrap;padding:6px 12px 10px}
   .quick-chip{background:rgba(251,191,36,.12);border:1px solid var(--yellow);color:var(--yellow);border-radius:16px;padding:5px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
   .quick-chip:hover{background:var(--yellow);color:#000;transform:scale(1.05)}
@@ -1088,6 +1088,10 @@ function taskExecutionPanel(task){
     <button class="btn sm" data-recovery-check style="margin-top:12px">核实恢复条件</button>
     <button class="btn sm" data-resume-task hidden>恢复原任务</button>
     <button class="btn sm" data-recovery-next style="margin-top:12px" hidden>继续核实剩余步骤</button>
+    <button class="btn sm" data-question-check style="margin-top:12px">查看待回复问题</button>
+    <div class="task-question-result" role="status" aria-live="polite" style="white-space:pre-wrap;margin-top:10px"></div>
+    <textarea data-question-answer aria-label="回复当前问题" maxlength="20000" rows="3" style="width:100%;box-sizing:border-box;margin-top:8px;padding:8px 12px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;resize:vertical" hidden></textarea>
+    <button class="btn sm" data-question-send hidden>保存回复到原任务</button>
     <div class="task-recovery-result" role="status" aria-live="polite" style="margin-top:10px;font-size:13px;white-space:pre-wrap"></div>
   </div>`;
 }
@@ -1181,6 +1185,56 @@ async function resumeOriginalTask(taskId,panel,revision){
   }catch(error){if(panel.isConnected)output.textContent='恢复未获确认：'+error.message+'。可重试同一请求或重新核实原节点。';}
   finally{if(panel.isConnected){button.disabled=false;check.disabled=false;next.disabled=false;}}
 }
+async function checkTaskQuestion(taskId,pmId,panel){
+  const button=panel.querySelector('[data-question-check]');
+  const output=panel.querySelector('.task-question-result');
+  const answer=panel.querySelector('[data-question-answer]');
+  const send=panel.querySelector('[data-question-send]');
+  if(button.disabled)return;
+  button.disabled=true;send.hidden=true;
+  try{
+    const response=await apiFetch(`/api/pm/${encodeURIComponent(pmId)}/clarification`);
+    const question=await response.json();
+    if(!response.ok)throw new Error(question.detail||'原问题无法读取');
+    if(question.task_id!==taskId||question.pm_id!==pmId)throw new Error('返回了其他任务的问题');
+    if(!panel.isConnected)return;
+    if(answer.dataset.questionId&&answer.dataset.questionId!==question.question_id&&answer.value.trim()){
+      output.textContent='问题已变化。已保留旧回复，请先复制保存并清空输入，再读取新问题。';return;
+    }
+    answer.dataset.questionId=question.question_id||'';
+    output.textContent=question.state==='missing'?'没有可核实的待回复问题。':[
+      question.question,question.deadline?'原等待截止：'+fmtTime(question.deadline):'',(question.options||[]).length?'选项：'+question.options.join(' / '):'',
+      question.state==='answered'?'已保存回复：'+question.response:question.state==='closed'?'该问题已结束。':
+      question.can_reply?'等待你的回复。':'原 PM 当前未运行，请先核实恢复条件并恢复原任务，再回复同一问题。'
+    ].filter(Boolean).join('\n');
+    answer.hidden=!question.can_reply&&!answer.value;
+    send.hidden=!question.can_reply;
+    send.onclick=()=>answerTaskQuestion(taskId,pmId,panel);
+  }catch(error){if(panel.isConnected)output.textContent='问题核实失败：'+error.message;}
+  finally{if(panel.isConnected)button.disabled=false;}
+}
+async function answerTaskQuestion(taskId,pmId,panel){
+  const send=panel.querySelector('[data-question-send]');
+  const check=panel.querySelector('[data-question-check]');
+  const answer=panel.querySelector('[data-question-answer]');
+  const output=panel.querySelector('.task-question-result');
+  const text=answer.value.trim(),questionId=answer.dataset.questionId;
+  if(send.disabled||!text||!questionId)return;
+  send.disabled=true;check.disabled=true;
+  try{
+    const response=await apiFetch(`/api/pm/${encodeURIComponent(pmId)}/inject-input`,{method:'POST',
+      body:JSON.stringify({question_id:questionId,response:text})});
+    const result=await response.json();
+    if(!response.ok||!result.ok)throw new Error(result.detail||result.message||'回复未获确认');
+    if(result.task_id!==taskId||result.pm_id!==pmId||result.question_id!==questionId)throw new Error('回复确认归属不匹配');
+    if(!panel.isConnected)return;
+    output.textContent=result.message||'回复已保存';
+    if(answer.value.trim()===text)answer.value='';
+    send.hidden=true;
+  }catch(error){if(panel.isConnected)output.textContent='回复未获确认：'+error.message+'。已保留原文，可核实或重试同一回复。';}
+  finally{if(panel.isConnected){send.disabled=false;check.disabled=false;}}
+}
+
 async function showTaskDetail(id){
   const t=allTasks.find(x=>x.task_id===id);if(!t)return;
   const stepLabels={pending:'等待执行',assigned:'已分配',running:'执行中',in_progress:'执行中',completed:'已完成',failed:'失败',blocked:'已阻塞',retrying:'重试中'};
@@ -1222,6 +1276,7 @@ async function showTaskDetail(id){
   if(checkPanel){
     checkPanel.querySelector('[data-execution-check]').addEventListener('click',()=>checkTaskExecution(id,checkPanel));
     checkPanel.querySelector('[data-recovery-check]').addEventListener('click',()=>checkTaskRecovery(id,checkPanel));
+    checkPanel.querySelector('[data-question-check]').addEventListener('click',()=>checkTaskQuestion(id,t.pm_agent_id,checkPanel));
     const retry=checkPanel.querySelector('[data-control-retry]');
     if(retry)retry.addEventListener('click',()=>retryTaskControl(id,t.output_data._pm_control.action,checkPanel));
   }
@@ -2088,7 +2143,6 @@ async function openPMThread(pmId){
   if(!thread){closePMThread();return;}
   const wrap=document.getElementById('pm-thread-panel-wrap');
   const st=thread.status||'starting';
-  const isAwait=st==='awaiting_input';
 
   // 加载线程消息
   let msgs=[];
@@ -2097,11 +2151,17 @@ async function openPMThread(pmId){
     const d=await r.json();
     msgs=d.messages||[];
   }catch(e){}
+  let currentQuestion={};
+  try{
+    const r=await apiFetch(`/api/pm/${encodeURIComponent(pmId)}/clarification`);
+    if(r.ok)currentQuestion=await r.json();
+  }catch(error){}
+  if(_openThreadId!==pmId)return;
   _threadMessages[pmId]=msgs;
 
   // 查找最新的澄清请求 (用于快捷回复)
-  const lastClarification=[...msgs].reverse().find(m=>m.type==='clarification');
-  const showChips=isAwait&&lastClarification&&lastClarification.options&&lastClarification.options.length;
+  const lastClarification=currentQuestion.question_id?{options:currentQuestion.options||[],question_id:currentQuestion.question_id}:null;
+  const showChips=currentQuestion.can_reply&&lastClarification&&lastClarification.options.length;
 
   wrap.innerHTML=`<div class="pm-thread-panel" id="thread-panel-${pmId}">
     <div class="thread-header">
@@ -2113,10 +2173,11 @@ async function openPMThread(pmId){
     <div class="thread-messages" id="thread-msgs-${pmId}">
       ${msgs.length?msgs.map(m=>renderThreadMsg(m)).join(''):'<div style="text-align:center;color:var(--dim);font-size:12px;padding:16px">线程暂无消息，直接输入即可与 PM 对话</div>'}
     </div>
-    ${showChips?`<div class="quick-chips" id="thread-chips-${pmId}">${lastClarification.options.map(o=>`<span class="quick-chip" onclick="sendThreadQuickReply('${pmId}','${esc(o)}')">${esc(o)}</span>`).join('')}</div>`:''}
+    ${showChips?`<div class="quick-chips" id="thread-chips-${pmId}">${lastClarification.options.map(o=>`<span class="quick-chip" onclick="sendThreadQuickReply('${pmId}','${escJs(o)}')">${esc(o)}</span>`).join('')}</div>`:''}
     <div class="thread-input-bar">
-      <input type="text" id="thread-input-${pmId}" placeholder="直接发送给 ${esc(thread.agent_name||'PM')}…" onkeydown="if(event.key==='Enter')sendThreadMessage('${pmId}')">
+      <input type="text" id="thread-input-${pmId}" data-question-id="${esc(currentQuestion.question_id||'')}" placeholder="${currentQuestion.can_reply?'回复当前问题…':'请在任务详情核实待回复问题'}" onkeydown="if(event.key==='Enter')sendThreadMessage('${pmId}')">
       <button class="btn primary" onclick="sendThreadMessage('${pmId}')">发送</button>
+      <button class="btn sm" onclick="refreshThreadQuestion('${pmId}')">读取当前问题</button>
     </div>
   </div>`;
 
@@ -2125,6 +2186,36 @@ async function openPMThread(pmId){
   if(msgEl)msgEl.scrollTop=msgEl.scrollHeight;
   const inp=document.getElementById(`thread-input-${pmId}`);
   if(inp)inp.focus();
+}
+
+function applyThreadQuestion(pmId,question){
+  const inp=document.getElementById(`thread-input-${pmId}`);
+  if(!inp||_openThreadId!==pmId)return;
+  if(inp.disabled)return;
+  if(inp.dataset.questionId!==question.question_id&&inp.value.trim()){
+    showToast('问题已变化，旧回复已保留。请先保存并清空草稿，再读取当前问题。','err');return;
+  }
+  const changed=inp.dataset.questionId!==question.question_id;
+  inp.dataset.questionId=question.question_id||'';
+  inp.placeholder=question.can_reply?'回复当前问题…':'当前问题已结束或需先恢复任务';
+  if(question.question&&(changed||!document.getElementById(`thread-msgs-${pmId}`)?.textContent.includes(question.question))){
+    appendThreadMsgLocal(pmId,{role:'pm',content:question.question,timestamp:Date.now()/1000,type:'clarification'});
+  }
+  document.getElementById(`thread-chips-${pmId}`)?.remove();
+  if(question.can_reply&&question.options?.length){
+    inp.closest('.thread-input-bar').insertAdjacentHTML('beforebegin',`<div class="quick-chips" id="thread-chips-${pmId}">${question.options.map(o=>`<span class="quick-chip" onclick="sendThreadQuickReply('${pmId}','${escJs(o)}')">${esc(o)}</span>`).join('')}</div>`);
+  }
+}
+async function refreshThreadQuestion(pmId){
+  const inp=document.getElementById(`thread-input-${pmId}`);
+  if(!inp||inp.disabled)return;
+  try{
+    const r=await apiFetch(`/api/pm/${encodeURIComponent(pmId)}/clarification`);
+    const q=await r.json();
+    if(!r.ok||q.pm_id!==pmId)throw new Error(q.detail||'原问题无法读取');
+    if(!inp.isConnected||document.getElementById(`thread-input-${pmId}`)!==inp)return;
+    applyThreadQuestion(pmId,q);
+  }catch(error){if(inp.isConnected)showToast('问题核实失败：'+error.message,'err');}
 }
 
 function renderThreadMsg(m){
@@ -2137,45 +2228,32 @@ function renderThreadMsg(m){
 
 async function sendThreadMessage(pmId){
   const inp=document.getElementById(`thread-input-${pmId}`);
-  if(!inp)return;
-  const text=inp.value.trim();
+  if(!inp||inp.disabled)return;
+  const text=inp.value.trim(),questionId=inp.dataset.questionId;
   if(!text)return;
-  inp.value='';
-  // 立即显示用户消息
-  appendThreadMsgLocal(pmId,{role:'user',content:text,timestamp:Date.now()/1000});
+  if(!questionId){showToast('请先在任务详情核实当前问题','err');return;}
+  inp.disabled=true;
   try{
-    const r=await apiFetch(`/api/pm-threads/${pmId}/messages`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:text,conv_id:_activeConvId})
-    });
+    const r=await apiFetch(`/api/pm-threads/${pmId}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:text,conv_id:_activeConvId,question_id:questionId})});
     const d=await r.json();
-    if(d.ok){
-      appendThreadMsgLocal(pmId,{role:'system',content:'✅ 已发送给 PM Agent',timestamp:Date.now()/1000});
-      // 发送成功后清除快捷回复 chips
-      const chips=document.getElementById(`thread-chips-${pmId}`);
-      if(chips)chips.remove();
-    }else{
-      appendThreadMsgLocal(pmId,{role:'system',content:d.reply||'发送失败',timestamp:Date.now()/1000});
-    }
-  }catch(e){
-    appendThreadMsgLocal(pmId,{role:'system',content:'[通信失败] '+e.message,timestamp:Date.now()/1000});
-  }
+    if(!inp.isConnected)return;
+    if(r.ok&&d.ok&&d.pm_id===pmId&&d.question_id===questionId){
+      if(inp.value.trim()===text)inp.value='';
+      if(!d.duplicate)appendThreadMsgLocal(pmId,{role:'user',content:text,timestamp:Date.now()/1000});
+      appendThreadMsgLocal(pmId,{role:'system',content:d.reply||'回复已保存',timestamp:Date.now()/1000});
+      document.getElementById(`thread-chips-${pmId}`)?.remove();
+      inp.disabled=false;
+      await refreshThreadQuestion(pmId);
+    }else{appendThreadMsgLocal(pmId,{role:'system',content:d.reply||d.detail||'回复未获确认，已保留原文',timestamp:Date.now()/1000});}
+  }catch(error){if(inp.isConnected)appendThreadMsgLocal(pmId,{role:'system',content:'回复未获确认，已保留原文：'+error.message,timestamp:Date.now()/1000});}
+  finally{if(inp.isConnected)inp.disabled=false;}
 }
-
 async function sendThreadQuickReply(pmId,option){
-  appendThreadMsgLocal(pmId,{role:'user',content:option,timestamp:Date.now()/1000});
-  const chips=document.getElementById(`thread-chips-${pmId}`);
-  if(chips)chips.remove();
-  try{
-    const r=await apiFetch(`/api/pm-threads/${pmId}/messages`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:option,conv_id:_activeConvId})
-    });
-    const d=await r.json();
-    appendThreadMsgLocal(pmId,{role:'system',content:d.ok?'✅ 决策已发送':(d.reply||'发送失败'),timestamp:Date.now()/1000});
-  }catch(e){
-    appendThreadMsgLocal(pmId,{role:'system',content:'[通信失败] '+e.message,timestamp:Date.now()/1000});
-  }
+  const inp=document.getElementById(`thread-input-${pmId}`);
+  if(!inp||inp.disabled)return;
+  inp.value=option;
+  await sendThreadMessage(pmId);
 }
 
 function appendThreadMsgLocal(pmId,m){
@@ -2206,16 +2284,9 @@ function onPMThreadStatusChange(data){
         const task=panel.querySelector('.th-task');
         if(task)task.textContent=(t.task_name||'')+' · '+(_PM_STATUS_LABEL[st]||st);
       }
-      // awaiting_input 且有选项时动态插入快捷回复
-      if(st==='awaiting_input'&&data.clarification_options&&data.clarification_options.length){
-        appendThreadMsgLocal(pmId,{role:'pm',content:data.clarification_question||'',timestamp:Date.now()/1000,type:'clarification',options:data.clarification_options});
-        let chips=document.getElementById(`thread-chips-${pmId}`);
-        if(!chips){
-          const inputBar=panel.querySelector('.thread-input-bar');
-          if(inputBar){
-            inputBar.insertAdjacentHTML('beforebegin',`<div class="quick-chips" id="thread-chips-${pmId}">${data.clarification_options.map(o=>`<span class="quick-chip" onclick="sendThreadQuickReply('${pmId}','${escJs(o)}')">${esc(o)}</span>`).join('')}</div>`);
-          }
-        }
+      if(st==='awaiting_input'&&data.clarification_id){
+        applyThreadQuestion(pmId,{question_id:data.clarification_id,question:data.clarification_question||'',
+          options:data.clarification_options||[],can_reply:true});
       }
     }
   }

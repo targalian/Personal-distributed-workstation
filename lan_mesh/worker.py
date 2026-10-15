@@ -373,23 +373,14 @@ class WorkerAgent:
         return control_pm(lambda: self.state.pm_agent, self.state.device_id, payload)
 
     def inject_pm_input(self, input_data: dict) -> dict:
-        """向 PM Agent 注入来自 Secretary/Boss 的回复输入。
-
-        用于反向沟通通道: Boss 回复 PM 的澄清请求后,
-        Secretary 通过此方法将回复注入 PM。
-
-        Args:
-            input_data: Boss 回复数据
-
-        Returns:
-            {ok: True} 或 {ok: False, message}
-        """
         if not self.state.pm_agent:
-            return {"ok": False, "message": "PM Agent 未运行"}
-        if not self.state.pm_agent._running:
-            return {"ok": False, "message": "PM Agent 已停止"}
-        self.state.pm_agent.receive_input(input_data)
-        return {"ok": True, "pm_id": self.state.pm_agent.pm_id}
+            return {"ok": False, "message": "原 PM 未运行，请先核实并恢复原任务"}
+        return self.state.pm_agent.receive_input(input_data)
+
+    def get_pm_question(self, pm_id: str, task_id: str) -> dict:
+        from .pm_clarification import inspect_question
+        return inspect_question(self.data_dir / "worker-pm-starts.sqlite3", pm_id,
+                                task_id, self.state.device_id, lambda: self.state.pm_agent)
 
     def inspect_pm_start(self, pm_id: str, task_id: str) -> dict:
         from .pm_inspection import inspect_pm_start

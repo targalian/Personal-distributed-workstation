@@ -28,6 +28,7 @@
 | tests/test_execution_receipts.py | Verify durable execution claims, restart ambiguity and Station/Worker HTTP receipts. |
 | tests/test_local_checks.py | Verify local-loop failure propagation, environment isolation and offline reports. |
 | tests/test_pm_checkpoint.py | Verify durable PM boundaries, write-failure fencing and read-only restart evidence. |
+| tests/test_pm_clarification.py | Verify question-bound replies and durable refinement continuation across process death. |
 | tests/test_pm_control.py | Verify stop intent, original-PM identity and acknowledgment under races and transport loss. |
 | tests/test_pm_delivery.py | Delivery outcomes must reflect persisted acknowledgements, not child progress or model errors. |
 | tests/test_pm_inspection.py | Verify original-node inspection survives restart and never redispatches or rewrites results. |
@@ -163,3 +164,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 ## 显式恢复与进程排除回归（iter-54）
 
 新增 test_pm_resume.py：真实子进程运行 A 后在依赖释放前退出，检查点恢复只执行 B 并交付原任务；独立活进程持锁拒绝接管。覆盖并发重复请求、版本/身份/业务授权、同进程排除、原时限、旧版/迁移/停止/待澄清、本地未知结果、写入及线程启动失败、原成功回报质量检查、聚合与交付请求复用。真实本机 Secretary→Station/Worker→执行节点验证在途原回执到依赖交付。Chrome UI-047 覆盖确认、错误重试、重复请求、晚到隔离及桌面手机；不代替真实模型/多机/72 小时验收。
+
+## 澄清继续点与回复确认（iter-55）
+
+`tests/test_pm_clarification.py` 覆盖真实子进程退出、两轮上下文/原时限、写盘失败、身份校验、并发/重复/过期回复、停止后保护、聊天确认及模拟 Bot 按钮；真实本机 HTTP 联验 Secretary→Station/Worker。Chrome 脚本增加问题恢复、丢失确认、跨题草稿隔离及桌面/手机场景。真实模型、多机及生产恢复仍待验收。

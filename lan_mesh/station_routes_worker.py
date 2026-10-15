@@ -123,10 +123,17 @@ def build_worker_routes(controller) -> APIRouter:
         """子 Agent 向本机 PM 上报进度。"""
         return controller._local_forward_progress(payload)
 
+    @router.get("/role/pm-clarification/{pm_id}")
+    async def pm_question(pm_id: str, task_id: str):
+        try:
+            return await run_in_threadpool(controller._local_pm_question, pm_id, task_id)
+        except (ValueError, OSError):
+            raise HTTPException(409, "原问题无法核实")
+
     @router.post("/pm/inject-input")
     async def local_inject_input(payload: dict):
         """向本机 PM 注入 Boss 回复。"""
-        result = controller._local_inject_input(payload)
+        result = await run_in_threadpool(controller._local_inject_input, payload)
         if not result.get("ok"):
             raise HTTPException(status_code=409, detail=result.get("message", "注入失败"))
         return result

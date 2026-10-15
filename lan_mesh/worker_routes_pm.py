@@ -176,6 +176,15 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
 
     # ── 优化7: 反向沟通通道 ──
 
+    @router.get("/role/pm-clarification/{pm_id}")
+    async def pm_question(pm_id: str, task_id: str):
+        if not role_manager:
+            raise HTTPException(503, "角色管理未初始化")
+        try:
+            return await run_in_threadpool(role_manager.get_pm_question, pm_id, task_id)
+        except (ValueError, OSError):
+            raise HTTPException(409, "原问题无法核实")
+
     @router.post("/pm/inject-input")
     async def pm_inject_input(payload: dict):
         """向 PM Agent 注入来自 Secretary/Boss 的回复 (反向沟通通道)。
@@ -189,7 +198,7 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
         """
         if not role_manager:
             raise HTTPException(status_code=503, detail="角色管理未初始化")
-        result = role_manager.inject_pm_input(payload)
+        result = await run_in_threadpool(role_manager.inject_pm_input, payload)
         if not result.get("ok"):
             raise HTTPException(status_code=409, detail=result.get("message", "注入失败"))
         return result

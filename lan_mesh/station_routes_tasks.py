@@ -252,6 +252,15 @@ def build_task_routes(controller) -> APIRouter:
 
     # ── 优化7: 反向沟通 — PM 注入回复 ──
 
+    @router.get("/api/pm/{pm_id}/clarification")
+    async def get_pm_clarification(pm_id: str):
+        check_secretary(controller)
+        from .pm_clarification import query_question
+        try:
+            return await run_in_threadpool(query_question, controller, pm_id)
+        except (ValueError, OSError):
+            raise HTTPException(409, "原问题暂时无法核实，请检查节点连接")
+
     @router.post("/api/pm/{pm_id}/inject-input")
     async def inject_pm_input(pm_id: str, payload: dict):
         """向 PM Agent 注入来自 Boss/秘书的回复 (反向沟通通道)。
@@ -260,7 +269,7 @@ def build_task_routes(controller) -> APIRouter:
         将 Boss 的决策回复注入到 PM Agent。
         """
         check_secretary(controller)
-        result = controller.inject_input_to_pm(pm_id, payload)
+        result = await run_in_threadpool(controller.inject_input_to_pm, pm_id, payload)
         if result.get("ok"):
             await _broadcast(state, "pm_input_injected", {
                 "pm_id": pm_id, "message": "回复已注入 PM Agent",

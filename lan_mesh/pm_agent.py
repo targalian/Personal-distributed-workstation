@@ -119,7 +119,6 @@ class ProjectManagerAgent:
             self._state.stop_reason = reason
             self._state.stop_event.set()
             self._running = False
-            self._state.clarification_response = {"response": "", "choice": "", reason: True}
             self._state.clarification_event.set()
             self.checkpoint(reason if self._state.phase not in ("completed", "failed") else "")
 
@@ -150,6 +149,9 @@ class ProjectManagerAgent:
                 return
             task = self._planner.refine_requirements(task)
             if st.stop_event.is_set():
+                return
+            if self._monitor.is_global_timed_out():
+                self._monitor._fail_task("全局超时", "澄清结束时原任务全局时限已耗尽")
                 return
 
             # 阶段 1: 规划
@@ -304,51 +306,14 @@ class ProjectManagerAgent:
         }
         self._monitor.receive_progress_report(report)
 
-    def receive_input(self, input_data: dict):
-        st = self._state
-        with st.lock:
-            if st.stop_event.is_set():
-                return
-            st.clarification_response = input_data
-            if not self.checkpoint():
-                return
-            st.clarification_event.set()
-        logger.info("[%s] 收到 Boss 回复: %s", self.pm_id[:8], str(input_data)[:200])
+    def receive_input(self, input_data: dict) -> dict:
+        from .pm_clarification import receive_answer
+        return receive_answer(self, input_data)
 
     def request_clarification(self, question: str, options: list = None,
-                              timeout: float = None) -> dict:
-        """向 Boss 发起澄清请求, 阻塞等待回复。"""
-        st = self._state
-        with st.lock:
-            if st.stop_event.is_set():
-                return {st.stop_reason or "stopped": True}
-            st.clarification_event.clear()
-            st.clarification_response = {}
-            st.clarification_request = {"question": question, "options": options or [],
-                                        "timeout": timeout if timeout is not None else st.clarification_timeout}
-            if not self.checkpoint("awaiting_input"):
-                return {"checkpoint_failed": True}
-        self.report_status("awaiting_input",
-                           task_list=[{"name": "请求决策", "status": "awaiting_input", "description": question}])
-        self.report_progress(-1.0, "awaiting_input", question,
-                             reporter_type="pm_clarification", task_name=question[:100])
-        if options:
-            try:
-                http_post(f"{self.secretary_url}/api/pm/{self.pm_id}/status",
-                              json={"status": "awaiting_input", "clarification_question": question,
-                                    "clarification_options": options}, timeout=5)
-            except Exception:
-                pass
-        actual_timeout = timeout if timeout is not None else st.clarification_timeout
-        logger.info("[%s] 等待 Boss 决策 (超时=%ds): %s", self.pm_id[:8], actual_timeout, question[:120])
-        signalled = st.clarification_event.wait(timeout=actual_timeout)
-        if st.stop_event.is_set():
-            return {st.stop_reason or "stopped": True}
-        if not signalled:
-            logger.warning("[%s] 等待 Boss 决策超时, 使用默认策略继续", self.pm_id[:8])
-            return {"response": "", "choice": "", "timed_out": True}
-        self.report_status("executing")
-        return st.clarification_response
+                              timeout: float = None, continuation: dict = None) -> dict:
+        from .pm_clarification import wait_for_answer
+        return wait_for_answer(self, question, options, timeout, continuation)
 
     def cancel(self):
         self._signal_stop("cancelled")
@@ -363,13 +328,17 @@ class ProjectManagerAgent:
         logger.info("[%s] 任务已暂停", self.pm_id[:8])
 
     def report_status(self, status: str, team_structure: dict = None,
-                      task_list: list = None, collaboration_mode: str = None):
+                      task_list: list = None, collaboration_mode: str = None, clarification: dict = None):
         if self._state.stop_event.is_set() and status != self._state.stop_reason:
             return
         if status in ("completed", "failed") and not self.checkpoint(status):
             return
         try:
             payload = {"status": status}
+            if clarification is not None:
+                payload.update(clarification_question=clarification["question"],
+                               clarification_options=clarification["options"],
+                               clarification_id=clarification["question_id"])
             if team_structure is not None:
                 payload["team_structure"] = team_structure
             if task_list is not None:

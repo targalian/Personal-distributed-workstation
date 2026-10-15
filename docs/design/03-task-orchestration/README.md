@@ -11,6 +11,7 @@
 | orchestrator.py | 任务编排引擎 — 已废弃, 降级为工具库 (iter-30 收敛裁定) |
 | pm_agent.py | PM Agent 协调器/门面 — 持有 Planner/Dispatcher/Monitor, 对外暴露统一接口。 |
 | pm_checkpoint.py | Persist PM execution snapshots before side effects and expose read-only recovery evidence. |
+| pm_clarification.py | Persist question identities and answers before acknowledging or continuing a PM. |
 | pm_control.py | Apply identity-bound PM stop requests and persist the distinction between intent and acknowledgment. |
 | pm_dispatcher.py | PM 分发器 — 团队创建与子任务分发 |
 | pm_inspection.py | Read original-node PM evidence without dispatching work or changing task state. |
@@ -199,3 +200,7 @@ PM 协调器、分发器、监控器在关键边界调用持久化：执行前�
 正常启动通过 pm_lease.py 持有启动数据库旁的进程生命周期独占锁，检查点保留本机身份和原路径。pm_resume.py 复核显式授权、现场和原时限；PMCheckpoints.takeover 在锁保护下按版本原子更换所有者并记录请求。同一请求只读已有接管结果，不再启动线程。
 
 PMState.restore 恢复原计划、请求编号、输出和剩余时间语义；复用已接受输出，重放已持久化成功回报到质量检查，远端未知执行仅查询原回执，未开始步骤按依赖继续。已保存聚合及交付请求复用；规划前和已返回单任务支持继续。新副作用前复核授权，停止/预算/网络异常停止调度。仅原 Linux 主机原路径且带新版锁凭据支持；暂停/取消/终态、待澄清及本地在途结果未知不直接恢复。详见 ../../pm-checkpoints.md。
+
+## 澄清继续点与回复确认（iter-55）
+
+`pm_clarification.py` 将问题编号、选项、原截止时间、refinement 轮次/累计上下文和已消费回答保存到原 PM 检查点。需求细化阶段可显式恢复，同一问题不重新计时；保存回答后才唤醒 PM，写盘失败不确认。重复回复从当前问题或历史核实，旧回复不会回答新问题；终态仅允许确认已保存的相同回答。暂停继续、执行阶段任意澄清及无继续点的旧现场仍不支持。

@@ -17,8 +17,8 @@ from .pm_start import _START_LOCK
 def validate_snapshot(snapshot: dict, pm_id: str, task_id: str) -> None:
     """Reject ambiguous local effects; remote effects retain their original IDs."""
     if (snapshot.get('stopped') or snapshot.get('stop_reason') or snapshot.get('terminal_failures')
-            or snapshot.get('phase') in ('completed', 'failed', 'awaiting_input')):
-        raise ValueError('执行现场已停止、失败或等待澄清，不能直接续跑')
+            or snapshot.get('phase') in ('completed', 'failed')):
+        raise ValueError('执行现场已停止或失败，不能直接续跑')
     if time.time() - snapshot['start_time'] >= snapshot['global_timeout']:
         raise ValueError('原任务全局时限已耗尽，不能重置时限')
     delivery = snapshot.get('delivery', {}).get('payload')
@@ -29,11 +29,17 @@ def validate_snapshot(snapshot: dict, pm_id: str, task_id: str) -> None:
     steps = plan.get('decomposition', [])
     if not steps:
         phase = snapshot.get('recovery', {}).get('source_phase') if snapshot['phase'] == 'recovering' else snapshot['phase']
-        if phase not in ('starting', 'refining', 'planning') and not (phase == 'planned' and plan.get('pattern') == 'single'):
+        if phase == 'awaiting_input':
+            from .pm_clarification import valid_refinement
+            if not valid_refinement(snapshot):
+                raise ValueError('澄清现场没有可验证的继续点，不能直接恢复')
+        elif phase not in ('starting', 'refining', 'refined', 'planning') and not (phase == 'planned' and plan.get('pattern') == 'single'):
             raise ValueError('执行计划缺失，请核实现场')
         if snapshot['execution_attempts'] or snapshot['direct_execution'] or snapshot['dispatched']:
             raise ValueError('已有执行记录但没有计划，不能重新规划')
         return
+    if snapshot['phase'] == 'awaiting_input':
+        raise ValueError('执行中的澄清没有已支持的继续点')
     if len(steps) > 150:
         raise ValueError('执行计划超出支持范围')
     PMDispatcher._validate_plan(steps)
