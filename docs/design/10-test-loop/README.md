@@ -36,6 +36,7 @@
 | tests/test_project_brief.py | Artifact correctness: graph integrity, concurrency, isolation, and chat integration. |
 | tests/test_restart_recovery.py | Preserve remote execution ownership and committed results across Secretary restart. |
 | tests/test_startup.py | Launch the shell wrapper in temporary projects to verify errors, arguments and cleanup. |
+| tests/test_task_resubmission.py | Verify resubmission preserves requirements and never duplicates a replacement or PM. |
 <!-- /AUTO:module-list -->
 ---
 
@@ -143,3 +144,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 ## iter-50 验证
 
 `tests/test_restart_recovery.py` 覆盖本机/远端及多种活动状态、125条任务无分页遗漏、已交付/验收/停止不变、旧interrupted兼容、陈旧保存保护、原PM回报清理、写失败事务回滚和缺失PM不能假确认停止。真实HTTP服务退出重建期间，独立Python进程重新打开数据库标记恢复，原PM线程存活并最终完成一次交付。
+
+## iter-51 重提验证
+
+`tests/test_task_resubmission.py` 覆盖真实 API/SQLite 并发、输入快照、准备进程退出后恢复、启动结果未知不重启、事务回滚、v4→v5 迁移、删除后去重、重提链条、预算和原任务交付在 PM 绑定前变化。`project_brief_browser.py` 增加真实网页操作与 API 验证，执行端模拟；不等同真实模型和多机验收。

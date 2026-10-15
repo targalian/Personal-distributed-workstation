@@ -30,6 +30,7 @@ def submit_task(controller, name: str, description: str, created_by: str = "secr
 
 def dispatch_task(controller, task: Task, target=None) -> dict:
     """Bind once, start once, then return current persisted state, never an old snapshot."""
+    from .task_resubmission import validate_resubmission_dispatch
     db, state = controller.db, controller.state
     active = getattr(controller, "_local_pm_agent", None)
     local = (target is None and getattr(controller, "secretary_active", False)
@@ -56,7 +57,7 @@ def dispatch_task(controller, task: Task, target=None) -> dict:
     host_name = state.device_name if local else target.device_name or target.hostname
     pm = PMAgent(pm_id=pm_id, agent_name=f"PM-{pm_id[:8]}", task_id=task.task_id, project_id=task.project_id,
                  device_id=device_id, hostname=host_name, ip=ip, api_port=port, status="starting")
-    if not db.bind_task_pm(pm):
+    if not db.bind_task_pm(pm, validate=lambda current: validate_resubmission_dispatch(controller, current)):
         return db.get_task(task.task_id).to_dict()
     controller._pm_worker_map[pm_id] = {"ip": ip, "api_port": port, "device_id": device_id,
                                       "local": bool(local), "task_id": task.task_id}

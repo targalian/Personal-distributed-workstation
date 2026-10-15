@@ -19,6 +19,7 @@
 | pm_state.py | PM Agent 共享状态容器 |
 | project.py | 项目管理与预算控制 — Phase 3 项目隔离核心 |
 | task.py | 任务 DAG 管理 — 子任务依赖图与拓扑排序 (增强版: 条件边 + 动态路由 + 图序列化) |
+| task_resubmission.py | Transactional task resubmission with preserved inputs and durable source provenance. |
 | task_submission.py | Shared task submission: persist PM ownership before any local or remote execution. |
 | task_templates.py | F2.4: 任务模板库 — 预置常见任务 DAG |
 <!-- /AUTO:module-list -->
@@ -165,3 +166,11 @@ Secretary 只发一次带认证的 GET（5 秒超时，禁止重定向），校�
 Secretary重新激活只表示观察中断，不能证明本机或远端PM已经停止。原节点、PM和任务编号保持不变，不重新创建PM、不重派任务。原PM完成回报兼容running/monitoring/planning/executing/awaiting_input活动任务，仍不覆盖暂停、取消或验收终态。
 
 这不是检查点续跑；如果原PM进程已退出，仍需核实原节点与产物。HTTP服务重启+独立恢复进程+原PM线程联验确认：原执行存活时无需重做即可继续交付。
+
+## 服务端安全重提（iter-51）
+
+`task_resubmission.py` 将网页快捷复制任务替换为服务端事务。SQLite v5 的 `task_resubmissions` 对 source_task_id 和 replacement_task_id 分别唯一约束，保存原任务快照和副作用确认；删除任务不删除记录。新任务继承完整输入（含 `_brief` 与 `_priority`）、描述和项目，独立执行/交付。重复请求返回同一任务，准备后进程退出可以继续派发原替代任务；PM 已绑定则不再启动。
+
+创建事务校验终态、交付、执行未知、PM 失败证据和停止确认；PM 绑定事务再次校验原任务与项目预算，普通待执行队列也不能绕过。响应丢失后重发无需重新创建；记录中替代任务已删除则拒绝。每个失败替代任务可成为下一次重提的来源。原任务删去而替代任务仍 pending 时禁止继续派发，需人工核实。
+
+这不是 PM 检查点恢复，不证明旧工具已停止，也不提供跨所有模型请求的预算预留。API 和浏览器验证使用模拟执行；真实模型和多机验收仍待完成。

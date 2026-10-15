@@ -18,6 +18,7 @@ from lan_mesh.database import Database
 from lan_mesh.execution_receipts import ExecutionReceipts
 from lan_mesh.pm_start import start_pm_once
 from lan_mesh.protocol import Task
+from lan_mesh.task_resubmission import prepare_resubmission
 from tests.test_project_brief import document
 
 
@@ -65,6 +66,22 @@ def dataset(tmp_path, monkeypatch):
     return SimpleNamespace(roots={"state": state, "shared": shared, "database_dir": data},
                            archive=tmp_path / "backup.zip", db=db, cid=cid, handoff=handoff, payload=payload,
                            pm_payload=pm_payload)
+
+
+def test_restore_preserves_resubmission_tombstone_and_frozen_source(dataset, tmp_path):
+    source = Task(task_id="retry-source", status="failed", input_data={"_brief": {"revision": 2}})
+    dataset.db.save_task(source)
+    replacement, _ = prepare_resubmission(SimpleNamespace(db=dataset.db), source.task_id)
+    dataset.db.delete_task(replacement.task_id)
+    create_backup(dataset.roots, dataset.archive, offline_confirmed=True)
+    destination = tmp_path / "restored"
+    restore_backup(dataset.archive, destination)
+    db = Database(str(destination / "database_dir/main.sqlite3"))
+    with pytest.raises(ValueError, match="已删除"):
+        prepare_resubmission(SimpleNamespace(db=db), source.task_id)
+    record = db._get_conn().execute("SELECT * FROM task_resubmissions").fetchone()
+    assert record["replacement_task_id"] == replacement.task_id
+    assert json.loads(record["source_snapshot"])["input_data"] == source.input_data
 
 
 def test_roundtrip_preserves_reviews_history_handoffs_and_execution_dedup(dataset, tmp_path, monkeypatch):

@@ -221,6 +221,85 @@ def verify_restart_recovery(page, output):
     page.set_viewport_size({'width':1680,'height':1100})
 
 
+def verify_task_resubmission(page, output):
+    """Use the real resubmission API/SQLite; simulate only PM execution."""
+    controller.project_manager=None
+    controller.state.device_name='browser-node'
+    controller.state.api_port=12345
+    controller.chat_runtime=runtime
+    controller._local_pm_agent=None
+    controller._pm_worker_map={}
+    controller._queue_ws_broadcast=Mock()
+    controller._auto_attach_pm_thread=Mock()
+    started=[]
+    def start(task_id, secretary_url, task_data, pm_id):
+        started.append(task_id)
+        return {'ok':True,'pm_id':pm_id,'task_id':task_id}
+    controller._local_start_pm=start
+    source=Task(task_id='resubmit-source',name='重新提交并保留已确认需求',status='failed',
+        description='沿用已经确认的项目描述',input_data={'_brief':{'revision':7,'task_id':'resubmit-source'},
+        '_priority':'high','files':['input.csv']})
+    controller.db.save_task(source)
+    def tasks_route(r):
+        response=client.get('/api/tasks')
+        r.fulfill(status=response.status_code,json=response.json())
+    page.route('**/api/tasks',tasks_route)
+    page.locator('.tabs [data-tab="workspace"]').click()
+    page.locator('[data-wsview="tasks"]').click()
+    page.wait_for_load_state('networkidle')
+    page.evaluate('(task)=>{allTasks=[task];renderTasks()}',source.to_dict())
+    page.locator('#task-grid .card',has_text=source.name).locator('.card-title').click()
+    # Server completes the operation, but the browser never receives its response.
+    endpoint='**/api/tasks/resubmit-source/resubmit'
+    def lose_response(r):
+        response=client.post('/api/tasks/resubmit-source/resubmit',json=json.loads(r.request.post_data))
+        assert response.status_code==200
+        r.abort('failed')
+    page.route(endpoint,lose_response,times=1)
+    page.locator('#task-grid').get_by_role('button',name='🔄 重新提交',exact=True).click()
+    page.wait_for_function("!resubmittingTasks.has('resubmit-source')")
+    assert len(started)==1
+    # Repeated browser actions find the same persisted replacement.
+    page.evaluate("Promise.all([resubmitTask('resubmit-source'),resubmitTask('resubmit-source')])")
+    assert len(started)==1
+    current=client.get('/api/tasks/resubmit-source').json()
+    replacement_id=current['resubmission']['replacement_task_id']
+    replacement=client.get('/api/tasks/'+replacement_id).json()
+    assert replacement['input_data']==source.input_data
+    assert replacement['resubmission']['source_task_id']==source.task_id
+    assert page.locator('#task-grid .card',has_text=source.name).get_by_role('button',name='🔄 重新提交',exact=True).count()==0
+    page.evaluate("showTaskDetail('resubmit-source')")
+    assert replacement_id in page.locator('.task-provenance').inner_text()
+    page.locator('[data-resubmit-existing]').click()
+    page.wait_for_function("!resubmittingTasks.has('resubmit-source')")
+    assert len(started)==1
+    page.wait_for_function("document.querySelectorAll('#toast-container .toast').length===0")
+    page.screenshot(path=str(output/'task_resubmission_desktop.png'),full_page=True)
+    page.locator('[data-replacement-task]').click()
+    page.wait_for_function("document.querySelector('.task-provenance').textContent.includes('来源任务')")
+    assert source.task_id in page.locator('.task-provenance').inner_text()
+    page.set_viewport_size({'width':390,'height':844})
+    assert page.locator('#modal').evaluate('(el)=>el.scrollWidth<=el.clientWidth+1')
+    page.screenshot(path=str(output/'task_resubmission_mobile.png'),full_page=True)
+    page.evaluate('closeOverlayForce()')
+    # The source changes after the browser GET. The server must reject the POST.
+    raced=Task(task_id='resubmit-race',name='请求途中状态变化',status='failed')
+    controller.db.save_task(raced)
+    page.evaluate('(task)=>{allTasks=[task];renderTasks()}',raced.to_dict())
+    rejected=[]
+    def change_before_post(r):
+        controller.db.update_task_status(raced.task_id,'running')
+        response=client.post('/api/tasks/resubmit-race/resubmit',json=json.loads(r.request.post_data))
+        rejected.append(response.status_code)
+        r.fulfill(status=response.status_code,json=response.json())
+    page.route('**/api/tasks/resubmit-race/resubmit',change_before_post,times=1)
+    page.evaluate("resubmitTask('resubmit-race')")
+    assert rejected==[409] and len(started)==1
+    assert '重新提交失败' in page.locator('#toast-container').inner_text()
+    page.unroute('**/api/tasks',tasks_route)
+    page.set_viewport_size({'width':1680,'height':1100})
+
+
 def accept_all_suggestions(page):
     """Review and explicitly accept a candidate without relying on automatic writes."""
     page.locator('#project-brief-panel [data-tab="review"]').click()
@@ -733,6 +812,7 @@ with sync_playwright() as p:
     verify_execution_inspection(page,output)
     verify_task_control(page,output)
     verify_restart_recovery(page,output)
+    verify_task_resubmission(page,output)
     assert not errors,errors
     # UI-036: test unified editing history against isolated conversations and the real API.
     history_id=chat.create_conversation('编辑历史测试')['id']
@@ -790,3 +870,4 @@ print('PASS: original-node inspection, unknown/running/inactive evidence, retry 
 print("PASS: cancel/pause intent versus PM confirmation, explicit retry, retained task on unknown stop, original request ID, disabled resubmit, desktop/mobile; real API and cooperative PM instance")
 
 print("PASS: restart recovery, legacy interrupted protection, stale resubmit rejection, original callback clearing, desktop/mobile; real task/PM API and temporary SQLite")
+print("PASS: resubmission preserves inputs, lost response and repeated clicks reuse one replacement, source links, server race rejection, desktop/mobile; real API/SQLite, simulated PM")

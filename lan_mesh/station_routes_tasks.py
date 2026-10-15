@@ -18,6 +18,7 @@ from .protocol import AgentCard
 from starlette.concurrency import run_in_threadpool
 from .logger import get_logger
 from .station_routes_common import _broadcast, check_secretary
+from .task_resubmission import resubmit_task, task_with_provenance
 
 logger = get_logger("station_api")
 
@@ -86,7 +87,22 @@ def build_task_routes(controller) -> APIRouter:
     async def list_tasks(status: str = None, limit: int = 50):
         check_secretary(controller)
         tasks = db.list_tasks(status=status, limit=limit)
-        return {"tasks": [t.to_dict() for t in tasks], "total": len(tasks)}
+        return {"tasks": [task_with_provenance(db, t) for t in tasks], "total": len(tasks)}
+
+    @router.post("/api/tasks/{task_id}/resubmit")
+    async def resubmit(task_id: str, payload: dict = None):
+        check_secretary(controller)
+        acknowledged = (payload or {}).get("acknowledge_side_effects", False)
+        if not isinstance(acknowledged, bool):
+            raise HTTPException(status_code=422, detail="确认字段必须为布尔值")
+        try:
+            return await run_in_threadpool(resubmit_task, controller, task_id, acknowledged)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=exc.args[0]) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=402, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/api/tasks/{task_id}")
     async def get_task(task_id: str):
@@ -94,7 +110,7 @@ def build_task_routes(controller) -> APIRouter:
         task = db.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
-        return task.to_dict()
+        return task_with_provenance(db, task)
 
     # ── 优化8: 取消/暂停任务 ──
 

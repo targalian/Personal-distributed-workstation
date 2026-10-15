@@ -1047,9 +1047,11 @@ function taskControlPending(task){
   return !!control&&control.state!=='confirmed';
 }
 function canResubmitTask(task){
+  if(task.resubmission?.replacement_task_id)return false;
+  if(Object.hasOwn(task.output_data||{},'_delivery'))return false;
   if(taskControlPending(task))return false;
   const confirmed=(task.output_data||{})._pm_control?.state==='confirmed';
-  if(!confirmed&&(taskExecutionIssue(task)||(task.status==='interrupted'&&task.pm_agent_id)))return false;
+  if(!confirmed&&(taskExecutionIssue(task)||['cancelled','interrupted'].includes(task.status)))return false;
   return ['interrupted','failed','cancelled'].includes(task.status);
 }
 function taskStatusText(task){
@@ -1057,6 +1059,14 @@ function taskStatusText(task){
   if(!control)return taskExecutionIssue(task)?'执行待核实':task.status;
   const action=control.action==='pause'?'暂停':'取消';
   return taskControlPending(task)?`${action}已登记 · 停止待核实`:`已${action} · ${control.scope==='not_dispatched'?'尚未派发':'PM 已确认'}`;
+}
+function taskProvenancePanel(task){
+  const links=task.resubmission||{};
+  if(!links.source_task_id&&!links.replacement_task_id)return '';
+  return `<div class="modal-sec task-provenance" style="overflow-wrap:anywhere"><h3>重提记录</h3>
+    ${links.source_task_id?`<p>来源任务：${esc(links.source_task_id)}</p><p>沿用原任务的需求版本与输入；本次执行和验收独立记录。</p>`:''}
+    ${links.replacement_task_id?`<p>替代任务：${esc(links.replacement_task_id)}</p><p>该任务已有重提记录。重复请求返回同一替代任务，删除任务不会清除此记录。若替代任务仍待派发，重试提交请求会继续派发同一任务。</p><button class="btn sm" data-replacement-task>查看替代任务</button> <button class="btn sm" data-resubmit-existing>重试提交请求</button>`:''}
+  </div>`;
 }
 function taskExecutionIssue(task){
   const output=task.output_data||{};
@@ -1120,6 +1130,7 @@ async function showTaskDetail(id){
   document.getElementById('modal').innerHTML=`<span class="modal-close" onclick="closeOverlayForce()">&times;</span><h2>${esc(t.name)}</h2><p style="color:var(--dim);font-size:13px">${esc(taskStatusText(t))} · ${fmtTime(t.created_at)}${t.completed_at?' → '+fmtTime(t.completed_at):''}</p>
   <div class="modal-sec"><h3>描述</h3><p style="font-size:14px">${esc(t.description||'-')}</p></div>
   ${deliverySec}
+  ${taskProvenancePanel(t)}
   ${taskExecutionPanel(t)}
   <div class="modal-sec"><h3>子任务 (${(t.subtasks||[]).length})</h3>${steps||'<p style="color:var(--dim)">无子任务</p>'}</div>
   <div class="modal-sec"><h3>输出结果</h3>${out}</div>
@@ -1129,6 +1140,23 @@ async function showTaskDetail(id){
     <button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="deleteTask('${t.task_id}','${escJs(t.name||'')}')">🗑️ 删除任务</button>
   </div>`;
   const checkPanel=document.querySelector('#modal .task-execution-check');
+  const replacementButton=document.querySelector('#modal [data-replacement-task]');
+  const resubmitButton=document.querySelector('#modal [data-resubmit-existing]');
+  if(resubmitButton)resubmitButton.addEventListener('click',async()=>{
+    resubmitButton.disabled=true;
+    try{await resubmitTask(id);}finally{if(resubmitButton.isConnected)resubmitButton.disabled=false;}
+  });
+  if(replacementButton)replacementButton.addEventListener('click',async()=>{
+    replacementButton.disabled=true;
+    try{
+      const response=await apiFetch(`/api/tasks/${encodeURIComponent(t.resubmission.replacement_task_id)}`);
+      if(!response.ok)throw new Error('替代任务不存在或已删除；重提记录仍然保留');
+      const current=await response.json();
+      allTasks=allTasks.filter(item=>item.task_id!==current.task_id);allTasks.push(current);
+      if(replacementButton.isConnected)showTaskDetail(current.task_id);
+    }catch(error){showToast(error.message,'err');}
+    finally{if(replacementButton.isConnected)replacementButton.disabled=false;}
+  });
   if(checkPanel){
     checkPanel.querySelector('[data-execution-check]').addEventListener('click',()=>checkTaskExecution(id,checkPanel));
     const retry=checkPanel.querySelector('[data-control-retry]');
@@ -1214,17 +1242,24 @@ async function rejectDelivery(taskId){
     else{const d=await r.json();showToast('退回失败: '+(d.detail||''),'err');}
   }catch(e){showToast('请求异常: '+e.message,'err');}
 }
+const resubmittingTasks=new Set();
 async function resubmitTask(taskId){
+  if(resubmittingTasks.has(taskId))return;
+  resubmittingTasks.add(taskId);
+  try{
   let t=allTasks.find(x=>x.task_id===taskId);if(!t)return;
   try{const response=await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}`);if(!response.ok)throw new Error('无法读取当前任务');t=await response.json();}
   catch(error){showToast('请刷新任务后重试：'+error.message,'err');return;}
-  if(!canResubmitTask(t)){showToast('任务尚不允许重新提交，请先核实原节点及当前结果','err');return;}
-  if((t.output_data||{})._pm_control&&!confirm('重新提交会创建新任务。请先确认旧任务的在途工具已经结束，并核对已有产物，继续吗？'))return;
+  const existing=!!t.resubmission?.replacement_task_id;
+  if(!existing&&!canResubmitTask(t)){showToast('任务尚不允许重新提交，请先核实原节点及当前结果','err');return;}
+  const acknowledge=!!(t.pm_agent_id||(t.output_data||{})._pm_control);
+  if(!existing&&acknowledge&&!confirm('重新提交会创建新任务，并保留原需求依据。请先确认旧任务的在途工具已经结束，并核对已有产物和费用，继续吗？'))return;
   try{
-    const r=await apiFetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:t.name,description:t.description||'',project_id:t.project_id||''})});
-    if(r.ok){const nt=await r.json();showToast(`✅ 任务已重新提交: ${nt.task_id.slice(0,8)}`,'ok');refreshTasks();}
+    const r=await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/resubmit`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({acknowledge_side_effects:acknowledge})});
+    if(r.ok){const result=await r.json();showToast(`${result.duplicate?'已找到原替代任务':'已创建替代任务'}: ${result.task.task_id}，状态：${taskStatusText(result.task)}`,'info');await refreshTasks();}
     else{const d=await r.json();showToast('重新提交失败: '+(d.detail||''),'err');}
   }catch(e){showToast('请求异常: '+e.message,'err');}
+  }finally{resubmittingTasks.delete(taskId);}
 }
 
 // ── Agent面板 ──

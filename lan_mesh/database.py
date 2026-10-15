@@ -21,7 +21,7 @@ logger = get_logger("database")
 # 每次 schema 变更时递增 SCHEMA_VERSION 并添加对应的迁移函数。
 # 迁移函数签名: (conn: sqlite3.Connection) -> None
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -102,12 +102,24 @@ def _migration_v4(conn: sqlite3.Connection):
         pass
 
 
+def _migration_v5(conn: sqlite3.Connection):
+    """Keep one durable replacement per source, including after task deletion."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS task_resubmissions (
+        source_task_id TEXT PRIMARY KEY,
+        replacement_task_id TEXT NOT NULL UNIQUE,
+        created_at REAL NOT NULL,
+        source_snapshot TEXT NOT NULL,
+        acknowledged_side_effects INTEGER NOT NULL DEFAULT 0
+    )""")
+
+
 # 迁移注册表: version → 迁移函数
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
     2: _migration_v2,
     3: _migration_v3,
     4: _migration_v4,
+    5: _migration_v5,
 }
 
 
@@ -843,7 +855,7 @@ class Database:
             self._save_task_fields(task)
         return True
 
-    def bind_task_pm(self, pm: PMAgent) -> bool:
+    def bind_task_pm(self, pm: PMAgent, validate=None) -> bool:
         """Commit task ownership and the PM row before any execution can start."""
         conn = self._get_conn()
         with conn:
@@ -853,6 +865,8 @@ class Database:
                 return False
             if self.get_pm_agent(pm.pm_id) is not None:
                 raise ValueError("PM 编号已经登记")
+            if validate is not None:
+                validate(task)
             self._save_pm_agent_fields(pm)
             conn.execute("UPDATE tasks SET pm_agent_id=?, status='running' WHERE task_id=?", (pm.pm_id, pm.task_id))
         return True
