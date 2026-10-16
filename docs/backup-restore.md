@@ -10,7 +10,7 @@
 .venv/bin/python scripts/backup_workstation.py create /外部备份目录/workstation.zip --plan
 ```
 
-默认读取配置确定主库与共享目录，收集用户状态目录 `~/.lan_mesh`、两种角色的共享目录、主库旁执行/启动回执，以及存在的项目 `.env`、resources.yaml、model_pool.yaml。状态目录内已包含 Worker 回执、配置及节点身份；共享目录内包含会话、PM 线程、项目描述修订、待审阅建议、下发记录和交付文件。
+默认读取配置确定主库与共享目录，收集用户状态目录（设置 `LAN_MESH_DATA_DIR` 时使用该绝对路径，否则为 `~/.lan_mesh`）、两种角色的共享目录、主库旁执行/启动回执，以及存在的项目 `.env`、resources.yaml、model_pool.yaml。状态目录内已包含 Worker 回执、配置及节点身份；共享目录内包含会话、PM 线程、项目描述修订、待审阅建议、下发记录和交付文件。
 
 启动时用了自定义 `--config`、`--shared` 或数据库路径，备份时也要指定。例如：
 
