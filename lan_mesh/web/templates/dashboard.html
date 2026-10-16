@@ -1087,6 +1087,7 @@ function taskExecutionPanel(task){
     <div class="task-execution-result" role="status" aria-live="polite" style="margin-top:10px;font-size:13px;white-space:pre-wrap"></div>
     <button class="btn sm" data-recovery-check style="margin-top:12px">核实恢复条件</button>
     <button class="btn sm" data-resume-task hidden>恢复原任务</button>
+    <button class="btn sm" data-continue-task hidden>继续暂停任务</button>
     <button class="btn sm" data-recovery-next style="margin-top:12px" hidden>继续核实剩余步骤</button>
     <button class="btn sm" data-question-check style="margin-top:12px">查看待回复问题</button>
     <div class="task-question-result" role="status" aria-live="polite" style="white-space:pre-wrap;margin-top:10px"></div>
@@ -1140,6 +1141,8 @@ async function checkTaskRecovery(taskId,panel,offset=0,revision=null){
   if(button.disabled)return;
   const resume=panel.querySelector('[data-resume-task]');
   resume.hidden=true;
+  const continueButton=panel.querySelector('[data-continue-task]');
+  continueButton.hidden=true;
   const previous=revision!==null?output.textContent:'';
   next.hidden=true;
   button.disabled=true;button.textContent='核实中…';output.textContent='正在读取执行现场并查询原执行回执，请稍候。';
@@ -1155,8 +1158,11 @@ async function checkTaskRecovery(taskId,panel,offset=0,revision=null){
       ...(result.steps||[]).map(step=>`${step.name}：${step.message}${step.execution_id?'（执行编号 '+step.execution_id+'）':''}`),
       ...(result.blockers||[]).map(message=>'待处理：'+message),
       '本次只读取原执行证据，不启动任务、不生成新执行编号、不修改检查点。',
-      result.resume_message||'',
-      result.resume_supported?'可申请恢复；服务端仍须排除原进程并复核授权，未知执行不会重新派发。':'当前现场不允许直接恢复。'].filter(Boolean).join('\n');
+      result.continue_message||result.resume_message||'',
+      result.continue_supported?'继续前服务端将复核暂停授权与在途调用，不能延长原时限。':result.resume_supported?'可申请恢复；服务端仍须排除原进程并复核授权，未知执行不会重新派发。':'当前现场不允许直接恢复。'].filter(Boolean).join('\n');
+    if(result.continue_supported&&Number.isInteger(result.revision)&&typeof result.pause_request_id==='string'){
+      continueButton.hidden=false;continueButton.onclick=()=>resumeOriginalTask(taskId,panel,result.continue_revision||result.revision,result.pause_request_id);
+    }
     if(result.resume_supported&&Number.isInteger(result.revision)){
       resume.hidden=false;resume.onclick=()=>resumeOriginalTask(taskId,panel,result.revision);
     }
@@ -1166,23 +1172,39 @@ async function checkTaskRecovery(taskId,panel,offset=0,revision=null){
   }catch(error){if(panel.isConnected)output.textContent='恢复核实失败：'+error.message+'。可稍后重试。';}
   finally{if(panel.isConnected){button.disabled=false;button.textContent='再次核实恢复条件';}}
 }
-async function resumeOriginalTask(taskId,panel,revision){
-  const button=panel.querySelector('[data-resume-task]');
+async function resumeOriginalTask(taskId,panel,revision,pauseRequestId=null){
+  const continuing=pauseRequestId!==null;
+  const button=panel.querySelector(continuing?'[data-continue-task]':'[data-resume-task]');
   if(button.disabled)return;
-  if(!confirm('恢复原任务会继续尚未完成的工作，并可能产生模型或工具费用。保留原时限，未知执行不重做。确认恢复？'))return;
+  if(!confirm(continuing?'继续暂停任务会复用已保存结果，并可能产生后续模型或工具费用。保留原时限。确认继续？':'恢复原任务会继续尚未完成的工作，并可能产生模型或工具费用。保留原时限，未知执行不重做。确认恢复？'))return;
   const output=panel.querySelector('.task-recovery-result');
   const check=panel.querySelector('[data-recovery-check]');
   const next=panel.querySelector('[data-recovery-next]');
   button.disabled=true;check.disabled=true;next.disabled=true;
   try{
-    const response=await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/resume`,{method:'POST',body:JSON.stringify({expected_revision:revision})});
+    const payload={expected_revision:revision,...(continuing?{pause_request_id:pauseRequestId}:{})};
+    const response=await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/${continuing?'continue':'resume'}`,{method:'POST',body:JSON.stringify(payload)});
     const result=await response.json();
     if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'恢复未获确认');
     if(result.task_id!==taskId)throw new Error('恢复返回了其他任务');
     if(!panel.isConnected)return;
     output.textContent=result.message||'请核实原任务进度';
     if(result.ok){button.hidden=true;next.hidden=true;}
-  }catch(error){if(panel.isConnected)output.textContent='恢复未获确认：'+error.message+'。可重试同一请求或重新核实原节点。';}
+    if(result.ok&&continuing){
+      try{
+        const latestResponse=await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}`);
+        const latest=await latestResponse.json();
+        if(!panel.isConnected)return;
+        if(!latestResponse.ok||latest.task_id!==taskId)throw new Error('状态刷新失败');
+        allTasks=allTasks.map(task=>task.task_id===taskId?latest:task);
+        await showTaskDetail(taskId);
+        const refreshed=document.querySelector('.task-execution-check .task-recovery-result');
+        if(refreshed)refreshed.textContent=result.message||'已继续原任务';
+      }catch(error){
+        if(panel.isConnected)output.textContent='已确认继续；状态刷新失败，请重新打开任务详情核实。';
+      }
+    }
+  }catch(error){if(panel.isConnected)output.textContent=(continuing?'继续未获确认：':'恢复未获确认：')+error.message+'。可重试同一请求或重新核实原节点。';}
   finally{if(panel.isConnected){button.disabled=false;check.disabled=false;next.disabled=false;}}
 }
 async function checkTaskQuestion(taskId,pmId,panel){
@@ -1239,7 +1261,8 @@ async function showTaskDetail(id){
   const t=allTasks.find(x=>x.task_id===id);if(!t)return;
   const stepLabels={pending:'等待执行',assigned:'已分配',running:'执行中',in_progress:'执行中',completed:'已完成',failed:'失败',blocked:'已阻塞',retrying:'重试中'};
   let steps=(t.subtasks||[]).map(s=>`<div class="task-step"><span class="step-dot ${Object.hasOwn(stepLabels,s.status)?s.status:'pending'}"></span><div class="task-step-content">${esc(s.name||s.description||'子任务')} <span style="color:var(--dim)">[${esc(stepLabels[s.status]||s.status||'未知')}]</span>${s.assigned_agent_id?' → '+esc(s.assigned_agent_id.slice(0,8)):''}${s.error?`<div class="task-step-error">${esc(s.error)}</div>`:''}</div></div>`).join('');
-  let out=t.output_data&&Object.keys(t.output_data).length?`<pre style="max-height:200px;overflow:auto">${esc(JSON.stringify(t.output_data,null,2))}</pre>`:'<p style="color:var(--dim)">暂无输出</p>';
+  const userOutput=Object.fromEntries(Object.entries(t.output_data||{}).filter(([key])=>!key.startsWith('_')));
+  let out=Object.keys(userOutput).length?`<pre style="max-height:200px;overflow:auto">${esc(JSON.stringify(userOutput,null,2))}</pre>`:'<p style="color:var(--dim)">暂无输出</p>';
   const d=t.output_data&&t.output_data._delivery;
   const deliverySec=d?`<div class="modal-sec" style="border:1px solid var(--yellow);border-radius:8px;padding:12px"><h3>📦 交付物 ${d.accepted===true?'<span style="color:var(--green)">(已验收)</span>':d.accepted===false?'<span style="color:#e5533c">(已退回)</span>':'<span style="color:var(--yellow)">(待验收)</span>'}</h3><p style="font-size:13px;white-space:pre-wrap;max-height:150px;overflow:auto">${esc(d.summary||d.deliverable||'').slice(0,500)}</p><button class="btn sm primary" onclick="closeOverlayForce();showDelivery('${t.task_id}')">查看完整交付物</button></div>`:'';
   const canAct=['running','monitoring','planning','executing'].includes(t.status);

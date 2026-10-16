@@ -29,6 +29,7 @@
 | tests/test_local_checks.py | Verify local-loop failure propagation, environment isolation and offline reports. |
 | tests/test_pm_checkpoint.py | Verify durable PM boundaries, write-failure fencing and read-only restart evidence. |
 | tests/test_pm_clarification.py | Verify question-bound replies and durable refinement continuation across process death. |
+| tests/test_pm_continue.py | Pause continuation must reuse effects, fence old work and survive partial activation. |
 | tests/test_pm_control.py | Verify stop intent, original-PM identity and acknowledgment under races and transport loss. |
 | tests/test_pm_delivery.py | Delivery outcomes must reflect persisted acknowledgements, not child progress or model errors. |
 | tests/test_pm_inspection.py | Verify original-node inspection survives restart and never redispatches or rewrites results. |
@@ -173,3 +174,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 ## 暂停现场与停止确认持久化（iter-56）
 
 新增 tests/test_pm_pause.py 覆盖四类暂停中在途返回、取消隔离、并发/冲突回报、写盘失败、控制回执持久化、损坏/错身份记录及恢复停止标志。真实子进程在暂停结果落盘后退出；Secretary→Station/Worker 本机 HTTP 验证确认丢失后原实例缺失仍可核实暂停、取消不误用旧回执。测试未证明暂停后执行恢复。
+
+## iter-57：暂停继续验收
+
+`test_pm_continue.py` 覆盖真实线程五阶段暂停、结果复用与质量分支、同进程旧实例/写者隔离、重复点击、取消竞争、二次暂停、准备/启动故障重试、子进程退出及旧代上报拒绝。原恢复 HTTP 测试同时参数化 Station/Worker 暂停继续。Chrome 验证继续、失败重试、状态刷新、输出过滤及迟到隔离。模型/工具模拟；实机多节点和真实成本不在这些证据范围。

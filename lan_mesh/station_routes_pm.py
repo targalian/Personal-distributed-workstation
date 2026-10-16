@@ -86,12 +86,14 @@ def build_pm_routes(controller) -> APIRouter:
         task_list = payload.get("task_list")
         collaboration_mode = payload.get("collaboration_mode")
 
-        db.update_pm_status(
+        changed = db.update_pm_status(
             pm_id, status,
             team_structure=team_structure,
             task_list=task_list,
-            collaboration_mode=collaboration_mode,
+            collaboration_mode=collaboration_mode, generation=payload.get("generation", ""),
         )
+        if changed is False:
+            return {"ok": True, "ignored": True, "message": "旧一轮执行状态已忽略"}
 
         # 优化7: awaiting_input 状态时附带澄清问题
         broadcast_data = {
@@ -161,23 +163,8 @@ def build_pm_routes(controller) -> APIRouter:
             message=payload.get("message", ""),
             timestamp=payload.get("timestamp", time.time()),
         )
-        db.save_progress_report(report)
-
-        # ── 关键: PM 完成/失败时同步更新任务状态 ──
-        pm_status = payload.get("status", "")
-        if pm_status in ("completed", "failed") and payload.get("reporter_type") == "pm":
-            # 通过 pm_agent_id 查找对应任务并更新状态
-            try:
-                conn = db._get_conn()
-                cursor = conn.execute(
-                    "UPDATE tasks SET status = ? WHERE pm_agent_id = ? AND status IN ('running','monitoring','planning','executing','awaiting_input')",
-                    (pm_status, pm_id),
-                )
-                conn.commit()
-                if cursor.rowcount:
-                    logger.info("PM %s 任务状态同步: running → %s", pm_id[:16], pm_status)
-            except Exception as e:
-                logger.error("任务状态同步失败: %s", e)
+        if not db.save_progress_report(report, generation=payload.get("generation", "")):
+            return {"ok": True, "ignored": True, "message": "旧一轮执行进度已忽略"}
 
         await _broadcast(state, "progress_report", {
             "pm_id": pm_id,
@@ -238,7 +225,8 @@ def build_pm_routes(controller) -> APIRouter:
             }
             merged.append(item)
 
-        db.update_task_subtasks(task_id, merged)
+        if not db.update_task_subtasks(task_id, merged, generation=payload.get("generation", ""), pm_id=pm_id):
+            return {"ok": True, "ignored": True, "message": "旧一轮子任务同步已忽略"}
         task.subtasks = merged
         await _broadcast(state, "task_updated", task.to_dict())
         return {"ok": True, "task_id": task_id, "subtasks": len(merged)}

@@ -830,6 +830,11 @@ class Database:
                                (task.task_id,)).fetchone()
             if row:
                 previous = json.loads(row["output_data"]) or {}
+                if previous.get("_pm_generation", "") != (task.output_data or {}).get("_pm_generation", ""):
+                    return  # Stale whole-task writes cannot restore a consumed pause or old authorization.
+                for key in ("_pm_continue", "_pm_control_history", "_pm_generation"):
+                    if key in previous:
+                        task.output_data = {**(task.output_data or {}), key: previous[key]}
                 if "_pm_resume" in previous:
                     task.output_data = {**(task.output_data or {}), "_pm_resume": previous["_pm_resume"]}
                     task.pm_agent_id = self.get_task(task.task_id).pm_agent_id
@@ -946,7 +951,7 @@ class Database:
             task.project_id, task.pm_agent_id,
         ))
 
-    def record_task_delivery(self, task_id: str, pm_id: str, delivery: dict) -> dict:
+    def record_task_delivery(self, task_id: str, pm_id: str, delivery: dict, generation: str = "") -> dict:
         """Atomically save one immutable delivery, or acknowledge an identical retry."""
         conn = self._get_conn()
         with conn:
@@ -957,6 +962,8 @@ class Database:
             if task.pm_agent_id != pm_id:
                 raise ValueError("交付 PM 与任务当前关联的 PM 不一致")
             output = task.output_data or {}
+            if output.get("_pm_generation", "") != generation:
+                raise ValueError("交付属于旧一轮执行，不能修改当前任务")
             existing = output.get("_delivery")
             if existing is not None:
                 fields = ("pm_id", "deliverable", "summary", "subtask_stats")
@@ -1045,6 +1052,7 @@ class Database:
                 "state": "pending" if dispatched else "confirmed",
                 "scope": "pm_cooperative" if dispatched else "not_dispatched",
                 "requested_at": time.time(),
+                **({"generation": data["_pm_generation"]} if data.get("_pm_generation") else {}),
                 "message": "停止意图已登记，等待原节点确认" if dispatched else "任务已停止，尚未派发到 PM",
             }
             conn.execute("UPDATE tasks SET status=?,output_data=? WHERE task_id=?",
@@ -1106,15 +1114,19 @@ class Database:
         conn.commit()
         return cursor.rowcount > 0
 
-    def update_task_subtasks(self, task_id: str, subtasks: list):
+    def update_task_subtasks(self, task_id: str, subtasks: list, *, generation=None, pm_id=None):
         """更新任务的子任务列表 (PM 同步进度用)。"""
         import json
         conn = self._get_conn()
-        conn.execute(
-            "UPDATE tasks SET subtasks = ? WHERE task_id = ?",
-            (json.dumps(subtasks, ensure_ascii=False), task_id),
-        )
-        conn.commit()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self.get_task(task_id)
+            if generation is not None and (not task or task.pm_agent_id != pm_id
+                    or (task.output_data or {}).get("_pm_generation", "") != generation):
+                return False
+            conn.execute("UPDATE tasks SET subtasks = ? WHERE task_id = ?",
+                         (json.dumps(subtasks, ensure_ascii=False), task_id))
+        return True
 
     def list_tasks(self, status: str = None, limit: int = 50) -> list[Task]:
         """列出任务,可按状态过滤。"""
@@ -1470,7 +1482,7 @@ class Database:
 
     def update_pm_status(self, pm_id: str, status: str,
                          team_structure: dict = None, task_list: list = None,
-                         collaboration_mode: str = None):
+                         collaboration_mode: str = None, generation: str = ""):
         """更新 PM Agent 状态 (由 Worker 上报)。"""
         conn = self._get_conn()
         sets = ["status = ?", "updated_at = ?"]
@@ -1487,6 +1499,8 @@ class Database:
         params.append(pm_id)
         with conn:
             conn.execute("BEGIN IMMEDIATE")
+            if not self.pm_generation_matches(pm_id, generation):
+                return False
             protected = conn.execute("SELECT status FROM tasks WHERE pm_agent_id=? AND status IN ('cancelled','paused')", (pm_id,)).fetchone()
             if protected and status != protected["status"]:
                 return
@@ -1505,6 +1519,8 @@ class Database:
                     if changed:
                         conn.execute("UPDATE tasks SET output_data=? WHERE task_id=?",
                                      (json.dumps(output, ensure_ascii=False), row["task_id"]))
+
+        return True
 
     # ── Agent Team CRUD ──────────────────────────────────────────
 
@@ -1591,20 +1607,29 @@ class Database:
 
     # ── Progress Report CRUD ─────────────────────────────────────
 
-    def save_progress_report(self, report: ProgressReport):
-        """保存进度报告。"""
+    def pm_generation_matches(self, pm_id: str, generation: str) -> bool:
+        row = self._get_conn().execute("SELECT output_data FROM tasks WHERE pm_agent_id=?", (pm_id,)).fetchone()
+        return not row or (json.loads(row["output_data"]) or {}).get("_pm_generation", "") == generation
+
+    def save_progress_report(self, report: ProgressReport, generation: str = "") -> bool:
+        """Save reports and terminal task status under the same generation check."""
         conn = self._get_conn()
-        conn.execute("""
-            INSERT INTO progress_reports (
-                pm_id, reporter_id, reporter_type, task_name,
-                progress, status, message, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            report.pm_id, report.reporter_id, report.reporter_type,
-            report.task_name, report.progress, report.status,
-            report.message, report.timestamp,
-        ))
-        conn.commit()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self.pm_generation_matches(report.pm_id, generation):
+                return False
+            conn.execute("""
+                INSERT INTO progress_reports (
+                    pm_id, reporter_id, reporter_type, task_name,
+                    progress, status, message, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (report.pm_id, report.reporter_id, report.reporter_type, report.task_name,
+                  report.progress, report.status, report.message, report.timestamp))
+            if report.status in ("completed", "failed") and report.reporter_type == "pm":
+                conn.execute("UPDATE tasks SET status=? WHERE pm_agent_id=? "
+                             "AND status IN ('running','monitoring','planning','executing','awaiting_input')",
+                             (report.status, report.pm_id))
+        return True
 
     # ── Chat History CRUD ─────────────────────────────────────────
 

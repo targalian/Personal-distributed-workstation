@@ -313,7 +313,8 @@ time.sleep(10)
 
 
 @pytest.mark.parametrize('mode', ['station', 'worker'])
-def test_remote_resume_via_real_http_and_original_receipt(recovery, monkeypatch, mode):
+@pytest.mark.parametrize('continuing', [False, True])
+def test_remote_resume_via_real_http_and_original_receipt(recovery, monkeypatch, mode, continuing):
     import requests
     from fastapi import FastAPI
 
@@ -369,11 +370,22 @@ def test_remote_resume_via_real_http_and_original_receipt(recovery, monkeypatch,
         state.execution_attempts = {'A': {**identity, 'phase': 'active', 'station': {
             'device_id': 'executor', 'ip': '127.0.0.1', 'api_port': executor_port}}}
         state.dispatched = {'A'}
+        if continuing:
+            paused = ctl.db.begin_task_control('task-resume', 'pause')
+            pause_id = paused.output_data['_pm_control']['request_id']
+            ctl.db.finish_task_control('task-resume', pause_id, True, 'confirmed pause')
+            state.pause = {'format': 1, 'source_phase': state.phase, 'returned': {}}
+            state.phase, state.stop_reason = 'paused', 'paused'
+            state.stop_event.set()
+            state.control_receipt = dict(ok=True, pm_id='pm-resume', task_id='task-resume', device_id='remote-node',
+                                        request_id=pause_id, action='pause', scope='pm_cooperative')
         PMCheckpoints(path, owner='original-process', lease=lease_identity(path)).save('pm-resume', 'task-resume', 'remote-node',
             {**state.snapshot(), 'secretary_url': f'http://127.0.0.1:{secretary_port}'}, 0)
         with live_server(node_app) as node_port:
             ctl.db.upsert_pm_agent(PMAgent(pm_id='pm-resume', task_id='task-resume', device_id='remote-node', ip='127.0.0.1', api_port=node_port))
-            response = requests.post(f'http://127.0.0.1:{secretary_port}/api/tasks/task-resume/resume', json={'expected_revision': 1}, timeout=10)
+            route = 'continue' if continuing else 'resume'
+            payload = {'expected_revision': 1, **({'pause_request_id': pause_id} if continuing else {})}
+            response = requests.post(f'http://127.0.0.1:{secretary_port}/api/tasks/task-resume/{route}', json=payload, timeout=10)
             assert response.status_code == 200 and response.json()['ok'], response.text
             pm = current()
             pm._thread.join(timeout=3)

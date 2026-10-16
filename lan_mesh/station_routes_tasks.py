@@ -168,6 +168,37 @@ def build_task_routes(controller) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(409, str(exc))
 
+    @router.post("/api/tasks/{task_id}/continue")
+    async def continue_task(task_id: str, payload: dict):
+        check_secretary(controller)
+        from .task_continue import request_task_continue
+        try:
+            result = await run_in_threadpool(request_task_continue, controller, task_id,
+                                            payload.get("expected_revision"), payload.get("pause_request_id"))
+            return JSONResponse(result, status_code=200 if result.get("ok") else 202)
+        except KeyError:
+            raise HTTPException(404, "任务不存在")
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+
+    @router.get("/api/tasks/{task_id}/continue-authorization")
+    async def get_continue_authorization(task_id: str, request_id: str):
+        return await continuation_authorization(task_id, request_id)
+
+    @router.post("/api/tasks/{task_id}/continue-activation")
+    async def activate_continuation(task_id: str, payload: dict):
+        return await continuation_authorization(task_id, payload.get("request_id", ""), activate=True)
+
+    async def continuation_authorization(task_id, request_id, activate=False):
+        check_secretary(controller)
+        from .task_continue import continue_authorization
+        try:
+            return await run_in_threadpool(continue_authorization, controller, task_id, request_id, activate=activate)
+        except KeyError:
+            raise HTTPException(404, "任务不存在")
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+
     @router.get("/api/tasks/{task_id}/resume-authorization")
     async def get_resume_authorization(task_id: str, request_id: str):
         check_secretary(controller)
@@ -300,7 +331,7 @@ def build_task_routes(controller) -> APIRouter:
             "subtask_stats": subtask_stats, "delivered_at": payload.get("delivered_at", time.time()),
         }
         try:
-            result = db.record_task_delivery(task_id, pm_id, delivery)
+            result = db.record_task_delivery(task_id, pm_id, delivery, generation=payload.get("generation", ""))
         except KeyError as exc:
             raise HTTPException(404, exc.args[0]) from exc
         except ValueError as exc:

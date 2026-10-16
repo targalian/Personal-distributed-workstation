@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .http_retry import http_get
+from .pm_activity import activity
 from .pm_agent import ProjectManagerAgent
 from .pm_checkpoint import PMCheckpoints, read_checkpoint
 from .pm_dispatcher import PMDispatcher
@@ -14,7 +15,7 @@ from .pm_recovery import _receipt_status
 from .pm_start import _START_LOCK
 
 
-def validate_snapshot(snapshot: dict, pm_id: str, task_id: str) -> None:
+def validate_snapshot(snapshot: dict, pm_id: str, task_id: str, *, paused_results=False) -> None:
     """Reject ambiguous local effects; remote effects retain their original IDs."""
     if (snapshot.get('stopped') or snapshot.get('stop_reason') or snapshot.get('terminal_failures')
             or snapshot.get('phase') in ('completed', 'failed')):
@@ -59,7 +60,9 @@ def validate_snapshot(snapshot: dict, pm_id: str, task_id: str) -> None:
                 raise ValueError('原执行归属不匹配')
             report = attempt.get('received_result')
             if report:
-                if _receipt_status(attempt, {**report, 'name': report.get('task_name')}) != 'receipt_completed':
+                status = _receipt_status(attempt, {**report, 'name': report.get('task_name')})
+                if status != 'receipt_completed' and not (paused_results and status in ('failed', 'result_unknown')
+                        and report.get('status') in ('failed', 'unknown')):
                     raise ValueError('原结果失败、未知或身份不符，不能自动续跑')
             elif not attempt.get('station') or attempt.get('phase') != 'active':
                 raise ValueError('原执行没有可核实的在途回执，不能重做')
@@ -72,6 +75,7 @@ def validate_snapshot(snapshot: dict, pm_id: str, task_id: str) -> None:
             raise ValueError('步骤已派发但缺少执行编号，不能重做')
 
 
+@activity
 def _run_resumed(pm: ProjectManagerAgent) -> None:
     st = pm._state
     keep_monitoring = False
@@ -118,6 +122,10 @@ def _run_resumed(pm: ProjectManagerAgent) -> None:
 
 def resume_pm_once(*, payload: dict, receipt_path: Path, runtime, device_id: str,
                    device_name: str, current, assign, authorization=None) -> dict:
+    if "pause_request_id" in payload:
+        from .pm_continue import continue_pm_once
+        return continue_pm_once(payload=payload, receipt_path=receipt_path, runtime=runtime, device_id=device_id,
+                                device_name=device_name, current=current, assign=assign, authorization=authorization)
     identity = {k: payload.get(k) for k in ('pm_id', 'task_id', 'device_id', 'request_id', 'expected_revision')}
     result = {'ok': False, **identity}
     claimed_pm = None
@@ -163,6 +171,8 @@ def resume_pm_once(*, payload: dict, receipt_path: Path, runtime, device_id: str
                 raise ValueError('当前节点已有运行中的 PM')
             validate_snapshot(snapshot, identity['pm_id'], identity['task_id'])
             authorized()
+            from .pm_activity import retire_instances
+            retire_instances(receipt_path, identity['pm_id'])
             store = PMCheckpoints(receipt_path, lease=lease)
             claim = store.takeover(identity['pm_id'], identity['task_id'], device_id,
                                    identity['expected_revision'], identity['request_id'])

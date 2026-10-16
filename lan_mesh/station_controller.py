@@ -550,6 +550,10 @@ class StationController:
         # Local Secretary lookup is used only when this node owns the task.
         task = self.db.get_task(payload.get("task_id", "")) if self.secretary_active else None
         authorization = (lambda task_id, request_id: resume_authorization(self, task_id, request_id)) if task else None
+        if task and "pause_request_id" in payload:
+            from .task_continue import continue_authorization
+            authorization = lambda task_id, request_id, activate=False: continue_authorization(
+                self, task_id, request_id, activate=activate)
         return resume_pm_once(payload=payload,
                               receipt_path=self.db.path.with_name(self.db.path.stem + "-pm-starts.sqlite3"),
                               runtime=self.chat_runtime, device_id=self.state.device_id, device_name=self.state.device_name,

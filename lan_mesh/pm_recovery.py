@@ -164,6 +164,26 @@ def assess_pm_recovery(path: Path, pm_id: str, task_id: str, device_id: str, cur
                 result["resume_message"] = "该现场缺少原进程排除凭据，或已迁移；不能直接续跑"
         except (ValueError, KeyError, TypeError) as exc:
             result["resume_message"] = str(exc)
+        if snapshot.get("stop_reason") == "paused":
+            from .pm_activity import retire_instances
+            from .pm_continue import continuation_snapshot
+            pause_id = snapshot.get("control_receipt", {}).get("request_id", "")
+            result["pause_request_id"] = pause_id
+            result["continue_supported"] = False
+            try:
+                continuation_snapshot(snapshot, pm_id, task_id, pause_id)
+                retire_instances(path, pm_id, commit=False)
+                if not lease["machine"] or snapshot.get("process_lease") != lease:
+                    raise ValueError("暂停现场不在原 Linux 主机原路径，不能继续")
+                result["continue_supported"] = True
+                prepared = snapshot.get("continuation", {})
+                if prepared.get("state") == "prepared" and prepared.get("pause_request_id") == pause_id:
+                    result["continue_revision"] = prepared["expected_revision"]
+                    result["continue_request_id"] = prepared["request_id"]
+                result["continue_message"] = "可申请继续暂停任务；沿用原时限，原始结果仍需质量检查"
+                result["blockers"] = [b for b in result["blockers"] if b != "检查点包含停止意图，不能直接恢复"]
+            except (ValueError, KeyError, TypeError) as exc:
+                result["continue_message"] = str(exc)
         unresolved = any(s["state"] not in ("saved_completed", "receipt_completed", "unstarted") for s in result["steps"])
         result["state"] = "review_required" if unresolved or result["blockers"] else "evidence_complete"
         if offset or result["next_offset"] is not None:
@@ -194,7 +214,7 @@ def assess_task_recovery(controller, task_id: str, offset: int = 0, expected_rev
         if (not isinstance(evidence, dict) or evidence.get("format") != 1 or evidence.get("pm_id") != pm.pm_id
                 or evidence.get("task_id") != task_id or evidence.get("device_id") != pm.device_id):
             return {**result, "state": "mismatch", "blockers": ["返回的节点或任务归属不匹配"]}
-        allowed = ("state", "revision", "checkpoint_at", "checked_at", "blockers", "offset", "next_offset", "total_steps", "resume_message")
+        allowed = ("state", "revision", "checkpoint_at", "checked_at", "blockers", "offset", "next_offset", "total_steps", "resume_message", "continue_message", "pause_request_id", "continue_revision", "continue_request_id")
         if (evidence.get("state") not in ("unavailable", "missing", "running", "changed", "mismatch", "review_required", "evidence_complete", "partial")
                 or not isinstance(evidence.get("steps"), list) or len(evidence["steps"]) > 150
                 or not isinstance(evidence.get("blockers"), list)
@@ -202,6 +222,7 @@ def assess_task_recovery(controller, task_id: str, offset: int = 0, expected_rev
             raise ValueError("恢复核实响应格式错误")
         result.update({k: evidence[k] for k in allowed if k in evidence})
         result["resume_supported"] = evidence.get("resume_supported") is True
+        result["continue_supported"] = evidence.get("continue_supported") is True
         for step in evidence["steps"]:
             if (not isinstance(step, dict) or step.get("state") not in STEP_MESSAGES
                     or not isinstance(step.get("name"), str) or not isinstance(step.get("execution_id"), str)):
@@ -215,7 +236,23 @@ def assess_task_recovery(controller, task_id: str, offset: int = 0, expected_rev
     if (latest is None or latest.pm_agent_id != task.pm_agent_id or latest.status != task.status
             or latest.output_data != task.output_data or latest_pm is None
             or any(getattr(latest_pm, key) != getattr(pm, key) for key in ("task_id", "device_id", "ip", "api_port"))):
-        return {**result, "state": "changed", "steps": [], "blockers": ["查询期间任务变化，请刷新任务后重试"]}
+        return {**result, "state": "changed", "steps": [], "continue_supported": False, "resume_supported": False,
+                "blockers": ["查询期间任务变化，请刷新任务后重试"]}
+    if result.get("continue_supported"):
+        from .task_continue import _eligible
+        try:
+            request = task.output_data.get("_pm_continue", {})
+            prepared = bool(result.get("continue_request_id") and request.get("request_id") == result["continue_request_id"])
+            _eligible(controller, task, request if prepared else None)
+            pause_id = request.get("pause_request_id") if prepared else task.output_data["_pm_control"]["request_id"]
+            if pause_id != result.get("pause_request_id"):
+                raise ValueError("原暂停请求不匹配，请重新核实")
+        except (KeyError, ValueError) as exc:
+            result["continue_supported"] = False
+            result["continue_message"] = str(exc)
+    if result.get("continue_supported"):
+        result["resume_supported"] = False
+        return result
     if task.status not in ("running", "planning", "executing", "monitoring", "awaiting_input", "interrupted"):
         result["blockers"].append("当前任务状态不允许直接恢复")
     if "_delivery" in task.output_data or "_pm_control" in task.output_data:

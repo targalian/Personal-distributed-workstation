@@ -41,7 +41,7 @@ def prepare_resume(controller, task_id: str, revision: int) -> dict:
                 return {k: v for k, v in earlier.items() if k != 'history'}
         request = {'request_id': uuid.uuid4().hex, 'pm_id': pm.pm_id, 'task_id': task_id,
                    'device_id': pm.device_id, 'expected_revision': revision, 'state': 'authorized',
-                   'authorized_at': time.time()}
+                   'authorized_at': time.time(), 'generation': (task.output_data or {}).get('_pm_generation', '')}
         if previous:
             request['history'] = [*history, {k: v for k, v in previous.items() if k != 'history'}]
         output = {**(task.output_data or {}), '_pm_resume': request}
@@ -59,7 +59,8 @@ def resume_authorization(controller, task_id: str, request_id: str) -> dict:
         latest = (task.output_data or {}).get('_pm_resume', {})
         request = next((r for r in [latest, *latest.get('history', [])] if r.get('request_id') == request_id), {})
         if (not request_id or request.get('request_id') != request_id
-                or request.get('pm_id') != pm.pm_id or request.get('device_id') != pm.device_id):
+                or request.get('pm_id') != pm.pm_id or request.get('device_id') != pm.device_id
+                or request.get('generation', '') != (task.output_data or {}).get('_pm_generation', '')):
             raise ValueError('恢复授权已变化，请重新核实')
         return {'authorization': dict(request), 'task': task.to_dict()}
 

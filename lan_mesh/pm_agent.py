@@ -9,6 +9,7 @@ from typing import Optional
 
 from .http_retry import http_post, http_get
 from .logger import get_logger
+from .pm_activity import activity, register
 from .pm_state import PMState
 from .pm_planner import PMPlanner
 from .pm_dispatcher import PMDispatcher
@@ -40,6 +41,7 @@ class ProjectManagerAgent:
         self._checkpoint_error = False
         self._resume_authorization = None
         self._state.persist = self.checkpoint
+        register(self)
 
         # ── 子组件 ──
         self._planner = PMPlanner(pm_id, agent_runtime, self._state, self)
@@ -62,7 +64,7 @@ class ProjectManagerAgent:
         """Stop future scheduling if durable evidence cannot be written."""
         st = self._state
         with st.lock:
-            if self._checkpoint_error:
+            if self._checkpoint_error or self._retired:
                 return False
             if st.stop_event.is_set() and phase and phase != st.stop_reason:
                 return False
@@ -140,6 +142,7 @@ class ProjectManagerAgent:
             "checkpoint_error": self._checkpoint_error,
         }
 
+    @activity
     def _run_task(self, task: dict):
         st = self._state
         keep_monitoring = False
@@ -163,7 +166,9 @@ class ProjectManagerAgent:
             self.report_status("planning")
             if not self.checkpoint("planning"):
                 return
-            plan = self._planner.analyze_with_skill(task)
+            plan = st.pause.get("returned", {}).get("planning")
+            if plan is None:
+                plan = self._planner.analyze_with_skill(task)
             if st.stop_event.is_set():
                 from .pm_pause import retain_paused_result
                 retain_paused_result(self, "planning", plan)
@@ -322,6 +327,7 @@ class ProjectManagerAgent:
         }
         self._monitor.receive_progress_report(report)
 
+    @activity
     def receive_input(self, input_data: dict) -> dict:
         from .pm_clarification import receive_answer
         return receive_answer(self, input_data)
@@ -350,7 +356,7 @@ class ProjectManagerAgent:
         if status in ("completed", "failed") and not self.checkpoint(status):
             return
         try:
-            payload = {"status": status}
+            payload = {"status": status, "generation": self._state.generation}
             if clarification is not None:
                 payload.update(clarification_question=clarification["question"],
                                clarification_options=clarification["options"],
@@ -389,6 +395,7 @@ class ProjectManagerAgent:
                 f"{self.secretary_url}/api/pm/{self.pm_id}/progress",
                 json={
                     "pm_id": self.pm_id,
+                    "generation": self._state.generation,
                     "reporter_id": reporter_id or self.pm_id,
                     "reporter_type": reporter_type,
                     "task_name": task_name,
@@ -414,6 +421,7 @@ class ProjectManagerAgent:
                 json={
                     "task_id": (self._state.task or {}).get("task_id", ""),
                     "subtasks": subtasks,
+                    "generation": self._state.generation,
                 },
                 timeout=5, retries=2,
             )
@@ -500,7 +508,7 @@ class ProjectManagerAgent:
         try:
             resp = http_post(
                 f"{self.secretary_url}/api/pm/{self.pm_id}/deliver",
-                json=delivery,
+                json={**delivery, "generation": self._state.generation},
                 timeout=10,
             )
             ack = resp.json() if resp.status_code == 200 else {}

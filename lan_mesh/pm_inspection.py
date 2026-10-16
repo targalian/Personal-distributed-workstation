@@ -40,10 +40,13 @@ def inspect_pm_start(path: Path, pm_id: str, task_id: str, device_id: str, curre
                 and control.get('ok') is True and control.get('scope') == 'pm_cooperative'
                 and control.get('pm_id') == pm_id and control.get('task_id') == task_id
                 and control.get('device_id') == device_id and control.get('request_id')
+                and control.get('generation', '') == snapshot.get('generation', '')
                 and control.get('action') in ('pause', 'cancel')
                 and snapshot.get('stop_reason') == ('paused' if control['action'] == 'pause' else 'cancelled')):
             result['control_receipt'] = {key: control[key] for key in
                 ('ok', 'scope', 'pm_id', 'task_id', 'device_id', 'request_id', 'action')}
+            if control.get('generation'):
+                result['control_receipt']['generation'] = control['generation']
     if path.is_file():
         with closing(sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True, timeout=5)) as conn:
             table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='execution_receipts'").fetchone()

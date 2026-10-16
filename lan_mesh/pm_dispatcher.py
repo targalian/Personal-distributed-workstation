@@ -20,6 +20,7 @@ import requests
 from .agent_prompt import build_subagent_prompt, build_dispatch_context
 from .http_retry import auth_headers, http_get
 from .logger import get_logger
+from .pm_activity import activity
 from .pm_state import PMState
 from .execution_routes import normalize_result
 
@@ -70,6 +71,7 @@ class PMDispatcher:
         except CycleError as exc:
             raise ValueError("子任务计划存在循环依赖") from exc
 
+    @activity
     def create_team_and_dispatch(self, task: dict, plan: dict):
         """根据规划创建团队并分发子任务 (依赖感知拓扑排序)。
 
@@ -230,6 +232,7 @@ class PMDispatcher:
                 return None
             return attempt
 
+    @activity
     def dispatch_subtask(self, station: dict, agent_info: dict, task: dict,
                          sub: dict, plan: dict = None):
         """Dispatch once; uncertain responses are resolved by polling the original station."""
@@ -425,6 +428,7 @@ class PMDispatcher:
 
     # ── 本地执行 ──────────────────────────────────────────────────
 
+    @activity
     def execute_subtask_locally(self, task: dict, sub: dict):
         """在本地执行子任务 (无可用远程站点时)。
 

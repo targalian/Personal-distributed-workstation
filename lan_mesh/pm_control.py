@@ -29,6 +29,8 @@ def control_pm(current: Callable, device_id: str, payload: dict) -> dict:
             if (pm.pm_id != identity["pm_id"] or pm._state.task.get("task_id") != identity["task_id"]
                     or pm.device_id != device_id):
                 return {"ok": False, "message": "当前 PM 或任务不匹配，未停止其他任务"}
+            if payload.get("generation", "") != pm._state.generation:
+                return {"ok": False, "message": "停止请求属于旧一轮执行，未停止新实例"}
             if pm._state.stop_reason == "cancelled" and identity["action"] == "pause":
                 return {"ok": False, "message": "PM 已取消，拒绝晚到的暂停请求"}
             if pm._state.phase in ("completed", "failed"):
@@ -37,6 +39,8 @@ def control_pm(current: Callable, device_id: str, payload: dict) -> dict:
                     and pm._state.stop_event.is_set()):
                 return dict(pm._state.control_receipt)
             receipt = {"ok": True, **identity, "scope": "pm_cooperative"}
+            if pm._state.generation:
+                receipt["generation"] = pm._state.generation
             previous = dict(pm._state.control_receipt)
             pm._state.control_receipt = receipt
             pm._signal_stop("cancelled" if identity["action"] == "cancel" else "paused")
@@ -70,6 +74,8 @@ def request_task_control(controller: "StationController", task_id: str, action: 
         if pm and pm.task_id == task_id:
             request = {"pm_id": pm.pm_id, "task_id": task_id, "device_id": pm.device_id,
                        "request_id": control["request_id"], "action": action}
+            if control.get("generation"):
+                request["generation"] = control["generation"]
             try:
                 if pm.device_id == controller.state.device_id:
                     receipt = controller._local_control_pm(request)

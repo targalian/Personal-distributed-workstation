@@ -9,9 +9,11 @@
 | 文件/目录 | 职责一句话 |
 |---|---|
 | orchestrator.py | 任务编排引擎 — 已废弃, 降级为工具库 (iter-30 收敛裁定) |
+| pm_activity.py | Track PM work and close old instances before a paused task changes execution owner. |
 | pm_agent.py | PM Agent 协调器/门面 — 持有 Planner/Dispatcher/Monitor, 对外暴露统一接口。 |
 | pm_checkpoint.py | Persist PM execution snapshots before side effects and expose read-only recovery evidence. |
 | pm_clarification.py | Persist question identities and answers before acknowledging or continuing a PM. |
+| pm_continue.py | Continue paused PMs with quiescence, fenced writers and a retryable activation boundary. |
 | pm_control.py | Apply identity-bound PM stop requests and persist the distinction between intent and acknowledgment. |
 | pm_dispatcher.py | PM 分发器 — 团队创建与子任务分发 |
 | pm_inspection.py | Read original-node PM evidence without dispatching work or changing task state. |
@@ -25,6 +27,7 @@
 | pm_state.py | PM Agent 共享状态容器 |
 | project.py | 项目管理与预算控制 — Phase 3 项目隔离核心 |
 | task.py | 任务 DAG 管理 — 子任务依赖图与拓扑排序 (增强版: 条件边 + 动态路由 + 图序列化) |
+| task_continue.py | Authorize pause continuation, then activate only after the original node claims it. |
 | task_resubmission.py | Transactional task resubmission with preserved inputs and durable source provenance. |
 | task_resume.py | Persist explicit, version-bound recovery authorization on the task's original PM. |
 | task_submission.py | Shared task submission: persist PM ownership before any local or remote execution. |
@@ -209,3 +212,7 @@ PMState.restore 恢复原计划、请求编号、输出和剩余时间语义；�
 ## 暂停现场与停止确认持久化（iter-56）
 
 新增 `pm_pause.py` 保存暂停前阶段与在途结果。规划和聚合原响应存入 pause.returned；直接执行结果按原执行编号保存；子任务回报核对完整身份，保留首份终态记录，不覆盖冲突结果。暂停期间不运行质量检查、重试、后续依赖或交付；取消后继续拒绝晚到结果。PMState.restore 保留停止信号；普通服务退出不覆盖暂停、取消或检查点故障。此轮完成续跑所需的持久化前置条件，尚未开放暂停继续。
+
+## iter-57：暂停继续
+
+`pm_activity` 追踪原 PM 阻塞调用和回调，封闭已退出实例；`pm_continue` 完成原路径进程排除、版本接管、准备/启动两阶段记录和新实例执行；`task_continue` 负责秘书授权及事务激活。复用原规划/执行/聚合响应、编号和截止时间；旧请求与旧写者隔离。准备后失败可重试，启动后进程退出走普通恢复。详见 [检查点](../../pm-checkpoints.md) 与 [操作说明](../../task-recovery.md)。

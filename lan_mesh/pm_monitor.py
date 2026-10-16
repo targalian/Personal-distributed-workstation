@@ -16,6 +16,7 @@ from typing import Optional
 
 from .agent_prompt import build_aggregation_prompt
 from .logger import get_logger
+from .pm_activity import activity
 from .pm_state import PMState
 
 logger = get_logger("pm.monitor")
@@ -46,6 +47,7 @@ class PMMonitor:
 
     # ── 进度轮询 ──────────────────────────────────────────────────
 
+    @activity
     def progress_loop(self):
         """定期收集进度并上报 Secretary (优化4: 全部完成后触发聚合)。"""
         _aggregated = False
@@ -94,6 +96,7 @@ class PMMonitor:
 
     # ── 接收进度上报 ──────────────────────────────────────────────
 
+    @activity
     def receive_progress_report(self, report: dict):
         """接收子 Agent 主动上报的进度 (通过 Worker API 转发)。
 
@@ -398,6 +401,7 @@ class PMMonitor:
 
     # ── 优化4: 结果聚合 ───────────────────────────────────────────
 
+    @activity
     def aggregate_results(self):
         """收集所有子任务结果, 调用 LLM 聚合为最终交付物。"""
         st = self._state
@@ -439,10 +443,12 @@ class PMMonitor:
             if not st.persist("aggregating"):
                 return
             try:
-                resp = self._runtime._call_llm_with_routing(
-                    agg_prompt,
-                    {"_model_preference": "", "_fallback_models": [], "description": "结果聚合"}
-                )
+                resp = st.pause.get("returned", {}).get("aggregation")
+                if resp is None:
+                    resp = self._runtime._call_llm_with_routing(
+                        agg_prompt,
+                        {"_model_preference": "", "_fallback_models": [], "description": "结果聚合"}
+                    )
                 with st.lock:
                     if st.stop_event.is_set():
                         from .pm_pause import retain_paused_result

@@ -257,3 +257,7 @@ Secretary 新增 GET `/api/pm/{pm_id}/clarification`；Station/Worker 新增 GET
 ## 暂停现场与停止确认持久化（iter-56）
 
 停止请求只有原 PM 检查点保存成功才返回确认；保存失败保留中央待核实状态。相同请求重发复用已存确认且不重复写检查点。原节点只读启动核实可从检查点返回身份匹配的历史控制回执；Secretary 本机及远端在确认丢失时都可核实，取消请求不采信旧暂停回执。
+
+## iter-57：继续授权与秘书写入隔离
+
+新增任务 continue/continue-authorization/continue-activation 接口，准备保留暂停，原节点接管后事务激活；归档原停止记录，替换执行代号并撤销旧恢复授权。数据库在状态/进度/子任务/交付写入事务内核对代号，拒绝旧整任务跨代覆盖。详情继续成功刷新当前状态。无 schema 迁移；详见 [任务恢复](../../task-recovery.md)。

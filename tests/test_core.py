@@ -1463,6 +1463,8 @@ class _RecordingAgent:
 
     def __init__(self):
         self.calls = []
+        self._retired = False
+        self._activities = 0
 
     def __getattr__(self, name):
         def _record(*args, **kwargs):
