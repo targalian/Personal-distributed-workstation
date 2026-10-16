@@ -1,7 +1,7 @@
 {
-  "version": "0.34.18",
-  "commit": "8ac8578",
+  "version": "0.34.19",
+  "commit": "cd46109",
   "released_at": "2026-10-16",
-  "note": "Linux源码发布门禁及数据目录隔离；Actions 38874316383在干净Ubuntu22.04/Python3.10.22通过768项单测、Chrome和真实启动退出。EN未启用强制分支保护；真实模型/物理多机/升级回退/72小时仍待验收。",
-  "upgrade_hint": "无在途任务时升级所有参与节点：git pull && pip install -r requirements.txt 后重启；旧异步节点不支持执行回执，已有在途结果需先核实"
+  "note": "主库迁移前快照通过校验和同步后独占发布，schema全事务回滚，未来版本拒绝启动；临时真实Station离线原路径恢复及目录回退通过。784项单测、本地8/8、Chrome、启动退出通过；生产/多机/历史二进制组合仍待验收。",
+  "upgrade_hint": "先停止所有参与节点及外部写入，核实在途任务并创建完整离线备份；保留原代码和依赖。Linux x86_64/Python3.10 按 requirements-linux-py310.lock 安装后重启验收；迁移前主库快照不替代完整节点备份，回退见 docs/schema-upgrades.md。"
 }
