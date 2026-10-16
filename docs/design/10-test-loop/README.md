@@ -30,6 +30,7 @@ iter-58 新增 `tests/test_release_checks.py`：独立进程验证数据默认�
 | test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
 | tests/test_backup.py | Restore real task, brief and receipt stores; reject corrupt or unsafe backup archives. |
 | tests/test_brief_generation.py | Background generation: paid request deduplication, crash evidence and edit safety. |
+| tests/test_brief_readiness.py | Decision compatibility, advisory readiness and immutable handoff evidence. |
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_database_upgrade.py | Verify schema upgrade rollback, pre-write snapshots and recovery across real processes. |
 | tests/test_delivery_replay.py | Concurrent delivery retries must preserve the reviewed artifact and acceptance decision. |
@@ -192,3 +193,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 ### iter-61 后台整理验证
 
 `tests/test_brief_generation.py` 覆盖实际线程并发/去重、同进程重新创建处理器、独立进程退出与租约、文档/建议冲突、失效输出、写盘失败、线程创建失败、并发上限、固定输入以及离线备份恢复。浏览器脚本补后台整理回归：提交回执丢失后刷新、生成期间编辑/保存/切换、晚到状态隔离、过期候选下载、错误终态与桌面/手机截图。它们验证接口和存储行为，不替代真实模型与物理多机验收。
+
+### iter-62 决策与检查验证
+
+新增 `tests/test_brief_readiness.py`：占位词、导航字段、自由文本不推断、结论逐项采纳/导出/历史恢复、旧文档和建议默认值只读兼容、检查接口不写文件不派发、下发检查快照固定与旧记录兼容。Chrome 补待讨论增改/确认/重开/撤销/刷新、DAG 字段定位、检查与草稿保护/冲突/晚到查询、整理前状态核实和桌面手机截图。修正旧重提浏览器夹具只丢弃首次响应，使后续重试确实收到服务端结果，不依赖周期刷新时机。

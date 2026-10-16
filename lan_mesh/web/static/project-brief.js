@@ -4,6 +4,7 @@ window.ProjectBriefUI = (() => {
   const drafts = new Map();
   const generationJobs = new Map(), pendingStarts = new Map();
   let generationTimer = null, focusReview = false, generationEpoch = 0;
+  let discussionFilter = 'open';
   let cid = '', state = null, tab = 'document', selected = null, edgeSelected = -1;
   let connecting = false, connectSource = null, drag = null, boxes = new Map();
   let view = {x:0,y:0,w:1100,h:680}, requestId = 0, busy = false;
@@ -29,6 +30,8 @@ window.ProjectBriefUI = (() => {
       <button class="btn" role="tab" data-tab="preview">Markdown 预览</button>
       <button class="btn" role="tab" data-tab="review">AI 建议</button>
       <button class="btn" role="tab" data-tab="history">版本历史</button>
+      <button class="btn" role="tab" data-tab="discussion">待讨论</button>
+      <button class="btn" role="tab" data-tab="readiness">下发检查</button>
       <button class="btn" role="tab" data-tab="handoffs">下发记录</button>
     </div><div class="brief-content"></div>`;
   const content = panel.querySelector('.brief-content');
@@ -37,8 +40,9 @@ window.ProjectBriefUI = (() => {
   function note(message) { status.textContent = message; status.classList.toggle('dirty', !!state?.dirty); }
   function summary() {
     if (!state) return note('选择一个对话，开始沉淀项目描述。');
-    const pending = state.document.nodes.filter(n => n.status === 'discussion').length;
-    note(`v${state.revision} · ${state.dirty?'有未保存修改':'已同步'} · ${pending} 个待讨论节点${state.proposal?' · 有 AI 建议待审阅':''} · 需求草稿`);
+    const pending = state.document.nodes.filter(unresolvedNode).length;
+    panel.querySelector('[data-tab=discussion]').textContent=`待讨论 (${pending})`;
+    note(`v${state.revision} · ${state.dirty?'有未保存修改':'已同步'} · ${pending} 个待确认节点${state.proposal?' · 有 AI 建议待审阅':''} · 需求草稿`);
   }
   function remember() { if (cid && state) drafts.set(cid, state); }
   function same(a,b) {
@@ -65,7 +69,8 @@ window.ProjectBriefUI = (() => {
     if(!source.length)return;
     const focused=document.activeElement;
     const focusedNode=focused?.closest('[data-node]')?.dataset.node;
-    const field=['field','section','nodeField'].find(key=>focused?.dataset[key]);
+    const focusedDiscussion=focused?.closest('[data-discussion-id]')?.dataset.discussionId;
+    const field=['field','section','nodeField','discussionField'].find(key=>focused?.dataset[key]);
     const value=field?focused.dataset[field]:null,caret=focused?.selectionStart;
     const scroll=content.scrollTop;
     pushHistory(destination,state.document);state.document=source.pop();
@@ -73,8 +78,9 @@ window.ProjectBriefUI = (() => {
     edgeSelected=-1;connectSource=null;drag=null;
     changed();render();
     if(field){
-      const attr=field==='nodeField'?'node-field':field;
-      const input=content.querySelector(`[data-${attr}="${value}"]`);
+      const attr=field==='nodeField'?'node-field':field==='discussionField'?'discussion-field':field;
+      const scope=field==='discussionField'?content.querySelector(`[data-discussion-id="${focusedDiscussion}"]`):content;
+      const input=scope?.querySelector(`[data-${attr}="${value}"]`);
       input?.focus({preventScroll:true});
       if(input?.setSelectionRange && caret!==null)input.setSelectionRange(caret,caret);
     }else if(focusedNode)(content.querySelector(`[data-node="${focusedNode}"]`)||panel).focus({preventScroll:true});
@@ -157,7 +163,10 @@ window.ProjectBriefUI = (() => {
     const id=cid,token=requestId;
     let payload=pendingStart(id);
     if(!payload){
-      const previous=generationJobs.get(id);
+      const latest=await(await request('/generation',{},id)).json();
+      if(id!==cid||token!==requestId)return;
+      const previous=latest.job;generationJobs.set(id,previous);generationSummary();
+      if(['queued','running'].includes(previous?.status))return;
       if(['failed','interrupted'].includes(previous?.status)&&!confirm('上次整理可能已经产生模型费用。开始一次新的整理？'))return;
       await save();if(id!==cid||token!==requestId)return;
       payload={request_id:globalThis.crypto?.randomUUID?.()||`brief_${Date.now()}_${Math.random().toString(36).slice(2)}`,expected_revision:state.revision};
@@ -221,7 +230,7 @@ window.ProjectBriefUI = (() => {
     panel.querySelector('[data-action="dispatch"]').disabled=!state?.revision||state.dirty;
     panel.querySelector('[data-tab="review"]').textContent=state?.proposal?`AI 建议 (${state.proposal.changes.length})`:'AI 建议';
     if(!state){content.innerHTML='<div class="brief-empty">与秘书讨论项目背景、需求和想法，内容将整理到这里。<br>文档、模块框图与依赖关系可以共同编辑。</div>';return;}
-    if(tab==='document')renderDocument(); else if(tab==='graph')renderGraph(); else if(tab==='review')renderReview(); else if(tab==='history')renderHistory(); else if(tab==='handoffs')renderHandoffs(); else renderPreview();
+    if(tab==='document')renderDocument(); else if(tab==='graph')renderGraph(); else if(tab==='review')renderReview(); else if(tab==='history')renderHistory(); else if(tab==='handoffs')renderHandoffs(); else if(tab==='discussion')renderDiscussions(); else if(tab==='readiness')renderReadiness(); else renderPreview();
   }
   function renderDocument() {
     const opened=new Set([...content.querySelectorAll('details[open] textarea')].map(el=>el.dataset.section));
@@ -238,7 +247,7 @@ window.ProjectBriefUI = (() => {
     out+='## 模块与功能分解\n\n';
     const emit=(parent=null,level=0)=>d.nodes.filter(n=>n.parent_id===parent).forEach(n=>{
       out+=`${'  '.repeat(level)}- **${n.title.replace(/\n/g,' ')}** (${n.id}) · ${n.priority} · ${statuses[n.status]}\n`;
-      for(const [label,val] of [['说明',n.description],['验收',n.acceptance],['负责人',n.owner]])if(val)out+=`${'  '.repeat(level+1)}- ${label}：${val.replace(/\n/g,' ')}\n`;
+      for(const [label,val] of [['说明',n.description],['验收',n.acceptance],['负责人',n.owner],['决策结论',n.decision]])if(val)out+=`${'  '.repeat(level+1)}- ${label}：${val.replace(/\n/g,' ')}\n`;
       emit(n.id,level+1);
     });emit();
     out+='\n## 依赖 DAG\n\n箭头表示前置依赖，框内嵌套表示包含关系，最多三层。\n\n```mermaid\nflowchart LR\n';
@@ -256,7 +265,7 @@ window.ProjectBriefUI = (() => {
   function reviewValue(value) {
     if(value?.nodes && value?.edges){
       const names=new Map(value.nodes.map(node=>[node.id,node.title]));
-      const nodes=value.nodes.map(node=>`${node.title} · ${node.priority} · ${statuses[node.status]}\n所属框：${names.get(node.parent_id)||'顶层'}\n说明：${node.description||'待讨论'}\n验收：${node.acceptance||'待讨论'}\n负责人：${node.owner||'待讨论'}\n位置：${node.x}, ${node.y}${node.collapsed?' · 已折叠':''}`);
+      const nodes=value.nodes.map(node=>`${node.title} · ${node.priority} · ${statuses[node.status]}\n所属框：${names.get(node.parent_id)||'顶层'}\n说明：${node.description||'待讨论'}\n验收：${node.acceptance||'待讨论'}\n负责人：${node.owner||'待讨论'}\n决策结论：${node.decision||'待讨论'}\n位置：${node.x}, ${node.y}${node.collapsed?' · 已折叠':''}`);
       const edges=value.edges.map(edge=>`${names.get(edge.source)} → ${names.get(edge.target)}`);
       return `模块与功能\n${nodes.join('\n\n')||'暂无节点'}\n\n前置依赖\n${edges.join('\n')||'暂无依赖'}`;
     }
@@ -325,17 +334,75 @@ window.ProjectBriefUI = (() => {
         <button class="btn" data-action="handoff-view" data-revision="${record.revision}">查看下发依据</button>
         <button class="btn" data-action="handoff-task" data-task="${escape(record.task_id)}">查看任务与产物</button></details>`).join('')+
       (!records.length?'<p class="brief-empty">暂无下发记录。先保存项目描述，再点击「确认并下发」。</p>':'')+
-      (state.handoffDetail?`<details open><summary>下发依据 v${state.handoffDetail.revision}</summary><pre>${escape(state.handoffDetail.markdown)}</pre></details>`:'');
+      (state.handoffDetail?`<details open><summary>下发依据 v${state.handoffDetail.revision}</summary>${state.handoffDetail.readiness?`<p class="brief-hint">下发时记录 ${state.handoffDetail.readiness.issues.length} 项需复核：${escape(state.handoffDetail.readiness.issues.map(issue=>issue.message).join('；')||'未发现上述缺项')}。不代表已经完成验收。</p>`:''}<pre>${escape(state.handoffDetail.markdown)}</pre></details>`:'');
+  }
+  async function loadReadiness() {
+    const target=cid,token=requestId,current=state;
+    const report=await(await request('/readiness',{},target)).json();
+    if(target!==cid||token!==requestId||current!==state)return;
+    if(report.revision!==state.revision)throw new Error('项目描述已更新，请重新审阅当前版本后下发。');
+    state.readiness=report;remember();if(tab==='readiness')renderReadiness();
   }
   async function dispatchBrief() {
     if(state.dirty||!state.revision)throw new Error('请先保存并审阅当前内容，再下发。');
-    if(!confirm(`确认下发已保存的项目描述 v${state.revision}「${state.document.title}」给 PM 执行？未采纳的 AI 建议不包含在内。`))return;
+    tab='readiness';state.readiness=null;render();await loadReadiness();
+  }
+  async function dispatchReviewed() {
+    const report=state.readiness;
+    if(!report||state.dirty||!state.revision||report.revision!==state.revision)throw new Error('请先保存并重新检查当前版本。');
     const target=cid,token=requestId;
-    const result=await(await request('/handoffs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_revision:state.revision})})).json();
+    const result=await(await request('/handoffs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_revision:report.revision})})).json();
     if(target===cid&&token===requestId){
       tab='handoffs';render();await loadHandoffs();
       if(target===cid&&token===requestId)note(`项目描述 v${result.revision} 已登记 · 任务 ${result.task_id} · ${taskStatus(result.task_status)}`);
     }
+  }
+  function renderReadiness() {
+    const report=state.readiness;
+    if(!report){content.innerHTML='<p class="brief-hint">检查已保存版本的目标、范围、需求、验收和待确认节点。</p><button class="btn" data-action="readiness-refresh">检查当前版本</button>';return;}
+    const stale=state.dirty||report.revision!==state.revision;
+    content.innerHTML=`<h3>下发前检查 · v${report.revision}</h3><p>${escape(report.title)}</p>
+      <p class="brief-hint">${escape(report.notice)} 未采纳的 AI 建议不包含在下发内容中。</p>
+      ${stale?'<p class="brief-review-warning" role="alert">当前内容有改动，以下是已保存版本的检查；请保存并重新检查。</p>':''}
+      <p>${report.issues.length?`${report.issues.length} 项需复核 · ${report.unconfirmed_nodes} 个未确认节点 · ${report.unresolved_discussions} 个未解决问题`:'未发现上述缺项，请继续核对方案与验收标准是否可执行。'}</p>
+      <ul class="brief-readiness-issues">${report.issues.map((issue,index)=>`<li><span>${escape(issue.priority)} · ${escape(issue.message)}</span><button class="btn" data-action="readiness-locate" data-issue="${index}">去处理</button></li>`).join('')}</ul>
+      ${report.has_freeform_questions?'<p class="brief-hint">文档还有自由文本讨论记录，不自动判定其是否解决。</p><button class="btn" data-action="questions-locate">查看讨论记录</button>':''}
+      <div class="brief-review-tools"><button class="btn" data-action="readiness-refresh">重新检查</button>
+      <button class="btn primary" data-action="dispatch-reviewed" ${stale||!state.revision?'disabled':''}>${report.issues.length?'知悉待复核项，仍下发':'确认下发'} v${report.revision}</button></div>`;
+  }
+  function locateBriefTarget(target) {
+    focusReview=false;
+    if(target.node_id){
+      selected=target.node_id;edgeSelected=-1;tab='graph';render();
+      const editor=content.querySelector('.brief-node-editor');
+      editor?.scrollIntoView({block:'nearest'});editor?.querySelector(`[data-node-field="${target.field||'title'}"]`)?.focus();
+    }else if(target.id==='proposal'){tab='review';render();}
+    else{
+      tab='document';render();
+      const input=content.querySelector(target.section?`[data-section="${target.section}"]`:'[data-field="title"]');
+      const details=input?.closest('details');if(details)details.open=true;
+      input?.scrollIntoView({block:'nearest'});input?.focus();
+    }
+  }
+  function missingText(value) {return ['', '待讨论', '待确认', '待补充', '待填写', '未填写', 'tbd', 'todo', '待命名项目'].includes(String(value||'').trim().replace(/^[。.!！?？… ]+|[。.!！?？… ]+$/g,'').toLowerCase());}
+  function unresolvedNode(node) {return node.status!=='confirmed'||(node.kind==='discussion'&&missingText(node.decision));}
+  function renderDiscussions() {
+    const nodes=state.document.nodes.filter(node=>discussionFilter==='all'||(discussionFilter==='open'?unresolvedNode(node):!unresolvedNode(node)))
+      .sort((a,b)=>a.priority.localeCompare(b.priority));
+    content.innerHTML=`<p class="brief-hint">集中处理待讨论问题和未确认需求。填写结论后确认问题；所有修改与文档、DAG 共用保存和撤销。自由文本记录保留在下方，不自动拆分或判定解决状态。</p>
+      <div class="brief-review-tools"><button class="btn" data-action="discussion-add">＋ 待讨论项</button>
+      <label>显示<select data-discussion-filter>${Object.entries({open:'待确认',closed:'已确认',all:'全部'}).map(([key,label])=>`<option value="${key}" ${discussionFilter===key?'selected':''}>${label}</option>`).join('')}</select></label></div>
+      ${nodes.map(node=>`<details class="brief-discussion-card" data-discussion-id="${node.id}" open><summary>${escape(node.priority)} · ${escape(node.title)} · ${statuses[node.status]}</summary>
+        <p class="brief-hint">${escape([...ancestors(node.id).reverse().map(id=>state.document.nodes.find(n=>n.id===id).title),node.title].join(' / '))}</p>
+        <label>名称<input data-discussion-field="title" maxlength="160" value="${escape(node.title)}"></label>
+        <label>问题／需求与影响<textarea data-discussion-field="description" maxlength="6000">${escape(node.description)}</textarea></label>
+        <label>负责人<input data-discussion-field="owner" maxlength="160" value="${escape(node.owner)}"></label>
+        <label>决策结论<textarea data-discussion-field="decision" maxlength="6000" placeholder="记录已确认的选择、理由及下一步">${escape(node.decision)}</textarea></label>
+        <label>验收标准<textarea data-discussion-field="acceptance" maxlength="3000">${escape(node.acceptance)}</textarea></label>
+        <div class="brief-review-tools"><button class="btn" data-action="discussion-locate">在 DAG 中编辑</button>
+        <button class="btn" data-action="discussion-confirm">${node.status==='confirmed'?'重新打开讨论':'确认此项'}</button></div></details>`).join('')}
+      ${!nodes.length?'<p class="brief-empty">此筛选下没有节点。可新增待讨论项，或切换筛选查看已确认内容。</p>':''}
+      <details open><summary>文档中的自由文本讨论记录</summary><label>功能待讨论项与决策记录<textarea data-section="questions" maxlength="12000">${escape(state.document.sections.questions||'')}</textarea></label></details>`;
   }
   async function inspectHistory(revision) {
     const current=state,target=cid,token=requestId;
@@ -473,7 +540,8 @@ window.ProjectBriefUI = (() => {
       <label>类型<select data-node-field="kind">${Object.entries({module:'模块',feature:'功能',discussion:'待讨论项'}).map(([k,v])=>`<option value="${k}" ${n.kind===k?'selected':''}>${v}</option>`).join('')}</select></label>
       <label>负责人<input data-node-field="owner" maxlength="160" value="${escape(n.owner)}"></label></div>
       <label>说明<textarea data-node-field="description" maxlength="6000">${escape(n.description)}</textarea></label>
-      <label>验收标准<textarea data-node-field="acceptance" maxlength="3000">${escape(n.acceptance)}</textarea></label>`;
+      <label>验收标准<textarea data-node-field="acceptance" maxlength="3000">${escape(n.acceptance)}</textarea></label>
+      <label>决策结论（如有）<textarea data-node-field="decision" maxlength="6000">${escape(n.decision)}</textarea></label>`;
   }
   function fit(){const all=[...boxes.values()];if(!all.length)return;const maxX=Math.max(...all.map(b=>b.x+b.w)),maxY=Math.max(...all.map(b=>b.y+b.h));view={x:0,y:0,w:Math.max(400,maxX+40),h:Math.max(300,maxY+40)};draw();}
   function autoLayout(){
@@ -486,6 +554,7 @@ window.ProjectBriefUI = (() => {
     };arrange(null);
   }
   panel.addEventListener('change',event=>{if(!state)return;const el=event.target;
+    if(el.hasAttribute('data-discussion-filter')){discussionFilter=el.value;renderDiscussions();return;}
     if(el.dataset.reviewIndex!==undefined){
       const key=state.proposal.changes[Number(el.dataset.reviewIndex)].id;
       const selection=new Set(state.reviewSelection);if(el.checked)selection.add(key);else selection.delete(key);
@@ -495,6 +564,10 @@ window.ProjectBriefUI = (() => {
     if(el.dataset.nodeField){const key=el.dataset.nodeField;mutate(()=>{const n=state.document.nodes.find(n=>n.id===selected);n[key]=key==='parent_id'?(el.value||null):el.value;if(!n.title.trim())throw new Error('节点名称不能为空。');if(key==='parent_id'){n.x=24;n.y=n.parent_id?60:24;}});}
   });
   panel.addEventListener('input',event=>{if(!state)return;const el=event.target;
+    if(el.dataset.discussionField){
+      const node=state.document.nodes.find(n=>n.id===el.closest('[data-discussion-id]').dataset.discussionId),key=el.dataset.discussionField;
+      if(node[key]===el.value)return;checkpoint(el);node[key]=el.value;changed();return;
+    }
     if(el.dataset.field==='title'||el.dataset.section){
       const current=el.dataset.field?state.document.title:state.document.sections[el.dataset.section];
       if(current===el.value)return;
@@ -515,11 +588,11 @@ window.ProjectBriefUI = (() => {
   panel.addEventListener('click',async event=>{
     const target=event.target.closest('button');if(!target||busy)return;
     editGroup=null;
-    if(target.dataset.tab){focusReview=false;tab=target.dataset.tab;render();if(state)try{if(tab==='history')await loadHistory();if(tab==='handoffs')await loadHandoffs();}catch(error){note(error.message);}return;}
+    if(target.dataset.tab){focusReview=false;tab=target.dataset.tab;render();if(state)try{if(tab==='history')await loadHistory();if(tab==='handoffs')await loadHandoffs();if(tab==='readiness')await loadReadiness();}catch(error){note(error.message);}return;}
     const action=target.dataset.action;if(!action||!state)return;
     if(action==='generate'&&state.proposal){tab='review';render();note('请先采纳或忽略现有建议，再重新整理。');return;}
     try{
-      if(['save','generate','generation-export','export','reload','review-apply','review-discard','history-refresh','history-more','history-view','history-restore','dispatch','handoffs-refresh','handoff-view','handoff-task'].includes(action)){
+      if(['save','generate','generation-export','export','reload','review-apply','review-discard','history-refresh','history-more','history-view','history-restore','dispatch','dispatch-reviewed','readiness-refresh','handoffs-refresh','handoff-view','handoff-task'].includes(action)){
         busy=true;panel.setAttribute('aria-busy','true');panel.inert=true;
         if(action==='save')await save();
         if(action==='generate')await startGeneration();
@@ -530,6 +603,8 @@ window.ProjectBriefUI = (() => {
         if(action==='history-view')await inspectHistory(content.querySelector('[data-history-choice]').value);
         if(action==='history-restore')await restoreHistory();
         if(action==='dispatch')await dispatchBrief();
+        if(action==='dispatch-reviewed')await dispatchReviewed();
+        if(action==='readiness-refresh')await loadReadiness();
         if(action==='handoffs-refresh')await loadHandoffs();
         if(action==='handoff-view'){
           const current=state,id=cid,token=requestId;const data=await(await request(`/handoffs/${target.dataset.revision}`)).json();
@@ -553,6 +628,19 @@ window.ProjectBriefUI = (() => {
         }
         if(action==='export'){if(state.dirty)download(markdown());else download(await(await request('/markdown')).text());}
         if(action==='reload'){if(!state.dirty||confirm('重新加载将替换本地未保存修改。建议先导出草稿，是否继续？')){drafts.delete(cid);state=null;await open(cid);}}
+      }else if(action==='readiness-locate'){locateBriefTarget(state.readiness.issues[Number(target.dataset.issue)]);}
+      else if(action==='questions-locate'){locateBriefTarget({section:'questions'});}
+      else if(action==='discussion-locate'){locateBriefTarget({node_id:target.closest('[data-discussion-id]').dataset.discussionId});}
+      else if(action==='discussion-confirm'){
+        const id=target.closest('[data-discussion-id]').dataset.discussionId;
+        mutate(()=>{const node=state.document.nodes.find(n=>n.id===id);
+          if(!node.title.trim())throw new Error('请先填写名称。');
+          if(node.status!=='confirmed'&&node.kind==='discussion'&&missingText(node.decision))throw new Error('请先记录决策结论，再确认此问题。');
+          node.status=node.status==='confirmed'?'discussion':'confirmed';});
+      }else if(action==='discussion-add'){
+        if(state.document.nodes.length>=150)throw new Error('节点最多 150 个，请先整理已有内容。');
+        discussionFilter='open';
+        mutate(()=>state.document.nodes.push({id:'question_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,7),title:'新的待讨论问题',kind:'discussion',parent_id:null,description:'',decision:'',owner:'',acceptance:'',priority:'P1',status:'discussion',x:24,y:60+state.document.nodes.filter(n=>!n.parent_id).length*110,collapsed:false}));
       }else if(action==='review-all'||action==='review-none'){
         state.reviewSelection=action==='review-all'?state.proposal.changes.map(change=>change.id):[];remember();renderReview();
       }else if(action==='add'||action==='child'){
@@ -560,7 +648,7 @@ window.ProjectBriefUI = (() => {
         const parent=action==='child'?selected:null;
         mutate(()=>{if(parent)state.document.nodes.find(n=>n.id===parent).collapsed=false;
           const id='node_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,7);const peers=state.document.nodes.filter(n=>n.parent_id===parent);
-          state.document.nodes.push({id,title:parent?'新功能':'新模块',kind:parent?'feature':'module',parent_id:parent,description:'',status:'discussion',priority:'P1',acceptance:'',owner:'',x:24,y:60+peers.length*110,collapsed:false});selected=id;});
+          state.document.nodes.push({id,title:parent?'新功能':'新模块',kind:parent?'feature':'module',parent_id:parent,description:'',status:'discussion',priority:'P1',acceptance:'',owner:'',decision:'',x:24,y:60+peers.length*110,collapsed:false});selected=id;});
       }else if(action==='connect'){connecting=!connecting;connectSource=null;render();if(connecting)note('依次点击前置节点与后续节点。');}
       else if(action==='delete'){
         if(edgeSelected>=0){mutate(()=>state.document.edges.splice(edgeSelected,1));edgeSelected=-1;draw();}

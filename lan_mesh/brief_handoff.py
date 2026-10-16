@@ -5,6 +5,7 @@ import time
 import uuid
 
 from .project_brief import RevisionConflict
+from .brief_readiness import brief_readiness
 
 
 class BriefHandoff:
@@ -44,7 +45,7 @@ class BriefHandoff:
         with self.store.lock:
             revisions = [int(path.stem) for path in self._folder(conv_id).glob("*.json") if path.stem.isdigit()]
         return [{key: value for key, value in self.get(conv_id, revision).items()
-                 if key not in ("document", "markdown")}
+                 if key not in ("document", "markdown", "readiness")}
                 for revision in sorted(revisions, reverse=True)]
 
     def dispatch(self, conv_id: str, expected_revision: int) -> dict:
@@ -64,6 +65,7 @@ class BriefHandoff:
                       "task_id": f"task-{identity}", "confirmed_at": time.time(),
                       "sha256": digest, "title": current["document"]["title"],
                       "document": current["document"], "markdown": current["markdown"],
+                      "readiness": brief_readiness(current),
                       "status": "prepared", "task_status": "unknown", "pm_agent_id": ""}
             self._write(conv_id, record)
         reference = {key: record[key] for key in ("id", "conv_id", "revision", "confirmed_at", "sha256")}

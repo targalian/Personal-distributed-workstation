@@ -47,6 +47,7 @@ class BriefNode(BaseModel):
     priority: Literal["P0", "P1", "P2"] = "P1"
     acceptance: str = Field(default="", max_length=3000)
     owner: str = Field(default="", max_length=160)
+    decision: str = Field(default="", max_length=6000)
     x: float = Field(default=24, ge=0, le=20000, allow_inf_nan=False)
     y: float = Field(default=60, ge=0, le=20000, allow_inf_nan=False)
     collapsed: bool = False
@@ -132,7 +133,8 @@ def render_markdown(brief: ProjectBrief, revision: int = 0) -> str:
                 continue
             pad = "  " * depth
             lines.append(f"{pad}- **{inline(node.title)}** (`{node.id}`) · {node.priority} · {STATUS_LABELS[node.status]}")
-            for label, value in [("说明", node.description), ("验收", node.acceptance), ("负责人", node.owner)]:
+            for label, value in [("说明", node.description), ("验收", node.acceptance), ("负责人", node.owner),
+                                 ("决策结论", node.decision)]:
                 if value:
                     lines.append(f"{pad}  - {label}：{inline(value)}")
             emit_nodes(node.id, depth + 1)
@@ -194,6 +196,9 @@ class BriefStore:
                 value = {"revision": 0, "updated_at": None, "document": brief.model_dump()}
             value.pop("_history", None)
             value.pop("_generation_jobs", None)
+            value["document"] = brief.model_dump()
+            if value.get("proposal"):
+                value["proposal"]["document"] = ProjectBrief.model_validate(value["proposal"]["document"]).model_dump()
             return {**value, "proposal": value.get("proposal"),
                     "markdown": render_markdown(brief, value["revision"]), "section_labels": SECTIONS}
 
@@ -348,12 +353,13 @@ def brief_instructions(current: dict, *, generate=False) -> str:
         + json.dumps(SECTIONS, ensure_ascii=False)
         + '\n节点格式：{"id":"module_1","title":"模块名","kind":"module",'
         '"parent_id":null,"description":"说明","status":"discussion","priority":"P1",'
-        '"acceptance":"验收标准","owner":"待讨论","x":24,"y":60,"collapsed":false}。'
+        '"acceptance":"验收标准","owner":"待讨论","decision":"","x":24,"y":60,"collapsed":false}。'
         "kind 可为 module/feature/discussion，status 可为 proposed/confirmed/discussion。"
         "仅 Boss 明确确认的内容可标 confirmed；建议标 proposed，未知标 discussion。"
         "父子最多三层（模块→功能→子功能），x/y 相对父框，新建同级节点要错开放置。"
         '依赖格式：{"source":"前置节点ID","target":"后续节点ID"}，不可成环、重复、自连或连接祖先与后代。'
         "模块和功能写入 nodes，功能待讨论项也应在 questions 中注明待决策事项、影响、负责人和结论。"
+        "可逐项处理的问题使用 kind=discussion 节点，description 写问题与影响，decision 写 Boss 已给出的决策结论；没有结论时留空，不可臆造。"
         "整理文档不是执行任务，不能声称已经创建项目、下发 PM 或保存成功。\n当前文档：\n"
         + json.dumps(current["document"], ensure_ascii=False)
     )

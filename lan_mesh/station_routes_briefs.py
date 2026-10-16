@@ -114,6 +114,11 @@ def build_brief_routes(controller):
     def list_history(conv_id: str, before_revision: int | None = Query(default=None, ge=1)):
         return handler(conv_id).briefs.history(conv_id, before_revision)
 
+    @router.get("/readiness")
+    def get_readiness(conv_id: str):
+        from .brief_readiness import brief_readiness
+        return brief_readiness(handler(conv_id).briefs.get(conv_id))
+
     @router.get("/handoffs")
     def list_handoffs(conv_id: str):
         return {"handoffs": handler(conv_id).brief_handoffs.list(conv_id)}

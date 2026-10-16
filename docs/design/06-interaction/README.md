@@ -10,6 +10,7 @@
 | bot_gateway.py | Bot 网关 — 手机消息通道 |
 | brief_generation.py | Durable background brief generation with idempotent starts and atomic proposals. |
 | brief_handoff.py | Persist confirmed project descriptions before dispatch and prevent duplicate handoffs. |
+| brief_readiness.py | Explain missing brief content and unresolved decisions before versioned handoff. |
 | brief_review.py | Build reviewable AI changes and merge an explicit selection without breaking graphs. |
 | chat_handler.py | 秘书聊天处理器 — Web 端对话接口 |
 | project_brief.py | Conversation-scoped project specification; Markdown and DAG share one source. |
@@ -86,3 +87,9 @@ Boss 与秘书对话新增文档／需求 DAG 双视图，支持三层框图、�
 「从对话整理」改走持久化后台任务：先保存并固定文档/对话输入，登记请求编号后调用模型，同编号请求重放只返回已有记录。任务终态和 AI 建议同一原子写入，不直接修改已保存文档。人工保存或另一份建议使结果过期时，保留候选供 Markdown 导出；进程退出后只标记待核实，不自动产生新调用。
 
 每会话一个活动任务、进程最多两个，数据目录的进程生命周期锁拒绝重复实例；同进程文档锁共享，普通保存/审阅/历史恢复保留去重记录。旧同步 API 保持兼容。接口、使用和边界详见 [后台整理说明](../../brief-generation.md)。
+
+### 待讨论与下发检查（iter-62）
+
+BriefNode 新增可选 `decision` 结论字段；旧文档、旧建议和历史读取补默认值且不改原文件。结论进入 Markdown、AI 逐项差异及恢复记录。`brief_readiness` 对保存版本生成可定位的缺项提示：目标/范围/需求/验收章节、节点确认状态、负责人、验收或决策结论，以及未采纳建议；仅判断结构，不推断内容质量或自由文本问题是否解决。
+
+GET `/brief/readiness` 只读。下发时仍按版本校验，在已有需求快照内增加当时的 `readiness`；后续编辑不改变旧检查，旧记录缺字段兼容。原聊天下发与 API 保持可提交含未决项的行为，检查不是权限机制。详见 [队列与下发检查](../../brief-readiness.md)。

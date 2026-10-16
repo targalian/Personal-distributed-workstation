@@ -54,6 +54,7 @@ function showToast(msg){window.lastToast=msg}
 document.querySelectorAll('.panel').forEach(p=>p.style.display=p.id==='panel-chat'?'block':'none');
 </script><script src="/static/project-brief.js"></script>''')
 errors=[]
+accept_dialog=lambda dialog:dialog.accept()
 
 
 def verify_execution_inspection(page, output):
@@ -119,7 +120,6 @@ def verify_task_control(page, output):
     """Verify accepted stop intent versus actual PM acknowledgment through the real API."""
     from lan_mesh.pm_agent import ProjectManagerAgent
     from lan_mesh.pm_control import control_pm, request_task_control
-    page.on('dialog',lambda dialog:dialog.accept())
     holder=SimpleNamespace(pm=None)
     controller._queue_ws_broadcast=Mock()
     controller._pm_worker_map={}
@@ -818,12 +818,14 @@ def verify_handoff(page, handoff_id, other_id, output):
     page.reload()
     page.evaluate('(id)=>ProjectBriefUI.open(id)',handoff_id)
     page.locator('[data-action="dispatch"]').click()
+    page.locator('[data-action="dispatch-reviewed"]').click()
     page.wait_for_selector('[data-action="handoff-view"]')
     record=chat.brief_handoffs.get(handoff_id,1)
     task_id=record['task_id']
     assert record['title']=='协作工作台'
     assert controller.db.get_task(task_id).input_data['_brief']['revision']==1
     page.locator('[data-action="dispatch"]').click()
+    page.locator('[data-action="dispatch-reviewed"]').click()
     page.wait_for_function("document.querySelector('#project-brief-panel').getAttribute('aria-busy')==='false'")
     assert controller.submit_task_from_chat.call_count==1
     page.locator('[data-action="handoff-view"]').click()
@@ -953,16 +955,17 @@ def verify_background_generation(page, output):
     def lose_response(r):
         if r.request.method!='POST':
             r.fallback();return
+        page.unroute(endpoint,lose_response)
         response=client.post(f'/api/conversations/{job_cid}/brief/generation',json=json.loads(r.request.post_data))
         assert response.status_code==202
         r.fulfill(status=503,json={'detail':'模拟提交回执丢失'})
-    page.route(endpoint,lose_response,times=1)
+    page.route(endpoint,lose_response)
     try:
         page.evaluate('(id)=>ProjectBriefUI.open(id)',job_cid)
         page.locator('[data-tab="document"]').click()
         page.locator('[data-action="generate"]').click()
-        assert entered.wait(2)
         page.wait_for_function("!document.querySelector('#project-brief-panel').inert")
+        assert entered.is_set()
         # Persisted request ID and server record resolve a lost POST after reload.
         page.reload()
         page.evaluate('(id)=>ProjectBriefUI.open(id)',job_cid)
@@ -995,8 +998,8 @@ def verify_background_generation(page, output):
         # A saved edit during generation must produce an exportable stale result.
         entered.clear();release.clear()
         page.locator('[data-action="generate"]').click()
-        assert entered.wait(2)
         page.wait_for_function("!document.querySelector('#project-brief-panel').inert")
+        assert entered.is_set()
         page.locator('[data-field="title"]').fill('整理期间已保存的新稿')
         page.locator('[data-action="save"]').click()
         page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v3 · 已同步')")
@@ -1026,8 +1029,8 @@ def verify_background_generation(page, output):
         page.wait_for_timeout(1500)
         assert held
         page.locator('[data-action="generate"]').click()
-        assert entered.wait(2)
         page.wait_for_function("!document.querySelector('#project-brief-panel').inert")
+        assert entered.is_set()
         route,response=held.pop()
         route.fulfill(status=response.status_code,json=response.json())
         page.wait_for_function("document.querySelector('.brief-generation').textContent.includes('正在整理')")
@@ -1038,6 +1041,130 @@ def verify_background_generation(page, output):
     finally:
         release.set()
         runtime._call_llm_with_routing.side_effect=None
+
+
+def verify_discussion_readiness(page, output):
+    """Edit decisions through the queue and inspect exact saved versions before dispatch."""
+    decision_cid=chat.create_conversation('讨论与下发检查')['id']
+    doc=document()
+    for node in doc['nodes']:
+        node.update(status='confirmed',owner='Boss',acceptance='浏览器功能验收')
+    doc['nodes'].append({'id':'choice','title':'<img src=x onerror=alert(1)>存储位置',
+                        'kind':'discussion','parent_id':'feature','description':'确定数据存储位置','priority':'P0'})
+    chat.briefs.save(decision_cid,doc,0)
+    page.reload()
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',decision_cid)
+    page.locator('[data-tab="discussion"]').click()
+    card=page.locator('[data-discussion-id="choice"]')
+    assert page.locator('[data-discussion-id]').count()==1
+    assert page.locator('.brief-content img').count()==0
+    page.locator('[data-action="discussion-add"]').click()
+    assert page.locator('[data-discussion-id]').count()==2
+    page.locator('[data-action="undo"]').click()
+    assert page.locator('[data-discussion-id]').count()==1
+    card.locator('[data-action="discussion-confirm"]').click()
+    assert '先记录决策结论' in page.locator('.brief-status').inner_text()
+    card.locator('[data-discussion-field="owner"]').fill('Boss')
+    card.locator('[data-discussion-field="decision"]').fill('存储到本地SQLite，离线备份')
+    card.locator('[data-discussion-field="decision"]').press('Tab')
+    page.locator('[data-action="undo"]').click()
+    assert card.locator('[data-discussion-field="decision"]').input_value()==''
+    page.locator('[data-action="redo"]').click()
+    page.locator('[data-action="save"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v2 · 已同步')")
+    card.locator('[data-action="discussion-confirm"]').click()
+    assert card.count()==0
+    page.locator('[data-action="undo"]').click()
+    assert card.count()==1
+    page.locator('[data-action="redo"]').click()
+    page.locator('[data-action="save"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v3 · 已同步')")
+    page.reload()
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',decision_cid)
+    page.locator('[data-tab="discussion"]').click()
+    page.locator('[data-discussion-filter]').select_option('closed')
+    assert card.locator('[data-discussion-field="decision"]').input_value()=='存储到本地SQLite，离线备份'
+    card.locator('[data-action="discussion-confirm"]').click()
+    page.locator('[data-discussion-filter]').select_option('open')
+    card.locator('[data-action="discussion-locate"]').click()
+    assert page.locator('[data-node-field="decision"]').input_value()=='存储到本地SQLite，离线备份'
+    page.locator('[data-tab="discussion"]').click()
+    page.locator('[data-action="save"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v4 · 已同步')")
+    page.screenshot(path=str(output/'brief_discussion_desktop.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    page.locator('#project-brief-panel').scroll_into_view_if_needed()
+    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+    page.screenshot(path=str(output/'brief_discussion_mobile.png'),full_page=True)
+    page.set_viewport_size({'width':1680,'height':1100})
+    page.locator('[data-action="dispatch"]').click()
+    page.wait_for_selector('[data-action="dispatch-reviewed"]')
+    assert '目标与成功指标尚未填写' in page.locator('.brief-readiness-issues').inner_text()
+    assert not chat.brief_handoffs.list(decision_cid)
+    page.locator('.brief-readiness-issues li').filter(has_text='目标与成功指标').locator('button').click()
+    assert page.locator('[data-section="goals"]').is_visible()
+    page.locator('[data-section="goals"]').fill('提高需求确认效率')
+    page.locator('[data-tab="readiness"]').click()
+    page.wait_for_selector('[data-action="dispatch-reviewed"]')
+    assert page.locator('[data-action="dispatch-reviewed"]').is_disabled()
+    page.locator('[data-action="save"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v5 · 已同步')")
+    page.locator('[data-action="readiness-refresh"]').click()
+    page.wait_for_selector('[data-action="dispatch-reviewed"]')
+    assert '目标与成功指标尚未填写' not in page.locator('.brief-readiness-issues').inner_text()
+    assert page.locator('.brief-content img').count()==0
+    page.screenshot(path=str(output/'brief_readiness_desktop.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+    page.locator('[data-action="dispatch-reviewed"]').scroll_into_view_if_needed()
+    assert page.locator('[data-action="dispatch-reviewed"]').is_enabled()
+    page.screenshot(path=str(output/'brief_readiness_mobile.png'),full_page=True)
+    page.set_viewport_size({'width':1680,'height':1100})
+    # Server revision validation still wins after the review screen was opened.
+    chat.briefs.save(decision_cid,{**chat.briefs.get(decision_cid)['document'],'title':'外部新版本'},5)
+    page.locator('[data-action="dispatch-reviewed"]').click()
+    page.wait_for_function("document.querySelector('.brief-status').textContent.includes('重新审阅')")
+    assert not chat.brief_handoffs.list(decision_cid)
+    # A late readiness response cannot replace the other conversation's content.
+    endpoint=f'**/api/conversations/{decision_cid}/brief/readiness'
+    held=[]
+    page.route(endpoint,lambda r:held.append(r),times=1)
+    page.locator('[data-action="readiness-refresh"]').click()
+    assert held
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',other)
+    response=client.get(f'/api/conversations/{decision_cid}/brief/readiness')
+    held.pop().fulfill(status=response.status_code,json=response.json())
+    page.wait_for_function("!document.querySelector('#project-brief-panel').inert")
+    assert '外部新版本' not in page.locator('.brief-content').inner_text()
+
+
+def verify_generation_initial_check(page):
+    """An immediate click after reload must query server failure before spending again."""
+    failed_cid=chat.create_conversation('重新整理前核实')['id']
+    chat.briefs.save(failed_cid,document(),0)
+    runtime._call_llm_with_routing.side_effect=RuntimeError('fixture failure')
+    chat.brief_generation.start(failed_cid,'initial-failed-job',1)
+    from tests.test_brief_generation import finish
+    assert finish(chat,failed_cid,'initial-failed-job')['status']=='failed'
+    runtime._call_llm_with_routing.side_effect=None
+    before=runtime._call_llm_with_routing.call_count
+    page.reload()
+    page.evaluate('(id)=>ProjectBriefUI.open(id)',failed_cid)
+    page.remove_listener('dialog',accept_dialog)
+    dialogs=[]
+    def dismiss(dialog):
+        dialogs.append(dialog.message)
+        dialog.dismiss()
+    page.on('dialog',dismiss)
+    try:
+        page.locator('[data-action="generate"]').click()
+        page.wait_for_function("!document.querySelector('#project-brief-panel').inert")
+        assert dialogs
+        assert '模型费用' in dialogs[0]
+        assert runtime._call_llm_with_routing.call_count==before
+    finally:
+        page.remove_listener('dialog',dismiss)
+        page.on('dialog',accept_dialog)
 
 
 def verify_ai_review(page, review_id, other_id, output):
@@ -1249,8 +1376,8 @@ def verify_graph_history(page):
 with sync_playwright() as p:
     browser=p.chromium.launch(executable_path=os.environ.get('BRIEF_BROWSER_EXECUTABLE') or shutil.which('google-chrome') or p.chromium.executable_path,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
     page=browser.new_page(viewport={'width':1680,'height':1100},device_scale_factor=1)
+    page.on('dialog',accept_dialog)
     page.on('pageerror',lambda e:errors.append(str(e)))
-    page.on('dialog',lambda d:d.accept())
     sockets=[]
     def route(r):
         req=r.request;path=urlparse(req.url).path
@@ -1336,6 +1463,7 @@ with sync_playwright() as p:
     # Integration smoke: original dashboard script, actual chat endpoint and WS reply.
     html=(root/'lan_mesh/web/templates/dashboard.html').read_text()
     page=browser.new_page(viewport={'width':1680,'height':1100})
+    page.on('dialog',accept_dialog)
     page.on('pageerror',lambda e:errors.append(str(e)))
     page.route('**/*',route)
     page.route_web_socket('**/ws',lambda ws:sockets.append(ws))
@@ -1426,8 +1554,8 @@ with sync_playwright() as p:
     history_document['nodes'][-1].update(x=650,y=60)
     chat.briefs.save(history_id,history_document,0)
     page=browser.new_page(viewport={'width':1680,'height':1100})
+    page.on('dialog',accept_dialog)
     page.on('pageerror',lambda e:errors.append(str(e)))
-    page.on('dialog',lambda d:d.accept())
     # Use the minimal editor shell to keep dashboard refreshes out of history assertions.
     html=re.sub(r'<script>.*?</script>','',html,flags=re.S)
     html=html.replace('<script src="/static/project-brief.js"></script>', '''<script>
@@ -1454,6 +1582,8 @@ document.querySelectorAll('.panel').forEach(p=>p.style.display=p.id==='panel-cha
     candidate['nodes'][0]['owner']='AI 建议负责人'
     runtime._call_llm_with_routing.return_value={'content':json.dumps({'reply':'待审阅','project_brief':candidate},ensure_ascii=False)}
     page.set_viewport_size({'width':1680,'height':1100})
+    verify_discussion_readiness(page, output)
+    verify_generation_initial_check(page)
     verify_background_generation(page, output)
     verify_ai_review(page,review_id,untouched_id,output)
     assert not errors,errors
@@ -1466,6 +1596,7 @@ document.querySelectorAll('.panel').forEach(p=>p.style.display=p.id==='panel-cha
     assert not errors,errors
     browser.close()
 print('PASS: generation, nested DAG, drag, editing, cycle guard, grouped typing, document/graph undo/redo, save history, clean state, 50-step bound, isolation, conflict reload, external revision, export, mobile, dashboard chat + WebSocket, delayed load/save; zero page errors')
+print('PASS: discussion decisions, reopen, undo, saved queue, field navigation, advisory preflight, stale dispatch rejection, late-response isolation and initial generation status check; real API, simulated model')
 print('PASS: background generation, lost POST recovery, reload, editable workspace, draft isolation, stale result export and terminal error; real API, simulated model')
 print('PASS: AI review, selective adoption, saved document protection, proposal persistence, draft-preserving discard, stale proposal guard, undo after acceptance, escaped HTML, desktop/mobile diff; zero page errors')
 print('PASS: revision history, persisted snapshots, comparison, restore as new version, dirty draft protection, concurrent save rejection, reload and desktop/mobile history; zero page errors')

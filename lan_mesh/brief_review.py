@@ -6,6 +6,7 @@ from .project_brief import SECTIONS, ProjectBrief
 NODE_FIELDS = {
     "title": "名称", "kind": "类型", "description": "说明", "status": "确认状态",
     "priority": "优先级", "acceptance": "验收标准", "owner": "负责人",
+    "decision": "决策结论",
     "x": "横坐标", "y": "纵坐标", "collapsed": "折叠状态",
 }
 
@@ -30,7 +31,7 @@ def brief_changes(before: dict, after: dict) -> list[dict]:
     else:
         for old, new in zip(before["nodes"], after["nodes"]):
             for field, label in NODE_FIELDS.items():
-                add(f"node:{old['id']}:{field}", f"{old['title']} · {label}", old[field], new[field])
+                add(f"node:{old['id']}:{field}", f"{old['title']} · {label}", old.get(field, ""), new.get(field, ""))
     return changes
 
 
