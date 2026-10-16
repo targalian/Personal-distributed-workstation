@@ -133,7 +133,7 @@ def test_missing_release_dependencies_prevent_any_gate(tmp_path, monkeypatch):
     assert report['status'] == 'failed' and not report['checks'] and report['errors']
 
 
-@pytest.mark.parametrize('failure', ['dependencies', 'local', 'browser', 'startup', 'skipped_local'])
+@pytest.mark.parametrize('failure', ['dependencies', 'local', 'browser', 'startup', 'upgrade', 'skipped_local'])
 def test_release_never_passes_after_failed_or_skipped_gate(tmp_path, monkeypatch, failure):
     monkeypatch.setattr(release_check, 'locked_environment_errors', lambda: [])
     seen = []

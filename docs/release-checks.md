@@ -34,6 +34,7 @@ env -u PYTHONPATH -u PYTHONHOME .venv-release/bin/python scripts/release_check.p
 3. 执行本地 loop：Python 语法、全量 pytest、UI 静态检查、设计清单、shell 和 JavaScript 语法。
 4. 使用真实 Chrome/Chromium 验证项目描述、DAG、AI 建议审阅、历史、下发及恢复界面；模型响应为模拟数据。
 5. 在临时源码和数据目录运行真实启动脚本，验证 Station 健康、首页和 Worker 信息接口；TERM 后退出码为 143，两个 HTTP 端口关闭。
+6. 执行固定旧版源码→当前候选→拒绝不支持库→完整归档恢复旧代码/数据的演练，核实需求、验收、身份和回执，见 [升级演练](upgrade-drill.md)。本地 git 必须包含基线历史，缺少时明确失败。
 
 任一门禁失败、超时或被中断，最终报告不能是通过。本地检查项被跳过也不能通过；pytest 自身的历史跳过项会保留在详细输出中，须结合验收范围审阅。子进程超时或退出后清理其进程组；启动冒烟还负责清理自身启动器进程组。
 
@@ -56,8 +57,8 @@ env -u PYTHONPATH -u PYTHONHOME .venv-release/bin/python scripts/release_check.p
 
 ## CI 与验收边界
 
-`.github/workflows/release-check.yml` 在 EN 推送、PR 和手动触发时运行同一入口，使用 Ubuntu 22.04、Python 3.10、Node 22 和 Playwright Chromium；无论成功失败都尝试保留报告，保留期 14 天。
+`.github/workflows/release-check.yml` 在 EN 推送、目标为 EN 的 PR 和手动触发时运行同一入口，获取完整 git 历史并使用 Ubuntu 22.04、Python 3.10、Node 22 和 Playwright Chromium；无论成功失败都尝试保留报告，保留期 14 天。
 
 工作流失败会使该次检查失败。必须另行将其设为受保护分支/发布流程的必需检查，才会阻止对应合并或发布；新增 workflow 本身不证明策略已启用。远程运行结果应以实际 Actions 记录为准。
 
-新虚拟环境验证不等于全新操作系统验收。该流程不能证明真实模型质量、物理多主机故障恢复、付费请求停止、Windows 兼容性、生产数据切换、升级回退或 72 小时稳定性。这些门槛继续见 [1.0 就绪清单](1.0-readiness.md)。
+新虚拟环境验证不等于全新操作系统验收。该流程不能证明真实模型质量、物理多主机故障恢复、付费请求停止、Windows 兼容性、生产数据切换、未覆盖的历史版本/依赖组合升降级或 72 小时稳定性。这些门槛继续见 [1.0 就绪清单](1.0-readiness.md)。

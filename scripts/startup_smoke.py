@@ -46,7 +46,8 @@ def run_smoke(venv: Path, output: Path) -> None:
             'secretary': {'db_path': str(directory / 'data' / 'station.sqlite3')},
             'security': {'auth_enabled': False}}))
         env = os.environ.copy()
-        for name in ('PYTHONPATH', 'PYTHONHOME', 'LAN_MESH_CONFIG', 'LAN_MESH_MODEL_POOL'):
+        for name in ('PYTHONPATH', 'PYTHONHOME', 'LAN_MESH_CONFIG', 'LAN_MESH_MODEL_POOL',
+                     'LAN_MESH_RESOURCES', 'LAN_MESH_API_KEY'):
             env.pop(name, None)
         env.update(LAN_MESH_DATA_DIR=str(directory / 'data'),
                    LAN_MESH_LOG_FILE=str(output / 'service.log'), PYTHONNOUSERSITE='1')

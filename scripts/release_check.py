@@ -100,6 +100,8 @@ def run_release_checks(output: Path) -> bool:
                 ('browser', [sys.executable, 'test_bug/project_brief_browser.py'], 240),
                 ('startup', [sys.executable, 'scripts/startup_smoke.py', '--venv', sys.prefix,
                              '--output', str(output / 'startup')], 150),
+                ('upgrade', [sys.executable, 'scripts/upgrade_drill.py', '--venv', sys.prefix,
+                             '--output', str(output / 'upgrade')], 300),
             ]
             for name, command, timeout in commands:
                 print(f'[Release] Running {name}...', flush=True)

@@ -2,6 +2,8 @@
 
 四层验证体系：pytest 基线、专项验证脚本、UI 走查、Loop Engineering 每日循环。
 
+iter-60 `tests/test_upgrade_drill.py` 验证私有配置排除、链接拒绝、子进程环境隔离、缺基线/依赖错误/中断不假报通过与证据不覆盖，以及真实忽略 TERM 的进程必须报停止超时；发布失败参数增加 upgrade 门禁。真实两版启动和归档回退由 `scripts/upgrade_drill.py` 在完整发布入口执行，日志与归档随 CI 上传，不在 unit tests 中重复启动整套流程。
+
 iter-59 `tests/test_database_upgrade.py` 覆盖旧 schema、迁移前快照、事务故障与进程退出、未来版本拒绝、WAL 与并发初始化；真实临时 Station 在离线恢复和回退后经 HTTP 核实身份、验收任务、项目描述修订与后续编辑。完整发布门禁自动运行这些测试；模型和物理多节点不在本轮范围。
 
 iter-58 新增 `tests/test_release_checks.py`：独立进程验证数据默认路径、首次配置与显式路径优先级；验证门禁失败/跳过/中断不假报通过、已有证据不覆盖，以及超时/正常退出后的真实子进程清理。完整发布入口串联本地 loop、真实浏览器和启动冒烟，输出独立证据目录；不调用真实模型。CI 和本地使用相同入口，详见 [发布检查](../../release-checks.md)。
@@ -49,6 +51,7 @@ iter-58 新增 `tests/test_release_checks.py`：独立进程验证数据默认�
 | tests/test_restart_recovery.py | Preserve remote execution ownership and committed results across Secretary restart. |
 | tests/test_startup.py | Launch the shell wrapper in temporary projects to verify errors, arguments and cleanup. |
 | tests/test_task_resubmission.py | Verify resubmission preserves requirements and never duplicates a replacement or PM. |
+| tests/test_upgrade_drill.py | Reject unsafe upgrade inputs and preserve evidence when a real drill cannot finish. |
 <!-- /AUTO:module-list -->
 ---
 
