@@ -11,6 +11,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -936,6 +937,109 @@ def verify_revision_history(page, revision_id, output):
     assert page.locator('[data-history-choice] option').count()==4
 
 
+def verify_background_generation(page, output):
+    """Delayed real API jobs survive reload, lost responses and concurrent edits."""
+    job_cid=chat.create_conversation('后台整理验证')['id']
+    chat.briefs.save(job_cid,{**document(),'title':'后台整理原稿'},0)
+    entered,release=threading.Event(),threading.Event()
+    calls=[]
+    def delayed(*args):
+        calls.append(args)
+        entered.set()
+        assert release.wait(20)
+        return {'content':json.dumps({'reply':'整理建议','project_brief':document()})}
+    runtime._call_llm_with_routing.side_effect=delayed
+    endpoint=f'**/api/conversations/{job_cid}/brief/generation'
+    def lose_response(r):
+        if r.request.method!='POST':
+            r.fallback();return
+        response=client.post(f'/api/conversations/{job_cid}/brief/generation',json=json.loads(r.request.post_data))
+        assert response.status_code==202
+        r.fulfill(status=503,json={'detail':'模拟提交回执丢失'})
+    page.route(endpoint,lose_response,times=1)
+    try:
+        page.evaluate('(id)=>ProjectBriefUI.open(id)',job_cid)
+        page.locator('[data-tab="document"]').click()
+        page.locator('[data-action="generate"]').click()
+        assert entered.wait(2)
+        page.wait_for_function("!document.querySelector('#project-brief-panel').inert")
+        # Persisted request ID and server record resolve a lost POST after reload.
+        page.reload()
+        page.evaluate('(id)=>ProjectBriefUI.open(id)',job_cid)
+        page.wait_for_function("document.querySelector('.brief-generation').textContent.includes('正在整理')")
+        assert page.locator('[data-action="generate"]').is_disabled()
+        assert page.locator('[data-action="save"]').is_enabled()
+        page.locator('[data-field="title"]').fill('生成期间的手工草稿')
+        page.screenshot(path=str(output/'brief_generation_desktop.png'),full_page=True)
+        page.set_viewport_size({'width':390,'height':844})
+        page.locator('#project-brief-panel').scroll_into_view_if_needed()
+        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+        page.screenshot(path=str(output/'brief_generation_mobile.png'),full_page=True)
+        page.set_viewport_size({'width':1680,'height':1100})
+        page.evaluate('(id)=>ProjectBriefUI.open(id)',other)
+        assert page.locator('.brief-generation').is_hidden()
+        page.evaluate('(id)=>ProjectBriefUI.open(id)',job_cid)
+        assert page.locator('[data-field="title"]').input_value()=='生成期间的手工草稿'
+        release.set()
+        page.wait_for_function("document.querySelector('[data-tab=review]').textContent.includes('(')")
+        assert page.locator('[data-field="title"]').input_value()=='生成期间的手工草稿'
+        assert len(calls)==1
+        assert chat.briefs.get(job_cid)['document']['title']=='后台整理原稿'
+        page.locator('[data-tab="review"]').click()
+        assert page.locator('[data-action="review-apply"]').is_disabled()
+        page.locator('[data-action="review-discard"]').click()
+        page.wait_for_function("!document.querySelector('[data-action=review-discard]')")
+        page.locator('[data-tab="document"]').click()
+        page.locator('[data-action="save"]').click()
+        page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v2 · 已同步')")
+        # A saved edit during generation must produce an exportable stale result.
+        entered.clear();release.clear()
+        page.locator('[data-action="generate"]').click()
+        assert entered.wait(2)
+        page.wait_for_function("!document.querySelector('#project-brief-panel').inert")
+        page.locator('[data-field="title"]').fill('整理期间已保存的新稿')
+        page.locator('[data-action="save"]').click()
+        page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v3 · 已同步')")
+        release.set()
+        page.wait_for_selector('[data-action="generation-export"]')
+        assert page.locator('[data-field="title"]').input_value()=='整理期间已保存的新稿'
+        assert chat.briefs.get(job_cid)['proposal'] is None
+        with page.expect_download() as downloaded:
+            page.locator('[data-action="generation-export"]').click()
+        assert '协作工作台' in Path(downloaded.value.path()).read_text()
+        assert len(calls)==2
+        # A failed provider response is terminal and the workspace remains editable.
+        runtime._call_llm_with_routing.side_effect=RuntimeError('simulated provider failure')
+        page.locator('[data-action="generate"]').click()
+        page.wait_for_function("document.querySelector('.brief-generation').textContent.includes('整理失败')")
+        assert page.locator('[data-field="title"]').is_editable()
+        assert page.locator('[data-action="generate"]').is_enabled()
+        # A status GET begun before a new start must not replace that new job.
+        entered.clear();release.clear()
+        runtime._call_llm_with_routing.side_effect=delayed
+        held=[]
+        def hold_old_status(r):
+            response=client.get(f'/api/conversations/{job_cid}/brief/generation')
+            held.append((r,response))
+        page.route(endpoint,hold_old_status,times=1)
+        page.evaluate('(id)=>ProjectBriefUI.refresh(id)',job_cid)
+        page.wait_for_timeout(1500)
+        assert held
+        page.locator('[data-action="generate"]').click()
+        assert entered.wait(2)
+        page.wait_for_function("!document.querySelector('#project-brief-panel').inert")
+        route,response=held.pop()
+        route.fulfill(status=response.status_code,json=response.json())
+        page.wait_for_function("document.querySelector('.brief-generation').textContent.includes('正在整理')")
+        assert page.locator('[data-action="generate"]').is_disabled()
+        release.set()
+        page.wait_for_selector('[data-review-index]')
+        assert len(calls)==3
+    finally:
+        release.set()
+        runtime._call_llm_with_routing.side_effect=None
+
+
 def verify_ai_review(page, review_id, other_id, output):
     """Verify selective adoption, escaping, stale review guards and draft preservation."""
     page.evaluate('(id)=>ProjectBriefUI.open(id)',review_id)
@@ -1350,6 +1454,7 @@ document.querySelectorAll('.panel').forEach(p=>p.style.display=p.id==='panel-cha
     candidate['nodes'][0]['owner']='AI 建议负责人'
     runtime._call_llm_with_routing.return_value={'content':json.dumps({'reply':'待审阅','project_brief':candidate},ensure_ascii=False)}
     page.set_viewport_size({'width':1680,'height':1100})
+    verify_background_generation(page, output)
     verify_ai_review(page,review_id,untouched_id,output)
     assert not errors,errors
     revision_id=chat.create_conversation('持久化版本历史测试')['id']
@@ -1361,6 +1466,7 @@ document.querySelectorAll('.panel').forEach(p=>p.style.display=p.id==='panel-cha
     assert not errors,errors
     browser.close()
 print('PASS: generation, nested DAG, drag, editing, cycle guard, grouped typing, document/graph undo/redo, save history, clean state, 50-step bound, isolation, conflict reload, external revision, export, mobile, dashboard chat + WebSocket, delayed load/save; zero page errors')
+print('PASS: background generation, lost POST recovery, reload, editable workspace, draft isolation, stale result export and terminal error; real API, simulated model')
 print('PASS: AI review, selective adoption, saved document protection, proposal persistence, draft-preserving discard, stale proposal guard, undo after acceptance, escaped HTML, desktop/mobile diff; zero page errors')
 print('PASS: revision history, persisted snapshots, comparison, restore as new version, dirty draft protection, concurrent save rejection, reload and desktop/mobile history; zero page errors')
 

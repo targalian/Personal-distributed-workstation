@@ -2,6 +2,8 @@
 window.ProjectBriefUI = (() => {
   const panel = document.getElementById('project-brief-panel');
   const drafts = new Map();
+  const generationJobs = new Map(), pendingStarts = new Map();
+  let generationTimer = null, focusReview = false, generationEpoch = 0;
   let cid = '', state = null, tab = 'document', selected = null, edgeSelected = -1;
   let connecting = false, connectSource = null, drag = null, boxes = new Map();
   let view = {x:0,y:0,w:1100,h:680}, requestId = 0, busy = false;
@@ -21,6 +23,7 @@ window.ProjectBriefUI = (() => {
     <button class="btn" data-action="redo" title="重做（Ctrl/Cmd+Shift+Z 或 Ctrl+Y）" disabled>重做</button>
     <button class="btn" data-action="dispatch">确认并下发</button>
     </div><div class="brief-status" role="status" aria-live="polite"></div>
+    <div class="brief-generation" role="status" aria-live="polite" hidden></div>
     <div class="brief-tabs" role="tablist" aria-label="项目描述视图">
       <button class="btn" role="tab" data-tab="document">文档</button><button class="btn" role="tab" data-tab="graph">需求 DAG</button>
       <button class="btn" role="tab" data-tab="preview">Markdown 预览</button>
@@ -30,6 +33,7 @@ window.ProjectBriefUI = (() => {
     </div><div class="brief-content"></div>`;
   const content = panel.querySelector('.brief-content');
   const status = panel.querySelector('.brief-status');
+  const generationStatus = panel.querySelector('.brief-generation');
   function note(message) { status.textContent = message; status.classList.toggle('dirty', !!state?.dirty); }
   function summary() {
     if (!state) return note('选择一个对话，开始沉淀项目描述。');
@@ -54,7 +58,7 @@ window.ProjectBriefUI = (() => {
     }
     editGroup={state,element,time:now};state.redo=[];
   }
-  function changed() { state.dirty=!same(state.document,state.savedDocument); remember(); summary(); historyButtons();panel.querySelector('[data-action="dispatch"]').disabled=!state.revision||state.dirty; }
+  function changed() { focusReview=false; state.dirty=!same(state.document,state.savedDocument); remember(); summary(); historyButtons();panel.querySelector('[data-action="dispatch"]').disabled=!state.revision||state.dirty; }
   function travel(action) {
     editGroup=null;
     const source=state[action],destination=state[action==='undo'?'redo':'undo'];
@@ -76,13 +80,99 @@ window.ProjectBriefUI = (() => {
     }else if(focusedNode)(content.querySelector(`[data-node="${focusedNode}"]`)||panel).focus({preventScroll:true});
     content.scrollTop=scroll;
   }
-  async function request(suffix='', options={}) {
-    const response = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/brief${suffix}`, options);
+  async function request(suffix='', options={}, target=cid) {
+    const response = await apiFetch(`/api/conversations/${encodeURIComponent(target)}/brief${suffix}`, options);
     if (!response.ok) {
       let detail; try {detail=(await response.json()).detail;} catch {detail=response.statusText;}
-      throw new Error(response.status===409?`版本冲突：${typeof detail==='string'?detail:'项目描述已更新'}。当前修改已保留，请重新加载后审阅或合并。`:typeof detail==='string'?detail:JSON.stringify(detail));
+      const error = new Error(response.status===409?`版本冲突：${typeof detail==='string'?detail:'项目描述已更新'}。当前修改已保留，请重新加载后审阅或合并。`:typeof detail==='string'?detail:JSON.stringify(detail));
+      error.httpStatus=response.status;throw error;
     }
     return response;
+  }
+  function pendingStart(id) {
+    if(pendingStarts.has(id))return pendingStarts.get(id);
+    try {const item=JSON.parse(localStorage.getItem(`brief-generation:${id}`));
+      if(item?.request_id&&Number.isInteger(item.expected_revision)){pendingStarts.set(id,item);return item;}
+    } catch { /* In-memory recovery still works when browser storage is unavailable. */ }
+    return null;
+  }
+  function keepStart(id, item) {
+    if(item)pendingStarts.set(id,item);else pendingStarts.delete(id);
+    try {if(item)localStorage.setItem(`brief-generation:${id}`,JSON.stringify(item));else localStorage.removeItem(`brief-generation:${id}`);}catch{}
+  }
+  function generationSummary(message='') {
+    const job=generationJobs.get(cid), pending=pendingStart(cid);
+    const active=['queued','running'].includes(job?.status);
+    const labels={queued:'已登记',running:'正在整理',review:'整理完成',no_changes:'无新增建议',
+      conflict:'结果已过期',failed:'整理失败',interrupted:'结果待核实'};
+    generationStatus.hidden=!cid||(!job&&!pending&&!message);
+    generationStatus.innerHTML=`<span>${escape(message||(job?`${labels[job.status]||job.status} · 基于 v${job.base_revision} · ${job.message}`:pending?'正在核实上次整理请求；再次点击会沿用同一请求，不重复提交。':''))}</span>
+      ${job?.status==='conflict'?'<button class="btn" data-action="generation-export">导出过期结果</button>':''}`;
+    const button=panel.querySelector('[data-action="generate"]');
+    button.disabled=active;
+    button.textContent=active?'正在整理…':pending?'核实／重试整理请求':'从对话整理';
+  }
+  function pollLater(id, token) {
+    clearTimeout(generationTimer);
+    if(id===cid&&token===requestId)generationTimer=setTimeout(()=>pollGeneration(id,token),1200);
+  }
+  async function pollGeneration(id, token) {
+    if(id!==cid||token!==requestId)return;
+    const pending=pendingStart(id),epoch=generationEpoch;
+    try {
+      const data=await(await request('/generation'+(pending?`?request_id=${encodeURIComponent(pending.request_id)}`:''),{},id)).json();
+      if(id!==cid||token!==requestId||epoch!==generationEpoch)return;
+      const previous=generationJobs.get(id),job=data.job;
+      generationJobs.set(id,job);
+      if(pending&&job?.id===pending.request_id)keepStart(id,null);
+      generationSummary();
+      if(job?.status==='review' && (previous?.id!==job.id || previous?.status!==job.status || !state?.proposal)){
+        if(busy){pollLater(id,token);return;}
+        const snapshot=state,revision=state?.revision;
+        const brief=await(await request('',{},id)).json();
+        if(id!==cid||token!==requestId||epoch!==generationEpoch)return;
+        // Only merge proposal metadata. Never replace an editing buffer, history,
+        // focus, or a newer save/review response with a background GET.
+        if(!busy&&snapshot===state&&revision===state?.revision&&brief.revision===revision){
+          const old=state.proposal?.id;
+          state.proposal=brief.proposal;
+          if(old!==brief.proposal?.id)state.reviewSelection=[];
+          remember();summary();
+          panel.querySelector('[data-tab="review"]').textContent=state.proposal?`AI 建议 (${state.proposal.changes.length})`:'AI 建议';
+          if(focusReview&&!state.dirty&&state.proposal?.id===job.proposal_id){tab='review';render();}
+          else if(tab==='review')renderReview();
+          focusReview=false;
+        }else if(!busy){generationSummary('整理已完成；本地内容已保留，请重新加载已保存版本后审阅。');}
+        else {pollLater(id,token);return;}
+      }
+      if(['queued','running'].includes(job?.status))pollLater(id,token);
+    } catch(error) {
+      if(id!==cid||token!==requestId||epoch!==generationEpoch)return;
+      generationSummary(error.httpStatus===404&&pending?'尚未找到上次请求，可点击「核实／重试整理请求」沿用原编号重试。':`整理状态暂不可用：${error.message}；将继续查询。`);
+      pollLater(id,token);
+    }
+  }
+  async function startGeneration() {
+    generationEpoch++;
+    const id=cid,token=requestId;
+    let payload=pendingStart(id);
+    if(!payload){
+      const previous=generationJobs.get(id);
+      if(['failed','interrupted'].includes(previous?.status)&&!confirm('上次整理可能已经产生模型费用。开始一次新的整理？'))return;
+      await save();if(id!==cid||token!==requestId)return;
+      payload={request_id:globalThis.crypto?.randomUUID?.()||`brief_${Date.now()}_${Math.random().toString(36).slice(2)}`,expected_revision:state.revision};
+      keepStart(id,payload);
+    }
+    focusReview=true;
+    try {
+      const data=await(await request('/generation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)},id)).json();
+      generationJobs.set(id,data.job);keepStart(id,null);
+    } catch(error) {
+      if(error.httpStatus===409||error.httpStatus===422)keepStart(id,null);
+      throw error;
+    } finally {
+      if(id===cid&&token===requestId){generationSummary();pollLater(id,token);}
+    }
   }
   function received(data, previous=null) {
     const sameProposal=previous?.proposal?.id===data.proposal?.id;
@@ -95,7 +185,8 @@ window.ProjectBriefUI = (() => {
   async function open(id) {
     remember(); editGroup=null;cid=id; state=drafts.get(id)||null; selected=null; edgeSelected=-1; drag=null; connectSource=null;
     const token=++requestId;
-    render();
+    clearTimeout(generationTimer);focusReview=false;
+    render();if(id)pollLater(id,token);
     if (!id || state?.dirty) return;
     try { const data=await (await request()).json(); if(token===requestId && !state?.dirty){
       const previous=state?.revision===data.revision && same(state.document,data.document)?state:null;
@@ -111,6 +202,7 @@ window.ProjectBriefUI = (() => {
   async function save() {
     if(!state)return;
     if(!state.dirty && state.revision)return;
+    generationEpoch++;
     const target=cid, token=requestId,previous=state;
     editGroup=null;
     const data=await (await request('', {method:'PUT',headers:{'Content-Type':'application/json'},
@@ -122,10 +214,10 @@ window.ProjectBriefUI = (() => {
     if(busy)throw new Error('项目描述正在保存或整理，请稍后发送。');
     if(!state?.dirty)return;
     busy=true;panel.setAttribute('aria-busy','true');panel.inert=true;
-    try {await save();} finally {busy=false;panel.setAttribute('aria-busy','false');panel.inert=false;}
+    try {await save();} finally {busy=false;panel.setAttribute('aria-busy','false');panel.inert=false;pollLater(cid,requestId);}
   }
   function render() {
-    summary(); historyButtons();panel.querySelectorAll('[data-tab]').forEach(el=>el.setAttribute('aria-selected',el.dataset.tab===tab));
+    summary(); generationSummary(); historyButtons();panel.querySelectorAll('[data-tab]').forEach(el=>el.setAttribute('aria-selected',el.dataset.tab===tab));
     panel.querySelector('[data-action="dispatch"]').disabled=!state?.revision||state.dirty;
     panel.querySelector('[data-tab="review"]').textContent=state?.proposal?`AI 建议 (${state.proposal.changes.length})`:'AI 建议';
     if(!state){content.innerHTML='<div class="brief-empty">与秘书讨论项目背景、需求和想法，内容将整理到这里。<br>文档、模块框图与依赖关系可以共同编辑。</div>';return;}
@@ -192,6 +284,7 @@ window.ProjectBriefUI = (() => {
   async function reviewProposal(discard) {
     if(!state.proposal)return;
     if(!discard && state.dirty)throw new Error('请先处理未保存修改，避免覆盖本地草稿。');
+    generationEpoch++;
     const target=cid,token=requestId,previous=state;
     const data=await(await request('/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       proposal_id:state.proposal.id,expected_revision:state.revision,selected:discard?[]:state.reviewSelection,
@@ -268,6 +361,7 @@ window.ProjectBriefUI = (() => {
         detail.changes.map(change=>`<details class="brief-change" open><summary>${escape(change.label)}</summary><div class="brief-diff"><div><strong>当前已保存内容</strong><pre>${escape(reviewValue(change.before))}</pre></div><div><strong>历史版本内容</strong><pre>${escape(reviewValue(change.after))}</pre></div></div></details>`).join(''):''}`;
   }
   async function restoreHistory() {
+    generationEpoch++;
     const detail=state.historyDetail;
     if(state.dirty)throw new Error('请先处理未保存修改，再恢复历史。');
     if(!detail||detail.current_revision!==state.revision)throw new Error('请重新加载并查看历史版本。');
@@ -421,14 +515,15 @@ window.ProjectBriefUI = (() => {
   panel.addEventListener('click',async event=>{
     const target=event.target.closest('button');if(!target||busy)return;
     editGroup=null;
-    if(target.dataset.tab){tab=target.dataset.tab;render();if(state)try{if(tab==='history')await loadHistory();if(tab==='handoffs')await loadHandoffs();}catch(error){note(error.message);}return;}
+    if(target.dataset.tab){focusReview=false;tab=target.dataset.tab;render();if(state)try{if(tab==='history')await loadHistory();if(tab==='handoffs')await loadHandoffs();}catch(error){note(error.message);}return;}
     const action=target.dataset.action;if(!action||!state)return;
     if(action==='generate'&&state.proposal){tab='review';render();note('请先采纳或忽略现有建议，再重新整理。');return;}
     try{
-      if(['save','generate','export','reload','review-apply','review-discard','history-refresh','history-more','history-view','history-restore','dispatch','handoffs-refresh','handoff-view','handoff-task'].includes(action)){
+      if(['save','generate','generation-export','export','reload','review-apply','review-discard','history-refresh','history-more','history-view','history-restore','dispatch','handoffs-refresh','handoff-view','handoff-task'].includes(action)){
         busy=true;panel.setAttribute('aria-busy','true');panel.inert=true;
         if(action==='save')await save();
-        if(action==='generate'){const id=cid,token=requestId;await save();if(id!==cid||token!==requestId)return;note('正在整理修改建议…');const data=await(await request('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_revision:state.revision})})).json();if(id===cid&&token===requestId){tab='review';accept(data,state);}}
+        if(action==='generate')await startGeneration();
+        if(action==='generation-export'){const job=generationJobs.get(cid);download(await(await request(`/generation/${encodeURIComponent(job.id)}/markdown`)).text());}
         if(action==='review-apply')await reviewProposal(false);
         if(action==='review-discard'&&confirm('忽略这份 AI 建议？已保存文档和本地编辑保持不变。'))await reviewProposal(true);
         if(action==='history-refresh'||action==='history-more')await loadHistory(action==='history-more');
@@ -474,7 +569,7 @@ window.ProjectBriefUI = (() => {
       }else if(action==='undo'||action==='redo')travel(action);
       else if(action==='layout'){mutate(autoLayout);fit();}else if(action==='fit')fit();
     }catch(error){note(error.message);showToast(error.message,'err');}
-    finally{busy=false;panel.setAttribute('aria-busy','false');panel.inert=false;}
+    finally{busy=false;panel.setAttribute('aria-busy','false');panel.inert=false;if(cid)pollLater(cid,requestId);}
   });
   window.addEventListener('beforeunload',event=>{if([...drafts.values()].some(s=>s.dirty)){event.preventDefault();event.returnValue='';}});
   render();

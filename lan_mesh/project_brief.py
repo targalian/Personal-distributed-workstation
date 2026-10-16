@@ -32,6 +32,8 @@ SECTIONS = {
     "acceptance": "验收标准与验证方式",
 }
 STATUS_LABELS = {"proposed": "建议", "confirmed": "已确认", "discussion": "待讨论"}
+_STORE_LOCKS = {}
+_STORE_LOCKS_GUARD = threading.Lock()
 
 
 class BriefNode(BaseModel):
@@ -173,7 +175,8 @@ class RevisionConflict(ValueError):
 class BriefStore:
     def __init__(self, root):
         self.root = Path(root) / "project_briefs"
-        self.lock = threading.RLock()
+        with _STORE_LOCKS_GUARD:
+            self.lock = _STORE_LOCKS.setdefault(str(self.root.resolve()), threading.RLock())
 
     def _path(self, conv_id):
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", conv_id):
@@ -190,6 +193,7 @@ class BriefStore:
                 brief = ProjectBrief()
                 value = {"revision": 0, "updated_at": None, "document": brief.model_dump()}
             value.pop("_history", None)
+            value.pop("_generation_jobs", None)
             return {**value, "proposal": value.get("proposal"),
                     "markdown": render_markdown(brief, value["revision"]), "section_labels": SECTIONS}
 
@@ -288,12 +292,15 @@ class BriefStore:
                             "source": "legacy", "title": raw["document"]["title"]})
         return entries
 
-    def _write(self, conv_id: str, value: dict, source: str = "", restored_from: int | None = None) -> None:
+    def _write(self, conv_id: str, value: dict, source: str = "", restored_from: int | None = None,
+               generation_jobs: dict | None = None) -> None:
         """Prepare snapshots, then atomically publish document, proposal and history index."""
         stored = {key: value[key] for key in ("revision", "updated_at", "document", "proposal")}
         path = self._path(conv_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        stored["_generation_jobs"] = (generation_jobs if generation_jobs is not None
+                                      else raw.get("_generation_jobs", {}))
         entries = self._history_entries(raw)
         if value["revision"] != raw.get("revision", 0):
             if entries and not entries[-1].get("file"):

@@ -8,6 +8,7 @@
 | 文件/目录 | 职责一句话 |
 |---|---|
 | bot_gateway.py | Bot 网关 — 手机消息通道 |
+| brief_generation.py | Durable background brief generation with idempotent starts and atomic proposals. |
 | brief_handoff.py | Persist confirmed project descriptions before dispatch and prevent duplicate handoffs. |
 | brief_review.py | Build reviewable AI changes and merge an explicit selection without breaking graphs. |
 | chat_handler.py | 秘书聊天处理器 — Web 端对话接口 |
@@ -79,3 +80,9 @@ Boss 与秘书对话新增文档／需求 DAG 双视图，支持三层框图、�
 ## 澄清继续点与回复确认（iter-55）
 
 任务详情与 PM 线程发送固定问题编号，失败保留输入；已落盘确认后才记录“已发送”消息。线程可读取当前问题，有旧草稿时不切换编号。Bot 选项绑定问题编号与选项索引，旧无编号按钮拒绝；取消操作必须走任务控制，不把“终止”文本当作已取消。Bot 测试全部模拟网络，没有发送真实消息。
+
+### 项目描述后台整理（iter-61）
+
+「从对话整理」改走持久化后台任务：先保存并固定文档/对话输入，登记请求编号后调用模型，同编号请求重放只返回已有记录。任务终态和 AI 建议同一原子写入，不直接修改已保存文档。人工保存或另一份建议使结果过期时，保留候选供 Markdown 导出；进程退出后只标记待核实，不自动产生新调用。
+
+每会话一个活动任务、进程最多两个，数据目录的进程生命周期锁拒绝重复实例；同进程文档锁共享，普通保存/审阅/历史恢复保留去重记录。旧同步 API 保持兼容。接口、使用和边界详见 [后台整理说明](../../brief-generation.md)。

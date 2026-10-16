@@ -18,6 +18,10 @@ class GenerateBrief(BaseModel):
     expected_revision: int = Field(ge=0)
 
 
+class StartGeneration(GenerateBrief):
+    request_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,100}$")
+
+
 class ReviewBrief(BaseModel):
     proposal_id: str = Field(min_length=1, max_length=64)
     expected_revision: int = Field(ge=0)
@@ -66,6 +70,35 @@ def build_brief_routes(controller):
         return Response(value["markdown"], media_type="text/markdown; charset=utf-8", headers={
             "Content-Disposition": "attachment; filename*=UTF-8''" + quote("项目描述.md"),
         })
+
+    @router.post("/generation", status_code=202)
+    def start_generation(conv_id: str, payload: StartGeneration):
+        try:
+            return handler(conv_id).brief_generation.start(conv_id, payload.request_id, payload.expected_revision)
+        except RevisionConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @router.get("/generation")
+    def get_generation(conv_id: str, request_id: str | None = Query(default=None, max_length=100)):
+        try:
+            return handler(conv_id).brief_generation.get(conv_id, request_id)
+        except RevisionConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(404, "整理任务不存在") from exc
+
+    @router.get("/generation/{request_id}/markdown")
+    def generation_markdown(conv_id: str, request_id: str):
+        try:
+            text = handler(conv_id).brief_generation.candidate_markdown(conv_id, request_id)
+            return Response(text, media_type="text/markdown; charset=utf-8", headers={
+                "Content-Disposition": "attachment; filename*=UTF-8''" + quote("过期整理结果.md")})
+        except RevisionConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(404, "没有可导出的过期结果") from exc
 
     @router.post("/review")
     def review_brief(conv_id: str, payload: ReviewBrief):

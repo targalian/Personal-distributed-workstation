@@ -17,7 +17,7 @@ from typing import Optional
 
 from .data_paths import data_directory
 from .logger import get_logger
-from .project_brief import BriefStore, brief_instructions, parse_brief_reply
+from .project_brief import BriefStore, ProjectBrief, brief_instructions, parse_brief_reply
 from .brief_handoff import BriefHandoff
 from .role_cards import render_secretary_prompt
 
@@ -111,6 +111,8 @@ class ChatHandler:
         self._max_history = 50
         self.briefs = BriefStore(self._get_conv_dir())
         self.brief_handoffs = BriefHandoff(self.briefs, controller)
+        from .brief_generation import BriefGeneration
+        self.brief_generation = BriefGeneration(self)
 
         # ── 多对话状态 ──
         self._conv_index: list[dict] = []       # [{id, title, project_id, pm_threads, created_at, updated_at}]
@@ -289,6 +291,12 @@ class ChatHandler:
 
     def generate_project_brief(self, conv_id: str, expected_revision: int) -> dict:
         """Explicitly compile conversation + current document without dispatching a task."""
+        prompt, options = self.prepare_project_brief(conv_id, expected_revision)
+        document = self.call_project_brief(prompt, options)
+        return self.briefs.propose(conv_id, document, expected_revision)
+
+    def prepare_project_brief(self, conv_id: str, expected_revision: int) -> tuple:
+        """Capture the conversation and document before background work starts."""
         if not self._get_conv_meta(conv_id):
             raise KeyError("对话不存在")
         current = self.briefs.get(conv_id)
@@ -298,15 +306,19 @@ class ChatHandler:
         if current.get("proposal"):
             from .project_brief import RevisionConflict
             raise RevisionConflict("已有待审阅建议，请先采纳或忽略")
-        response = self.runtime._call_llm_with_routing(
+        return (
             self._build_prompt("请根据以上讨论和当前文档整理完整项目描述，缺失信息标为待讨论。", self.get_messages(conv_id)),
             {"_model_preference": getattr(self.controller, "_default_model", ""),
              "_system_prompt": self._build_system_prompt("") + brief_instructions(current, generate=True)},
         )
+
+    def call_project_brief(self, prompt: str, options: dict) -> dict:
+        """Generate a validated candidate; this method does not save the document."""
+        response = self.runtime._call_llm_with_routing(prompt, options)
         _, document = parse_brief_reply(response.get("content", ""))
         if document is None:
             raise ValueError("模型未返回有效项目描述，原稿已保留，请重试或手工编辑")
-        return self.briefs.propose(conv_id, document, expected_revision)
+        return ProjectBrief.model_validate(document).model_dump()
 
     def get_history(self, limit: int = 50, conv_id: str = "") -> list[dict]:
         """返回指定对话的最近消息。"""

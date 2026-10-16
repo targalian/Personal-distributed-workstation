@@ -29,6 +29,7 @@ iter-58 新增 `tests/test_release_checks.py`：独立进程验证数据默认�
 | test_bug/ui_change_log.py | Loop Engineering — UI 改动待检登记工具 |
 | test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
 | tests/test_backup.py | Restore real task, brief and receipt stores; reject corrupt or unsafe backup archives. |
+| tests/test_brief_generation.py | Background generation: paid request deduplication, crash evidence and edit safety. |
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_database_upgrade.py | Verify schema upgrade rollback, pre-write snapshots and recovery across real processes. |
 | tests/test_delivery_replay.py | Concurrent delivery retries must preserve the reviewed artifact and acceptance decision. |
@@ -187,3 +188,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 ## iter-57：暂停继续验收
 
 `test_pm_continue.py` 覆盖真实线程五阶段暂停、结果复用与质量分支、同进程旧实例/写者隔离、重复点击、取消竞争、二次暂停、准备/启动故障重试、子进程退出及旧代上报拒绝。原恢复 HTTP 测试同时参数化 Station/Worker 暂停继续。Chrome 验证继续、失败重试、状态刷新、输出过滤及迟到隔离。模型/工具模拟；实机多节点和真实成本不在这些证据范围。
+
+### iter-61 后台整理验证
+
+`tests/test_brief_generation.py` 覆盖实际线程并发/去重、同进程重新创建处理器、独立进程退出与租约、文档/建议冲突、失效输出、写盘失败、线程创建失败、并发上限、固定输入以及离线备份恢复。浏览器脚本补后台整理回归：提交回执丢失后刷新、生成期间编辑/保存/切换、晚到状态隔离、过期候选下载、错误终态与桌面/手机截图。它们验证接口和存储行为，不替代真实模型与物理多机验收。

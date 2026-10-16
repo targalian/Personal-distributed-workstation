@@ -5,6 +5,8 @@
 .brief-toolbar strong{font-size:15px;margin-right:auto}.brief-toolbar .btn{font-size:12px;padding:6px 9px}
 .brief-status{font-size:12px;color:var(--dim);padding:8px 12px;border-bottom:1px solid var(--border);line-height:1.6;min-height:36px;overflow-wrap:anywhere}
 .brief-status.dirty{color:var(--yellow)}
+.brief-generation{padding:8px 12px;font-size:12px;line-height:1.7;color:var(--accent);border-bottom:1px solid var(--border);overflow-wrap:anywhere}
+.brief-generation .btn{margin:4px 0 0 8px}
 .brief-tabs{display:flex;gap:6px;padding:8px 12px}.brief-tabs button[aria-selected=true]{background:var(--accent);color:white}
 .brief-content{flex:1;min-height:0;overflow:auto;padding:12px;overflow-wrap:anywhere}.brief-content label{display:block;font-size:12px;color:var(--dim);margin-bottom:10px}
 .brief-content input,.brief-content textarea,.brief-content select{display:block;width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:5px;font:inherit}
