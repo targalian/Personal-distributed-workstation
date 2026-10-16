@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from .data_paths import data_directory
+from .schema_upgrade import add_column, backup_before_upgrade, execute_schema
 from .protocol import HostRecord, HostEvent, AgentCard, Task, SubTask, PMAgent, AgentTeam, ProgressReport
 from .logger import get_logger
 
@@ -26,81 +27,37 @@ SCHEMA_VERSION = 5
 
 
 def _migration_v1(conn: sqlite3.Connection):
-    """迁移 v1: 从旧版 ad-hoc ALTER TABLE 迁移到版本化管理。
-
-    包含历史兼容性列添加 (幂等操作)。
-    """
-    # tasks 表: project_id 列
-    try:
-        conn.execute("ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
-    # hosts 表: 评级列
-    for col, dtype, default in [
-        ("rating_tier", "TEXT", "''"),
-        ("rating_score", "INTEGER", "0"),
-        ("rating_summary", "TEXT", "''"),
+    """Add historical columns without masking unrelated SQLite errors."""
+    add_column(conn, "tasks", "project_id", "TEXT NOT NULL DEFAULT ''")
+    for col, definition in [
+        ("rating_tier", "TEXT NOT NULL DEFAULT ''"),
+        ("rating_score", "INTEGER NOT NULL DEFAULT 0"),
+        ("rating_summary", "TEXT NOT NULL DEFAULT ''"),
     ]:
-        try:
-            conn.execute(f"ALTER TABLE hosts ADD COLUMN {col} {dtype} NOT NULL DEFAULT {default}")
-        except sqlite3.OperationalError:
-            pass
-    # tasks 表: pm_agent_id 列
-    try:
-        conn.execute("ALTER TABLE tasks ADD COLUMN pm_agent_id TEXT NOT NULL DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
+        add_column(conn, "hosts", col, definition)
+    add_column(conn, "tasks", "pm_agent_id", "TEXT NOT NULL DEFAULT ''")
 
 
 def _migration_v2(conn: sqlite3.Connection):
-    """迁移 v2: resource_usage_log 增加 usage_id (幂等键) 与 reported 游标。"""
-    for col, dtype, default in [
-        ("usage_id", "TEXT", "''"),
-        ("reported", "INTEGER", "0"),
-    ]:
-        try:
-            conn.execute(f"ALTER TABLE resource_usage_log "
-                         f"ADD COLUMN {col} {dtype} NOT NULL DEFAULT {default}")
-        except sqlite3.OperationalError:
-            pass
-    try:
-        conn.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_usage_uid
-                ON resource_usage_log(usage_id) WHERE usage_id != ''
-        """)
-    except sqlite3.OperationalError:
-        pass
+    """Add usage identities and the deduplication index atomically."""
+    add_column(conn, "resource_usage_log", "usage_id", "TEXT NOT NULL DEFAULT ''")
+    add_column(conn, "resource_usage_log", "reported", "INTEGER NOT NULL DEFAULT 0")
+    conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_usage_uid
+        ON resource_usage_log(usage_id) WHERE usage_id != ''""")
 
 
 def _migration_v3(conn: sqlite3.Connection):
-    """迁移 v3: resource_usage_log 增加 task_id/project_id 成本归因列 (R6)。"""
+    """Add task/project cost attribution and its index."""
     for col in ("task_id", "project_id"):
-        try:
-            conn.execute(f"ALTER TABLE resource_usage_log "
-                         f"ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass
-    try:
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_resource_usage_task
-                ON resource_usage_log(task_id) WHERE task_id != ''
-        """)
-    except sqlite3.OperationalError:
-        pass
+        add_column(conn, "resource_usage_log", col, "TEXT NOT NULL DEFAULT ''")
+    conn.execute("""CREATE INDEX IF NOT EXISTS idx_resource_usage_task
+        ON resource_usage_log(task_id) WHERE task_id != ''""")
 
 
 def _migration_v4(conn: sqlite3.Connection):
-    """迁移 v4: hosts 表增加代码版本列 (S2/S3 跨主机版本统计与升级提醒)。"""
-    try:
-        conn.execute("ALTER TABLE hosts "
-                     "ADD COLUMN code_version TEXT NOT NULL DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        conn.execute("ALTER TABLE hosts "
-                     "ADD COLUMN version_ts REAL NOT NULL DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
+    """Add host code-version metadata."""
+    add_column(conn, "hosts", "code_version", "TEXT NOT NULL DEFAULT ''")
+    add_column(conn, "hosts", "version_ts", "REAL NOT NULL DEFAULT 0")
 
 
 def _migration_v5(conn: sqlite3.Connection):
@@ -173,8 +130,31 @@ class Database:
         return self._local.conn
 
     def _init_db(self):
-        """初始化数据库表结构 + 版本化迁移。"""
+        """Serialize schema initialization, snapshot old databases and roll back on failure."""
         conn = self._get_conn()
+        self.upgrade_backup_path = None
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            current = self._get_schema_version(conn) if "schema_meta" in tables else 0
+            if current < 0 or current > SCHEMA_VERSION:
+                raise ValueError(f"Unsupported database schema v{current}; this code supports v{SCHEMA_VERSION}")
+            if tables and current < SCHEMA_VERSION:
+                self.upgrade_backup_path = backup_before_upgrade(self.path, current, SCHEMA_VERSION)
+                logger.info("[DB] 迁移前快照: %s", self.upgrade_backup_path)
+            self._create_schema(conn)
+            self._run_migrations(conn)
+            conn.commit()
+            if current < SCHEMA_VERSION:
+                logger.info("[DB] 数据库 schema 已提交到 v%d", SCHEMA_VERSION)
+        except BaseException:
+            conn.rollback()
+            conn.close()
+            del self._local.conn
+            raise
+
+    def _create_schema(self, conn: sqlite3.Connection) -> None:
+        """Create base tables inside the schema initialization transaction."""
         # 创建 schema 元数据表
         conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_meta (
@@ -182,10 +162,9 @@ class Database:
                 value TEXT NOT NULL DEFAULT ''
             )
         """)
-        conn.commit()
 
-        # 创建所有表 (幂等)
-        conn.executescript("""
+        # 创建所有表 (幂等)，不隐式提交当前事务。
+        execute_schema(conn, """
             CREATE TABLE IF NOT EXISTS hosts (
                 device_id     TEXT PRIMARY KEY,
                 device_name   TEXT NOT NULL DEFAULT '',
@@ -323,7 +302,7 @@ class Database:
                 ON skill_assignments(assignee_type, assignee_id);
         """)
         # PM Agent 架构演进: 新增表
-        conn.executescript("""
+        execute_schema(conn, """
             CREATE TABLE IF NOT EXISTS pm_agents (
                 pm_id              TEXT PRIMARY KEY,
                 agent_name         TEXT NOT NULL DEFAULT '',
@@ -426,7 +405,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_resource_usage_rid_ts
                 ON resource_usage_log(resource_id, created_at);
             -- 注意: task_id 部分索引只能建在 _migration_v3 中
-            -- (executescript 先于迁移执行, 旧库无 task_id 列会炸)
+            -- (基础表创建先于迁移执行, 旧库无 task_id 列会炸)
 
             -- Graph Engine: 图执行检查点表
             CREATE TABLE IF NOT EXISTS graph_checkpoints (
@@ -442,10 +421,6 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_checkpoint_task
                 ON graph_checkpoints(task_id, created_at);
         """)
-        conn.commit()
-
-        # 执行版本化迁移
-        self._run_migrations(conn)
 
     def _get_schema_version(self, conn: sqlite3.Connection) -> int:
         """获取当前 schema 版本号。"""
@@ -460,7 +435,6 @@ class Database:
             "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', ?)",
             (str(version),),
         )
-        conn.commit()
 
     def _run_migrations(self, conn: sqlite3.Connection):
         """执行所有待应用的迁移。"""
@@ -475,10 +449,7 @@ class Database:
                 migration_fn(conn)
                 self._set_schema_version(conn, ver)
             else:
-                logger.warning("缺少迁移函数: v%d, 跳过", ver)
-                self._set_schema_version(conn, ver)
-
-        logger.info("数据库 schema 已更新到 v%d", SCHEMA_VERSION)
+                raise ValueError(f"Missing schema migration v{ver}; upgrade aborted")
 
     # ── 主机记录 CRUD ───────────────────────────────────────────
 

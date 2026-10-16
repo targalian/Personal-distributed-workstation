@@ -6,6 +6,8 @@ A distributed personal AI workstation — organizes multiple heterogeneous hosts
 
 Offline backup and recovery: see [the backup guide](docs/backup-restore.md) for `scripts/backup_workstation.py create`, `verify`, and `restore`. Backups include task data, conversations, project description history and execution/startup receipts; restore first into a new directory for verification.
 
+Database upgrades: [the migration guide](docs/schema-upgrades.md) describes pre-upgrade snapshots, atomic schema changes, unsupported-version rejection, and offline rollback. These database snapshots supplement full workstation backups.
+
 Task execution uncertainty: see [the recovery guide](docs/task-recovery.md) for original-node inspection and next steps after disconnects or restarts.
 
 Reproducible Linux source installation: [the release-check guide](docs/release-checks.md) covers the Python 3.10 dependency locks, isolated installation, browser and startup gates, and CI evidence. Set `LAN_MESH_DATA_DIR` before startup to select a separate absolute data directory; explicit configured paths still take precedence. This does not migrate existing data or enable PM recovery at a new path.

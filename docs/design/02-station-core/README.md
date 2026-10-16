@@ -3,6 +3,10 @@
 系统骨架：进程控制器、路由层、基础设施管理器、数据库持久化。
 设计原则: **Station Director 只管「机器」，Secretary 只管「项目」**。
 
+## schema_upgrade.py — 升级前保护（iter-59）
+
+主库初始化持有 SQLite `BEGIN IMMEDIATE`，先读取并验证版本。已有旧库先由独立只读连接写 `.pending`，完整性校验和 fsync 后独占发布正式快照，再在同一事务内执行基础建表、所有迁移和版本写入；取消 executescript 的隐式提交与笼统 SQL 异常吞掉。任一错误回滚并关闭连接，缺失迁移或未来版本拒绝启动。`backups/upgrades/` 中的唯一快照包含原路径摘要与版本，不参与日常三份保留清理。它只保护主库，不代替整个节点的离线备份。详见 [迁移和回退说明](../../schema-upgrades.md)。
+
 ## 模块清单
 
 <!-- AUTO:module-list -->
@@ -10,6 +14,7 @@
 |---|---|
 | backup.py | Offline, verified backups of task data, conversations, configuration and execution receipts. |
 | database.py | SQLite 数据库存储层 - Secretary 端主机注册记录持久化 |
+| schema_upgrade.py | Preserve the pre-upgrade SQLite state and execute schema changes without implicit commits. |
 | singleton.py | 主机级工作站单实例守护 (E6)。 |
 | station_api.py | Station Director API 路由层 (装配入口) |
 | station_controller.py | Station Director 独立控制器 — 基础设施管理入口 |

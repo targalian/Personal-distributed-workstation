@@ -59,6 +59,7 @@ MAPPING = {
     "lan_mesh/station_routes_worker.py": "02-station-core",
     "lan_mesh/singleton.py": "02-station-core",
     "lan_mesh/database.py": "02-station-core",
+    "lan_mesh/schema_upgrade.py": "02-station-core",
     "lan_mesh/backup.py": "02-station-core",
     # 03-task-orchestration — 任务编排与 PM
     "lan_mesh/task.py": "03-task-orchestration",
@@ -142,6 +143,7 @@ MAPPING = {
     "tests/test_pm_pause.py": "10-test-loop",
     "tests/test_pm_continue.py": "10-test-loop",
     "tests/test_release_checks.py": "10-test-loop",
+    "tests/test_database_upgrade.py": "10-test-loop",
     "tests/test_pm_clarification.py": "10-test-loop",
     "tests/test_pm_checkpoint.py": "10-test-loop",
     "tests/test_pm_recovery.py": "10-test-loop",

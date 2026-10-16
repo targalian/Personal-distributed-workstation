@@ -2,6 +2,8 @@
 
 四层验证体系：pytest 基线、专项验证脚本、UI 走查、Loop Engineering 每日循环。
 
+iter-59 `tests/test_database_upgrade.py` 覆盖旧 schema、迁移前快照、事务故障与进程退出、未来版本拒绝、WAL 与并发初始化；真实临时 Station 在离线恢复和回退后经 HTTP 核实身份、验收任务、项目描述修订与后续编辑。完整发布门禁自动运行这些测试；模型和物理多节点不在本轮范围。
+
 iter-58 新增 `tests/test_release_checks.py`：独立进程验证数据默认路径、首次配置与显式路径优先级；验证门禁失败/跳过/中断不假报通过、已有证据不覆盖，以及超时/正常退出后的真实子进程清理。完整发布入口串联本地 loop、真实浏览器和启动冒烟，输出独立证据目录；不调用真实模型。CI 和本地使用相同入口，详见 [发布检查](../../release-checks.md)。
 
 ## 模块清单
@@ -26,6 +28,7 @@ iter-58 新增 `tests/test_release_checks.py`：独立进程验证数据默认�
 | test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
 | tests/test_backup.py | Restore real task, brief and receipt stores; reject corrupt or unsafe backup archives. |
 | tests/test_core.py | 核心模块单元测试 |
+| tests/test_database_upgrade.py | Verify schema upgrade rollback, pre-write snapshots and recovery across real processes. |
 | tests/test_delivery_replay.py | Concurrent delivery retries must preserve the reviewed artifact and acceptance decision. |
 | tests/test_execution_receipts.py | Verify durable execution claims, restart ambiguity and Station/Worker HTTP receipts. |
 | tests/test_local_checks.py | Verify local-loop failure propagation, environment isolation and offline reports. |
