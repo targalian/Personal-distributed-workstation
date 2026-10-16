@@ -471,8 +471,6 @@ class PMDispatcher:
             result = self._runtime.execute(subtask)
         except Exception as exc:
             result = {"status": "failed", "error": str(exc), "output": {}}
-        if st.stop_event.is_set():
-            return
         result = normalize_result(result)
         status, output = result["status"], result["output"]
 

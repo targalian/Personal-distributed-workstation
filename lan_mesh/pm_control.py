@@ -31,9 +31,18 @@ def control_pm(current: Callable, device_id: str, payload: dict) -> dict:
                 return {"ok": False, "message": "当前 PM 或任务不匹配，未停止其他任务"}
             if pm._state.stop_reason == "cancelled" and identity["action"] == "pause":
                 return {"ok": False, "message": "PM 已取消，拒绝晚到的暂停请求"}
-            pm._signal_stop("cancelled" if identity["action"] == "cancel" else "paused")
+            if pm._state.phase in ("completed", "failed"):
+                return {"ok": False, "message": "PM 已有终态，拒绝修改停止意图"}
+            if (not pm._checkpoint_error and _matches(pm._state.control_receipt, identity)
+                    and pm._state.stop_event.is_set()):
+                return dict(pm._state.control_receipt)
             receipt = {"ok": True, **identity, "scope": "pm_cooperative"}
-            pm._control_receipt = receipt
+            previous = dict(pm._state.control_receipt)
+            pm._state.control_receipt = receipt
+            pm._signal_stop("cancelled" if identity["action"] == "cancel" else "paused")
+            if pm._checkpoint_error:
+                pm._state.control_receipt = previous
+                return {"ok": False, "message": "PM 已设置停止信号，但检查点保存失败；停止确认仍待核实"}
             logger.info("PM %s 任务 %s 已设置协作停止信号: %s (请求 %s)",
                         pm.pm_id, identity["task_id"], identity["action"], identity["request_id"])
             # The Secretary has already persisted intent. Do not block this
@@ -71,13 +80,17 @@ def request_task_control(controller: "StationController", task_id: str, action: 
                 confirmed = _matches(receipt, request)
             except Exception:
                 confirmed = False
-            if not confirmed and pm.device_id != controller.state.device_id:
+            if not confirmed:
                 # A lost acknowledgment can be checked, but never causes a second POST.
                 try:
-                    response = http_get(f"http://{pm.ip}:{pm.api_port}/role/pm-starts/{quote(pm.pm_id, safe='')}",
-                                        params={"task_id": task_id}, timeout=5, retries=0, allow_redirects=False)
-                    evidence = response.json() if response is not None and response.status_code == 200 else {}
+                    if pm.device_id == controller.state.device_id:
+                        evidence = controller._local_inspect_pm_start(pm.pm_id, task_id)
+                    else:
+                        response = http_get(f"http://{pm.ip}:{pm.api_port}/role/pm-starts/{quote(pm.pm_id, safe='')}",
+                                            params={"task_id": task_id}, timeout=5, retries=0, allow_redirects=False)
+                        evidence = response.json() if response is not None and response.status_code == 200 else {}
                     confirmed = (evidence.get("format") == 1 and evidence.get("pm_id") == pm.pm_id
+                                 and evidence.get("state") not in ("mismatch", "unavailable", "changed")
                                  and evidence.get("task_id") == task_id and evidence.get("device_id") == pm.device_id
                                  and _matches(evidence.get("control_receipt", {}), request))
                 except Exception:

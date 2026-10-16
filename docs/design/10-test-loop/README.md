@@ -33,6 +33,7 @@
 | tests/test_pm_delivery.py | Delivery outcomes must reflect persisted acknowledgements, not child progress or model errors. |
 | tests/test_pm_inspection.py | Verify original-node inspection survives restart and never redispatches or rewrites results. |
 | tests/test_pm_lifecycle.py | Exercise PM worker and monitor threads through completion and cooperative stop. |
+| tests/test_pm_pause.py | Verify paused execution evidence is durable without scheduling, retry or delivery. |
 | tests/test_pm_recovery.py | Recovery evidence must use original identities and never dispatch or overwrite state. |
 | tests/test_pm_resume.py | Exercise process death, atomic recovery and original execution reuse through delivery. |
 | tests/test_pm_start.py | Verify task/PM registration precedes execution and startup retries never create another PM. |
@@ -168,3 +169,7 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 ## 澄清继续点与回复确认（iter-55）
 
 `tests/test_pm_clarification.py` 覆盖真实子进程退出、两轮上下文/原时限、写盘失败、身份校验、并发/重复/过期回复、停止后保护、聊天确认及模拟 Bot 按钮；真实本机 HTTP 联验 Secretary→Station/Worker。Chrome 脚本增加问题恢复、丢失确认、跨题草稿隔离及桌面/手机场景。真实模型、多机及生产恢复仍待验收。
+
+## 暂停现场与停止确认持久化（iter-56）
+
+新增 tests/test_pm_pause.py 覆盖四类暂停中在途返回、取消隔离、并发/冲突回报、写盘失败、控制回执持久化、损坏/错身份记录及恢复停止标志。真实子进程在暂停结果落盘后退出；Secretary→Station/Worker 本机 HTTP 验证确认丢失后原实例缺失仍可核实暂停、取消不误用旧回执。测试未证明暂停后执行恢复。

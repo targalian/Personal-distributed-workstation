@@ -253,3 +253,7 @@ Station/Worker 新增 GET `/role/pm-recovery/{pm_id}`，Secretary 新增 GET `/a
 ## 澄清继续点与回复确认（iter-55）
 
 Secretary 新增 GET `/api/pm/{pm_id}/clarification`；Station/Worker 新增 GET `/role/pm-clarification/{pm_id}?task_id=...`。读取持久化归属和原检查点，进度变化不使查询失效，归属变化仍拒绝；按最新停止/交付状态限制回复。输入 POST 在线程池执行，原节点确认落盘后才成功；不依赖 `_pm_worker_map`。
+
+## 暂停现场与停止确认持久化（iter-56）
+
+停止请求只有原 PM 检查点保存成功才返回确认；保存失败保留中央待核实状态。相同请求重发复用已存确认且不重复写检查点。原节点只读启动核实可从检查点返回身份匹配的历史控制回执；Secretary 本机及远端在确认丢失时都可核实，取消请求不采信旧暂停回执。

@@ -116,6 +116,11 @@ class ProjectManagerAgent:
 
     def _signal_stop(self, reason: str):
         with self._state.lock:
+            if reason == "stopped" and self._state.stop_reason in ("paused", "cancelled", "checkpoint_failed"):
+                return  # Service shutdown must not erase a persisted business stop.
+            if reason == "paused":
+                from .pm_pause import begin_pause
+                begin_pause(self._state)
             self._state.stop_reason = reason
             self._state.stop_event.set()
             self._running = False
@@ -131,7 +136,7 @@ class ProjectManagerAgent:
             "running": self._running,
             "teams": len(st.teams),
             "subagents": len(st.subagents),
-            "control_receipt": dict(getattr(self, "_control_receipt", {})),
+            "control_receipt": dict(st.control_receipt),
             "checkpoint_error": self._checkpoint_error,
         }
 
@@ -160,12 +165,18 @@ class ProjectManagerAgent:
                 return
             plan = self._planner.analyze_with_skill(task)
             if st.stop_event.is_set():
+                from .pm_pause import retain_paused_result
+                retain_paused_result(self, "planning", plan)
                 return
             logger.info("[%s] 规划完成: 模式=%s, 子任务=%d",
                        self.pm_id[:8], plan.get('pattern', 'single'),
                        len(plan.get('decomposition', [])))
 
             with st.lock:
+                if st.stop_event.is_set():
+                    from .pm_pause import retain_paused_result
+                    retain_paused_result(self, "planning", plan)
+                    return
                 st.plan = plan
                 st.task = task
                 if not self.checkpoint("planned"):
@@ -239,10 +250,13 @@ class ProjectManagerAgent:
                 st.direct_execution = {"execution_id": str(uuid.uuid4()), "state": "active"}
                 if not self.checkpoint("executing_single"):
                     return
+            execution_id = st.direct_execution["execution_id"]
             result = self._planner.execute_directly(task)
-            if st.stop_event.is_set():
-                return
             with st.lock:
+                if st.stop_event.is_set():
+                    from .pm_pause import retain_paused_result
+                    retain_paused_result(self, "direct", result, execution_id=execution_id)
+                    return
                 st.direct_execution.update(state="returned", result=result)
                 if not self.checkpoint():
                     return
@@ -257,6 +271,8 @@ class ProjectManagerAgent:
             return
 
         with st.lock:
+            if st.stop_event.is_set():
+                return
             for sub in plan.get("decomposition", []):
                 st.subtask_outputs[sub.get("name", "")] = result
             st.direct_execution["state"] = "completed"

@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .http_retry import http_get
-from .pm_checkpoint import inspect_checkpoint
+from .pm_checkpoint import inspect_checkpoint, read_checkpoint
 
 GUIDANCE = {
     "running": ("原节点 PM 仍在运行", "等待进度或交付；需要停止时使用暂停或取消，并核实在途工具是否结束。"),
@@ -29,18 +29,36 @@ def inspect_pm_start(path: Path, pm_id: str, task_id: str, device_id: str, curre
               "state": "not_found", "startup_recorded": False,
               "checkpoint": inspect_checkpoint(path, pm_id, task_id, device_id)}
     receipt = None
+    try:
+        record = read_checkpoint(path, pm_id, task_id, device_id)
+    except (ValueError, TypeError, AttributeError, sqlite3.Error, OSError):
+        record = None  # Broken checkpoint data cannot supply a stop acknowledgment.
+    if record:
+        snapshot = record['snapshot']
+        control = snapshot.get('control_receipt', {})
+        if (snapshot.get('stopped') is True and isinstance(control, dict)
+                and control.get('ok') is True and control.get('scope') == 'pm_cooperative'
+                and control.get('pm_id') == pm_id and control.get('task_id') == task_id
+                and control.get('device_id') == device_id and control.get('request_id')
+                and control.get('action') in ('pause', 'cancel')
+                and snapshot.get('stop_reason') == ('paused' if control['action'] == 'pause' else 'cancelled')):
+            result['control_receipt'] = {key: control[key] for key in
+                ('ok', 'scope', 'pm_id', 'task_id', 'device_id', 'request_id', 'action')}
     if path.is_file():
         with closing(sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True, timeout=5)) as conn:
-            row = conn.execute("SELECT identity,result FROM execution_receipts WHERE execution_id=?", (pm_id,)).fetchone()
+            table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='execution_receipts'").fetchone()
+            row = conn.execute("SELECT identity,result FROM execution_receipts WHERE execution_id=?", (pm_id,)).fetchone() if table else None
         if row:
             identity = json.loads(row[0])
             if identity.get("pm_id") != pm_id or identity.get("parent_task_id") != task_id:
+                result.pop("control_receipt", None)
                 return {**result, "state": "mismatch"}
             result["startup_recorded"] = True
             receipt = json.loads(row[1]) if row[1] else {}
             result["state"] = "unknown"
     if current.get("pm_id") == pm_id:
         if current.get("task_id") != task_id or current.get("device_id") != device_id:
+            result.pop("control_receipt", None)
             return {**result, "state": "mismatch"}
         if isinstance(current.get("running"), bool):
             result["state"] = "running" if current["running"] else "inactive"

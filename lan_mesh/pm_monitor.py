@@ -101,14 +101,14 @@ class PMMonitor:
         优化5: 当子任务失败时, 触发接管策略。
         """
         st = self._state
-        if st.stop_event.is_set():
-            return
         reporter_id = report.get("reporter_id", "")
         task_name = report.get("task_name", "")
         status = report.get("status", "in_progress")
 
         with st.lock:
             if st.stop_event.is_set():
+                from .pm_pause import retain_paused_result
+                retain_paused_result(self._agent, "subtask", report)
                 return
             if task_name in st.subtask_outputs:
                 return
@@ -443,8 +443,11 @@ class PMMonitor:
                     agg_prompt,
                     {"_model_preference": "", "_fallback_models": [], "description": "结果聚合"}
                 )
-                if st.stop_event.is_set():
-                    return
+                with st.lock:
+                    if st.stop_event.is_set():
+                        from .pm_pause import retain_paused_result
+                        retain_paused_result(self._agent, "aggregation", resp)
+                        return
                 aggregated = resp.get("content", "")
                 if (resp.get("_error") or resp.get("error") or resp.get("model") == "none"
                         or not isinstance(aggregated, str) or not aggregated.strip()
@@ -458,6 +461,10 @@ class PMMonitor:
                 return
 
             with st.lock:
+                if st.stop_event.is_set():
+                    from .pm_pause import retain_paused_result
+                    retain_paused_result(self._agent, "aggregation", resp)
+                    return
                 st.subtask_outputs["_aggregated"] = aggregated
                 if not st.persist("aggregated"):
                     return

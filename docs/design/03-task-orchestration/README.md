@@ -17,6 +17,7 @@
 | pm_inspection.py | Read original-node PM evidence without dispatching work or changing task state. |
 | pm_lease.py | Keep a process-lifetime lock on the original local PM database before execution. |
 | pm_monitor.py | PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证 |
+| pm_pause.py | Retain identity-checked in-flight results while a PM remains cooperatively paused. |
 | pm_planner.py | PM 规划器 — 任务分析与分解 |
 | pm_recovery.py | Read checkpoint and original execution receipts to assess recovery without running work. |
 | pm_resume.py | Resume the original PM after process exclusion and a version-bound authorization. |
@@ -204,3 +205,7 @@ PMState.restore 恢复原计划、请求编号、输出和剩余时间语义；�
 ## 澄清继续点与回复确认（iter-55）
 
 `pm_clarification.py` 将问题编号、选项、原截止时间、refinement 轮次/累计上下文和已消费回答保存到原 PM 检查点。需求细化阶段可显式恢复，同一问题不重新计时；保存回答后才唤醒 PM，写盘失败不确认。重复回复从当前问题或历史核实，旧回复不会回答新问题；终态仅允许确认已保存的相同回答。暂停继续、执行阶段任意澄清及无继续点的旧现场仍不支持。
+
+## 暂停现场与停止确认持久化（iter-56）
+
+新增 `pm_pause.py` 保存暂停前阶段与在途结果。规划和聚合原响应存入 pause.returned；直接执行结果按原执行编号保存；子任务回报核对完整身份，保留首份终态记录，不覆盖冲突结果。暂停期间不运行质量检查、重试、后续依赖或交付；取消后继续拒绝晚到结果。PMState.restore 保留停止信号；普通服务退出不覆盖暂停、取消或检查点故障。此轮完成续跑所需的持久化前置条件，尚未开放暂停继续。

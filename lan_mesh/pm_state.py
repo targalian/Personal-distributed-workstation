@@ -67,6 +67,8 @@ class PMState:
     direct_execution: dict = field(default_factory=dict)
     delivery: dict = field(default_factory=dict)
     recovery: dict = field(default_factory=dict)
+    pause: dict = field(default_factory=dict)
+    control_receipt: dict = field(default_factory=dict)
     persist: Callable[[str], bool] = field(default=lambda phase="": True, repr=False)
 
     def snapshot(self) -> dict:
@@ -74,7 +76,7 @@ class PMState:
         names = ("phase", "plan", "task", "subtask_outputs", "pending_subtasks", "task_station", "task_agent",
                  "execution_attempts", "execution_history", "teams", "subagents", "retry_counts", "max_retries", "terminal_failures",
                  "blocked_subtasks", "global_timeout", "subtask_timeout", "start_time", "subtask_start_times",
-                 "clarification_response", "clarification_request", "clarification_timeout", "refinement", "clarification_history", "stop_reason", "direct_execution", "delivery", "recovery")
+                 "clarification_response", "clarification_request", "clarification_timeout", "refinement", "clarification_history", "stop_reason", "direct_execution", "delivery", "recovery", "pause", "control_receipt")
         return {"format": 1, **copy.deepcopy({name: getattr(self, name) for name in names}),
                 "dispatched": sorted(self.dispatched), "cross_station_attempted": sorted(self.cross_station_attempted),
                 "local_takeover_tasks": sorted(self.local_takeover_tasks),
@@ -88,6 +90,8 @@ class PMState:
             value = copy.deepcopy(snapshot[name])
             setattr(self, name, set(value) if isinstance(getattr(self, name), set) else value)
         self.stop_event.clear()
+        if snapshot.get("stopped") or self.stop_reason:
+            self.stop_event.set()
         self.monitoring_ready.clear()
         if self.clarification_response:
             self.clarification_event.set()
