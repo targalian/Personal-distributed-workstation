@@ -24,17 +24,17 @@
 """
 import os
 import secrets
-from pathlib import Path
 from typing import Optional
 
 from fastapi import HTTPException, Request
 
+from .data_paths import data_directory
 from .logger import get_logger
 
 logger = get_logger("auth")
 
 # Token 文件路径 (持久化, 重启不变)
-_TOKEN_FILE = Path.home() / ".lan_mesh" / "mesh_token"
+_TOKEN_FILE = data_directory() / "mesh_token"
 
 
 def generate_token() -> str:

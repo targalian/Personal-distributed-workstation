@@ -28,6 +28,7 @@ from typing import Optional
 
 import requests
 
+from .data_paths import data_directory
 from .logger import get_logger
 
 logger = get_logger("agent_runtime")
@@ -57,7 +58,7 @@ def _ensure_env_loaded():
         candidates = [
             Path(__file__).parent.parent / ".env",   # 项目根目录
             Path.cwd() / ".env",                      # 当前工作目录
-            Path.home() / ".lan_mesh" / ".env",       # 用户数据目录
+            data_directory() / ".env",       # 用户数据目录
         ]
         for p in candidates:
             if p.is_file():
@@ -278,7 +279,7 @@ class AgentRuntime:
         # 优化3: 当前执行的技能类型 (供选择性加载)
         # 用线程局部变量: 并行分发场景下多个线程共享同一 runtime, 实例属性会互相覆盖
         self._local = threading.local()
-        self._skills_cache_dir = Path.home() / ".lan_mesh" / "skills_cache"
+        self._skills_cache_dir = data_directory() / "skills_cache"
         self._handlers = {
             "code_generation": self._handle_code_generation,
             "code_review": self._handle_code_review,

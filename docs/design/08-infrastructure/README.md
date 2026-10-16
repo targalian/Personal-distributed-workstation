@@ -9,6 +9,7 @@
 |---|---|
 | api.py | FastAPI 路由层 - Worker API (装配入口) |
 | config.py | 配置管理 - 基于 Pydantic 的强类型配置校验 |
+| data_paths.py | Resolve workstation data storage without changing the user's home directory. |
 | error_tracker.py | F1.4: 本地错误聚合追踪 |
 | event_bus.py | Station 事件总线 (M5)。 |
 | execution_receipts.py | Persist execution claims and results so transport retries cannot start a second copy. |
@@ -26,6 +27,10 @@
 
 Pydantic 强类型校验，读取 config.yaml 与环境变量，提供全局配置访问。
 关键段: 端口、security.auth_enabled、发现参数、同步间隔。
+
+## data_paths.py — 独立数据根目录（iter-58）
+
+`LAN_MESH_DATA_DIR` 在启动前指定非空绝对路径；身份、token、默认 DB/回执、日志、缓存、备份、项目工作区以及首次生成配置统一使用该目录。配置默认值由 Pydantic factory 在实例化时解析；token 路径在导入时解析，因此运行中不切换目录。未指定时沿用旧路径，显式配置/日志路径仍优先。此选项不移动数据、不隔离工具访问，也不改变 PM 原数据库路径的恢复约束。发布检查以临时目录验证，详见 [发布流程](../../release-checks.md)。
 
 ## logger.py — 结构化日志
 

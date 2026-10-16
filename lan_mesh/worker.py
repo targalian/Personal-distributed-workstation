@@ -28,6 +28,7 @@ import requests
 import uvicorn
 from fastapi import FastAPI
 
+from .data_paths import data_directory
 from .config import AppConfig
 from .discovery import DiscoveryService
 from .host_info import (
@@ -87,7 +88,7 @@ class WorkerAgent:
         self.state = WorkerState(role="worker")
 
         # 数据目录
-        self.data_dir = Path.home() / ".lan_mesh"
+        self.data_dir = data_directory()
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         # 设备身份
@@ -216,7 +217,7 @@ class WorkerAgent:
             )
             if resp.status_code == 200:
                 skills = resp.json()
-                cache_dir = Path.home() / ".lan_mesh" / "skills_cache"
+                cache_dir = data_directory() / "skills_cache"
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 for skill in skills:
                     skill_dir = cache_dir / skill.get("skill_id", "unknown")

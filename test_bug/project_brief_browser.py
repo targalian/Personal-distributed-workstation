@@ -2,12 +2,13 @@
 
 Run from repository root: python test_bug/project_brief_browser.py
 Requires dev dependencies + playwright, and a local Chrome/Chromium executable.
-Set BRIEF_BROWSER_EXECUTABLE to override /usr/bin/google-chrome.
-Screenshots are written to the gitignored temp_resault/ directory.
+Uses google-chrome from PATH or Playwright Chromium; BRIEF_BROWSER_EXECUTABLE overrides both.
+Screenshots use BRIEF_BROWSER_OUTPUT or the gitignored temp_resault/ directory.
 """
 import os
 import json
 import re
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -1142,7 +1143,7 @@ def verify_graph_history(page):
 
 
 with sync_playwright() as p:
-    browser=p.chromium.launch(executable_path=os.environ.get('BRIEF_BROWSER_EXECUTABLE', '/usr/bin/google-chrome'),headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
+    browser=p.chromium.launch(executable_path=os.environ.get('BRIEF_BROWSER_EXECUTABLE') or shutil.which('google-chrome') or p.chromium.executable_path,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
     page=browser.new_page(viewport={'width':1680,'height':1100},device_scale_factor=1)
     page.on('pageerror',lambda e:errors.append(str(e)))
     page.on('dialog',lambda d:d.accept())
@@ -1221,7 +1222,7 @@ with sync_playwright() as p:
     assert page.locator('[data-field=title]').input_value()=='协作工作台'
     page.locator('[data-tab="graph"]').click()
     page.locator('[data-action="fit"]').click()
-    output=root/'temp_resault';output.mkdir(exist_ok=True)
+    output=Path(os.environ.get('BRIEF_BROWSER_OUTPUT',root/'temp_resault'));output.mkdir(parents=True,exist_ok=True)
     page.screenshot(path=str(output/'project_brief_desktop.png'),full_page=True)
     page.set_viewport_size({'width':390,'height':844})
     page.locator('#project-brief-panel').scroll_into_view_if_needed()

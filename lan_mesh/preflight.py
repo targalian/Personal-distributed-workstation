@@ -44,6 +44,7 @@ def _safe_print(msg=""):
         safe = safe.replace("─", "-").replace("│", "|")
         print(safe.encode("ascii", "replace").decode())
 
+from .data_paths import data_directory
 from .config import AppConfig, get_db_path, get_shared_folder
 from .protocol import DISCOVERY_PORT
 
@@ -96,7 +97,7 @@ def _check_config_file(config_path: Optional[str] = None) -> CheckResult:
     env_path = os.environ.get("LAN_MESH_CONFIG")
     if env_path:
         candidates.append(Path(env_path))
-    candidates.append(Path.home() / ".lan_mesh" / "config.yaml")
+    candidates.append(data_directory() / "config.yaml")
     candidates.append(Path("config.yaml"))
 
     for p in candidates:
@@ -104,7 +105,7 @@ def _check_config_file(config_path: Optional[str] = None) -> CheckResult:
             return CheckResult("配置文件", True, f"{p}", auto_fixed=False)
 
     # 自动创建默认配置
-    target = Path("config.yaml")
+    target = data_directory() / "config.yaml" if "LAN_MESH_DATA_DIR" in os.environ else Path("config.yaml")
     try:
         _write_default_config(target)
         return CheckResult("配置文件", True, f"已自动创建: {target}", auto_fixed=True)
@@ -114,6 +115,7 @@ def _check_config_file(config_path: Optional[str] = None) -> CheckResult:
 
 def _write_default_config(path: Path):
     """写入默认配置文件。"""
+    cfg = AppConfig()
     default = {
         "discovery": {
             "port": 45454,
@@ -122,14 +124,14 @@ def _write_default_config(path: Path):
         },
         "worker": {
             "api_port": 45460,
-            "shared_folder": "~/lan_mesh_shared",
+            "shared_folder": cfg.worker.shared_folder,
             "device_name": "",
         },
         "secretary": {
             "api_port": 45470,
-            "shared_folder": "~/lan_mesh_shared",
+            "shared_folder": cfg.secretary.shared_folder,
             "device_name": "",
-            "db_path": "~/.lan_mesh/secretary.sqlite3",
+            "db_path": cfg.secretary.db_path,
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,7 +141,7 @@ def _write_default_config(path: Path):
 
 def _check_data_dir() -> CheckResult:
     """检查数据目录是否可写。"""
-    data_dir = Path.home() / ".lan_mesh"
+    data_dir = data_directory()
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         test_file = data_dir / ".write_test"

@@ -23,6 +23,7 @@ import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from .data_paths import data_directory
 
 
 # ── 默认配置 ──────────────────────────────────────────────────
@@ -107,7 +108,7 @@ def _get_log_file() -> Path:
     env_path = os.environ.get("LAN_MESH_LOG_FILE", DEFAULT_LOG_FILE)
     if env_path:
         return Path(env_path).expanduser()
-    return Path.home() / ".lan_mesh" / "lan_mesh.log"
+    return data_directory() / "lan_mesh.log"
 
 
 def get_logger(module_name: str) -> logging.Logger:

@@ -9,6 +9,7 @@ from typing import Optional
 
 import yaml
 from pydantic import BaseModel, Field
+from .data_paths import data_directory, default_shared_directory
 
 
 class DiscoveryConfig(BaseModel):
@@ -21,16 +22,16 @@ class DiscoveryConfig(BaseModel):
 class WorkerConfig(BaseModel):
     """Worker 节点配置。"""
     api_port: int = 45460
-    shared_folder: str = "~/lan_mesh_shared"
+    shared_folder: str = Field(default_factory=default_shared_directory)
     device_name: str = ""           # 留空则自动使用 hostname
 
 
 class SecretaryConfig(BaseModel):
     """Secretary 节点配置。"""
     api_port: int = 45470
-    shared_folder: str = "~/lan_mesh_shared"
+    shared_folder: str = Field(default_factory=default_shared_directory)
     device_name: str = ""
-    db_path: str = "~/.lan_mesh/secretary.sqlite3"
+    db_path: str = Field(default_factory=lambda: str(data_directory() / "secretary.sqlite3"))
 
 
 # ── 模型池配置 (Phase 2: 模型路由器) ─────────────────────────────
@@ -148,7 +149,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     env_path = os.environ.get("LAN_MESH_CONFIG")
     if env_path:
         candidates.append(Path(env_path))
-    candidates.append(Path.home() / ".lan_mesh" / "config.yaml")
+    candidates.append(data_directory() / "config.yaml")
     candidates.append(Path("config.yaml"))
 
     for p in candidates:

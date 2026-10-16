@@ -10,9 +10,9 @@ PM 规划器 — 任务分析与分解
 """
 import json
 import uuid
-from pathlib import Path
 from typing import Optional
 
+from .data_paths import data_directory
 from .logger import get_logger
 from .pm_state import PMState
 from .role_cards import PM_CARD
@@ -41,7 +41,7 @@ class PMPlanner:
 
     def load_skill(self) -> str:
         """从本地技能缓存加载 multi-agent-architect skill。"""
-        skill_dir = Path.home() / ".lan_mesh" / "skills_cache" / "multi-agent-architect"
+        skill_dir = data_directory() / "skills_cache" / "multi-agent-architect"
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.is_file():
             logger.warning("[%s] multi-agent-architect skill 未找到, 使用内置摘要", self._pm_id[:8])

@@ -15,6 +15,7 @@ import time
 import threading
 from typing import Optional
 
+from .data_paths import data_directory
 from .logger import get_logger
 from .project_brief import BriefStore, brief_instructions, parse_brief_reply
 from .brief_handoff import BriefHandoff
@@ -583,8 +584,7 @@ class ChatHandler:
         if self._shared_folder:
             base = self._shared_folder.path
         else:
-            from pathlib import Path
-            base = Path.home() / ".lan_mesh"
+            base = data_directory()
         conv_dir = os.path.join(str(base), "conversations")
         os.makedirs(conv_dir, exist_ok=True)
         return conv_dir

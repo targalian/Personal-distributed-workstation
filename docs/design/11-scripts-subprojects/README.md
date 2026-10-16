@@ -2,6 +2,10 @@
 
 运维脚本、技能库资产、独立 Tauri 子项目。
 
+## Linux 发布检查（iter-58）
+
+`release_check.py` 校验 Linux x86_64 / Python 3.10 虚拟环境精确依赖，顺序执行依赖、导入、本地 loop、Chrome/Chromium 和启动检查。新输出目录保留提交/dirty 标记、状态、日志和截图；失败即停止，中断写入失败证据。`startup_smoke.py` 使用临时源码、数据和随机端口，验证真实 Station/Worker HTTP 以及 TERM 清理；不会启动模型任务。GitHub Actions 使用同一命令，远程状态和分支保护须单独核实。锁文件范围为源码安装，参见 [完整说明](../../release-checks.md)。
+
 ## 模块清单
 
 <!-- AUTO:module-list -->
@@ -10,9 +14,11 @@
 | quicklan-main/ | 独立子项目: Tauri + React 桌面文件共享应用 |
 | scripts/backup_workstation.py | Create, verify or restore an offline workstation backup without overwriting live data. |
 | scripts/check_environment.py | Validate startup dependencies and imports without contacting a package index. |
+| scripts/release_check.py | Run the Linux release gates and preserve evidence without invoking real models. |
 | scripts/start_workstation.bat | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/start_workstation.ps1 | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/start_workstation.sh | 跨平台一键启动 Station (bat/ps1/sh) |
+| scripts/startup_smoke.py | Verify real launcher HTTP readiness and shutdown using disposable source and data. |
 | scripts/sync_docs.py | docs/design 模块清单一致性校验/生成器 (D2-docs-sync)。 |
 | scripts/sync_push.ps1 | ★ 双库同步推送脚本 (上库唯一入口) |
 | scripts/update_version.py | VERSION.json 自动同步脚本 (P2 #10: commit/released_at 对齐 HEAD + 可选 bump) |

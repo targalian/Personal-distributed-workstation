@@ -34,6 +34,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from .data_paths import data_directory
 from .config import AppConfig, get_db_path, load_model_pool
 from .database import Database
 from .discovery import DiscoveryService
@@ -96,7 +97,7 @@ class StationController:
         self.state = StationState(role="station")
 
         # 数据目录
-        self.data_dir = Path.home() / ".lan_mesh"
+        self.data_dir = data_directory()
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         # 设备身份

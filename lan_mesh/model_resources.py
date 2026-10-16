@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Union
 
 import yaml
 
+from .data_paths import data_directory
 from .logger import get_logger
 
 if TYPE_CHECKING:
@@ -1117,7 +1118,7 @@ def _backup_config(path: Path) -> str:
     """
     import shutil
     try:
-        bak_dir = Path.home() / ".lan_mesh" / "backups"
+        bak_dir = data_directory() / "backups"
         bak_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         dst = bak_dir / f"resources-{ts}.bak"

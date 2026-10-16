@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from .data_paths import data_directory
 from .protocol import HostRecord, HostEvent, AgentCard, Task, SubTask, PMAgent, AgentTeam, ProgressReport
 from .logger import get_logger
 
@@ -143,7 +144,7 @@ class Database:
         备份失败仅告警不抛异常。返回备份文件路径 (失败时为空串)。
         """
         try:
-            bak_dir = Path.home() / ".lan_mesh" / "backups"
+            bak_dir = data_directory() / "backups"
             bak_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
             dst = bak_dir / f"{self.path.stem}-{ts}.sqlite3"

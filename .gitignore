@@ -8,6 +8,7 @@ build/
 
 # Virtual environment
 .venv/
+.venv-release/
 venv/
 
 # LAN Mesh runtime data

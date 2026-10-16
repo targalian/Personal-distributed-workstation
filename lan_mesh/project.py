@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from .data_paths import data_directory
 from .database import Database
 from .protocol import Project, ProjectStatus
 from .logger import get_logger
@@ -104,7 +105,7 @@ class ProjectManager:
         now = time.time()
 
         # 创建独立工作空间目录
-        base = Path(workspace_base) if workspace_base else (Path.home() / ".lan_mesh" / "workspaces")
+        base = Path(workspace_base) if workspace_base else (data_directory() / "workspaces")
         ws_path = base / project_id[:8]
         ws_path.mkdir(parents=True, exist_ok=True)
 

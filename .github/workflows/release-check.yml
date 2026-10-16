@@ -1,0 +1,43 @@
+name: Linux release checks
+
+on:
+  push:
+    branches: [EN]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-check:
+    name: Linux Python 3.10 release gates
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install exact release dependencies into a fresh environment
+        run: |
+          python -m venv .venv-release
+          .venv-release/bin/python -m pip install --disable-pip-version-check -r requirements-release-linux-py310.lock
+          .venv-release/bin/python -m playwright install --with-deps chromium
+      - name: Run all release gates
+        run: .venv-release/bin/python scripts/release_check.py --output .lan_mesh/release-check
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-check-${{ github.sha }}
+          path: .lan_mesh/release-check/
+          if-no-files-found: warn
+          retention-days: 14

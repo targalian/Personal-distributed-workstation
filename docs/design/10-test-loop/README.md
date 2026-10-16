@@ -2,6 +2,8 @@
 
 四层验证体系：pytest 基线、专项验证脚本、UI 走查、Loop Engineering 每日循环。
 
+iter-58 新增 `tests/test_release_checks.py`：独立进程验证数据默认路径、首次配置与显式路径优先级；验证门禁失败/跳过/中断不假报通过、已有证据不覆盖，以及超时/正常退出后的真实子进程清理。完整发布入口串联本地 loop、真实浏览器和启动冒烟，输出独立证据目录；不调用真实模型。CI 和本地使用相同入口，详见 [发布检查](../../release-checks.md)。
+
 ## 模块清单
 
 <!-- AUTO:module-list -->
@@ -40,6 +42,7 @@
 | tests/test_pm_start.py | Verify task/PM registration precedes execution and startup retries never create another PM. |
 | tests/test_pm_transport.py | Exercise lost dispatch responses, receipt polling and concurrent stale callbacks. |
 | tests/test_project_brief.py | Artifact correctness: graph integrity, concurrency, isolation, and chat integration. |
+| tests/test_release_checks.py | Verify isolated data defaults and release failure evidence without calling models. |
 | tests/test_restart_recovery.py | Preserve remote execution ownership and committed results across Secretary restart. |
 | tests/test_startup.py | Launch the shell wrapper in temporary projects to verify errors, arguments and cleanup. |
 | tests/test_task_resubmission.py | Verify resubmission preserves requirements and never duplicates a replacement or PM. |

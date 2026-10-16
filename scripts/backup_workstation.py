@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT))
 
 from lan_mesh.backup import EXCLUDED_STATE, create_backup, restore_backup, verify_backup  # noqa: E402
 from lan_mesh.config import AppConfig, get_db_path, load_config  # noqa: E402
+from lan_mesh.data_paths import data_directory  # noqa: E402
 
 
 def backup_roots(args) -> dict[str, Path]:
@@ -69,7 +70,7 @@ def main() -> int:
     create.add_argument("--db")
     create.add_argument("--shared")
     create.add_argument("--worker-shared")
-    create.add_argument("--state-dir", default=str(Path.home() / ".lan_mesh"))
+    create.add_argument("--state-dir", default=str(data_directory()))
     create.add_argument("--extra-file", action="append", default=[])
     create.add_argument("--offline-confirmed", action="store_true", help="确认所有节点和外部工具已停止写入这些数据")
     create.add_argument("--plan", action="store_true", help="仅列出将备份的路径，不读取文件内容或创建备份")

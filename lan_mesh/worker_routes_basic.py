@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from .data_paths import data_directory
 from .shared_folder import SharedFolderManager
 from .execution_routes import build_execution_routes
 
@@ -40,7 +41,7 @@ def build_basic_routes(
         return agent_runtime.execute(payload)
 
     router.include_router(build_execution_routes(
-        execute_task, receipt_path or Path.home() / ".lan_mesh" / "worker-executions.sqlite3",
+        execute_task, receipt_path or data_directory() / "worker-executions.sqlite3",
         synchronous=True))
 
     @router.get("/agents/cli-status")

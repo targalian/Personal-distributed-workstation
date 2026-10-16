@@ -24,6 +24,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from .data_paths import data_directory
 from .logger import get_logger
 
 logger = get_logger("singleton")
@@ -33,7 +34,7 @@ LOCK_NAME = "station.lock"
 
 def _lock_path() -> Path:
     """锁文件路径: 与 DB 同目录 (主机级, 跨工作区生效)。"""
-    return Path.home() / ".lan_mesh" / LOCK_NAME
+    return data_directory() / LOCK_NAME
 
 
 def _pid_alive(pid: int) -> bool:
