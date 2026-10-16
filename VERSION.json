@@ -1,7 +1,7 @@
 {
-  "version": "0.34.17",
-  "commit": "91b1372",
+  "version": "0.34.18",
+  "commit": "d165210",
   "released_at": "2026-10-16",
-  "note": "暂停任务可显式继续：绑定原暂停与版本，新实例和执行代隔离，复用结果/澄清/原时限；准备后崩溃与响应丢失可重试。751项单测、Chrome、Station/Worker HTTP及启动冒烟通过；真实模型/物理多机/72小时仍未验收",
+  "note": "Linux/Python3.10精确依赖锁与统一发布门禁；独立数据目录覆盖首次配置和备份CLI。本机新venv完整门禁通过：767项单测、Chrome、Station/Worker启动退出；后续专项43/43。新增Actions，真实模型/物理多机/升级回退/72小时仍待验收。",
   "upgrade_hint": "无在途任务时升级所有参与节点：git pull && pip install -r requirements.txt 后重启；旧异步节点不支持执行回执，已有在途结果需先核实"
 }
