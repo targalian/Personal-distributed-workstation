@@ -965,7 +965,7 @@ def verify_background_generation(page, output):
         page.locator('[data-tab="document"]').click()
         page.locator('[data-action="generate"]').click()
         page.wait_for_function("!document.querySelector('#project-brief-panel').inert")
-        assert entered.is_set()
+        assert entered.wait(5), "registered job did not enter the model callback"
         # Persisted request ID and server record resolve a lost POST after reload.
         page.reload()
         page.evaluate('(id)=>ProjectBriefUI.open(id)',job_cid)
@@ -999,7 +999,7 @@ def verify_background_generation(page, output):
         entered.clear();release.clear()
         page.locator('[data-action="generate"]').click()
         page.wait_for_function("!document.querySelector('#project-brief-panel').inert")
-        assert entered.is_set()
+        assert entered.wait(5), "registered job did not enter the model callback"
         page.locator('[data-field="title"]').fill('整理期间已保存的新稿')
         page.locator('[data-action="save"]').click()
         page.wait_for_function("document.querySelector('.brief-status').textContent.includes('v3 · 已同步')")
@@ -1030,7 +1030,7 @@ def verify_background_generation(page, output):
         assert held
         page.locator('[data-action="generate"]').click()
         page.wait_for_function("!document.querySelector('#project-brief-panel').inert")
-        assert entered.is_set()
+        assert entered.wait(5), "registered job did not enter the model callback"
         route,response=held.pop()
         route.fulfill(status=response.status_code,json=response.json())
         page.wait_for_function("document.querySelector('.brief-generation').textContent.includes('正在整理')")
