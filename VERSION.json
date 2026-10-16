@@ -1,7 +1,7 @@
 {
   "version": "0.34.18",
-  "commit": "d165210",
+  "commit": "8ac8578",
   "released_at": "2026-10-16",
-  "note": "Linux/Python3.10精确依赖锁与统一发布门禁；独立数据目录覆盖首次配置和备份CLI。本机新venv完整门禁通过：767项单测、Chrome、Station/Worker启动退出；后续专项43/43。新增Actions，真实模型/物理多机/升级回退/72小时仍待验收。",
+  "note": "Linux源码发布门禁及数据目录隔离；Actions 38874316383在干净Ubuntu22.04/Python3.10.22通过768项单测、Chrome和真实启动退出。EN未启用强制分支保护；真实模型/物理多机/升级回退/72小时仍待验收。",
   "upgrade_hint": "无在途任务时升级所有参与节点：git pull && pip install -r requirements.txt 后重启；旧异步节点不支持执行回执，已有在途结果需先核实"
 }
