@@ -278,6 +278,16 @@ class ProjectManagerAgent:
             self.report_progress(0.0, "failed", error_msg)
             return
 
+        # BUG-041: cancel() 在 execute_directly 阻塞期间把 _running 置 False,
+        # 但 runtime 可能已过取消检查点而正常返回 completed —— 此处必须再拦一道,
+        # 否则已取消的 PM 仍走完整交付链 (实测: 取消 → 3 分钟后仍交付)。
+        if not self._running:
+            logger.warning("[%s] PM 已取消 (执行线程滞后于 Boss 取消), 不写交付物",
+                           self.pm_id[:8])
+            self.report_status("cancelled")
+            self.report_progress(0.0, "cancelled", "任务已被 Boss 取消")
+            return
+
         for sub in plan.get("decomposition", []):
             st.subtask_outputs[sub.get("name", "")] = result
         self.sync_subtasks()

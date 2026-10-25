@@ -10484,3 +10484,139 @@ class TestIter102SingleModeTerminalStates:
         subtasks = agent._build_subtask_status()
 
         assert subtasks[0]["status"] == "cancelled"
+
+class TestIter103CancelRaceCondition:
+    """BUG-041: cancel() 在 execute_directly 阻塞期间置 _running=False,
+    但 runtime 已过取消检查点正常返回 completed —— 交付前缺 _running 检查,
+    已取消的 PM 仍走完整交付链 (实测: 取消 → 3 分钟后仍交付)。
+    """
+
+    def test_cancel_during_execute_not_delivered(self, tmp_path):
+        """cancel() 发生在 execute_directly 期间, runtime 正常完成后不交付。"""
+        from lan_mesh.pm_agent import PMState, PMPlanner, ProjectManagerAgent
+
+        class SlowRuntime:
+            """模拟: execute 正常完成, 但 PM 已被取消 (_running=False)。"""
+            def execute(self, subtask):
+                return {"output": {"code": "print('hello')"}, "status": "completed"}
+            def cancel(self):
+                pass
+            def reset_cancel(self):
+                pass
+
+        state = PMState()
+        state.task = {"task_id": "task-race-1"}
+        agent = ProjectManagerAgent(
+            "pm-race-1", SlowRuntime(), "http://secretary.invalid", "dev-race")
+        agent._state = state
+        agent._planner = PMPlanner("pm-race-1", SlowRuntime(), state, agent)
+
+        statuses, progress, delivered = [], [], []
+        agent.report_status = lambda status, **kw: statuses.append(status)
+        agent.report_progress = lambda progress_value, status, message, **kw: \
+            progress.append((status, message))
+        agent.deliver_result = lambda *args, **kw: delivered.append(args)
+        agent.sync_subtasks = lambda: None
+        agent._persist_snapshot = lambda *args, **kw: None
+        agent._planner.analyze_with_skill = lambda task: \
+            {"pattern": "single", "decomposition": []}
+        agent._planner.attach_blueprint_context = lambda task: task
+        agent._planner.refine_requirements = lambda task: task
+
+        # 模拟: PM 启动后 Boss 取消 → _running=False
+        # 但 execute_directly 内的 runtime 正常完成
+        original_execute = agent._planner.execute_directly
+        def execute_and_cancel(task):
+            result = original_execute(task)
+            agent._running = False  # cancel() 在 execute 期间被调用
+            return result
+        agent._planner.execute_directly = execute_and_cancel
+
+        agent._run_task({"task_id": "task-race-1", "name": "race-test",
+                        "description": "test cancel race"})
+
+        assert statuses[-1] == "cancelled"
+        assert progress[-1][0] == "cancelled"
+        assert delivered == []
+
+    def test_running_flag_checked_before_delivery(self, tmp_path):
+        """_running=False 后不走交付链 (直接检查方法行为)。"""
+        from lan_mesh.pm_agent import PMState, PMPlanner, ProjectManagerAgent
+
+        class NormalRuntime:
+            def execute(self, subtask):
+                return {"output": {"code": "ok"}, "status": "completed"}
+            def cancel(self):
+                pass
+            def reset_cancel(self):
+                pass
+
+        state = PMState()
+        state.task = {"task_id": "task-race-2"}
+        agent = ProjectManagerAgent(
+            "pm-race-2", NormalRuntime(), "http://secretary.invalid", "dev-race")
+        agent._state = state
+        agent._planner = PMPlanner("pm-race-2", NormalRuntime(), state, agent)
+
+        delivered = []
+        agent.report_status = lambda status, **kw: None
+        agent.report_progress = lambda *args, **kw: None
+        agent.deliver_result = lambda *args, **kw: delivered.append(args)
+        agent.sync_subtasks = lambda: None
+        agent._persist_snapshot = lambda *args, **kw: None
+
+        plan = {"pattern": "single",
+                "decomposition": [{"name": "S1", "skill": "code_generation",
+                                   "description": "test", "depends_on": []}]}
+
+        # PM 正常运行 → 交付
+        agent._running = True
+        agent._run_single_pattern(
+            {"task_id": "task-race-2", "name": "normal", "description": "normal"},
+            plan)
+        assert len(delivered) == 1
+
+        # PM 已取消 → 不交付
+        delivered.clear()
+        agent._running = False
+        agent._run_single_pattern(
+            {"task_id": "task-race-2", "name": "cancelled", "description": "cancelled"},
+            plan)
+        assert delivered == []
+
+    def test_cancel_before_execute_returns_cancelled(self, tmp_path):
+        """cancel() 在 execute 之前 → runtime 返回 cancelled → 原有检查已覆盖。"""
+        from lan_mesh.pm_agent import PMState, PMPlanner, ProjectManagerAgent
+
+        class CancelledRuntime:
+            def execute(self, subtask):
+                return {"output": {}, "status": "cancelled"}
+            def cancel(self):
+                pass
+            def reset_cancel(self):
+                pass
+
+        state = PMState()
+        state.task = {"task_id": "task-race-3"}
+        agent = ProjectManagerAgent(
+            "pm-race-3", CancelledRuntime(), "http://secretary.invalid", "dev-race")
+        agent._state = state
+        agent._planner = PMPlanner("pm-race-3", CancelledRuntime(), state, agent)
+
+        statuses, delivered = [], []
+        agent.report_status = lambda status, **kw: statuses.append(status)
+        agent.report_progress = lambda *args, **kw: None
+        agent.deliver_result = lambda *args, **kw: delivered.append(args)
+        agent.sync_subtasks = lambda: None
+        agent._persist_snapshot = lambda *args, **kw: None
+
+        plan = {"pattern": "single",
+                "decomposition": [{"name": "S1", "skill": "code_generation",
+                                   "description": "test", "depends_on": []}]}
+
+        agent._run_single_pattern(
+            {"task_id": "task-race-3", "name": "cancel-before", "description": "test"},
+            plan)
+
+        assert statuses[-1] == "cancelled"
+        assert delivered == []
