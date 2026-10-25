@@ -17,6 +17,7 @@
 | scripts/start_workstation.bat | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/start_workstation.ps1 | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/start_workstation.sh | 跨平台一键启动 Station (bat/ps1/sh) |
+| scripts/sync_dependencies.py | Keep source-install requirements generated from the wheel dependency contract. |
 | scripts/sync_docs.py | docs/design 模块清单一致性校验/生成器 (D2-docs-sync)。 |
 | scripts/sync_push.ps1 | ★ 双库同步推送脚本 (上库唯一入口) |
 | scripts/update_version.py | VERSION.json 自动同步脚本 (P2 #10: commit/released_at 对齐 HEAD + 可选 bump) |
@@ -87,10 +88,15 @@ bat / ps1 / sh 三平台版本，激活 .venv 后 `python main.py station`。
 - CLI Agent PATH 注入 (npm global + Node.js, 供 shadow_dev 使用)
 - 防火墙弹窗提示 (启动前打印, 避免用户困惑)
 
+## iter-111：Yomk迁移本机验收
+
+requirements由pyproject生成；版本与包验收，QuickLAN27个native command保持。详见[完整评估](../yomk-refactor-assessment.md)。实机联调尚待用户提供环境。
+
 ## 变更记录
 
 | 日期 | 迭代 | 变更 |
 |------|------|------|
+| 2026-10-25 | iter-111 | requirements由pyproject生成；版本与包验收，QuickLAN27个native command保持 |
 | 2026-09-09 | iter-92 | 新增 `scripts/boss_channel.py`: Codex ↔ 秘书/PM 通道 12 子命令 (health/diag/projects/blueprint/chat/tasks/task/graph/pm/progress/reply/watch), mesh token 自动加载 + 错误分类提示; `sync_docs.py` MAPPING 登记该脚本 |
 | 2026-09-02 | iter-76 | start_workstation 三端对齐: bat 补齐版本检查/.env/API Key/Git Hooks/防火墙提示; ps1/sh 加镜像+进度条 |
 

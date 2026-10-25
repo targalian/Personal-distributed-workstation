@@ -381,6 +381,8 @@ def do_run(task: str, backend: str, timeout: int, keep: bool,
     return 0 if report.get("verdict") == "READY_FOR_REVIEW" else 1
 
 
+from typing import Any
+
 class ShadowDevManager:
     """常驻影子开发守护: 串行队列 + 内存状态 + 历史报告聚合。"""
 
@@ -419,56 +421,17 @@ class ShadowDevManager:
         return {"running": self._thread is not None and self._thread.is_alive(),
                 "cancelled": True}
 
-    def submit(self, task: str, backend: str = "", timeout: int = 1800,
-               simulate: bool = False) -> dict:
-        """提交影子任务; 同一时间只执行一个, 其余排队。"""
-        task = task.strip()
-        if not task:
-            raise ValueError("task 不能为空")
-        run_id = new_run_id()
-        record = {
-            "run_id": run_id,
-            "task": task,
-            "backend": "simulate" if simulate else (backend or "auto"),
-            "timeout": max(30, min(timeout, 1800)),
-            "simulate": simulate,
-            "status": "queued",
-            "created_at": datetime.now().isoformat(),
-        }
-        with self._condition:
-            if self._stopping:
-                raise RuntimeError("影子开发守护已停止")
-            self._runs[run_id] = record
-            self._queue.append(record)
-            queued = len(self._queue)
-            self._condition.notify_all()
-        _emit_run_event(record, "queued", queued)
-        self.start_guardian()
-        return record
+    def submit(self, task: str, backend: str='', timeout: int=1800, simulate: bool=False) -> dict:
+        return call_component(self, ShadowQueueService, 'submit', task=task, backend=backend, timeout=timeout, simulate=simulate)
 
     def status(self) -> dict:
-        """返回守护状态与队列摘要。"""
-        with self._condition:
-            queued = len(self._queue)
-            running = any(run["status"] == "running" for run in self._runs.values())
-            thread_alive = bool(self._thread and self._thread.is_alive())
-            return {"running": thread_alive, "busy": running,
-                    "queued": queued, "stopping": self._stopping}
+        return call_component(self, ShadowQueueService, 'status')
 
     def list_runs(self) -> list[dict]:
-        """合并内存队列/运行状态与历史报告。"""
-        with self._condition:
-            records = [dict(run) for run in self._runs.values()]
-        known = {run["run_id"] for run in records}
-        records.extend(self._load_history(known))
-        return sorted(records, key=lambda run: run.get("run_id", ""), reverse=True)
+        return call_component(self, ShadowQueueService, 'list_runs')
 
     def get_run(self, run_id: str) -> dict | None:
-        """获取单次运行详情。"""
-        with self._condition:
-            if run_id in self._runs:
-                return dict(self._runs[run_id])
-        return self._read_report(run_id)
+        return call_component(self, ShadowQueueService, 'get_run', run_id=run_id)
 
     def _guardian_loop(self) -> None:
         """串行消费影子任务队列。"""
@@ -503,29 +466,10 @@ class ShadowDevManager:
                 _emit_run_event(snapshot, "ERROR", queued)
 
     def _read_report(self, run_id: str) -> dict | None:
-        """读取历史 report.json。"""
-        report_path = SHADOW_HOME / run_id / "report.json"
-        if not report_path.is_file():
-            return None
-        try:
-            data = json.loads(report_path.read_text(encoding="utf-8"))
-            data["status"] = data.get("verdict", "unknown")
-            return data
-        except Exception:
-            return {"run_id": run_id, "status": "REPORT_ERROR"}
+        return call_component(self, ShadowQueueService, '_read_report', run_id=run_id)
 
     def _load_history(self, known_ids: set[str]) -> list[dict]:
-        """加载不在内存中的历史运行。"""
-        if not SHADOW_HOME.is_dir():
-            return []
-        records = []
-        for directory in SHADOW_HOME.iterdir():
-            if not directory.name.startswith("20") or directory.name in known_ids:
-                continue
-            report = self._read_report(directory.name)
-            if report:
-                records.append(report)
-        return records
+        return call_component(self, ShadowQueueService, '_load_history', known_ids=known_ids)
 
 
 def do_list() -> int:
@@ -588,3 +532,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+from typing import Any
+from .component_service import call_component
+from .shadow_queue_service import ShadowQueueService

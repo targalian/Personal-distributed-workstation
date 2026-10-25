@@ -360,10 +360,8 @@ def test_shadow_event_failure_does_not_break_submit(monkeypatch,
 
 def test_dashboard_reacts_to_shadow_run_event() -> None:
     """iter-98 F6: dashboard wires shadow_run_update to the shadowdev panel."""
-    from lan_mesh.station_controller import TEMPLATES_DIR
-
-    html = (TEMPLATES_DIR / 'dashboard.html').read_text(encoding='utf-8')
-    handler = html.split("if(t==='shadow_run_update'){", 1)[1].split(
+    from lan_mesh.dashboard_assets import load_dashboard_script
+    handler = load_dashboard_script().split("if(t==='shadow_run_update'){", 1)[1].split(
         "if(t==='cost_budget_warning')", 1)[0]
 
     assert "refreshShadowDev()" in handler

@@ -13,6 +13,7 @@ Worker Agent - 部署在各主机上的守护进程
   → 启动 FastAPI → 启动 UDP 发现 → 发现 Secretary 后注册 → 心跳循环
 """
 import os
+from .application_lifecycle import wait_for_stop
 import shutil
 import signal
 import socket
@@ -70,6 +71,8 @@ class WorkerState:
     sub_agents: dict = field(default_factory=dict)  # PM 创建的子 Agent Runtime 实例
     cloud_sync: CloudSyncManager = None  # 云存储同步管理器
 
+
+from typing import Any
 
 class WorkerAgent:
     """Worker 守护进程。
@@ -269,288 +272,73 @@ class WorkerAgent:
         while self._running:
             if not registered:
                 registered = self._register_with_secretary()
-                time.sleep(HEARTBEAT_INTERVAL_SECS)
+                if wait_for_stop(self, HEARTBEAT_INTERVAL_SECS):
+                    return
                 continue
 
             if not self._send_heartbeat():
                 logger.warning("心跳失败, 尝试重新注册...")
                 registered = False
-            time.sleep(HEARTBEAT_INTERVAL_SECS)
+            if wait_for_stop(self, HEARTBEAT_INTERVAL_SECS):
+                return
 
     # ── Secretary 子进程管理 (远程角色分配) ─────────────────────────
 
-    def start_secretary(self, port: int = None) -> dict:
-        """在本机启动 Secretary 子进程。
-
-        Args:
-            port: Secretary HTTP 端口 (默认自动查找)
-
-        Returns:
-            {ok, pid, port} 或 {ok: False, message}
-        """
-        if self._secretary_process and self._secretary_process.poll() is None:
-            return {"ok": False, "message": "Secretary 已在运行", "port": self._secretary_port}
-
-        if port is None:
-            port = self._find_available_port(45470)
-
-        python_exe = sys.executable
-        project_root = str(Path(__file__).parent.parent)
-        cmd = [python_exe, "main.py", "secretary", "--port", str(port)]
-
-        try:
-            self._secretary_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                cwd=project_root,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
-            self._secretary_port = port
-            logger.info("Secretary 子进程已启动: PID=%d, port=%d", self._secretary_process.pid, port)
-            return {"ok": True, "pid": self._secretary_process.pid, "port": port}
-        except Exception as e:
-            logger.error("启动 Secretary 失败: %s", e)
-            return {"ok": False, "message": str(e)}
+    def start_secretary(self, port: int=None) -> dict:
+        return call_component(self, WorkerSecretaryService, 'start_secretary', port=port)
 
     def stop_secretary(self) -> dict:
-        """停止本机的 Secretary 子进程。"""
-        if not self._secretary_process or self._secretary_process.poll() is not None:
-            self._secretary_process = None
-            self._secretary_port = None
-            return {"ok": False, "message": "Secretary 未在运行"}
-
-        try:
-            self._secretary_process.terminate()
-            self._secretary_process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self._secretary_process.kill()
-            self._secretary_process.wait(timeout=3)
-        except Exception:
-            pass
-
-        logger.info("Secretary 子进程已停止")
-        self._secretary_process = None
-        self._secretary_port = None
-        return {"ok": True, "message": "Secretary 已停止"}
+        return call_component(self, WorkerSecretaryService, 'stop_secretary')
 
     def get_secretary_status(self) -> dict:
-        """查询本机 Secretary 运行状态。"""
-        if self._secretary_process and self._secretary_process.poll() is None:
-            return {"running": True, "pid": self._secretary_process.pid, "port": self._secretary_port}
-        return {"running": False}
+        return call_component(self, WorkerSecretaryService, 'get_secretary_status')
 
     # ── PM Agent 管理 (内嵌模块) ───────────────────────────────────
 
-    def start_pm(self, task_id: str, secretary_url: str, task_data: dict = None) -> dict:
-        """在本 Worker 上启动 PM Agent 接管指定任务。
+    def start_pm(self, task_id: str, secretary_url: str, task_data: dict=None) -> dict:
+        return call_component(self, WorkerPmService, 'start_pm', task_id=task_id, secretary_url=secretary_url, task_data=task_data)
 
-        Args:
-            task_id: 任务 ID
-            secretary_url: Secretary API 地址 (用于上报状态/进度)
-            task_data: 任务详情 (可选, 由 Secretary 传入)
+    def stop_pm(self, expected_pm_id: str="") -> dict:
+        return call_component(self, WorkerPmService, 'stop_pm', expected_pm_id=expected_pm_id)
 
-        Returns:
-            {ok, pm_id} 或 {ok: False, message}
-        """
-        if self.state.pm_agent and self.state.pm_agent._running:
-            return {"ok": False, "message": "PM Agent 已在运行"}
+    def cancel_pm(self, expected_pm_id: str="") -> dict:
+        return call_component(self, WorkerPmService, 'cancel_pm', expected_pm_id=expected_pm_id)
 
-        if not self.state.agent_runtime:
-            return {"ok": False, "message": "Agent 运行时未初始化"}
+    def pause_pm(self, expected_pm_id: str="") -> dict:
+        return call_component(self, WorkerPmService, 'pause_pm', expected_pm_id=expected_pm_id)
 
-        import uuid as _uuid
-        pm_id = f"pm-{_uuid.uuid4().hex[:12]}"
-
-        # 如果未提供 task_data, 从 Secretary 获取
-        if not task_data:
-            try:
-                import requests as _req
-                resp = _req.get(f"{secretary_url.rstrip('/')}/api/tasks/{task_id}", timeout=5)
-                if resp.status_code == 200:
-                    task_data = resp.json()
-            except Exception as e:
-                return {"ok": False, "message": f"获取任务详情失败: {e}"}
-
-        if not task_data:
-            return {"ok": False, "message": "无法获取任务详情"}
-
-        # 创建 PM Agent 实例
-        self.state.pm_agent = ProjectManagerAgent(
-            pm_id=pm_id,
-            agent_runtime=self.state.agent_runtime,
-            secretary_url=secretary_url,
-            device_id=self.state.device_id,
-            device_name=self.state.device_name,
-        )
-
-        # 启动任务 (异步)
-        self.state.pm_agent.start_task(task_data)
-        logger.info("PM Agent 已启动: %s, 任务: %s", pm_id, task_id)
-
-        return {"ok": True, "pm_id": pm_id, "device_id": self.state.device_id}
-
-    def stop_pm(self) -> dict:
-        """停止本 Worker 上的 PM Agent。"""
-        if not self.state.pm_agent:
-            return {"ok": False, "message": "PM Agent 未运行"}
-
-        self.state.pm_agent.cancel()
-        pm_id = self.state.pm_agent.pm_id
-        self.state.pm_agent = None
-        # 清理子 Agent
-        self.state.sub_agents.clear()
-        logger.info("PM Agent 已停止: %s", pm_id)
-        return {"ok": True, "pm_id": pm_id}
-
-    def cancel_pm(self) -> dict:
-        """取消 PM Agent (保留实例, 标记取消)。"""
-        if not self.state.pm_agent:
-            return {"ok": False, "message": "PM Agent 未运行"}
-        self.state.pm_agent.cancel()
-        return {"ok": True, "pm_id": self.state.pm_agent.pm_id}
-
-    def pause_pm(self) -> dict:
-        """暂停 PM Agent。"""
-        if not self.state.pm_agent:
-            return {"ok": False, "message": "PM Agent 未运行"}
-        self.state.pm_agent.pause()
-        return {"ok": True, "pm_id": self.state.pm_agent.pm_id}
-
-    def inject_pm_input(self, input_data: dict) -> dict:
-        """向 PM Agent 注入来自 Secretary/Boss 的回复输入。
-
-        用于反向沟通通道: Boss 回复 PM 的澄清请求后,
-        Secretary 通过此方法将回复注入 PM。
-
-        Args:
-            input_data: Boss 回复数据
-
-        Returns:
-            {ok: True} 或 {ok: False, message}
-        """
-        if not self.state.pm_agent:
-            return {"ok": False, "message": "PM Agent 未运行"}
-        if not self.state.pm_agent._running:
-            return {"ok": False, "message": "PM Agent 已停止"}
-        self.state.pm_agent.receive_input(input_data)
-        return {"ok": True, "pm_id": self.state.pm_agent.pm_id}
+    def inject_pm_input(self, input_data: dict, expected_pm_id: str="") -> dict:
+        return call_component(self, WorkerPmService, 'inject_pm_input', input_data=input_data, expected_pm_id=expected_pm_id)
 
     def get_pm_status(self) -> dict:
-        """查询本 Worker 上的 PM Agent 运行状态。"""
-        if not self.state.pm_agent:
-            return {"running": False}
-        return self.state.pm_agent.get_status()
+        return call_component(self, WorkerPmService, 'get_pm_status')
 
-    def create_subagent(self, agent_name: str, skills: list, task_description: str = "",
-                        system_prompt: str = "", preferred_agent_id: str = "") -> dict:
-        """在本 Worker 上为 PM 创建子 Agent (新 AgentRuntime 实例)。
-
-        Args:
-            agent_name: 子 Agent 名称
-            skills: 技能列表
-            task_description: 任务描述
-            system_prompt: PM 生成的定制 system prompt (角色/团队/依赖/质量要求)
-            preferred_agent_id: PM 预先生成的 agent_id (用于 prompt 中引用)
-
-        Returns:
-            {agent_id, agent_name} 或 {ok: False, message}
-        """
-        import uuid as _uuid
-        # 优先使用 PM 预先生成的 agent_id (已在 prompt 中引用)
-        agent_id = preferred_agent_id or f"sub-{_uuid.uuid4().hex[:10]}"
-
-        # 创建新的 AgentRuntime 实例, 注入 PM 定制的 system prompt
-        sub_runtime = AgentRuntime(
-            agent_id=agent_id,
-            shared_folder_path=str(self.state.shared_folder.path),
-            custom_system_prompt=system_prompt,
-        )
-
-        self.state.sub_agents[agent_id] = {
-            "agent_id": agent_id,
-            "agent_name": agent_name,
-            "runtime": sub_runtime,
-            "skills": skills,
-            "current_task": task_description,
-            "status": "idle",
-            "progress": 0.0,
-            "has_custom_prompt": bool(system_prompt),
-        }
-
-        logger.info("子 Agent 已创建: %s (%s)", agent_id, agent_name)
-        return {"agent_id": agent_id, "agent_name": agent_name}
+    def create_subagent(self, agent_name: str, skills: list, task_description: str='', system_prompt: str='', preferred_agent_id: str='') -> dict:
+        return call_component(self, WorkerSubagentService, 'create_subagent', agent_name=agent_name, skills=skills, task_description=task_description, system_prompt=system_prompt, preferred_agent_id=preferred_agent_id)
 
     def cancel_subagent(self, agent_id: str) -> dict:
-        """Request cooperative cancellation for a sub-agent runtime."""
-        info = self.state.sub_agents.get(agent_id)
-        if not info:
-            return {"ok": False, "message": f"子 Agent {agent_id} 不存在"}
-        runtime = info.get("runtime")
-        cancel_runtime = getattr(runtime, "cancel", None)
-        if callable(cancel_runtime):
-            cancel_runtime()
-        info["status"] = "cancelled"
-        logger.info("子 Agent 已请求取消: %s", agent_id)
-        return {"ok": True, "agent_id": agent_id}
+        return call_component(self, WorkerSubagentService, 'cancel_subagent', agent_id=agent_id)
 
     def forward_progress_report(self, report: dict) -> dict:
-        """将子 Agent 的进度报告转发给 PM Agent。
-
-        Args:
-            report: 进度报告字典
-
-        Returns:
-            {ok: True} 或 {ok: False, message}
-        """
-        if not self.state.pm_agent:
-            return {"ok": False, "message": "PM Agent 未运行"}
-
-        self.state.pm_agent.receive_progress_report(report)
-        return {"ok": True}
+        return call_component(self, WorkerPmService, 'forward_progress_report', report=report)
 
     def get_subagent_status(self) -> dict:
-        """返回本 Worker 上所有子 Agent 的状态。"""
-        result = []
-        for agent_id, info in self.state.sub_agents.items():
-            result.append({
-                "agent_id": agent_id,
-                "agent_name": info.get("agent_name", ""),
-                "current_task": info.get("current_task", ""),
-                "status": info.get("status", "idle"),
-                "progress": info.get("progress", 0.0),
-            })
-        return {"sub_agents": result, "total": len(result)}
+        return call_component(self, WorkerSubagentService, 'get_subagent_status')
 
     def update_subagent_prompt(self, agent_id: str, new_prompt: str) -> dict:
-        """动态更新子 Agent 的 system prompt (优化2)。
-
-        PM 可在任务执行中途调用此方法, 更新子 Agent 的定制 prompt,
-        用于纠偏、补充上下文、调整策略。
-
-        Args:
-            agent_id: 子 Agent ID
-            new_prompt: 新的 system prompt
-
-        Returns:
-            {ok: True} 或 {ok: False, message}
-        """
-        info = self.state.sub_agents.get(agent_id)
-        if not info:
-            return {"ok": False, "message": f"子 Agent {agent_id} 不存在"}
-        runtime = info.get("runtime")
-        if not runtime:
-            return {"ok": False, "message": "子 Agent runtime 不可用"}
-        runtime.set_custom_prompt(new_prompt)
-        info["has_custom_prompt"] = bool(new_prompt)
-        logger.info("子 Agent %s prompt 已更新 (%d 字符)", agent_id, len(new_prompt))
-        return {"ok": True, "agent_id": agent_id}
+        return call_component(self, WorkerSubagentService, 'update_subagent_prompt', agent_id=agent_id, new_prompt=new_prompt)
 
     # ── FastAPI 应用 ─────────────────────────────────────────────
 
     def _create_app(self) -> FastAPI:
         """创建 Worker 的 FastAPI 应用。"""
-        app = FastAPI(title="LAN Mesh Worker", version="0.1.0")
+        from .version import __version__
+        app = FastAPI(title="LAN Mesh Worker", version=__version__)
+
+        @app.on_event("shutdown")
+        async def shutdown_event() -> None:
+            from starlette.concurrency import run_in_threadpool
+            await run_in_threadpool(self.stop)
 
         # Phase 0: 节点间 mesh token 认证 (与 Station 同一中间件, auth_enabled 时启用)
         from .station_api import api_guard_middleware, configure_mesh_auth, mesh_auth_enabled
@@ -592,6 +380,10 @@ class WorkerAgent:
 
     def start(self):
         """启动 Worker 守护进程。"""
+        from .application_lifecycle import stop_signal
+        stop_signal(self).clear()
+        vars(self).pop("_shutdown_report", None)
+        self._services_stopping = False
         self._running = True
 
         # 启动前自检
@@ -660,6 +452,10 @@ class WorkerAgent:
         hb_thread.start()
         self._threads.append(hb_thread)
 
+        self._serve()
+
+    def _serve(self) -> None:
+        """Own the Uvicorn server and always clean up after it exits."""
         # 启动 FastAPI (阻塞主线程)
         app = self._create_app()
         config = uvicorn.Config(
@@ -669,22 +465,21 @@ class WorkerAgent:
             log_level="warning",
         )
         server = uvicorn.Server(config)
+        self._server = server
         logger.info("服务已启动 → http://0.0.0.0:%d", self.state.api_port)
         try:
             server.run()
-        except KeyboardInterrupt:
-            logger.info("正在停止...")
+        finally:
             self.stop()
 
-    def stop(self):
-        """停止 Worker。"""
-        self._running = False
-        # 停止云同步
-        if self.state.cloud_sync:
-            self.state.cloud_sync.stop()
-        # 停止 PM Agent
-        if self.state.pm_agent:
-            self.state.pm_agent.stop()
-            logger.info("PM Agent 已停止")
-        if self.discovery:
-            self.discovery.stop()
+    def stop(self) -> dict:
+        """Cooperatively stop owned work and release service containers."""
+        from .application_lifecycle import shutdown_application
+        return shutdown_application(self)
+
+
+from typing import Any
+from .component_service import call_component
+from .worker_secretary_service import WorkerSecretaryService
+from .worker_pm_service import WorkerPmService
+from .worker_subagent_service import WorkerSubagentService

@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 from .logger import get_logger
+from .version import get_version
 
 logger = get_logger("version")
 
@@ -83,7 +84,7 @@ def local_version_info(force: bool = False) -> dict:
             commit = record.get("commit", "")
             commit_time = 0.0
         info = {
-            "version": record.get("version", ""),
+            "version": record.get("version", "") or get_version(),
             "commit": commit,
             "commit_time": commit_time,
             "released_at": record.get("released_at", ""),

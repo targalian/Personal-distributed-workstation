@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lan-mesh"
-version = "0.2.0"
+dynamic = ["version"]
 description = "LAN Mesh 分布式 AI 工作站 — 局域网多智能体协作系统"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,7 +14,7 @@ authors = [
 ]
 
 dependencies = [
-    "fastapi>=0.104.0,<1.0",
+    "fastapi==0.128.8",
     "uvicorn[standard]>=0.24.0,<1.0",
     "websockets>=12.0,<14.0",
     "psutil>=5.9.0,<7.0",
@@ -24,6 +24,8 @@ dependencies = [
     "python-multipart>=0.0.6,<1.0",
     "python-dotenv>=1.0.0,<2.0",
     "boto3>=1.28.0,<2.0",
+    "cryptography>=41.0.0",
+    "readerwriterlock==1.0.9",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +33,7 @@ dev = [
     "pytest>=7.4.0,<9.0",
     "pytest-cov>=4.1.0,<6.0",
     "ruff>=0.1.0,<1.0",
+    "httpx>=0.24.0,<1.0",
 ]
 
 [project.scripts]
@@ -38,6 +41,12 @@ lan-mesh = "main:main"
 
 [tool.setuptools.packages.find]
 include = ["lan_mesh*"]
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.dynamic]
+version = {attr = "lan_mesh.version.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -54,3 +63,7 @@ ignore = ["E501"]  # 行长度由 line-length 控制
 
 [tool.ruff.isort]
 known-first-party = ["lan_mesh"]
+
+[tool.setuptools.package-data]
+"lan_mesh" = ["web/templates/*.html", "web/static/*.*", "web/static/dashboard/*.js", "web/static/icons/*", "web/static/spa/**/*", "model_pool.yaml", "model_pool.example.yaml", "resources.example.yaml"]
+"lan_mesh._vendor.yomkserverpy" = ["LICENSE.txt", "UPSTREAM.md"]

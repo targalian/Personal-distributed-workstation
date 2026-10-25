@@ -12,12 +12,28 @@ Worker 侧的任务执行能力：守护进程、Agent 运行时、能力卡片�
 | agent_prompt.py | 子 Agent 通用 Prompt 模板与定制构建器 |
 | agent_runtime.py | Agent 运行时 — Worker 端任务执行引擎 |
 | mcp_client.py | MCP 客户端 — 轻量级 JSON-RPC 2.0 客户端 |
+| mcp_connection_service.py | McpConnectionService: domain behavior separated from the public compatibility facade. |
 | mcp_gateway.py | MCP 网关 — 中央工具调度枢纽 |
+| mcp_tool_service.py | McpToolService: domain behavior separated from the public compatibility facade. |
+| runtime_cli_service.py | RuntimeCliService: domain behavior separated from the public compatibility facade. |
+| runtime_execution_service.py | RuntimeExecutionService: domain behavior separated from the public compatibility facade. |
+| runtime_llm_service.py | RuntimeLlmService: domain behavior separated from the public compatibility facade. |
+| runtime_prompt_service.py | RuntimePromptService: domain behavior separated from the public compatibility facade. |
+| runtime_react_service.py | RuntimeReactService: domain behavior separated from the public compatibility facade. |
+| runtime_skill_service.py | RuntimeSkillService: domain behavior separated from the public compatibility facade. |
 | sandbox.py | F2.2: 代码执行沙箱 — 安全隔离执行 Agent 生成的代码。 |
+| skill_access_service.py | SkillAccessService: domain behavior separated from the public compatibility facade. |
+| skill_catalog_service.py | SkillCatalogService: domain behavior separated from the public compatibility facade. |
+| skill_distribution_service.py | SkillDistributionService: domain behavior separated from the public compatibility facade. |
 | skill_market.py | 技能市场 — 第三方 Skill 插件浏览/安装/卸载 (F5.3 插件系统, iter-61) |
 | skill_registry.py | 技能库注册表 — 中央技能管理与分发系统 |
+| tool_catalog_service.py | ToolCatalogService: domain behavior separated from the public compatibility facade. |
+| tool_execution_service.py | ToolExecutionService: domain behavior separated from the public compatibility facade. |
 | tool_registry.py | 工具注册表 — 插件化工具管理系统 |
 | worker.py | Worker Agent - 部署在各主机上的守护进程 |
+| worker_pm_service.py | WorkerPmService: domain behavior separated from the public compatibility facade. |
+| worker_secretary_service.py | WorkerSecretaryService: domain behavior separated from the public compatibility facade. |
+| worker_subagent_service.py | WorkerSubagentService: domain behavior separated from the public compatibility facade. |
 <!-- /AUTO:module-list -->
 ---
 

@@ -3,7 +3,7 @@ PM 远程反向控制与任务 DAG 图读写 — 取消/暂停/注入/图更新�
 
 拆分自 station_controller.py (iter-75 Phase 3)。这里的方法面向「PM 跑在别的
 节点上」的场景: Secretary 收到 Boss 指令后经 HTTP 反向下发到 PM 所在 Worker,
-本机 PM 则委托 _local_* 路径。DAG 图读写同属任务控制面, 故一并归此。
+iter-105 起三项 PM 控制委托 PmControlService；DAG 图读写保留在此兼容层。
 """
 from typing import Optional
 
@@ -23,168 +23,21 @@ class StationPmControlMixin:
     # ── 优化7: 反向沟通 ──
 
     def inject_input_to_pm(self, pm_id: str, input_data: dict) -> dict:
-        """向指定 PM Agent 注入来自 Boss 的回复。
-
-        优先检查本机 PM, 否则 HTTP POST 到远程 Worker。
-        """
-        worker = self._pm_worker_map.get(pm_id)
-
-        # 本机 PM 直接调用
-        if worker and worker.get("local") and self._local_pm_agent:
-            result = self._local_inject_input(input_data)
-            if result.get("ok"):
-                logger.info("已注入回复到本机 PM %s", pm_id[:12])
-                return {"ok": True, "message": "回复已发送到 PM Agent"}
-            return result
-
-        if not worker:
-            return {"ok": False, "message": f"PM {pm_id[:12]} 的 Worker 信息未找到"}
-
-        ip = worker.get("ip", "")
-        port = worker.get("api_port", 0)
-        if not ip or not port:
-            return {"ok": False, "message": "Worker 地址信息不完整"}
-
-        try:
-            resp = http_post(
-                f"http://{ip}:{port}/pm/inject-input",
-                json=input_data,
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                result = resp.json()
-                logger.info("已注入回复到 PM %s", pm_id[:12])
-                return {"ok": True, "message": "回复已发送到 PM Agent"}
-            else:
-                return {"ok": False, "message": f"Worker 返回错误: {resp.text[:200]}"}
-        except Exception as e:
-            return {"ok": False, "message": f"注入失败: {e}"}
+        """Compatibility entry routed through the shared PM control service."""
+        from .pm_control_service import call_pm_control
+        return call_pm_control(self, "inject_input_to_pm", pm_id=pm_id, input_data=input_data)
 
     # ── 优化8: 取消/暂停任务 ──
 
     def cancel_task(self, task_id: str) -> dict:
-        """取消指定任务及对应的 PM Agent。
-
-        Args:
-            task_id: 任务 ID
-
-        Returns:
-            {ok: bool, message: str}
-        """
-        task = self.db.get_task(task_id)
-        if not task:
-            return {"ok": False, "message": f"任务 {task_id} 不存在"}
-
-        pm_id = task.pm_agent_id
-        if not pm_id:
-            # 任务尚未分配 PM, 直接取消
-            self.db.update_task_status(task_id, "cancelled")
-            return {"ok": True, "message": "任务已取消 (未分配 PM)"}
-
-        worker = self._pm_worker_map.get(pm_id)
-        if not worker:
-            # Worker 信息丢失, 标记取消
-            self.db.update_task_status(task_id, "cancelled")
-            self.db.update_pm_status(pm_id, "cancelled")
-            return {"ok": True, "message": "任务已标记取消 (Worker 信息丢失)"}
-
-        # 本机 PM 直接取消
-        if worker.get("local"):
-            self._local_cancel_pm()
-            self.db.update_task_status(task_id, "cancelled")
-            self.db.update_pm_status(pm_id, "cancelled")
-            # iter-66 (Bug H): 清理映射, 防止 busy 误判
-            self._pm_worker_map.pop(pm_id, None)
-            logger.info("本机任务已取消: %s", task_id)
-            self.bot_gateway.notify("task_cancelled", {"task_id": task_id, "name": task.name})
-            return {"ok": True, "message": "任务已取消"}
-
-        ip = worker.get("ip", "")
-        port = worker.get("api_port", 0)
-        if not ip or not port:
-            return {"ok": False, "message": "Worker 地址信息不完整"}
-
-        try:
-            # iter-66 (Bug G): 认证启用时远程 stop/cancel 端点同样要求 Bearer
-            from .http_retry import auth_headers
-            resp = http_post(
-                f"http://{ip}:{port}/role/cancel-pm",
-                headers=auth_headers(),
-                retries=1,
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                self.db.update_task_status(task_id, "cancelled")
-                self.db.update_pm_status(pm_id, "cancelled")
-                # iter-66 (Bug H): 清理映射, 否则 _is_worker_busy 误判
-                # Worker 仍忙 → F3.1 自动扩容永不派发到该 Worker
-                self._pm_worker_map.pop(pm_id, None)
-                logger.info("任务已取消: %s", task_id)
-                self.bot_gateway.notify("task_cancelled", {
-                    "task_id": task_id, "name": task.name,
-                })
-                return {"ok": True, "message": "任务已取消"}
-            else:
-                return {"ok": False, "message": f"Worker 返回错误: {resp.text[:200]}"}
-        except Exception as e:
-            return {"ok": False, "message": f"取消失败: {e}"}
+        """Compatibility entry routed through the shared PM control service."""
+        from .pm_control_service import call_pm_control
+        return call_pm_control(self, "cancel_task", task_id=task_id)
 
     def pause_task(self, task_id: str) -> dict:
-        """暂停指定任务及对应的 PM Agent。
-
-        Args:
-            task_id: 任务 ID
-
-        Returns:
-            {ok: bool, message: str}
-        """
-        task = self.db.get_task(task_id)
-        if not task:
-            return {"ok": False, "message": f"任务 {task_id} 不存在"}
-
-        pm_id = task.pm_agent_id
-        if not pm_id:
-            return {"ok": False, "message": "任务尚未分配 PM Agent"}
-
-        worker = self._pm_worker_map.get(pm_id)
-        if not worker:
-            return {"ok": False, "message": "PM Agent 的 Worker 信息未找到"}
-
-        # 本机 PM 直接暂停
-        if worker.get("local"):
-            self._local_pause_pm()
-            self.db.update_task_status(task_id, "paused")
-            self.db.update_pm_status(pm_id, "paused")
-            logger.info("本机任务已暂停: %s", task_id)
-            self.bot_gateway.notify("task_paused", {"task_id": task_id, "name": task.name})
-            return {"ok": True, "message": "任务已暂停"}
-
-        ip = worker.get("ip", "")
-        port = worker.get("api_port", 0)
-        if not ip or not port:
-            return {"ok": False, "message": "Worker 地址信息不完整"}
-
-        try:
-            # iter-66 (Bug G 同类): 认证启用时远程 pause 端点同样要求 Bearer
-            from .http_retry import auth_headers
-            resp = http_post(
-                f"http://{ip}:{port}/role/pause-pm",
-                headers=auth_headers(),
-                retries=1,
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                self.db.update_task_status(task_id, "paused")
-                self.db.update_pm_status(pm_id, "paused")
-                logger.info("任务已暂停: %s", task_id)
-                self.bot_gateway.notify("task_paused", {
-                    "task_id": task_id, "name": task.name,
-                })
-                return {"ok": True, "message": "任务已暂停"}
-            else:
-                return {"ok": False, "message": f"Worker 返回错误: {resp.text[:200]}"}
-        except Exception as e:
-            return {"ok": False, "message": f"暂停失败: {e}"}
+        """Compatibility entry routed through the shared PM control service."""
+        from .pm_control_service import call_pm_control
+        return call_pm_control(self, "pause_task", task_id=task_id)
 
     # ── DAG 图结构读写 (iter-51, F4.3) ────────────────────────────
 

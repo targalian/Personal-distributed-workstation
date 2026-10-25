@@ -13,6 +13,15 @@ API Key 加密分发与版本同步（S1/S2/S3 迭代成果集中于此）。
 | collect_config.py | LAN Mesh 主机配置独立采集脚本 |
 | model_resources.py | 模型资源管理 — 多主机 / 多 API Key 预算池管理 (R1) |
 | model_router.py | 模型路由器 — Phase 2 核心模块 |
+| model_routing_service.py | ModelRoutingService: domain behavior separated from the public compatibility facade. |
+| resource_accounting_service.py | ResourceAccountingService: domain behavior separated from the public compatibility facade. |
+| resource_alert_service.py | ResourceAlertService: domain behavior separated from the public compatibility facade. |
+| resource_api_service.py | ResourceApiService: transport-neutral interaction operations behind the original API. |
+| resource_config_service.py | ResourceConfigService: domain behavior separated from the public compatibility facade. |
+| resource_reporting_service.py | ResourceReportingService: domain behavior separated from the public compatibility facade. |
+| resource_selection_service.py | ResourceSelectionService: domain behavior separated from the public compatibility facade. |
+| resource_usage_batch.py | Shared idempotent usage batch adapter for HTTP and Worker WebSocket. |
+| secret_exchange_service.py | SecretExchangeService: transport-neutral interaction operations behind the original API. |
 | secret_sync.py | S1-key-sync: API Key 加密自动分发 (节点间密钥同步) |
 | version_sync.py | S2: 版本记录与升级提醒 — 单机版本文件 + 局域网版本比对 + 领先节点通知 |
 <!-- /AUTO:module-list -->

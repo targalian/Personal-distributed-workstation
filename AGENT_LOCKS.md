@@ -1,10 +1,10 @@
-﻿# Agent 占用登记表
+# Agent 占用登记表
 
 多 Agent（Codex CLI / Qoder Quest）并行开发时的文件占用与交接看板。
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
-- 更新时间：2026-09-10
-- 当前迭代：`iter-102`（Codex：BUG-040 single 模式终态链路三缺口修复，iter-101 根因3 孪生缺陷；iter-91~101 已验证待 Boss 发货）
+- 更新时间：2026-10-25
+- 当前迭代：`iter-111`（Yomk代码与本机验收完成，真实双节点演练待用户环境；源码发布按 Git 记录核验）
 
 ## 一、职责边界（长期约定）
 
@@ -24,7 +24,7 @@
 
 | Agent | 占用文件 | 任务 | 开始 | 状态 |
 |---|---|---|---|---|
-| Codex | 空闲 | 无 | —— | 已释放 |
+| Codex | 空闲 | iter-111 本机验收完成；实机待用户提供测试节点 | 2026-10-25 | 已释放 |
 | Quest | 空闲 | 无 | —— | 已释放 |
 
 > 认领格式：一行一个 Agent，`占用文件` 写通配范围（如 `lan_mesh/station_*.py`），
@@ -36,6 +36,12 @@
 按归属各自提交，不要互相 `git add .`：
 
 **Quest（无待推送改动）**
+
+**Codex（iter-103 BUG-041 single 模式取消竞态，已验证待 Boss 发货）**
+- `lan_mesh/pm_agent.py`（**BUG-041**。BUG-040 验证过程中发现: cancel() 在 execute_directly 阻塞期间把 _running 置 False, 但 runtime 可能已过取消检查点而正常返回 completed —— 交付前缺 _running 检查, 已取消的 PM 仍走完整交付链。实测: 取消 → 3 分钟后仍交付。修复: `_run_single_pattern` 交付前增加 `not self._running` 检查, 已取消的 PM 不再走交付链）:
+- `tests/test_core.py`（`TestIter103CancelRaceCondition` 3 例，**3 变异全部致红**）
+- `docs/design/03-task-orchestration/README.md`（BUG-041 节 + 变更记录）
+- `loop_status.json`、`AGENT_LOCKS.md`（iter-103 收尾）
 
 **Codex（iter-102 BUG-040 single 模式终态链路，已验证待 Boss 发货）**
 - `lan_mesh/pm_agent.py`（**BUG-040，三个缺口**。iter-101 修了 `AgentRuntime.execute` 采纳内层失败信号后，本轮排查发现 single 模式——PM 自己执行——还有三个缺口）：
@@ -255,3 +261,19 @@ Codex 的沙箱把 `.git` 挂为只读（NTFS 层其实有 Modify 权限），�
 4. **hook 联动**：Codex 提交代码 → post-commit 入队 `.qoder/repowiki/.pending/` →
    Quest 侧 `qoderclicn` 后台消费。Codex 不要清空该队列。
 5. **锁超时**：占用超过 24h 未更新视为失效，接手方在本表注明「接管原因」后可强占。
+
+## iter-104 交接（2026-10-25）
+
+[Codex][iter-104] Boss 明确要求直接引入 YomkServerPy。完成阶段1：固定源码1.4.20/975028d接入，实例化YomkServer + ServiceRuntime/ServiceContext/HTTP适配；21个任务域端点迁入5服务，OpenAPI完整相等，683→58行，超80行函数35→33；远程派发线程池+10s超时，discovery改为调用时解析，无pm_id不再假running；新增23项行为回归，全量577 passed/123.35s，编译/导入/86文件未绑定扫描/文档116项11域/源码许可证wheel分发通过。Windows沙箱socketpair会卡住基线与测试，已授权沙箱外验证。全项目重构尚未完成，余下7阶段见docs/design/yomk-refactor-assessment.md；特别是PM生命周期统一锁、聊天/队列/联邦统一入口、类型化请求与移除controller依赖。未改已有iter-103的pm_agent.py/test_core.py等未提交业务改动。
+
+VERSION.json 的 commit 记录当前 HEAD（尚未包含工作区改动）；发货时由既有脚本对齐最终代码提交。pyproject.toml 与 lan_mesh.__version__ 的旧版本元数据漂移列入后续统一，不在本轮伪造为已发布。
+
+## iter-105 交接（2026-10-25）
+
+[Codex][iter-105] 完成Yomk阶段2：PmLifecycleService/PmControlService/TaskSchedulingService；运行时ensure/request_sync并发装配；PM slot统一锁、同task重试幂等、退役线程屏障、锁外取消/暂停回调、失败清理和恢复登记；HTTP/聊天/联邦共用提交，队列/接管/扩容共用本机与远程实际派发；Worker控制可选pm_id及输入X-PM-ID身份校验保留旧调用；新增16项PM专项，全量593 passed/122.98s，最终服务专项39 passed/7.12s，编译/导入/89文件未绑定扫描/docs120项11域通过。scheduler599→334、local_pm537→355、pm_control260→113；顶层超长函数33→32。尚未迁移独立worker.py、类型化消息或应用整体后台生命周期；真实多机/在线LLM负载未做本轮结论。下一阶段3拆秘书对话/意图/命令/Bot/项目/蓝图，移除更多controller耦合。详见docs/design/02-station-core/pm-service-phase2.md。
+
+## iter-111 用户交接
+
+iter-111 Yomk阶段8代码与本机验收完成：仪表盘16源模块、Web共用认证、React领域客户端、Tauri四域27命令兼容；统一VERSION→包/CLI/OpenAPI版本，依赖由pyproject生成，补齐cryptography/httpx并固定FastAPI0.128.8维持上传OpenAPI；兼容适配器76处阻塞调用线程池隔离、Discovery请求时解析；56业务服务类/12普通repository。隔离venv全量621 passed/125.29s，Node6 passed、两套前端类型检查与构建、Chromium桌面/手机/React任务/DAG四页37认证请求零异常、真实loopback HTTP执行/取消/关闭、wheel源码/许可证/资产/依赖/密钥配置排除通过。编译/导入/158文件名称扫描、依赖同步、docs201项11域通过。阶段1~7完成，阶段8真实多机/在线模型/升级回滚未验收：已知本机/LAN节点连接失败、VPN超时；需要用户提供两台可达隔离测试节点及联调条件。未部署、未派发外部任务、未提交或推送；保留原iter103未提交改动。详见docs/design/yomk-refactor-assessment.md及08-infrastructure/yomk-rollout.md。
+
+本轮依用户全项目重构授权包含 webui/ 与 quicklan-main/src/api*；Quest 当前已释放。

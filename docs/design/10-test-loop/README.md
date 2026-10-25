@@ -21,7 +21,18 @@
 | test_bug/test_checklist.csv | UI 变更清单 (UI-0xx 编号) |
 | test_bug/ui_change_log.py | Loop Engineering — UI 改动待检登记工具 |
 | test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
+| tests/frontend/ | Node认证并发与Tauri IPC契约回归 |
+| tests/test_application_lifecycle.py | Cooperative lifecycle and draining regressions with controlled blocking windows. |
 | tests/test_core.py | 核心模块单元测试 |
+| tests/test_execution_services.py | Worker concurrency, responsive execution API and native execution boundaries. |
+| tests/test_frontend_assets.py | Dashboard source/markup compatibility and release version resolution. |
+| tests/test_infrastructure_adapters.py | Compatibility and event-loop isolation for remaining infrastructure HTTP adapters. |
+| tests/test_interaction_services.py | Interaction contracts, common ingress and real project domain persistence. |
+| tests/test_network_service_integration.py | Real loopback HTTP integration of Worker API, native execution and shutdown. |
+| tests/test_pm_services.py | Concurrency and integration regressions for shared PM ownership and scheduling. |
+| tests/test_repositories.py | Database compatibility: unchanged schema and shared repositories with isolated connections. |
+| tests/test_resource_services.py | Resource contracts, secret-free metadata and scoped execution accounting. |
+| tests/test_services.py | Behavioral regression for real Yomk routing, isolation and task API compatibility. |
 | tests/test_shadow_dev.py | Shadow development guardrail tests. |
 | tests/test_workstation_optimizer.py | Tests for the resident workstation optimization workflow. |
 <!-- /AUTO:module-list -->
@@ -80,10 +91,40 @@ post-merge 回归验证，形成「自动对齐 → 自动验证」闭环。
 3. 涉服务改动 → Station 重启冒烟
 4. UI 改动 → checklist 登记 + Browser 实测
 
+## iter-104：服务化回归
+
+tests/test_services.py 新增 23 项行为回归，使用真实 YomkServerPy 和隔离 SQLite。
+tests/fixtures/task_api_contract.json 是迁移前保存的任务域完整 OpenAPI 快照，
+用于验证端点路径、参数、默认值、描述和响应契约均无漂移。
+专项还覆盖总线路由/内省、线程与事件循环边界、错误传播、关闭重建、应用隔离、
+角色/发现组件热替换、任务派发多路径、交付闭环、预算拒绝、记忆聚合与网络等待期间并发查询。
+
+结果：全量 577 passed（123.35s）；核心编译、导入、86 个 Python 文件未绑定名称扫描
+通过。Windows 沙箱的本地 socketpair 初始化会卡住 TestClient，基线同样受影响，
+因此经授权在沙箱外运行测试。该结论不等价于真实多主机压测或线上升级验收。
+
+## iter-105：PM 并发与统一派发回归
+
+tests/test_pm_services.py 新增 16 项行为用例，构造阻塞窗口验证 12 路并发只有一个
+PM 构造进入；还覆盖恢复竞争、同 task_id 重试幂等、取消后线程退出屏障、回调重入、
+失败清理、身份隔离、统一选站与并发 claim。Worker 新可选 pm_id body 和 X-PM-ID
+输入 header 同时验证旧调用兼容。tests/test_services.py 复用统一传输测试接缝。
+
+全量 593 passed（122.98s）；最终服务专项 39 passed（7.12s）。编译、控制器导入、
+89 个 Python 文件未绑定名称扫描通过；设计清单 120 条目、11 域通过。
+测试为隔离 DB/受控线程与模拟网络，不等于真实跨机或在线 LLM 负载测试。
+
+## iter-111：Yomk迁移本机验收
+
+隔离环境621 passed/125.29s；Node6 passed；真实loopback HTTP、浏览器、两套前端与wheel通过。详见[完整评估](../yomk-refactor-assessment.md)。实机联调尚待用户提供环境。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-25 | iter-111 | 隔离环境621 passed/125.29s；Node6 passed；真实loopback HTTP、浏览器、两套前端与wheel通过 |
+| 2026-10-25 | iter-105 | 新增16项PM专项；全量593 passed，服务专项39 passed，原任务OpenAPI契约保持 |
+| 2026-10-25 | iter-104 | 新增 23 项服务化行为回归及 OpenAPI 快照；全量 577 passed |
 | 2026-08-29 | iter-65 | test_checklist.csv 数据恢复: iter-64 上库误截断为单行 GBK (丢 54 行历史) → 从 git 历史恢复全量并统一 utf-8-sig (工具链标准编码); UI-055 登记检测通过 |
 | 2026-08-16 | iter-30 补 | P1 #9: 新增 PM 三件套接口级单测 33 条 (TestPMPlanner/TestPMMonitor/TestPMDispatcher), 基线 121→154 |
 | 2026-08-16 | iter-30 补 | E5: 新增 TestSecretaryFailover 6 条, 基线 115→121 |

@@ -9,6 +9,8 @@
 |---|---|
 | auth.py | 节点间通信认证 — 轻量级 Shared Token 机制 |
 | discovery.py | UDP 广播局域网设备发现 - 参考 QuickLAN 的 DiscoveryService |
+| discovery_registry_service.py | DiscoveryRegistryService: domain behavior separated from the public compatibility facade. |
+| discovery_transport_service.py | DiscoveryTransportService: domain behavior separated from the public compatibility facade. |
 | http_retry.py | 内部 HTTP 通信重试工具 |
 | protocol.py | 协议定义 - 端口常量、发现数据包、主机信息模型 |
 <!-- /AUTO:module-list -->

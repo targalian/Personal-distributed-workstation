@@ -8,7 +8,10 @@ iter-56 (F5.1) 起新增 React SPA 新版（webui/），与旧版仪表盘并存
 <!-- AUTO:module-list -->
 | 文件/目录 | 职责一句话 |
 |---|---|
+| dashboard_assets.py | Dashboard domain assembly preserving classic JavaScript globals and source order. |
 | lan_mesh/web/static/ | CSS/JS 静态资源 (含 spa/ React 构建产物) |
+| lan_mesh/web/static/dashboard/ | 仪表盘16个业务源模块，组装为单一classic script |
+| lan_mesh/web/static/mesh_transport.js | 仪表盘与React共用认证和raw HTTP传输 |
 | lan_mesh/web/templates/dashboard.html | Station Web 控制台 (10 Tab, 含运行时性能) |
 | webui/ | React SPA 源码 (Vite+TS+xyflow, 构建产物 → web/static/spa/) |
 <!-- /AUTO:module-list -->
@@ -246,10 +249,15 @@ HTTP 响应渲染落话题 (闭包持有发送时 topic key); WS `chat_reply` ha
 `opt_discuss` 历史消息 (含配对 user 提问) 防刷新后历史回放串台 (后端会将
 讨论消息与普通对话一同落库)。503 (秘书未激活) 时讨论区落明确提示。
 
+## iter-111：Yomk迁移本机验收
+
+16仪表盘源模块，共享认证，React/Tauri领域客户端；6项Node与4页Chromium验收。详见[完整评估](../yomk-refactor-assessment.md)。实机联调尚待用户提供环境。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-25 | iter-111 | 16仪表盘源模块，共享认证，React/Tauri领域客户端；6项Node与4页Chromium验收 |
 | 2026-09-07 | iter-88 | 项目详情新增蓝图工作台: 结构化编辑 charter/roadmap/decisions, 保存后列表与详情联动刷新 |
 | 2026-08-16 | iter-27 后 | 初建；收录 S2/S3 版本统计 UI |
 | 2026-08-25 | iter-37 | 新增 📈 运行时性能 Tab (指标卡/按模型统计/调用明细/子任务轨迹)，UI-035 实测通过 |

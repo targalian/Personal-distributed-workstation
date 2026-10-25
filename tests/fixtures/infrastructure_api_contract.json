@@ -1,0 +1,2730 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "FastAPI",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health Check",
+        "description": "F1.2: 系统健康检查端点。\n\n返回各组件状态、资源使用、运行时间。\n用于外部监控 / 自愈重启判断 / 负载均衡探活。",
+        "operationId": "health_check_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/restart": {
+      "post": {
+        "summary": "Request Restart",
+        "description": "F1.2: 触发自愈重启 (graceful)。",
+        "operationId": "request_restart_health_restart_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/errors/stats": {
+      "get": {
+        "summary": "Error Stats",
+        "description": "F1.4: 错误统计摘要。",
+        "operationId": "error_stats_api_errors_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/errors/recent": {
+      "get": {
+        "summary": "Error Recent",
+        "description": "F1.4: 最近错误记录。",
+        "operationId": "error_recent_api_errors_recent_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "module",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Module"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/errors/diagnosis": {
+      "get": {
+        "summary": "Error Diagnosis",
+        "description": "iter-46 (F4.2): 错误自愈诊断建议 (模式规则表分组)。\n\niter-48: source=history 改诊断 error_log 持久化记录 (重启后不断档);\n默认 buffer 行为不变。",
+        "operationId": "error_diagnosis_api_errors_diagnosis_get",
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Window"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "buffer",
+              "title": "Source"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/errors/history": {
+      "get": {
+        "summary": "Error History",
+        "description": "iter-47: 持久化错误历史 (error_log 表, 跨重启保留)。",
+        "operationId": "error_history_api_errors_history_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "module",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Module"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/errors/heal": {
+      "post": {
+        "summary": "Error Heal",
+        "description": "iter-49 (F4.2 修复环节): 执行自愈动作并落盘 heal_log。\n\niter-60: rotate_key/switch_pool 升级为真实修复写动作 (失效/耗尽池\n自动暂停/剔除), 直接透传; 未注册动作返回 manual_required (需人工介入)。",
+        "operationId": "error_heal_api_errors_heal_post",
+        "parameters": [
+          {
+            "name": "action",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Action"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Category"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/errors/heal/history": {
+      "get": {
+        "summary": "Error Heal History",
+        "description": "iter-49: 自愈动作执行历史 (heal_log 表, 跨重启保留)。",
+        "operationId": "error_heal_history_api_errors_heal_history_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/errors/heal/status": {
+      "get": {
+        "summary": "Error Heal Status",
+        "description": "iter-50: 自动自愈守护状态 (开关/周期/冷却/累计轮次/最近动作)。",
+        "operationId": "error_heal_status_api_errors_heal_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/errors/heal/auto-check": {
+      "post": {
+        "summary": "Error Heal Auto Check",
+        "description": "iter-50: 手动触发一轮自动自愈扫描 (与守护线程同逻辑)。",
+        "operationId": "error_heal_auto_check_api_errors_heal_auto_check_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/activate-secretary": {
+      "post": {
+        "summary": "Activate Secretary",
+        "description": "激活 Secretary 模式 (同进程加载项目管理组件)。",
+        "operationId": "activate_secretary_api_station_activate_secretary_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/deactivate-secretary": {
+      "post": {
+        "summary": "Deactivate Secretary",
+        "description": "停用 Secretary 模式。",
+        "operationId": "deactivate_secretary_api_station_deactivate_secretary_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/roles": {
+      "get": {
+        "summary": "Get Roles",
+        "description": "查询当前激活的角色。",
+        "operationId": "get_roles_api_station_roles_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/register": {
+      "post": {
+        "summary": "Register Worker",
+        "description": "接收 Worker 的注册请求 (完整 HostInfo)。",
+        "operationId": "register_worker_api_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/auth-token": {
+      "get": {
+        "summary": "Get Auth Token",
+        "description": "Phase 0: Web UI 引导获取 mesh token (认证启用时)。\n\n信任根: 能访问 Web UI 的局域网成员视为内网成员, 凭此 token 操作 API。\n认证关闭时返回空字符串 (前端不附加认证头)。\n\niter-58 (F5.2): 请求带用户个人 token 时回显该用户角色/名称\n(SPA 登录后展示角色并禁用越权按钮); 否则回显默认 boss\n(mesh token 持有人 = boss, 向后兼容)。\n多用户模式安全收紧: 配置了用户表时, 仅 boss 身份可获得\nmesh_token (防止低角色从引导端点提权); 未登录回显空角色。",
+        "operationId": "get_auth_token_api_station_auth_token_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/bootstrap-token": {
+      "get": {
+        "summary": "Bootstrap Token",
+        "description": "S1: mesh token 引导端点 — Station 间无注册链路, 非 Secretary\n节点启动选举时从此处拉取信任根并持久化 (与注册下发同一\n信任假设: 能触及本端口的局域网成员视为内网成员)。",
+        "operationId": "bootstrap_token_api_station_bootstrap_token_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/federation/info": {
+      "get": {
+        "summary": "Federation Info",
+        "description": "F3.4 (iter-64): 联邦信息端点 — 供对端联邦节点轮询。\n\n返回本机身份与网段主机摘要 (含远端联邦主机, 实现多级转发\n可视化)。mesh token 认证由 api_guard 中间件完成。",
+        "operationId": "federation_info_api_federation_info_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/federation/tasks/forward": {
+      "post": {
+        "summary": "Federation Task Forward",
+        "description": "F3.4 (iter-65): 联邦任务委托入口 — 对端 Secretary 提交任务本网段执行。\n\n对端全权接管 (本网段选站/执行/交付), 不回调来源侧。\nmesh token 认证由 api_guard 中间件完成。",
+        "operationId": "federation_task_forward_api_federation_tasks_forward_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/users": {
+      "get": {
+        "summary": "List Users",
+        "description": "用户列表: boss 含 token 尾 4 位 (轮换核对用); 其余角色脱敏。",
+        "operationId": "list_users_api_station_users_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create User Endpoint",
+        "description": "新增用户 (boss): 生成 token, 仅本次响应返回明文。",
+        "operationId": "create_user_endpoint_api_station_users_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/users/{name}/role": {
+      "put": {
+        "summary": "Update User Role",
+        "description": "修改用户角色 (boss, 最后 boss 保护)。",
+        "operationId": "update_user_role_api_station_users__name__role_put",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/users/{name}/rotate-token": {
+      "post": {
+        "summary": "Rotate User Token Endpoint",
+        "description": "轮换用户 token (boss): 旧 token 立即失效, 新明文仅返回一次。",
+        "operationId": "rotate_user_token_endpoint_api_station_users__name__rotate_token_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/users/{name}": {
+      "delete": {
+        "summary": "Delete User Endpoint",
+        "description": "移除用户 (boss, 最后 boss 保护)。",
+        "operationId": "delete_user_endpoint_api_station_users__name__delete",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/version": {
+      "get": {
+        "summary": "Get Version",
+        "description": "S2: 返回本机代码版本信息 (VERSION.json 记录 + git HEAD)。",
+        "operationId": "get_version_api_version_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/version/upgrade-notice": {
+      "post": {
+        "summary": "Upgrade Notice",
+        "description": "S2: 接收领先节点的升级提醒 — 记录日志并发布事件 (Web Toast/横幅)。\n\n白名单放行 (与 /api/heartbeat 同一信任假设): 能触及本端口的\n局域网成员视为内网成员; 提醒内容仅展示, 不触发任何自动操作。",
+        "operationId": "upgrade_notice_api_version_upgrade_notice_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/heartbeat": {
+      "post": {
+        "summary": "Heartbeat",
+        "description": "接收 Worker 心跳 (实时资源使用率)。",
+        "operationId": "heartbeat_api_heartbeat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hosts": {
+      "get": {
+        "summary": "List Hosts",
+        "description": "返回所有注册主机列表 (DB 持久化 + UDP 发现合并)。",
+        "operationId": "list_hosts_api_hosts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hosts/{device_id}": {
+      "get": {
+        "summary": "Get Host",
+        "description": "查询单台主机详情。",
+        "operationId": "get_host_api_hosts__device_id__get",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/network": {
+      "get": {
+        "summary": "Get Network",
+        "description": "返回本机网络状态。",
+        "operationId": "get_network_api_network_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/discovery": {
+      "get": {
+        "summary": "Get Discovery",
+        "description": "返回 UDP 发现到的所有设备 (实时)。",
+        "operationId": "get_discovery_api_discovery_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/probe/{ip}": {
+      "post": {
+        "summary": "Probe Ip",
+        "description": "主动探测指定 IP。",
+        "operationId": "probe_ip_api_probe__ip__post",
+        "parameters": [
+          {
+            "name": "ip",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "Health",
+        "description": "健康检查。",
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health/restart": {
+      "post": {
+        "summary": "Restart System",
+        "description": "触发系统自愈重启。",
+        "operationId": "restart_system_api_health_restart_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station-info": {
+      "get": {
+        "summary": "Station Info",
+        "description": "返回 Station Director 自身的主机信息。",
+        "operationId": "station_info_api_station_info_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shared": {
+      "get": {
+        "summary": "List Shared",
+        "description": "列出共享文件夹内容。",
+        "operationId": "list_shared_api_shared_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/fleet": {
+      "get": {
+        "summary": "Get Fleet",
+        "description": "舰队概览: 在线/离线/各评级分布 + 主机列表 (DB + UDP 合并)。",
+        "operationId": "get_fleet_api_station_fleet_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/hosts": {
+      "get": {
+        "summary": "Get Station Hosts",
+        "description": "所有主机列表 (含评级+状态), 可按评级筛选。",
+        "operationId": "get_station_hosts_api_station_hosts_get",
+        "parameters": [
+          {
+            "name": "min_tier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "D",
+              "title": "Min Tier"
+            }
+          },
+          {
+            "name": "online_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Online Only"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/hosts/{device_id}/events": {
+      "get": {
+        "summary": "Get Host Events",
+        "description": "单台主机出入站事件历史。",
+        "operationId": "get_host_events_api_station_hosts__device_id__events_get",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/events": {
+      "get": {
+        "summary": "Get Station Events",
+        "description": "最近全站事件流。",
+        "operationId": "get_station_events_api_station_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/rate": {
+      "post": {
+        "summary": "Recompute Ratings",
+        "description": "手动触发重新评级所有在线主机。",
+        "operationId": "recompute_ratings_api_station_rate_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/stats": {
+      "get": {
+        "summary": "Get Station Stats",
+        "description": "统计摘要。",
+        "operationId": "get_station_stats_api_station_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/hosts/{device_id}/assign-secretary": {
+      "post": {
+        "summary": "Assign Secretary To Host",
+        "description": "指定主机运行 Secretary。\n\n- 本机 (Station Director): 进程内激活\n- 远程主机: 发送 HTTP 到 Worker, 启动 Secretary 子进程",
+        "operationId": "assign_secretary_to_host_api_station_hosts__device_id__assign_secretary_post",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/hosts/{device_id}/revoke-secretary": {
+      "post": {
+        "summary": "Revoke Secretary From Host",
+        "description": "撤销主机的 Secretary 角色。\n\n- 本机: 进程内停用\n- 远程主机: 发送 HTTP 到 Worker, 停止 Secretary 子进程",
+        "operationId": "revoke_secretary_from_host_api_station_hosts__device_id__revoke_secretary_post",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/secretary-status": {
+      "get": {
+        "summary": "Get Secretary Status",
+        "description": "查询当前 Secretary 分配状态。\n\n返回哪台主机正在运行 Secretary, 以及其端口。",
+        "operationId": "get_secretary_status_api_station_secretary_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/station/hosts/{device_id}/role": {
+      "get": {
+        "summary": "Get Host Role",
+        "description": "查询指定主机的角色状态 (含远程 Secretary 子进程状态)。",
+        "operationId": "get_host_role_api_station_hosts__device_id__role_get",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime/metrics": {
+      "get": {
+        "summary": "Runtime Metrics",
+        "description": "P1: LLM 调用性能指标 (SQLite 聚合, 最近 N 小时)。\n\n返回: 调用次数、平均/P99 延迟、Token 用量、按模型/状态拆分。",
+        "operationId": "runtime_metrics_api_runtime_metrics_get",
+        "parameters": [
+          {
+            "name": "hours",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 1.0,
+              "title": "Hours"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime/trace": {
+      "get": {
+        "summary": "Runtime Trace Log",
+        "description": "P0: 最近 JSONL 追踪记录 (子任务执行 + LLM 调用)。\n\nArgs:\n    limit: 返回条数 (上限 200)\n    type: 过滤类型 (\"llm_call\" / \"subtask_end\" / \"\"全部)",
+        "operationId": "runtime_trace_log_api_runtime_trace_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime/calls": {
+      "get": {
+        "summary": "Runtime Call Log",
+        "description": "P1: LLM 调用明细 (SQLite 最近 N 条, 调试/排查用)。",
+        "operationId": "runtime_call_log_api_runtime_calls_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime/stats": {
+      "get": {
+        "summary": "Runtime Stats",
+        "description": "P0: JSONL 追踪统计 (子任务成功率、模型分布、错误 Top5)。\n\n与 /api/runtime/metrics 互补: metrics 走 SQLite 审计表,\nstats 走 JSONL 文件 (含子任务执行层数据)。",
+        "operationId": "runtime_stats_api_runtime_stats_get",
+        "parameters": [
+          {
+            "name": "hours",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 1.0,
+              "title": "Hours"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime/task-flow": {
+      "get": {
+        "summary": "Runtime Task Flow",
+        "description": "P3: 任务流瀑布 — 按 task_id 聚合生命周期阶段时间线。\n\n返回: 各阶段事件 (提交/规划/执行/子任务结果/交付/失败)\n+ 阶段间隔 (gap_ms) + 总耗时。",
+        "operationId": "runtime_task_flow_api_runtime_task_flow_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime/task-flow-list": {
+      "get": {
+        "summary": "Runtime Task Flow List",
+        "description": "P3: 任务流总览 — 最近任务按阶段事件聚合 (末活动时间倒序)。\n\nArgs:\n    limit: 最多返回任务数 (1~100)\n    stall_minutes: 停滞判定阈值 (分钟, 0~1440); ≤0 禁用停滞检测 (iter-40)\n\n返回: [{task_id, stage_count, last_stage/last_label, total_ms, done, idle_ms, stalled}, ...]",
+        "operationId": "runtime_task_flow_list_api_runtime_task_flow_list_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "stall_minutes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 30.0,
+              "title": "Stall Minutes"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime/task-stall-alerts": {
+      "get": {
+        "summary": "Runtime Task Stall Alerts",
+        "description": "iter-41: 任务停滞主动告警 — 当前活跃告警 + 守护状态。\n\n返回: {alerts: [{task_id, level, last_stage, last_label, idle_min, message}],\n       watching, interval, stall_minutes}",
+        "operationId": "runtime_task_stall_alerts_api_runtime_task_stall_alerts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime/task-stall-alerts/check": {
+      "post": {
+        "summary": "Runtime Task Stall Check",
+        "description": "iter-41: 手动触发一轮停滞检测 (返回新推送的告警)。",
+        "operationId": "runtime_task_stall_check_api_runtime_task_stall_alerts_check_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtime/logs/prune": {
+      "post": {
+        "summary": "Runtime Logs Prune",
+        "description": "iter-54: 手动触发日志容量修剪 (补强#2, 运维/排查用)。\n\ndays: 保留天数 (1~365), 仅删超过保留期的历史行;\nresource_usage_log 未上报行保留等离线补报; 修剪后执行 VACUUM。\n返回各表删除行数统计与 vacuum 结果。",
+        "operationId": "runtime_logs_prune_api_runtime_logs_prune_post",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 30.0,
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pm": {
+      "get": {
+        "summary": "List Pm Agents",
+        "description": "列出所有 PM Agent 及其状态。",
+        "operationId": "list_pm_agents_api_pm_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pm/{pm_id}": {
+      "get": {
+        "summary": "Get Pm Agent",
+        "description": "PM Agent 详情 (含 team_structure)。",
+        "operationId": "get_pm_agent_api_pm__pm_id__get",
+        "parameters": [
+          {
+            "name": "pm_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pm Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pm/{pm_id}/snapshot": {
+      "post": {
+        "summary": "Save Pm Snapshot",
+        "description": "iter-53: PM 上报执行态快照 (断点恢复数据源, Worker 调用)。",
+        "operationId": "save_pm_snapshot_api_pm__pm_id__snapshot_post",
+        "parameters": [
+          {
+            "name": "pm_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pm Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Get Pm Snapshot",
+        "description": "iter-53: 查询 PM 执行态快照 (诊断/恢复前探视)。",
+        "operationId": "get_pm_snapshot_api_pm__pm_id__snapshot_get",
+        "parameters": [
+          {
+            "name": "pm_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pm Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Pm Snapshot",
+        "description": "iter-53: 删除 PM 执行态快照 (任务终结时 PM 调用清理)。",
+        "operationId": "delete_pm_snapshot_api_pm__pm_id__snapshot_delete",
+        "parameters": [
+          {
+            "name": "pm_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pm Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pm/{pm_id}/teams": {
+      "get": {
+        "summary": "Get Pm Teams",
+        "description": "PM 下属团队列表。",
+        "operationId": "get_pm_teams_api_pm__pm_id__teams_get",
+        "parameters": [
+          {
+            "name": "pm_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pm Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pm/{pm_id}/progress": {
+      "get": {
+        "summary": "Get Pm Progress",
+        "description": "PM 进度报告列表。",
+        "operationId": "get_pm_progress_api_pm__pm_id__progress_get",
+        "parameters": [
+          {
+            "name": "pm_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pm Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Receive Pm Progress",
+        "description": "PM 上报进度 (Worker 调用)。",
+        "operationId": "receive_pm_progress_api_pm__pm_id__progress_post",
+        "parameters": [
+          {
+            "name": "pm_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pm Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pm/{pm_id}/status": {
+      "post": {
+        "summary": "Update Pm Status",
+        "description": "PM 上报状态变更 (Worker 调用)。",
+        "operationId": "update_pm_status_api_pm__pm_id__status_post",
+        "parameters": [
+          {
+            "name": "pm_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pm Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pm/{pm_id}/subtasks": {
+      "post": {
+        "summary": "Sync Pm Subtasks",
+        "description": "PM 同步子任务状态列表到任务记录 (前端进度实时展示)。\n\n将 PM 的 plan decomposition + 运行态合并为 SubTask 结构,\n写入对应任务的 subtasks 字段, 并广播 task_updated 事件。",
+        "operationId": "sync_pm_subtasks_api_pm__pm_id__subtasks_post",
+        "parameters": [
+          {
+            "name": "pm_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pm Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/teams": {
+      "get": {
+        "summary": "List Teams",
+        "description": "所有团队 (支持按 pm_id 过滤)。",
+        "operationId": "list_teams_api_teams_get",
+        "parameters": [
+          {
+            "name": "pm_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "title": "Pm Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/teams/{team_id}": {
+      "get": {
+        "summary": "Get Team",
+        "description": "团队详情 (含 members 嵌套)。",
+        "operationId": "get_team_api_teams__team_id__get",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/role/start-pm": {
+      "post": {
+        "summary": "Local Start Pm",
+        "description": "在本机 Station 进程内启动 PM Agent (无需单独 Worker)。",
+        "operationId": "local_start_pm_role_start_pm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/role/stop-pm": {
+      "post": {
+        "summary": "Local Stop Pm",
+        "operationId": "local_stop_pm_role_stop_pm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/role/cancel-pm": {
+      "post": {
+        "summary": "Local Cancel Pm",
+        "operationId": "local_cancel_pm_role_cancel_pm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/role/pause-pm": {
+      "post": {
+        "summary": "Local Pause Pm",
+        "operationId": "local_pause_pm_role_pause_pm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/role/pm-status": {
+      "get": {
+        "summary": "Local Pm Status",
+        "operationId": "local_pm_status_role_pm_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pm/create-subagent": {
+      "post": {
+        "summary": "Local Create Subagent",
+        "description": "在本机为 PM 创建子 Agent。",
+        "operationId": "local_create_subagent_pm_create_subagent_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pm/cancel-subagent": {
+      "post": {
+        "summary": "Local Cancel Subagent",
+        "operationId": "local_cancel_subagent_pm_cancel_subagent_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pm/progress-report": {
+      "post": {
+        "summary": "Local Progress Report",
+        "description": "子 Agent 向本机 PM 上报进度。",
+        "operationId": "local_progress_report_pm_progress_report_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pm/inject-input": {
+      "post": {
+        "summary": "Local Inject Input",
+        "description": "向本机 PM 注入 Boss 回复。",
+        "operationId": "local_inject_input_pm_inject_input_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pm/subagents": {
+      "get": {
+        "summary": "Local List Subagents",
+        "description": "列出本机所有子 Agent。",
+        "operationId": "local_list_subagents_pm_subagents_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/execute": {
+      "post": {
+        "summary": "Local Execute Task",
+        "description": "接收 PM Dispatcher 分发的子任务并在本机异步执行。\n\n立即返回 {\"status\": \"started\"}，实际执行在后台线程完成，\n执行完毕后通过 receive_subtask_result 回调 PM Monitor。\n\n调用方校验 (M1): 必填字段缺失直接 400, 不进入执行线程。",
+        "operationId": "local_execute_task_tasks_execute_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/p2p/send": {
+      "post": {
+        "summary": "P2P Send Message",
+        "description": "向目标主机发送聊天消息。\n\n消息存储在本地并通过 HTTP 转发到目标主机的 /api/p2p/receive 端点,\n同时通过 WebSocket 广播给本机 Dashboard。",
+        "operationId": "p2p_send_message_api_p2p_send_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/p2p/receive": {
+      "post": {
+        "summary": "P2P Receive Message",
+        "description": "接收来自远程主机的消息。\n\n其他主机通过 HTTP POST 调用此端点发送消息给本机。",
+        "operationId": "p2p_receive_message_api_p2p_receive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/p2p/messages/{device_id}": {
+      "get": {
+        "summary": "P2P Get Messages",
+        "description": "获取与指定主机的聊天历史。",
+        "operationId": "p2p_get_messages_api_p2p_messages__device_id__get",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/p2p/transfer": {
+      "post": {
+        "summary": "P2P Transfer File",
+        "description": "向目标主机传输文件。\n\n文件通过 HTTP 上传到目标主机的 /shared 端点。",
+        "operationId": "p2p_transfer_file_api_p2p_transfer_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_p2p_transfer_file_api_p2p_transfer_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cloud-sync/status": {
+      "get": {
+        "summary": "Cloud Sync Status",
+        "description": "查询云存储同步状态。",
+        "operationId": "cloud_sync_status_api_cloud_sync_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cloud-sync/sync": {
+      "post": {
+        "summary": "Cloud Sync Now",
+        "description": "手动触发一次云存储同步。",
+        "operationId": "cloud_sync_now_api_cloud_sync_sync_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cloud-sync/test": {
+      "post": {
+        "summary": "Cloud Sync Test",
+        "description": "测试云存储连接。",
+        "operationId": "cloud_sync_test_api_cloud_sync_test_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Body_p2p_transfer_file_api_p2p_transfer_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          },
+          "target_device_id": {
+            "type": "string",
+            "title": "Target Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file",
+          "target_device_id"
+        ],
+        "title": "Body_p2p_transfer_file_api_p2p_transfer_post"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

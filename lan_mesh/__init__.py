@@ -7,4 +7,4 @@ LAN Mesh - 跨主机网络连接层框架
 参考: QuickLAN (https://github.com/xiaolongsu777/quicklan)
 """
 
-__version__ = "0.1.0"
+from .version import __version__

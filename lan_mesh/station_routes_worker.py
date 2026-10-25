@@ -12,7 +12,7 @@ import uuid as _uuid
 
 import requests as http_requests
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from .http_retry import auth_headers
@@ -29,7 +29,6 @@ def build_worker_routes(controller) -> APIRouter:
     # 便捷别名
     db = controller.db
     state = controller.state
-    discovery = controller.discovery
 
     # ════════════════════════════════════════════════════════════
     #  P2P 主机间通讯辅助
@@ -39,7 +38,7 @@ def build_worker_routes(controller) -> APIRouter:
         """解析 P2P 目标主机的网络信息, 返回 (ip, port, name) 或抛出 HTTPException。"""
         host = db.get_host(device_id)
         if not host:
-            dev = discovery.find_device(device_id)
+            dev = controller.discovery.find_device(device_id)
             if not dev:
                 raise HTTPException(status_code=404, detail="目标主机不存在")
             ip = dev.get("ip", "")
@@ -75,26 +74,44 @@ def build_worker_routes(controller) -> APIRouter:
         set_report_target_global(
             secretary_url,
             token=get_mesh_auth_token() or get_mesh_token())
-        result = controller._local_start_pm(task_id, secretary_url, task_data)
+        result = await run_in_threadpool(controller._local_start_pm, task_id, secretary_url, task_data)
         if not result.get("ok"):
             raise HTTPException(status_code=409, detail=result.get("message", "启动失败"))
         return result
 
     @router.post("/role/stop-pm")
-    async def local_stop_pm():
-        return controller._local_stop_pm()
+    async def local_stop_pm(payload: dict = None):
+        if payload and payload.get("pm_id"):
+            from .pm_lifecycle_service import call_pm
+            result = await run_in_threadpool(call_pm, controller, "stop", expected_pm_id=payload["pm_id"])
+            if not result.get("ok"):
+                raise HTTPException(status_code=409, detail=result.get("message", "停止失败"))
+            return result
+        return await run_in_threadpool(controller._local_stop_pm)
 
     @router.post("/role/cancel-pm")
-    async def local_cancel_pm():
+    async def local_cancel_pm(payload: dict = None):
+        if payload and payload.get("pm_id"):
+            from .pm_lifecycle_service import call_pm
+            result = await run_in_threadpool(call_pm, controller, "cancel", expected_pm_id=payload["pm_id"])
+            if not result.get("ok"):
+                raise HTTPException(status_code=409, detail=result.get("message", "取消失败"))
+            return result
         return await run_in_threadpool(controller._local_cancel_pm)
 
     @router.post("/role/pause-pm")
-    async def local_pause_pm():
-        return controller._local_pause_pm()
+    async def local_pause_pm(payload: dict = None):
+        if payload and payload.get("pm_id"):
+            from .pm_lifecycle_service import call_pm
+            result = await run_in_threadpool(call_pm, controller, "pause", expected_pm_id=payload["pm_id"])
+            if not result.get("ok"):
+                raise HTTPException(status_code=409, detail=result.get("message", "暂停失败"))
+            return result
+        return await run_in_threadpool(controller._local_pause_pm)
 
     @router.get("/role/pm-status")
     async def local_pm_status():
-        return controller._local_pm_status()
+        return (await run_in_threadpool(controller._local_pm_status))
 
     @router.post("/pm/create-subagent")
     async def local_create_subagent(payload: dict):
@@ -102,30 +119,30 @@ def build_worker_routes(controller) -> APIRouter:
         agent_name = payload.get("agent_name", "")
         if not agent_name:
             raise HTTPException(status_code=400, detail="缺少 agent_name")
-        return controller._local_create_subagent(
-            agent_name=agent_name,
-            skills=payload.get("skills", []),
-            task_description=payload.get("task_description", ""),
-            system_prompt=payload.get("system_prompt", ""),
-            preferred_agent_id=payload.get("preferred_agent_id", ""),
-        )
+        return (await run_in_threadpool(controller._local_create_subagent, agent_name=agent_name, skills=payload.get('skills', []), task_description=payload.get('task_description', ''), system_prompt=payload.get('system_prompt', ''), preferred_agent_id=payload.get('preferred_agent_id', '')))
 
     @router.post("/pm/cancel-subagent")
     async def local_cancel_subagent(payload: dict):
         agent_id = payload.get("agent_id", "")
         if not agent_id:
             raise HTTPException(status_code=400, detail="缺少 agent_id")
-        return controller._local_cancel_subagent(agent_id)
+        return (await run_in_threadpool(controller._local_cancel_subagent, agent_id))
 
     @router.post("/pm/progress-report")
     async def local_progress_report(payload: dict):
         """子 Agent 向本机 PM 上报进度。"""
-        return controller._local_forward_progress(payload)
+        return (await run_in_threadpool(controller._local_forward_progress, payload))
 
     @router.post("/pm/inject-input")
-    async def local_inject_input(payload: dict):
+    async def local_inject_input(payload: dict, request: Request):
         """向本机 PM 注入 Boss 回复。"""
-        result = controller._local_inject_input(payload)
+        expected_pm_id = request.headers.get("X-PM-ID", "")
+        if expected_pm_id:
+            from .pm_lifecycle_service import call_pm
+            result = await run_in_threadpool(call_pm, controller, "inject_input",
+                                             input_data=payload, expected_pm_id=expected_pm_id)
+        else:
+            result = await run_in_threadpool(controller._local_inject_input, payload)
         if not result.get("ok"):
             raise HTTPException(status_code=409, detail=result.get("message", "注入失败"))
         return result
@@ -212,18 +229,7 @@ def build_worker_routes(controller) -> APIRouter:
 
         # 转发到目标主机
         try:
-            resp = http_requests.post(
-                f"http://{target_ip}:{target_port}/api/p2p/receive",
-                json={
-                    "from_device_id": state.device_id,
-                    "from_name": state.device_name or "本机",
-                    "from_port": state.api_port,
-                    "message": message,
-                    "timestamp": msg["timestamp"],
-                },
-                headers=auth_headers(),
-                timeout=10,
-            )
+            resp = (await run_in_threadpool(http_requests.post, f'http://{target_ip}:{target_port}/api/p2p/receive', json={'from_device_id': state.device_id, 'from_name': state.device_name or '本机', 'from_port': state.api_port, 'message': message, 'timestamp': msg['timestamp']}, headers=auth_headers(), timeout=10))
             if resp.status_code != 200:
                 err_msg = {
                     "id": str(_uuid.uuid4()),
@@ -306,12 +312,7 @@ def build_worker_routes(controller) -> APIRouter:
 
         # 上传到目标主机的 /shared 端点
         try:
-            resp = http_requests.post(
-                f"http://{target_ip}:{target_port}/shared",
-                files={"file": (filename, data)},
-                headers=auth_headers(),
-                timeout=120,
-            )
+            resp = (await run_in_threadpool(http_requests.post, f'http://{target_ip}:{target_port}/shared', files={'file': (filename, data)}, headers=auth_headers(), timeout=120))
             result = resp.json()
 
             # 存储传输记录

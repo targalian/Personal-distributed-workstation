@@ -11,7 +11,8 @@ Worker 角色与 PM 路由 — 角色管理/PM 生命周期/子 Agent 管理 (it
 """
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 
 def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
@@ -26,7 +27,7 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
         if not role_manager:
             raise HTTPException(status_code=503, detail="角色管理未初始化")
         port = (payload or {}).get("port")
-        result = role_manager.start_secretary(port)
+        result = await run_in_threadpool(role_manager.start_secretary, port)
         if not result.get("ok"):
             raise HTTPException(status_code=409, detail=result.get("message", "启动失败"))
         return result
@@ -36,7 +37,7 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
         """停止本机的 Secretary 子进程。"""
         if not role_manager:
             raise HTTPException(status_code=503, detail="角色管理未初始化")
-        result = role_manager.stop_secretary()
+        result = await run_in_threadpool(role_manager.stop_secretary)
         return result
 
     @router.get("/role/status")
@@ -44,7 +45,7 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
         """查询本机 Secretary 运行状态。"""
         if not role_manager:
             return {"running": False, "role_manager": "unavailable"}
-        return role_manager.get_secretary_status()
+        return await run_in_threadpool(role_manager.get_secretary_status)
 
     # ── PM Agent 端点 (Secretary 远程激活 PM) ───────────────────
 
@@ -66,24 +67,27 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
         task_data = payload.get("task_data")
         if not task_id or not secretary_url:
             raise HTTPException(status_code=400, detail="缺少 task_id 或 secretary_url")
-        result = role_manager.start_pm(task_id, secretary_url, task_data)
+        result = await run_in_threadpool(role_manager.start_pm, task_id, secretary_url, task_data)
         if not result.get("ok"):
             raise HTTPException(status_code=409, detail=result.get("message", "启动失败"))
         return result
 
     @router.post("/role/stop-pm")
-    async def stop_pm():
+    async def stop_pm(payload: dict = None):
         """停止本 Worker 上的 PM Agent。"""
         if not role_manager:
             raise HTTPException(status_code=503, detail="角色管理未初始化")
-        return role_manager.stop_pm()
+        expected = (payload or {}).get("pm_id", "")
+        if expected:
+            return await run_in_threadpool(role_manager.stop_pm, expected_pm_id=expected)
+        return await run_in_threadpool(role_manager.stop_pm)
 
     @router.get("/role/pm-status")
     async def pm_status():
         """查询本 Worker 上的 PM Agent 运行状态。"""
         if not role_manager:
             return {"running": False, "role_manager": "unavailable"}
-        return role_manager.get_pm_status()
+        return await run_in_threadpool(role_manager.get_pm_status)
 
     # ── PM 子 Agent 端点 (PM 调用, 在目标 Worker 创建子 Agent) ──
 
@@ -109,7 +113,7 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
         preferred_id = payload.get("preferred_agent_id", "")
         if not agent_name:
             raise HTTPException(status_code=400, detail="缺少 agent_name")
-        return role_manager.create_subagent(agent_name, skills, task_desc, system_prompt, preferred_id)
+        return await run_in_threadpool(role_manager.create_subagent, agent_name, skills, task_desc, system_prompt, preferred_id)
 
     @router.post("/pm/cancel-subagent")
     async def cancel_subagent(payload: dict):
@@ -119,7 +123,7 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
         agent_id = payload.get("agent_id", "")
         if not agent_id:
             raise HTTPException(status_code=400, detail="缺少 agent_id")
-        return role_manager.cancel_subagent(agent_id)
+        return await run_in_threadpool(role_manager.cancel_subagent, agent_id)
 
     @router.post("/pm/progress-report")
     async def pm_progress_report(payload: dict):
@@ -137,14 +141,14 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
         """
         if not role_manager:
             raise HTTPException(status_code=503, detail="角色管理未初始化")
-        return role_manager.forward_progress_report(payload)
+        return await run_in_threadpool(role_manager.forward_progress_report, payload)
 
     @router.get("/pm/subagents")
     async def list_subagents():
         """列出本 Worker 上的所有子 Agent 状态。"""
         if not role_manager:
             return {"sub_agents": [], "total": 0}
-        return role_manager.get_subagent_status()
+        return await run_in_threadpool(role_manager.get_subagent_status)
 
     @router.post("/pm/update-prompt")
     async def update_subagent_prompt(payload: dict):
@@ -162,12 +166,12 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
         new_prompt = payload.get("system_prompt", "")
         if not agent_id:
             raise HTTPException(status_code=400, detail="缺少 agent_id")
-        return role_manager.update_subagent_prompt(agent_id, new_prompt)
+        return await run_in_threadpool(role_manager.update_subagent_prompt, agent_id, new_prompt)
 
     # ── 优化7: 反向沟通通道 ──
 
     @router.post("/pm/inject-input")
-    async def pm_inject_input(payload: dict):
+    async def pm_inject_input(payload: dict, request: Request):
         """向 PM Agent 注入来自 Secretary/Boss 的回复 (反向沟通通道)。
 
         请求体:
@@ -179,7 +183,11 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
         """
         if not role_manager:
             raise HTTPException(status_code=503, detail="角色管理未初始化")
-        result = role_manager.inject_pm_input(payload)
+        expected = request.headers.get("X-PM-ID", "")
+        if expected:
+            result = await run_in_threadpool(role_manager.inject_pm_input, payload, expected_pm_id=expected)
+        else:
+            result = await run_in_threadpool(role_manager.inject_pm_input, payload)
         if not result.get("ok"):
             raise HTTPException(status_code=409, detail=result.get("message", "注入失败"))
         return result
@@ -187,17 +195,23 @@ def build_pm_routes(role_manager: Optional[Any] = None) -> APIRouter:
     # ── 优化8: PM 控制端点 ──
 
     @router.post("/role/cancel-pm")
-    async def cancel_pm():
+    async def cancel_pm(payload: dict = None):
         """取消本 Worker 上的 PM Agent 任务。"""
         if not role_manager:
             raise HTTPException(status_code=503, detail="角色管理未初始化")
-        return role_manager.cancel_pm()
+        expected = (payload or {}).get("pm_id", "")
+        if expected:
+            return await run_in_threadpool(role_manager.cancel_pm, expected_pm_id=expected)
+        return await run_in_threadpool(role_manager.cancel_pm)
 
     @router.post("/role/pause-pm")
-    async def pause_pm():
+    async def pause_pm(payload: dict = None):
         """暂停本 Worker 上的 PM Agent 任务。"""
         if not role_manager:
             raise HTTPException(status_code=503, detail="角色管理未初始化")
-        return role_manager.pause_pm()
+        expected = (payload or {}).get("pm_id", "")
+        if expected:
+            return await run_in_threadpool(role_manager.pause_pm, expected_pm_id=expected)
+        return await run_in_threadpool(role_manager.pause_pm)
 
     return router

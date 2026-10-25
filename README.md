@@ -2,6 +2,11 @@
 
 分布式个人 AI 工作站 — 将局域网内多台异构主机组成统一调度网格，由项目经理 Agent (PM Agent) 驱动任务自动拆解、团队组建、分布式执行与结果聚合，通过 Web 端与秘书对话管理全局。
 
+已引入 YomkServerPy 的实例级业务服务、聚合 repository 与统一退出管理。0.41.0 为重构候选，
+本机验收通过，真实双节点演练待提供环境；见[架构评估](docs/design/yomk-refactor-assessment.md)
+和[实机放行步骤](docs/design/08-infrastructure/yomk-rollout.md)。运行依赖以 pyproject.toml 为准，
+requirements.txt 由 `python scripts/sync_dependencies.py --write` 生成。
+
 ## 项目结构
 
 ```

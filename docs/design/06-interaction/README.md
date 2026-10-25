@@ -7,8 +7,19 @@
 <!-- AUTO:module-list -->
 | 文件/目录 | 职责一句话 |
 |---|---|
+| bot_channel_service.py | BotChannelService: domain behavior separated from the public compatibility facade. |
+| bot_delivery_service.py | BotDeliveryService: domain behavior separated from the public compatibility facade. |
 | bot_gateway.py | Bot 网关 — 手机消息通道 |
-| chat_handler.py | 秘书聊天处理器 — Web 端对话接口 |
+| bot_ingress_service.py | BotIngressService: domain behavior separated from the public compatibility facade. |
+| chat_command_service.py | ChatCommandService: extracted domain behavior with explicit component ownership. |
+| chat_context_service.py | ChatContextService: extracted domain behavior with explicit component ownership. |
+| chat_handler.py | Compatibility facade and composition root for independently routed domains. |
+| chat_history_service.py | ChatHistoryService: extracted domain behavior with explicit component ownership. |
+| chat_intent_service.py | ChatIntentService: extracted domain behavior with explicit component ownership. |
+| chat_policy.py | 秘书聊天处理器 — Web 端对话接口 |
+| chat_requirements_service.py | ChatRequirementsService: extracted domain behavior with explicit component ownership. |
+| conversation_api_service.py | ConversationApiService: transport-neutral interaction operations behind the original API. |
+| conversation_service.py | Typed shared conversation ingress for Web, conversation threads and Bot adapters. |
 | role_cards.py | 统一角色卡定义 (M6) — Secretary/PM/Worker 人格的单一事实源。 |
 <!-- /AUTO:module-list -->
 ---

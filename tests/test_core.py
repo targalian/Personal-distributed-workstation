@@ -4180,8 +4180,10 @@ class TestIter62PwaMobile:
         from lan_mesh.station_controller import TEMPLATES_DIR
         html = (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
         assert 'rel="manifest" href="/static/manifest.json"' in html
-        assert "navigator.serviceWorker.register('/sw.js')" in html
-        assert "location.hostname==='127.0.0.1'" in html  # 安全上下文判定
+        from lan_mesh.dashboard_assets import load_dashboard_script
+        script = load_dashboard_script()
+        assert "navigator.serviceWorker.register('/sw.js')" in script
+        assert "location.hostname==='127.0.0.1'" in script  # 安全上下文判定
 
     def test_sw_auth_whitelisted(self):
         """/sw.js 在认证白名单 (SW 注册请求不带 Authorization 头)。"""
@@ -6275,10 +6277,8 @@ class TestIter64Federation:
         def boom(url, headers=None, timeout=8):
             raise ConnectionError("down")
         monkeypatch.setattr(requests, "get", boom)
-        # sleep 一次后抛异常退出 loop (offline_after=1 → 首轮失败即置离线)
-        def fake_sleep(secs):
-            raise RuntimeError("stop")
-        monkeypatch.setattr(sc.time, "sleep", fake_sleep)
+        # 首轮同步完成后触发停止令牌，不等待真实后台周期。
+        monkeypatch.setattr('lan_mesh.station_scheduler.wait_for_stop', lambda owner, secs: True)
 
         fake = type("F", (), {
             "db": db,
@@ -10047,14 +10047,18 @@ class TestIter100AgentWorkdir:
         assert "progress-report" in prompt
         assert "git_safe_directory_denied" in prompt
 
-    def test_react_loop_falls_back_on_blank_cwd(self):
-        """cwd 缺省必须用 or 而非 get 默认值 (空串也要回落 shared_folder)。"""
-        import inspect
+    def test_react_loop_falls_back_on_blank_cwd(self, tmp_path, monkeypatch):
+        """空 cwd 的实际工具调用必须回落共享目录。"""
         from lan_mesh.agent_runtime import AgentRuntime
-
-        code = inspect.getsource(AgentRuntime._handle_react_agent)
-        assert 'input_data.get("cwd") or self.shared_folder' in code
-        assert "_build_react_rules_prompt(cwd)" in code
+        from lan_mesh.tool_registry import ToolRegistry
+        runtime = AgentRuntime('cwd', str(tmp_path))
+        calls = []
+        monkeypatch.setattr(ToolRegistry, 'call_tool', lambda self, name, args: calls.append((name, args)) or {'content': []})
+        monkeypatch.setattr(runtime, '_call_llm_messages_with_tools', lambda *args: {
+            'message': {'tool_calls': [{'id': '1', 'function': {'name': 'dir_list', 'arguments': '{}'}}]}})
+        runtime._handle_react_agent({'cwd': '', 'max_iterations': 1})
+        assert calls == [('dir_list', {'cwd': str(tmp_path)})]
+        runtime.services.close()
 
     def test_file_tools_resolve_relative_path_against_cwd(self):
         """file_read/file_write 的相对路径必须以 cwd 为基准补成绝对路径。
@@ -10076,14 +10080,20 @@ class TestIter100AgentWorkdir:
         assert _resolve_tool_path("", "src/main.py") == "src/main.py"
         assert _resolve_tool_path(cwd, "") == ""
 
-    def test_react_loop_wires_file_tools_through_resolver(self):
+    def test_react_loop_wires_file_tools_through_resolver(self, tmp_path, monkeypatch):
         """ReAct 循环必须把 file 工具的 path 过一遍解析器。"""
-        import inspect
         from lan_mesh.agent_runtime import AgentRuntime
-
-        code = inspect.getsource(AgentRuntime._handle_react_agent)
-        assert 'func_name in ("file_read", "file_write")' in code
-        assert "_resolve_tool_path(" in code
+        from lan_mesh.tool_registry import ToolRegistry
+        runtime = AgentRuntime('paths', str(tmp_path))
+        calls = []
+        monkeypatch.setattr(ToolRegistry, 'call_tool', lambda self, name, args: calls.append((name, args)) or {'content': []})
+        monkeypatch.setattr(runtime, '_call_llm_messages_with_tools', lambda *args: {
+            'message': {'tool_calls': [{'id': name, 'function': {'name': name, 'arguments': '{"path":"src/main.py"}'}}
+                                     for name in ('file_read', 'file_write')]}})
+        runtime._handle_react_agent({'cwd': str(tmp_path), 'max_iterations': 1})
+        from pathlib import Path
+        assert [Path(args['path']) for _, args in calls] == [tmp_path/'src/main.py']*2
+        runtime.services.close()
 
 
 class TestIter101CliDispatch:
@@ -10484,6 +10494,7 @@ class TestIter102SingleModeTerminalStates:
         subtasks = agent._build_subtask_status()
 
         assert subtasks[0]["status"] == "cancelled"
+
 
 class TestIter103CancelRaceCondition:
     """BUG-041: cancel() 在 execute_directly 阻塞期间置 _running=False,

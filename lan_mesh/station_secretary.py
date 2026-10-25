@@ -196,6 +196,8 @@ class StationSecretaryMixin:
         # BUG-004 fix: 统一状态源 — 停用时同步清除 host_id/port
         self.secretary_host_id = None
         self.secretary_host_port = None
+        from .application_lifecycle import close_secretary_components
+        close_secretary_components(self)
         self.project_manager = None
         self.model_router = None
         self.mcp_gateway = None

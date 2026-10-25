@@ -1,0 +1,300 @@
+[
+  {
+    "name": "listDevices",
+    "args": [],
+    "call": {
+      "command": "list_devices",
+      "args": null
+    }
+  },
+  {
+    "name": "updateDeviceNote",
+    "args": [
+      "value-deviceId",
+      "value-note"
+    ],
+    "call": {
+      "command": "update_device_note",
+      "args": {
+        "deviceId": "value-deviceId",
+        "note": "value-note"
+      }
+    }
+  },
+  {
+    "name": "sendFiles",
+    "args": [
+      "value-targetId",
+      [
+        "C:/example/file.txt"
+      ]
+    ],
+    "call": {
+      "command": "send_files",
+      "args": {
+        "targetId": "value-targetId",
+        "filePaths": [
+          "C:/example/file.txt"
+        ]
+      }
+    }
+  },
+  {
+    "name": "acceptTransfer",
+    "args": [
+      "value-transferId"
+    ],
+    "call": {
+      "command": "accept_transfer",
+      "args": {
+        "transferId": "value-transferId"
+      }
+    }
+  },
+  {
+    "name": "rejectTransfer",
+    "args": [
+      "value-transferId"
+    ],
+    "call": {
+      "command": "reject_transfer",
+      "args": {
+        "transferId": "value-transferId"
+      }
+    }
+  },
+  {
+    "name": "getTransfers",
+    "args": [],
+    "call": {
+      "command": "get_transfers",
+      "args": null
+    }
+  },
+  {
+    "name": "getTransfer",
+    "args": [
+      "value-transferId"
+    ],
+    "call": {
+      "command": "get_transfer",
+      "args": {
+        "transferId": "value-transferId"
+      }
+    }
+  },
+  {
+    "name": "getControlApiInfo",
+    "args": [],
+    "call": {
+      "command": "get_control_api_info",
+      "args": null
+    }
+  },
+  {
+    "name": "getAppInfo",
+    "args": [],
+    "call": {
+      "command": "get_app_info",
+      "args": null
+    }
+  },
+  {
+    "name": "discoverIp",
+    "args": [
+      "value-ip"
+    ],
+    "call": {
+      "command": "discover_ip",
+      "args": {
+        "ip": "value-ip"
+      }
+    }
+  },
+  {
+    "name": "getNetworkStatus",
+    "args": [],
+    "call": {
+      "command": "get_network_status",
+      "args": null
+    }
+  },
+  {
+    "name": "getSettings",
+    "args": [],
+    "call": {
+      "command": "get_settings",
+      "args": null
+    }
+  },
+  {
+    "name": "updateNickname",
+    "args": [
+      "value-nickname"
+    ],
+    "call": {
+      "command": "update_nickname",
+      "args": {
+        "nickname": "value-nickname"
+      }
+    }
+  },
+  {
+    "name": "chooseDownloadDir",
+    "args": [],
+    "call": {
+      "command": "choose_download_dir",
+      "args": null
+    }
+  },
+  {
+    "name": "chooseSharePaths",
+    "args": [],
+    "call": {
+      "command": "choose_share_paths",
+      "args": null
+    }
+  },
+  {
+    "name": "chooseFolderPath",
+    "args": [],
+    "call": {
+      "command": "choose_folder_path",
+      "args": null
+    }
+  },
+  {
+    "name": "openPathLocation",
+    "args": [
+      "value-path"
+    ],
+    "call": {
+      "command": "open_path_location",
+      "args": {
+        "path": "value-path"
+      }
+    }
+  },
+  {
+    "name": "removeTransferRecord",
+    "args": [
+      "value-transferId"
+    ],
+    "call": {
+      "command": "remove_transfer_record",
+      "args": {
+        "transferId": "value-transferId"
+      }
+    }
+  },
+  {
+    "name": "clearFinishedTransfers",
+    "args": [],
+    "call": {
+      "command": "clear_finished_transfers",
+      "args": null
+    }
+  },
+  {
+    "name": "listSharedResources",
+    "args": [],
+    "call": {
+      "command": "list_shared_resources",
+      "args": null
+    }
+  },
+  {
+    "name": "listMyShares",
+    "args": [],
+    "call": {
+      "command": "list_my_shares",
+      "args": null
+    }
+  },
+  {
+    "name": "addSharePaths",
+    "args": [
+      [
+        "C:/example/file.txt"
+      ],
+      "value-category",
+      "value-permission",
+      "value-password"
+    ],
+    "call": {
+      "command": "add_share_paths",
+      "args": {
+        "paths": [
+          "C:/example/file.txt"
+        ],
+        "category": "value-category",
+        "permission": "value-permission",
+        "password": "value-password"
+      }
+    }
+  },
+  {
+    "name": "updateShare",
+    "args": [
+      "value-shareId",
+      "value-path"
+    ],
+    "call": {
+      "command": "update_share",
+      "args": {
+        "shareId": "value-shareId",
+        "path": "value-path"
+      }
+    }
+  },
+  {
+    "name": "removeShare",
+    "args": [
+      "value-shareId"
+    ],
+    "call": {
+      "command": "remove_share",
+      "args": {
+        "shareId": "value-shareId"
+      }
+    }
+  },
+  {
+    "name": "downloadShare",
+    "args": [
+      "value-shareId",
+      "value-password"
+    ],
+    "call": {
+      "command": "download_share",
+      "args": {
+        "shareId": "value-shareId",
+        "password": "value-password"
+      }
+    }
+  },
+  {
+    "name": "getLibrarySettings",
+    "args": [],
+    "call": {
+      "command": "get_library_settings",
+      "args": null
+    }
+  },
+  {
+    "name": "updateLibrarySettings",
+    "args": [
+      {
+        "enabled": true
+      }
+    ],
+    "call": {
+      "command": "update_library_settings",
+      "args": {
+        "settings": {
+          "enabled": true
+        }
+      }
+    }
+  }
+]

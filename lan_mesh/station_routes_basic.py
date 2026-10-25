@@ -15,6 +15,7 @@ import requests as http_requests
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from .protocol import HostInfo
 from .event_bus import publish_event
@@ -35,7 +36,6 @@ def build_basic_routes(controller) -> APIRouter:
     # 便捷别名
     db = controller.db
     state = controller.state
-    discovery = controller.discovery
     shared_folder = controller.state.shared_folder
     station_director = controller.station_director
 
@@ -67,7 +67,7 @@ def build_basic_routes(controller) -> APIRouter:
 
         # 活跃任务数
         try:
-            all_tasks = db.list_tasks()
+            all_tasks = (await run_in_threadpool(db.list_tasks))
             active_tasks = len([t for t in all_tasks if getattr(t, 'status', '') in ("pending", "running", "monitoring")])
         except Exception:
             active_tasks = 0
@@ -105,7 +105,7 @@ def build_basic_routes(controller) -> APIRouter:
     @router.post("/health/restart")
     async def request_restart():
         """F1.2: 触发自愈重启 (graceful)。"""
-        controller.request_restart("manual_health_restart")
+        (await run_in_threadpool(controller.request_restart, 'manual_health_restart'))
         return {"ok": True, "message": "重启已调度, 服务将在 3 秒后关闭"}
 
     # ════════════════════════════════════════════════════════════
@@ -133,15 +133,14 @@ def build_basic_routes(controller) -> APIRouter:
         """
         from .error_tracker import error_tracker, diagnose_records
         if source == "history":
-            records = db.query_error_history(limit=min(window, 500))
+            records = (await run_in_threadpool(db.query_error_history, limit=min(window, 500)))
             return diagnose_records(records)
         return error_tracker.diagnose(window_records=window)
 
     @router.get("/api/errors/history")
     async def error_history(limit: int = 50, module: str = ""):
         """iter-47: 持久化错误历史 (error_log 表, 跨重启保留)。"""
-        return {"errors": db.query_error_history(limit=min(limit, 200),
-                                                 module=module)}
+        return {"errors": (await run_in_threadpool(db.query_error_history, limit=min(limit, 200), module=module))}
 
     @router.post("/api/errors/heal")
     async def error_heal(action: str, category: str = ""):
@@ -150,22 +149,22 @@ def build_basic_routes(controller) -> APIRouter:
         iter-60: rotate_key/switch_pool 升级为真实修复写动作 (失效/耗尽池
         自动暂停/剔除), 直接透传; 未注册动作返回 manual_required (需人工介入)。
         """
-        return controller.run_heal_action(action, category)
+        return (await run_in_threadpool(controller.run_heal_action, action, category))
 
     @router.get("/api/errors/heal/history")
     async def error_heal_history(limit: int = 50):
         """iter-49: 自愈动作执行历史 (heal_log 表, 跨重启保留)。"""
-        return {"heals": db.query_heal_history(limit=min(limit, 200))}
+        return {"heals": (await run_in_threadpool(db.query_heal_history, limit=min(limit, 200)))}
 
     @router.get("/api/errors/heal/status")
     async def error_heal_status():
         """iter-50: 自动自愈守护状态 (开关/周期/冷却/累计轮次/最近动作)。"""
-        return controller.get_auto_heal_status()
+        return (await run_in_threadpool(controller.get_auto_heal_status))
 
     @router.post("/api/errors/heal/auto-check")
     async def error_heal_auto_check():
         """iter-50: 手动触发一轮自动自愈扫描 (与守护线程同逻辑)。"""
-        return controller._auto_heal_once()
+        return (await run_in_threadpool(controller._auto_heal_once))
 
     # ════════════════════════════════════════════════════════════
     #  角色激活端点
@@ -174,7 +173,7 @@ def build_basic_routes(controller) -> APIRouter:
     @router.post("/api/station/activate-secretary")
     async def activate_secretary():
         """激活 Secretary 模式 (同进程加载项目管理组件)。"""
-        result = controller.activate_secretary()
+        result = (await run_in_threadpool(controller.activate_secretary))
         if result.get("ok"):
             controller.secretary_host_id = controller.state.device_id
             controller.secretary_host_port = controller.state.api_port
@@ -183,18 +182,18 @@ def build_basic_routes(controller) -> APIRouter:
                 "port": controller.state.api_port,
             })
         await _broadcast(state, "secretary_activated", result)
-        controller.bot_gateway.notify("secretary_activated", {"port": controller.state.api_port})
+        (await run_in_threadpool(controller.bot_gateway.notify, 'secretary_activated', {'port': controller.state.api_port}))
         return result
 
     @router.post("/api/station/deactivate-secretary")
     async def deactivate_secretary():
         """停用 Secretary 模式。"""
-        result = controller.deactivate_secretary()
+        result = (await run_in_threadpool(controller.deactivate_secretary))
         controller.secretary_host_id = None
         controller.secretary_host_port = None
         await _broadcast(state, "secretary_revoked", {"device_id": controller.state.device_id})
         await _broadcast(state, "secretary_deactivated", result)
-        controller.bot_gateway.notify("secretary_deactivated", {})
+        (await run_in_threadpool(controller.bot_gateway.notify, 'secretary_deactivated', {}))
         return result
 
     @router.get("/api/station/roles")
@@ -219,9 +218,9 @@ def build_basic_routes(controller) -> APIRouter:
     async def register_worker(payload: dict):
         """接收 Worker 的注册请求 (完整 HostInfo)。"""
         info = HostInfo.from_dict(payload)
-        record = station_director.on_host_registered(info)
+        record = (await run_in_threadpool(station_director.on_host_registered, info))
         await _broadcast(state, "host_registered", record.to_dict())
-        controller.bot_gateway.notify("host_online", {"device_name": record.device_name or record.hostname or "未知", "ip": record.ip or ""})
+        (await run_in_threadpool(controller.bot_gateway.notify, 'host_online', {'device_name': record.device_name or record.hostname or '未知', 'ip': record.ip or ''}))
         result = {"ok": True, "device_id": info.device_id}
         # Phase 0: 向新节点下发 mesh token — S1 起无论认证开关都下发
         # (加密信任根与认证开关解耦; 认证启用时它同时是传输校验凭证)
@@ -300,7 +299,7 @@ def build_basic_routes(controller) -> APIRouter:
             ver = local_version_info()
         except Exception:
             ver = {}
-        hosts = [h.to_dict() for h in db.list_hosts()]
+        hosts = [h.to_dict() for h in (await run_in_threadpool(db.list_hosts))]
         return {
             "device_id": state.device_id,
             "device_name": state.device_name,
@@ -326,12 +325,14 @@ def build_basic_routes(controller) -> APIRouter:
                       else "federation")
         # iter-65 防环: 委托任务的 _federation_relay 标记透传给选站 (跳数上限 1)
         fed_relay = bool((task_data.get("input_data") or {}).get("_federation_relay"))
-        result = controller.submit_task_from_chat(
+        result = await run_in_threadpool(controller.submit_task_from_chat,
             name=task_data.get("name", "联邦任务"),
             description=task_data.get("description", ""),
             created_by=created_by,
             priority=(task_data.get("input_data") or {}).get("_priority", "normal"),
             fed_relay=fed_relay,
+            input_data=task_data.get("input_data") or {},
+            project_id=task_data.get("project_id", ""),
         )
         logger.info("联邦委托任务入口: %s (来自 %s)",
                     result.get("task_id", ""), forwarded_from[:8])
@@ -433,7 +434,7 @@ def build_basic_routes(controller) -> APIRouter:
         # F1: 角色无关版本对齐 — 落后节点自动 git pull + 依赖安装
         try:
             if controller and getattr(controller, "auto_upgrade_enabled", True):
-                controller._auto_upgrade(commit, from_name)
+                (await run_in_threadpool(controller._auto_upgrade, commit, from_name))
         except Exception as e:
             logger.warning("[F1] 自动升级触发失败: %s", e)
         publish_event("version_upgrade_notice", {
@@ -450,12 +451,7 @@ def build_basic_routes(controller) -> APIRouter:
     async def heartbeat(payload: dict):
         """接收 Worker 心跳 (实时资源使用率)。"""
         device_id = payload.get("device_id", "")
-        record = station_director.on_heartbeat(device_id, {
-            "cpu_percent": payload.get("cpu_percent"),
-            "memory_percent": payload.get("memory_percent"),
-            "disk_percent": payload.get("disk_percent"),
-            "shared_file_count": payload.get("shared_file_count"),
-        })
+        record = (await run_in_threadpool(station_director.on_heartbeat, device_id, {'cpu_percent': payload.get('cpu_percent'), 'memory_percent': payload.get('memory_percent'), 'disk_percent': payload.get('disk_percent'), 'shared_file_count': payload.get('shared_file_count')}))
         if not record:
             raise HTTPException(status_code=404, detail="设备未注册")
         await _broadcast(state, "heartbeat", record.to_dict())
@@ -468,7 +464,7 @@ def build_basic_routes(controller) -> APIRouter:
     @router.get("/api/hosts")
     async def list_hosts():
         """返回所有注册主机列表 (DB 持久化 + UDP 发现合并)。"""
-        all_hosts = _merge_db_and_udp_hosts(db, discovery)
+        all_hosts = _merge_db_and_udp_hosts(db, controller.discovery)
         return {
             "hosts": [h.to_dict() for h in all_hosts],
             "total": len(all_hosts),
@@ -478,9 +474,9 @@ def build_basic_routes(controller) -> APIRouter:
     @router.get("/api/hosts/{device_id}")
     async def get_host(device_id: str):
         """查询单台主机详情。"""
-        record = db.get_host(device_id)
+        record = (await run_in_threadpool(db.get_host, device_id))
         if not record:
-            dev = discovery.find_device(device_id)
+            dev = (await run_in_threadpool(controller.discovery.find_device, device_id))
             if not dev:
                 raise HTTPException(status_code=404, detail="主机不存在")
             return dev
@@ -489,7 +485,7 @@ def build_basic_routes(controller) -> APIRouter:
     @router.get("/api/network")
     async def get_network():
         """返回本机网络状态。"""
-        ns = discovery.network_status()
+        ns = (await run_in_threadpool(controller.discovery.network_status))
         return {
             "udp_port": ns.udp_port,
             "api_port": ns.api_port,
@@ -501,14 +497,14 @@ def build_basic_routes(controller) -> APIRouter:
     async def get_discovery():
         """返回 UDP 发现到的所有设备 (实时)。"""
         return {
-            "devices": discovery.list_devices(),
-            "total": len(discovery._devices),
+            "devices": (await run_in_threadpool(controller.discovery.list_devices)),
+            "total": len(controller.discovery._devices),
         }
 
     @router.post("/api/probe/{ip}")
     async def probe_ip(ip: str):
         """主动探测指定 IP。"""
-        discovery.probe_ip(ip)
+        (await run_in_threadpool(controller.discovery.probe_ip, ip))
         return {"ok": True, "message": f"已向 {ip} 发送探测包"}
 
     @router.get("/api/health")
@@ -544,15 +540,15 @@ def build_basic_routes(controller) -> APIRouter:
     @router.get("/api/station-info")
     async def station_info():
         """返回 Station Director 自身的主机信息。"""
-        return controller._collect_info().to_dict()
+        return (await run_in_threadpool(controller._collect_info)).to_dict()
 
     @router.get("/api/shared")
     async def list_shared():
         """列出共享文件夹内容。"""
         return {
             "folder": str(shared_folder.path),
-            "files": shared_folder.list_files(),
-            "file_count": shared_folder.file_count(),
+            "files": (await run_in_threadpool(shared_folder.list_files)),
+            "file_count": (await run_in_threadpool(shared_folder.file_count)),
         }
 
     # ════════════════════════════════════════════════════════════
@@ -562,7 +558,7 @@ def build_basic_routes(controller) -> APIRouter:
     @router.get("/api/station/fleet")
     async def get_fleet():
         """舰队概览: 在线/离线/各评级分布 + 主机列表 (DB + UDP 合并)。"""
-        all_hosts = _merge_db_and_udp_hosts(db, discovery)
+        all_hosts = _merge_db_and_udp_hosts(db, controller.discovery)
         online_count = sum(1 for h in all_hosts if h.online)
         offline_count = len(all_hosts) - online_count
         tiers = {"S": 0, "A": 0, "B": 0, "C": 0, "D": 0}
@@ -581,29 +577,29 @@ def build_basic_routes(controller) -> APIRouter:
     async def get_station_hosts(min_tier: str = "D", online_only: bool = False):
         """所有主机列表 (含评级+状态), 可按评级筛选。"""
         if online_only:
-            return {"hosts": station_director.get_hosts_by_tier(min_tier, online_only=True)}
-        return {"hosts": station_director.get_all_hosts()}
+            return {"hosts": (await run_in_threadpool(station_director.get_hosts_by_tier, min_tier, online_only=True))}
+        return {"hosts": (await run_in_threadpool(station_director.get_all_hosts))}
 
     @router.get("/api/station/hosts/{device_id}/events")
     async def get_host_events(device_id: str, limit: int = 20):
         """单台主机出入站事件历史。"""
-        return {"events": station_director.get_host_events(device_id, limit)}
+        return {"events": (await run_in_threadpool(station_director.get_host_events, device_id, limit))}
 
     @router.get("/api/station/events")
     async def get_station_events(limit: int = 50):
         """最近全站事件流。"""
-        return {"events": station_director.get_host_events(None, limit)}
+        return {"events": (await run_in_threadpool(station_director.get_host_events, None, limit))}
 
     @router.post("/api/station/rate")
     async def recompute_ratings():
         """手动触发重新评级所有在线主机。"""
-        updated = station_director.recompute_ratings()
+        updated = (await run_in_threadpool(station_director.recompute_ratings))
         return {"ok": True, "updated": updated}
 
     @router.get("/api/station/stats")
     async def get_station_stats():
         """统计摘要。"""
-        return station_director.get_fleet_summary()
+        return (await run_in_threadpool(station_director.get_fleet_summary))
 
     # ── 远程 Secretary 分配 (指定主机运行秘书) ───────────────────────
 
@@ -614,7 +610,7 @@ def build_basic_routes(controller) -> APIRouter:
         - 本机 (Station Director): 进程内激活
         - 远程主机: 发送 HTTP 到 Worker, 启动 Secretary 子进程
         """
-        host = db.get_host(device_id)
+        host = (await run_in_threadpool(db.get_host, device_id))
         if not host:
             raise HTTPException(status_code=404, detail="主机不存在")
         if not host.online:
@@ -624,7 +620,7 @@ def build_basic_routes(controller) -> APIRouter:
 
         # 本机 → 进程内激活
         if device_id == controller.state.device_id:
-            result = controller.activate_secretary()
+            result = (await run_in_threadpool(controller.activate_secretary))
             if result.get("ok"):
                 controller.secretary_host_id = device_id
                 controller.secretary_host_port = controller.state.api_port
@@ -635,12 +631,7 @@ def build_basic_routes(controller) -> APIRouter:
             raise HTTPException(status_code=400, detail="主机 IP 未知")
 
         try:
-            resp = http_requests.post(
-                f"http://{host.ip}:{host.api_port}/role/start-secretary",
-                json={"port": port} if port else {},
-                headers=auth_headers(),
-                timeout=10,
-            )
+            resp = (await run_in_threadpool(http_requests.post, f'http://{host.ip}:{host.api_port}/role/start-secretary', json={'port': port} if port else {}, headers=auth_headers(), timeout=10))
             if resp.status_code == 200:
                 data = resp.json()
                 controller.secretary_host_id = device_id
@@ -662,13 +653,13 @@ def build_basic_routes(controller) -> APIRouter:
         - 本机: 进程内停用
         - 远程主机: 发送 HTTP 到 Worker, 停止 Secretary 子进程
         """
-        host = db.get_host(device_id)
+        host = (await run_in_threadpool(db.get_host, device_id))
         if not host:
             raise HTTPException(status_code=404, detail="主机不存在")
 
         # 本机 → 进程内停用
         if device_id == controller.state.device_id:
-            result = controller.deactivate_secretary()
+            result = (await run_in_threadpool(controller.deactivate_secretary))
             controller.secretary_host_id = None
             controller.secretary_host_port = None
             await _broadcast(state, "secretary_revoked", {"device_id": device_id})
@@ -676,11 +667,7 @@ def build_basic_routes(controller) -> APIRouter:
 
         # 远程主机 → HTTP 调用 Worker
         try:
-            resp = http_requests.post(
-                f"http://{host.ip}:{host.api_port}/role/stop-secretary",
-                headers=auth_headers(),
-                timeout=10,
-            )
+            resp = (await run_in_threadpool(http_requests.post, f'http://{host.ip}:{host.api_port}/role/stop-secretary', headers=auth_headers(), timeout=10))
             if resp.status_code == 200:
                 controller.secretary_host_id = None
                 controller.secretary_host_port = None
@@ -701,7 +688,7 @@ def build_basic_routes(controller) -> APIRouter:
         host_port = getattr(controller, 'secretary_host_port', None)
         host_name = None
         if host_id:
-            host = db.get_host(host_id)
+            host = (await run_in_threadpool(db.get_host, host_id))
             if host:
                 host_name = host.device_name
 
@@ -716,7 +703,7 @@ def build_basic_routes(controller) -> APIRouter:
     @router.get("/api/station/hosts/{device_id}/role")
     async def get_host_role(device_id: str):
         """查询指定主机的角色状态 (含远程 Secretary 子进程状态)。"""
-        host = db.get_host(device_id)
+        host = (await run_in_threadpool(db.get_host, device_id))
         if not host:
             raise HTTPException(status_code=404, detail="主机不存在")
 
@@ -734,11 +721,7 @@ def build_basic_routes(controller) -> APIRouter:
         remote_status = {"running": False}
         if host.online and host.ip:
             try:
-                resp = http_requests.get(
-                    f"http://{host.ip}:{host.api_port}/role/status",
-                    headers=auth_headers(),
-                    timeout=5,
-                )
+                resp = (await run_in_threadpool(http_requests.get, f'http://{host.ip}:{host.api_port}/role/status', headers=auth_headers(), timeout=5))
                 if resp.status_code == 200:
                     remote_status = resp.json()
             except http_requests.RequestException:
@@ -764,7 +747,7 @@ def build_basic_routes(controller) -> APIRouter:
         返回: 调用次数、平均/P99 延迟、Token 用量、按模型/状态拆分。
         """
         hours = max(0.1, min(hours, 168))  # 0.1h ~ 7d
-        return db.query_llm_metrics(hours=hours)
+        return (await run_in_threadpool(db.query_llm_metrics, hours=hours))
 
     @router.get("/api/runtime/trace")
     async def runtime_trace_log(limit: int = 50, type: str = ""):
@@ -782,7 +765,7 @@ def build_basic_routes(controller) -> APIRouter:
     async def runtime_call_log(limit: int = 50):
         """P1: LLM 调用明细 (SQLite 最近 N 条, 调试/排查用)。"""
         limit = max(1, min(limit, 200))
-        return {"calls": db.query_llm_recent(limit=limit)}
+        return {"calls": (await run_in_threadpool(db.query_llm_recent, limit=limit))}
 
     @router.get("/api/runtime/stats")
     async def runtime_stats(hours: float = 1.0):
@@ -850,10 +833,10 @@ def build_basic_routes(controller) -> APIRouter:
         返回各表删除行数统计与 vacuum 结果。
         """
         days = max(1.0, min(days, 365.0))
-        stats = db.prune_logs(retention_days=days)
+        stats = (await run_in_threadpool(db.prune_logs, retention_days=days))
         vacuum_ok = True
         try:
-            db.vacuum()
+            (await run_in_threadpool(db.vacuum))
         except Exception as e:  # VACUUM 失败不阻断修剪结果返回
             vacuum_ok = False
             logger.warning("[LogPrune] 手动 VACUUM 失败: %s", e)

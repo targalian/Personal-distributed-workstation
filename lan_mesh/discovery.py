@@ -33,6 +33,8 @@ from .protocol import (
 logger = get_logger("discovery")
 
 
+from typing import Any
+
 class DiscoveryService:
     """UDP 广播发现服务。
 
@@ -71,10 +73,15 @@ class DiscoveryService:
 
     # ── 生命周期 ─────────────────────────────────────────────────
 
-    def start(self):
+    def start(self) -> None:
         """启动发现服务的三个后台线程。"""
         if self._running:
             return
+        if any(thread.is_alive() for thread in self._threads):
+            raise RuntimeError('Discovery threads are still stopping')
+        from .application_lifecycle import stop_signal
+        stop_signal(self).clear()
+        self._threads.clear()
         self._running = True
 
         for target, name in [
@@ -86,176 +93,57 @@ class DiscoveryService:
             t.start()
             self._threads.append(t)
 
-    def stop(self):
+    def stop(self) -> None:
         """停止发现服务。"""
         self._running = False
+        from .application_lifecycle import stop_signal, join_threads
+        stop_signal(self).set()
+        sock = vars(self).get('_socket')
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+        join_threads(self._threads)
 
-    def broadcast_now(self):
-        """立即发送一次广播包。"""
-        packet = self._make_packet()
-        self._broadcast_packet(packet)
+    def broadcast_now(self) -> Any:
+        return call_component(self, DiscoveryTransportService, 'broadcast_now')
 
     # ── 设备查询 ─────────────────────────────────────────────────
 
     def list_devices(self) -> list[dict]:
-        """返回当前已知设备的快照列表。"""
-        with self._lock:
-            now = time.time()
-            devices = []
-            for entry in self._devices.values():
-                pkt = entry["packet"]
-                age = now - entry["last_seen"]
-                devices.append({
-                    **pkt.to_dict(),
-                    "ip": entry["ip"],
-                    "online": age < self.device_ttl,
-                    "last_seen_ago": round(age, 1),
-                })
-            # 在线优先,然后按名称排序
-            devices.sort(key=lambda d: (not d["online"], d.get("device_name", "")))
-            return devices
+        return call_component(self, DiscoveryRegistryService, 'list_devices')
 
     def find_device(self, device_id: str) -> Optional[dict]:
-        """根据 device_id 查找设备。"""
-        with self._lock:
-            entry = self._devices.get(device_id)
-            if entry:
-                pkt = entry["packet"]
-                return {
-                    **pkt.to_dict(),
-                    "ip": entry["ip"],
-                    "online": (time.time() - entry["last_seen"]) < self.device_ttl,
-                }
-            return None
+        return call_component(self, DiscoveryRegistryService, 'find_device', device_id=device_id)
 
     def network_status(self) -> NetworkStatus:
-        """返回本机网络状态。"""
-        return NetworkStatus(
-            udp_port=self.discovery_port,
-            api_port=self.api_port,
-            local_ips=get_local_ipv4_addresses(),
-            broadcast_targets=get_broadcast_targets(),
-        )
+        return call_component(self, DiscoveryRegistryService, 'network_status')
 
     # ── 后台循环 ─────────────────────────────────────────────────
 
-    def _presence_loop(self):
-        """定期 UDP 广播自身存在 (参考 QuickLAN start_presence_loop)。"""
-        # 首次立即广播
-        self.broadcast_now()
-        while self._running:
-            time.sleep(self.presence_interval)
-            self.broadcast_now()
+    def _presence_loop(self) -> Any:
+        return call_component(self, DiscoveryTransportService, '_presence_loop')
 
-    def _listen_loop(self):
-        """监听 UDP 广播 (参考 QuickLAN start_listen_loop)。
+    def _listen_loop(self) -> Any:
+        return call_component(self, DiscoveryTransportService, '_listen_loop')
 
-        收到其他设备的包时:
-        1. 回送一个 presence 包让对方也知道我们
-        2. 更新设备列表
-        3. 触发 on_device_seen 回调
-        """
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-
-        try:
-            sock.bind(("", self.discovery_port))
-        except OSError as e:
-            logger.error("UDP 绑定端口 %d 失败: %s", self.discovery_port, e)
-            # 尝试 SO_REUSEPORT (Linux/macOS 支持, Windows 不存在该选项)
-            reuse_port = getattr(socket, "SO_REUSEPORT", None)
-            if reuse_port is not None:
-                try:
-                    sock.setsockopt(socket.SOL_SOCKET, reuse_port, 1)
-                    sock.bind(("", self.discovery_port))
-                except OSError:
-                    logger.warning("端口 %d 仍被占用, 发现服务降级运行", self.discovery_port)
-                    return
-            else:
-                logger.warning("端口 %d 仍被占用, 发现服务降级运行", self.discovery_port)
-                return
-
-        sock.settimeout(2.0)
-
-        while self._running:
-            try:
-                data, addr = sock.recvfrom(8192)
-                raw = json.loads(data.decode("utf-8"))
-                packet = DiscoveryPacket.from_dict(raw)
-
-                if not packet.is_lanmesh():
-                    continue
-                if packet.device_id == self.device_id:
-                    continue
-
-                # 回送 presence 让对方也知道我们 (参考 QuickLAN 的单播回复)
-                self._send_packet(self._make_packet(), addr)
-
-                # 更新设备列表
-                with self._lock:
-                    self._devices[packet.device_id] = {
-                        "packet": packet,
-                        "ip": addr[0],
-                        "last_seen": time.time(),
-                    }
-
-                # 触发回调
-                if self._on_device_seen:
-                    try:
-                        self._on_device_seen(packet, addr[0])
-                    except Exception as e:
-                        logger.error("on_device_seen 回调异常: %s", e)
-
-            except socket.timeout:
-                continue
-            except json.JSONDecodeError:
-                continue
-            except OSError:
-                continue
-
-        sock.close()
-
-    def _prune_loop(self):
-        """定期清理超时设备 (参考 QuickLAN start_prune_loop)。"""
-        while self._running:
-            time.sleep(5)
-            now = time.time()
-            with self._lock:
-                expired = [
-                    did for did, entry in self._devices.items()
-                    if now - entry["last_seen"] > self.device_ttl * 3
-                ]
-                for did in expired:
-                    del self._devices[did]
+    def _prune_loop(self) -> Any:
+        return call_component(self, DiscoveryTransportService, '_prune_loop')
 
     # ── UDP 发送 ────────────────────────────────────────────────
 
-    def _broadcast_packet(self, packet: DiscoveryPacket):
-        """向所有子网广播地址发送 UDP 包 (参考 QuickLAN broadcast_packet)。"""
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        payload = json.dumps(packet.to_dict()).encode("utf-8")
+    def _broadcast_packet(self, packet: DiscoveryPacket) -> Any:
+        return call_component(self, DiscoveryTransportService, '_broadcast_packet', packet=packet)
 
-        for target in get_broadcast_targets():
-            try:
-                sock.sendto(payload, (target, self.discovery_port))
-            except OSError:
-                continue
-        sock.close()
+    def _send_packet(self, packet: DiscoveryPacket, addr: tuple) -> Any:
+        return call_component(self, DiscoveryTransportService, '_send_packet', packet=packet, addr=addr)
 
-    def _send_packet(self, packet: DiscoveryPacket, addr: tuple):
-        """单播发送 UDP 包到指定地址 (参考 QuickLAN send_discovery_packet)。"""
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        payload = json.dumps(packet.to_dict()).encode("utf-8")
-        try:
-            sock.sendto(payload, addr)
-        except OSError:
-            pass
-        sock.close()
+    def probe_ip(self, ip: str) -> Any:
+        return call_component(self, DiscoveryTransportService, 'probe_ip', ip=ip)
 
-    def probe_ip(self, ip: str):
-        """主动探测指定 IP 的设备 (参考 QuickLAN probe_ip)。"""
-        packet = self._make_packet()
-        self._send_packet(packet, (ip, self.discovery_port))
+
+from typing import Any
+from .component_service import call_component
+from .discovery_registry_service import DiscoveryRegistryService
+from .discovery_transport_service import DiscoveryTransportService

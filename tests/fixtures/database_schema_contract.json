@@ -1,0 +1,290 @@
+[
+  [
+    "index",
+    "idx_agent_teams_pm",
+    "agent_teams",
+    "CREATE INDEX idx_agent_teams_pm ON agent_teams(pm_id)"
+  ],
+  [
+    "index",
+    "idx_agents_status",
+    "agents",
+    "CREATE INDEX idx_agents_status ON agents(status)"
+  ],
+  [
+    "index",
+    "idx_chat_history_ts",
+    "chat_history",
+    "CREATE INDEX idx_chat_history_ts\n                ON chat_history(timestamp)"
+  ],
+  [
+    "index",
+    "idx_checkpoint_task",
+    "graph_checkpoints",
+    "CREATE INDEX idx_checkpoint_task\n                ON graph_checkpoints(task_id, created_at)"
+  ],
+  [
+    "index",
+    "idx_error_log_module_ts",
+    "error_log",
+    "CREATE INDEX idx_error_log_module_ts\n                ON error_log(module, timestamp)"
+  ],
+  [
+    "index",
+    "idx_heal_log_ts",
+    "heal_log",
+    "CREATE INDEX idx_heal_log_ts\n                ON heal_log(timestamp)"
+  ],
+  [
+    "index",
+    "idx_heartbeat_device",
+    "heartbeat_log",
+    "CREATE INDEX idx_heartbeat_device\n                ON heartbeat_log(device_id, timestamp)"
+  ],
+  [
+    "index",
+    "idx_host_events_device",
+    "host_events",
+    "CREATE INDEX idx_host_events_device\n                ON host_events(device_id, timestamp)"
+  ],
+  [
+    "index",
+    "idx_llm_call_model_ts",
+    "llm_call_log",
+    "CREATE INDEX idx_llm_call_model_ts\n                ON llm_call_log(model, created_at)"
+  ],
+  [
+    "index",
+    "idx_llm_call_status",
+    "llm_call_log",
+    "CREATE INDEX idx_llm_call_status\n                ON llm_call_log(status, created_at)"
+  ],
+  [
+    "index",
+    "idx_pm_agents_status",
+    "pm_agents",
+    "CREATE INDEX idx_pm_agents_status ON pm_agents(status)"
+  ],
+  [
+    "index",
+    "idx_pm_agents_task",
+    "pm_agents",
+    "CREATE INDEX idx_pm_agents_task ON pm_agents(task_id)"
+  ],
+  [
+    "index",
+    "idx_pm_snapshot_task",
+    "pm_snapshots",
+    "CREATE INDEX idx_pm_snapshot_task\n                ON pm_snapshots(task_id, updated_at)"
+  ],
+  [
+    "index",
+    "idx_progress_pm",
+    "progress_reports",
+    "CREATE INDEX idx_progress_pm ON progress_reports(pm_id, timestamp)"
+  ],
+  [
+    "index",
+    "idx_projects_status",
+    "projects",
+    "CREATE INDEX idx_projects_status ON projects(status)"
+  ],
+  [
+    "index",
+    "idx_resource_usage_rid_ts",
+    "resource_usage_log",
+    "CREATE INDEX idx_resource_usage_rid_ts\n                ON resource_usage_log(resource_id, created_at)"
+  ],
+  [
+    "index",
+    "idx_resource_usage_task",
+    "resource_usage_log",
+    "CREATE INDEX idx_resource_usage_task\n                ON resource_usage_log(task_id) WHERE task_id != ''\n        "
+  ],
+  [
+    "index",
+    "idx_resource_usage_uid",
+    "resource_usage_log",
+    "CREATE UNIQUE INDEX idx_resource_usage_uid\n                ON resource_usage_log(usage_id) WHERE usage_id != ''\n        "
+  ],
+  [
+    "index",
+    "idx_skill_assignments",
+    "skill_assignments",
+    "CREATE INDEX idx_skill_assignments\n                ON skill_assignments(assignee_type, assignee_id)"
+  ],
+  [
+    "index",
+    "idx_task_memory_ts",
+    "task_memory",
+    "CREATE INDEX idx_task_memory_ts\n                ON task_memory(created_at)"
+  ],
+  [
+    "index",
+    "idx_task_memory_type",
+    "task_memory",
+    "CREATE INDEX idx_task_memory_type\n                ON task_memory(task_type, success)"
+  ],
+  [
+    "index",
+    "idx_tasks_status",
+    "tasks",
+    "CREATE INDEX idx_tasks_status ON tasks(status)"
+  ],
+  [
+    "index",
+    "idx_usage_project",
+    "usage_log",
+    "CREATE INDEX idx_usage_project\n                ON usage_log(project_id, timestamp)"
+  ],
+  [
+    "index",
+    "idx_workstation_opt_status",
+    "workstation_optimization_items",
+    "CREATE INDEX idx_workstation_opt_status\n            ON workstation_optimization_items(status, updated_at)\n    "
+  ],
+  [
+    "table",
+    "agent_teams",
+    "agent_teams",
+    "CREATE TABLE agent_teams (\n                team_id        TEXT PRIMARY KEY,\n                pm_id          TEXT NOT NULL DEFAULT '',\n                team_name      TEXT NOT NULL DEFAULT '',\n                team_type      TEXT NOT NULL DEFAULT '',\n                device_id      TEXT NOT NULL DEFAULT '',\n                parent_team_id TEXT NOT NULL DEFAULT '',\n                members        TEXT NOT NULL DEFAULT '[]',\n                status         TEXT NOT NULL DEFAULT 'pending',\n                current_task   TEXT NOT NULL DEFAULT '',\n                created_at     REAL NOT NULL DEFAULT 0\n            )"
+  ],
+  [
+    "table",
+    "agents",
+    "agents",
+    "CREATE TABLE agents (\n                agent_id           TEXT PRIMARY KEY,\n                agent_name         TEXT NOT NULL DEFAULT '',\n                version            TEXT NOT NULL DEFAULT '0.1.0',\n                device_id          TEXT NOT NULL DEFAULT '',\n                hostname           TEXT NOT NULL DEFAULT '',\n                ip                 TEXT NOT NULL DEFAULT '',\n                api_port           INTEGER NOT NULL DEFAULT 0,\n                skills             TEXT NOT NULL DEFAULT '[]',\n                tools              TEXT NOT NULL DEFAULT '[]',\n                model_preferences  TEXT NOT NULL DEFAULT '[]',\n                max_concurrent     INTEGER NOT NULL DEFAULT 5,\n                status             TEXT NOT NULL DEFAULT 'idle',\n                current_task_count INTEGER NOT NULL DEFAULT 0,\n                registered_at      REAL NOT NULL DEFAULT 0,\n                last_seen          REAL NOT NULL DEFAULT 0\n            )"
+  ],
+  [
+    "table",
+    "chat_history",
+    "chat_history",
+    "CREATE TABLE chat_history (\n                id          INTEGER PRIMARY KEY AUTOINCREMENT,\n                role        TEXT NOT NULL DEFAULT 'user',\n                content     TEXT NOT NULL DEFAULT '',\n                action_taken TEXT NOT NULL DEFAULT '',\n                timestamp   REAL NOT NULL DEFAULT 0\n            )"
+  ],
+  [
+    "table",
+    "error_log",
+    "error_log",
+    "CREATE TABLE error_log (\n                id           INTEGER PRIMARY KEY AUTOINCREMENT,\n                timestamp    REAL NOT NULL DEFAULT 0,\n                module       TEXT NOT NULL DEFAULT '',\n                error_type   TEXT NOT NULL DEFAULT '',\n                message      TEXT NOT NULL DEFAULT '',\n                context_json TEXT NOT NULL DEFAULT '{}',\n                traceback    TEXT NOT NULL DEFAULT ''\n            )"
+  ],
+  [
+    "table",
+    "graph_checkpoints",
+    "graph_checkpoints",
+    "CREATE TABLE graph_checkpoints (\n                checkpoint_id  TEXT PRIMARY KEY,\n                task_id        TEXT NOT NULL,\n                phase          TEXT NOT NULL DEFAULT '',\n                dag_json       TEXT NOT NULL DEFAULT '{}',\n                context_json   TEXT NOT NULL DEFAULT '{}',\n                history_json   TEXT NOT NULL DEFAULT '[]',\n                created_at     REAL NOT NULL DEFAULT 0\n            )"
+  ],
+  [
+    "table",
+    "heal_log",
+    "heal_log",
+    "CREATE TABLE heal_log (\n                id           INTEGER PRIMARY KEY AUTOINCREMENT,\n                timestamp    REAL NOT NULL DEFAULT 0,\n                category     TEXT NOT NULL DEFAULT '',\n                action       TEXT NOT NULL DEFAULT '',\n                result       TEXT NOT NULL DEFAULT '',\n                detail       TEXT NOT NULL DEFAULT ''\n            )"
+  ],
+  [
+    "table",
+    "heartbeat_log",
+    "heartbeat_log",
+    "CREATE TABLE heartbeat_log (\n                id        INTEGER PRIMARY KEY AUTOINCREMENT,\n                device_id TEXT NOT NULL,\n                timestamp REAL NOT NULL,\n                cpu_percent REAL,\n                memory_percent REAL,\n                disk_percent REAL\n            )"
+  ],
+  [
+    "table",
+    "host_events",
+    "host_events",
+    "CREATE TABLE host_events (\n                id          INTEGER PRIMARY KEY AUTOINCREMENT,\n                device_id   TEXT NOT NULL,\n                event_type  TEXT NOT NULL,\n                timestamp   REAL NOT NULL,\n                detail      TEXT DEFAULT ''\n            )"
+  ],
+  [
+    "table",
+    "hosts",
+    "hosts",
+    "CREATE TABLE hosts (\n                device_id     TEXT PRIMARY KEY,\n                device_name   TEXT NOT NULL DEFAULT '',\n                role          TEXT NOT NULL DEFAULT 'worker',\n                hostname      TEXT NOT NULL DEFAULT '',\n                platform      TEXT NOT NULL DEFAULT '',\n                ip            TEXT NOT NULL DEFAULT '',\n                api_port      INTEGER NOT NULL DEFAULT 0,\n                cpu_count     INTEGER NOT NULL DEFAULT 0,\n                memory_total_mb INTEGER NOT NULL DEFAULT 0,\n                disk_total_gb INTEGER NOT NULL DEFAULT 0,\n                cpu_percent   REAL NOT NULL DEFAULT 0,\n                memory_percent REAL NOT NULL DEFAULT 0,\n                disk_percent  REAL NOT NULL DEFAULT 0,\n                shared_folder TEXT NOT NULL DEFAULT '',\n                shared_file_count INTEGER NOT NULL DEFAULT 0,\n                online        INTEGER NOT NULL DEFAULT 1,\n                registered_at REAL NOT NULL DEFAULT 0,\n                last_seen     REAL NOT NULL DEFAULT 0,\n                latency_ms    REAL,\n                code_version  TEXT NOT NULL DEFAULT '',\n                version_ts    REAL NOT NULL DEFAULT 0\n            , rating_tier TEXT NOT NULL DEFAULT '', rating_score INTEGER NOT NULL DEFAULT 0, rating_summary TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT 'lan', federation TEXT NOT NULL DEFAULT '')"
+  ],
+  [
+    "table",
+    "llm_call_log",
+    "llm_call_log",
+    "CREATE TABLE llm_call_log (\n                id            INTEGER PRIMARY KEY AUTOINCREMENT,\n                call_type     TEXT NOT NULL DEFAULT 'chat',\n                model         TEXT NOT NULL DEFAULT '',\n                input_tokens  INTEGER NOT NULL DEFAULT 0,\n                output_tokens INTEGER NOT NULL DEFAULT 0,\n                ttft_ms       REAL NOT NULL DEFAULT 0,\n                total_ms      REAL NOT NULL DEFAULT 0,\n                status        TEXT NOT NULL DEFAULT 'ok',\n                task_id       TEXT NOT NULL DEFAULT '',\n                error         TEXT NOT NULL DEFAULT '',\n                created_at    REAL NOT NULL DEFAULT 0\n            )"
+  ],
+  [
+    "table",
+    "pm_agents",
+    "pm_agents",
+    "CREATE TABLE pm_agents (\n                pm_id              TEXT PRIMARY KEY,\n                agent_name         TEXT NOT NULL DEFAULT '',\n                task_id            TEXT NOT NULL DEFAULT '',\n                project_id         TEXT NOT NULL DEFAULT '',\n                device_id          TEXT NOT NULL DEFAULT '',\n                hostname           TEXT NOT NULL DEFAULT '',\n                ip                 TEXT NOT NULL DEFAULT '',\n                api_port           INTEGER NOT NULL DEFAULT 0,\n                status             TEXT NOT NULL DEFAULT 'starting',\n                team_structure      TEXT NOT NULL DEFAULT '{}',\n                task_list           TEXT NOT NULL DEFAULT '[]',\n                collaboration_mode TEXT NOT NULL DEFAULT '',\n                created_at         REAL NOT NULL DEFAULT 0,\n                updated_at         REAL NOT NULL DEFAULT 0\n            )"
+  ],
+  [
+    "table",
+    "pm_snapshots",
+    "pm_snapshots",
+    "CREATE TABLE pm_snapshots (\n                pm_id      TEXT PRIMARY KEY,\n                task_id    TEXT NOT NULL,\n                phase      TEXT NOT NULL DEFAULT '',\n                state_json TEXT NOT NULL DEFAULT '{}',\n                updated_at REAL NOT NULL DEFAULT 0\n            )"
+  ],
+  [
+    "table",
+    "progress_reports",
+    "progress_reports",
+    "CREATE TABLE progress_reports (\n                id            INTEGER PRIMARY KEY AUTOINCREMENT,\n                pm_id         TEXT NOT NULL DEFAULT '',\n                reporter_id   TEXT NOT NULL DEFAULT '',\n                reporter_type TEXT NOT NULL DEFAULT '',\n                task_name     TEXT NOT NULL DEFAULT '',\n                progress      REAL NOT NULL DEFAULT 0,\n                status        TEXT NOT NULL DEFAULT 'in_progress',\n                message       TEXT NOT NULL DEFAULT '',\n                timestamp     REAL NOT NULL DEFAULT 0\n            )"
+  ],
+  [
+    "table",
+    "projects",
+    "projects",
+    "CREATE TABLE projects (\n                project_id        TEXT PRIMARY KEY,\n                name              TEXT NOT NULL DEFAULT '',\n                description       TEXT NOT NULL DEFAULT '',\n                workspace_path    TEXT NOT NULL DEFAULT '',\n                budget_limit_usd  REAL NOT NULL DEFAULT 0,\n                budget_used_usd   REAL NOT NULL DEFAULT 0,\n                allowed_models    TEXT NOT NULL DEFAULT '[]',\n                routing_strategy  TEXT NOT NULL DEFAULT 'balanced',\n                status            TEXT NOT NULL DEFAULT 'active',\n                charter           TEXT NOT NULL DEFAULT '{}',\n                roadmap           TEXT NOT NULL DEFAULT '[]',\n                decisions         TEXT NOT NULL DEFAULT '[]',\n                created_at        REAL NOT NULL DEFAULT 0,\n                updated_at        REAL NOT NULL DEFAULT 0\n            )"
+  ],
+  [
+    "table",
+    "resource_usage_log",
+    "resource_usage_log",
+    "CREATE TABLE resource_usage_log (\n                id              INTEGER PRIMARY KEY AUTOINCREMENT,\n                resource_id     TEXT NOT NULL DEFAULT '',\n                model_id        TEXT NOT NULL DEFAULT '',\n                plan_type       TEXT NOT NULL DEFAULT '',\n                input_tokens    INTEGER NOT NULL DEFAULT 0,\n                output_tokens   INTEGER NOT NULL DEFAULT 0,\n                cost            REAL NOT NULL DEFAULT 0,\n                created_at      REAL NOT NULL DEFAULT 0,\n                usage_id        TEXT NOT NULL DEFAULT '',\n                reported        INTEGER NOT NULL DEFAULT 0,\n                task_id         TEXT NOT NULL DEFAULT '',\n                project_id      TEXT NOT NULL DEFAULT ''\n            )"
+  ],
+  [
+    "table",
+    "schema_meta",
+    "schema_meta",
+    "CREATE TABLE schema_meta (\n                key   TEXT PRIMARY KEY,\n                value TEXT NOT NULL DEFAULT ''\n            )"
+  ],
+  [
+    "table",
+    "skill_assignments",
+    "skill_assignments",
+    "CREATE TABLE skill_assignments (\n                id            INTEGER PRIMARY KEY AUTOINCREMENT,\n                skill_id      TEXT NOT NULL,\n                assignee_type TEXT NOT NULL,\n                assignee_id   TEXT NOT NULL,\n                assigned_at   REAL NOT NULL DEFAULT 0,\n                UNIQUE(skill_id, assignee_type, assignee_id)\n            )"
+  ],
+  [
+    "table",
+    "skills",
+    "skills",
+    "CREATE TABLE skills (\n                skill_id       TEXT PRIMARY KEY,\n                name           TEXT NOT NULL DEFAULT '',\n                description    TEXT NOT NULL DEFAULT '',\n                category       TEXT NOT NULL DEFAULT 'general',\n                tags           TEXT NOT NULL DEFAULT '[]',\n                default_access TEXT NOT NULL DEFAULT '[\"all\"]',\n                content_path   TEXT NOT NULL DEFAULT '',\n                origin         TEXT NOT NULL DEFAULT 'builtin',\n                version        TEXT NOT NULL DEFAULT '1.0',\n                created_at     REAL NOT NULL DEFAULT 0,\n                updated_at     REAL NOT NULL DEFAULT 0\n            )"
+  ],
+  [
+    "table",
+    "sqlite_sequence",
+    "sqlite_sequence",
+    "CREATE TABLE sqlite_sequence(name,seq)"
+  ],
+  [
+    "table",
+    "task_memory",
+    "task_memory",
+    "CREATE TABLE task_memory (\n                id              INTEGER PRIMARY KEY AUTOINCREMENT,\n                task_name       TEXT NOT NULL DEFAULT '',\n                task_keywords   TEXT NOT NULL DEFAULT '[]',\n                task_type       TEXT NOT NULL DEFAULT '',\n                collaboration_mode TEXT NOT NULL DEFAULT '',\n                team_size       INTEGER NOT NULL DEFAULT 0,\n                duration_secs   REAL NOT NULL DEFAULT 0,\n                success         INTEGER NOT NULL DEFAULT 1,\n                error_pattern   TEXT NOT NULL DEFAULT '',\n                boss_feedback   TEXT NOT NULL DEFAULT '',\n                device_id       TEXT NOT NULL DEFAULT '',\n                created_at      REAL NOT NULL DEFAULT 0\n            )"
+  ],
+  [
+    "table",
+    "tasks",
+    "tasks",
+    "CREATE TABLE tasks (\n                task_id      TEXT PRIMARY KEY,\n                name         TEXT NOT NULL DEFAULT '',\n                description TEXT NOT NULL DEFAULT '',\n                input_data   TEXT NOT NULL DEFAULT '{}',\n                output_data  TEXT NOT NULL DEFAULT '{}',\n                status       TEXT NOT NULL DEFAULT 'pending',\n                subtasks     TEXT NOT NULL DEFAULT '[]',\n                created_at   REAL NOT NULL DEFAULT 0,\n                completed_at REAL NOT NULL DEFAULT 0,\n                created_by   TEXT NOT NULL DEFAULT 'user'\n            , project_id TEXT NOT NULL DEFAULT '', pm_agent_id TEXT NOT NULL DEFAULT '')"
+  ],
+  [
+    "table",
+    "usage_log",
+    "usage_log",
+    "CREATE TABLE usage_log (\n                id            INTEGER PRIMARY KEY AUTOINCREMENT,\n                project_id    TEXT NOT NULL,\n                task_id       TEXT NOT NULL DEFAULT '',\n                subtask_id    TEXT NOT NULL DEFAULT '',\n                model         TEXT NOT NULL DEFAULT '',\n                input_tokens  INTEGER NOT NULL DEFAULT 0,\n                output_tokens INTEGER NOT NULL DEFAULT 0,\n                cost_usd      REAL NOT NULL DEFAULT 0,\n                timestamp     REAL NOT NULL DEFAULT 0\n            )"
+  ],
+  [
+    "table",
+    "users",
+    "users",
+    "CREATE TABLE users (\n            name TEXT PRIMARY KEY,\n            role TEXT NOT NULL DEFAULT 'viewer',\n            token_hash TEXT NOT NULL DEFAULT '',\n            token_tail4 TEXT NOT NULL DEFAULT '',\n            created_at REAL NOT NULL DEFAULT 0,\n            updated_at REAL NOT NULL DEFAULT 0\n        )"
+  ],
+  [
+    "table",
+    "workstation_optimization_items",
+    "workstation_optimization_items",
+    "CREATE TABLE workstation_optimization_items (\n            item_id        TEXT PRIMARY KEY,\n            source         TEXT NOT NULL,\n            title          TEXT NOT NULL,\n            description    TEXT NOT NULL,\n            priority       TEXT NOT NULL DEFAULT 'normal',\n            status         TEXT NOT NULL DEFAULT 'waiting_boss',\n            decision_reply TEXT NOT NULL DEFAULT '',\n            shadow_run_id  TEXT NOT NULL DEFAULT '',\n            result_json    TEXT NOT NULL DEFAULT '{}',\n            created_at     REAL NOT NULL,\n            updated_at     REAL NOT NULL\n        )"
+  ]
+]

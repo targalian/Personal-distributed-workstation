@@ -12,6 +12,7 @@ import time
 import uuid as _uuid
 
 from fastapi import APIRouter, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from .logger import get_logger
 from .station_routes_common import _broadcast, check_secretary
@@ -33,7 +34,7 @@ def build_pm_routes(controller) -> APIRouter:
     async def list_pm_agents(status: str = None):
         """列出所有 PM Agent 及其状态。"""
         check_secretary(controller)
-        agents = db.list_pm_agents(status=status)
+        agents = (await run_in_threadpool(db.list_pm_agents, status=status))
         return {
             "pm_agents": [a.to_dict() if hasattr(a, 'to_dict') else a for a in agents],
             "total": len(agents),
@@ -43,12 +44,12 @@ def build_pm_routes(controller) -> APIRouter:
     async def get_pm_agent(pm_id: str):
         """PM Agent 详情 (含 team_structure)。"""
         check_secretary(controller)
-        pm = db.get_pm_agent(pm_id)
+        pm = (await run_in_threadpool(db.get_pm_agent, pm_id))
         if not pm:
             raise HTTPException(status_code=404, detail="PM Agent 不存在")
         result = pm.to_dict() if hasattr(pm, 'to_dict') else pm
         # 附加团队信息
-        teams = db.get_teams_by_pm(pm_id)
+        teams = (await run_in_threadpool(db.get_teams_by_pm, pm_id))
         result["teams"] = [t.to_dict() if hasattr(t, 'to_dict') else t for t in teams]
         return result
 
@@ -61,14 +62,14 @@ def build_pm_routes(controller) -> APIRouter:
         phase = payload.get("phase", "")
         state = payload.get("state", {})
         state_json = state if isinstance(state, str) else _json.dumps(state, ensure_ascii=False)
-        db.save_pm_snapshot(pm_id, task_id, phase, state_json)
+        (await run_in_threadpool(db.save_pm_snapshot, pm_id, task_id, phase, state_json))
         return {"ok": True, "pm_id": pm_id, "phase": phase}
 
     @router.get("/api/pm/{pm_id}/snapshot")
     async def get_pm_snapshot(pm_id: str):
         """iter-53: 查询 PM 执行态快照 (诊断/恢复前探视)。"""
         check_secretary(controller)
-        snap = db.get_pm_snapshot(pm_id)
+        snap = (await run_in_threadpool(db.get_pm_snapshot, pm_id))
         if not snap:
             raise HTTPException(status_code=404, detail="快照不存在")
         return {
@@ -80,14 +81,14 @@ def build_pm_routes(controller) -> APIRouter:
     async def delete_pm_snapshot(pm_id: str):
         """iter-53: 删除 PM 执行态快照 (任务终结时 PM 调用清理)。"""
         check_secretary(controller)
-        db.delete_pm_snapshot(pm_id)
+        (await run_in_threadpool(db.delete_pm_snapshot, pm_id))
         return {"ok": True, "pm_id": pm_id}
 
     @router.get("/api/pm/{pm_id}/teams")
     async def get_pm_teams(pm_id: str):
         """PM 下属团队列表。"""
         check_secretary(controller)
-        teams = db.get_teams_by_pm(pm_id)
+        teams = (await run_in_threadpool(db.get_teams_by_pm, pm_id))
         return {
             "teams": [t.to_dict() if hasattr(t, 'to_dict') else t for t in teams],
             "total": len(teams),
@@ -97,14 +98,14 @@ def build_pm_routes(controller) -> APIRouter:
     async def get_pm_progress(pm_id: str, limit: int = 50):
         """PM 进度报告列表。"""
         check_secretary(controller)
-        reports = db.get_progress_reports(pm_id, limit=limit)
+        reports = (await run_in_threadpool(db.get_progress_reports, pm_id, limit=limit))
         return {"reports": reports, "total": len(reports)}
 
     @router.post("/api/pm/{pm_id}/status")
     async def update_pm_status(pm_id: str, payload: dict):
         """PM 上报状态变更 (Worker 调用)。"""
         check_secretary(controller)
-        pm = db.get_pm_agent(pm_id)
+        pm = (await run_in_threadpool(db.get_pm_agent, pm_id))
         if not pm:
             raise HTTPException(status_code=404, detail="PM Agent 不存在")
 
@@ -113,12 +114,7 @@ def build_pm_routes(controller) -> APIRouter:
         task_list = payload.get("task_list")
         collaboration_mode = payload.get("collaboration_mode")
 
-        db.update_pm_status(
-            pm_id, status,
-            team_structure=team_structure,
-            task_list=task_list,
-            collaboration_mode=collaboration_mode,
-        )
+        (await run_in_threadpool(db.update_pm_status, pm_id, status, team_structure=team_structure, task_list=task_list, collaboration_mode=collaboration_mode))
 
         # 优化7: awaiting_input 状态时附带澄清问题
         broadcast_data = {
@@ -153,26 +149,18 @@ def build_pm_routes(controller) -> APIRouter:
 
         # 优化: awaiting_input 时 Bot 推送 (带 options 触发 Inline Keyboard)
         if status == "awaiting_input" and clarification_question:
-            controller.bot_gateway.notify("pm_awaiting_input", {
-                "pm_id": pm_id,
-                "question": clarification_question,
-                "options": payload.get("clarification_options", []),
-            })
+            (await run_in_threadpool(controller.bot_gateway.notify, 'pm_awaiting_input', {'pm_id': pm_id, 'question': clarification_question, 'options': payload.get('clarification_options', [])}))
 
         # 优化10: escalated 时额外广播 + Bot 推送
         if status == "escalated" and escalation:
             await _broadcast(state, "task_escalated", escalation)
-            controller.bot_gateway.notify("task_escalated", {
-                "task_name": escalation.get("task_name", ""),
-                "failed_subtask": escalation.get("failed_subtask", ""),
-                "error": escalation.get("error", "")[:200],
-            })
+            (await run_in_threadpool(controller.bot_gateway.notify, 'task_escalated', {'task_name': escalation.get('task_name', ''), 'failed_subtask': escalation.get('failed_subtask', ''), 'error': escalation.get('error', '')[:200]}))
 
         # iter-57 (补强#5): PM 结束后接力派发排队任务 (并发提交时
         # 本机 PM 忙 → 任务排队; 此处完成一个就补上一个)
         if status in ("completed", "failed", "cancelled") and \
                 hasattr(controller, "_dispatch_queued_task"):
-            controller._dispatch_queued_task()
+            (await run_in_threadpool(controller._dispatch_queued_task))
 
         return {"ok": True, "pm_id": pm_id, "status": status}
 
@@ -192,14 +180,14 @@ def build_pm_routes(controller) -> APIRouter:
             message=payload.get("message", ""),
             timestamp=payload.get("timestamp", time.time()),
         )
-        db.save_progress_report(report)
+        (await run_in_threadpool(db.save_progress_report, report))
 
         # ── 关键: PM 完成/失败时同步更新任务状态 ──
         pm_status = payload.get("status", "")
         if pm_status in ("completed", "failed") and payload.get("reporter_type") == "pm":
             # 通过 pm_agent_id 查找对应任务并更新状态
             try:
-                conn = db._get_conn()
+                conn = (await run_in_threadpool(db._get_conn))
                 row = conn.execute(
                     "SELECT task_id FROM tasks WHERE pm_agent_id = ? AND status = 'running'",
                     (pm_id,)
@@ -207,7 +195,7 @@ def build_pm_routes(controller) -> APIRouter:
                 if row:
                     task_id = row["task_id"]
                     new_status = "completed" if pm_status == "completed" else "failed"
-                    db.update_task_status(task_id, new_status)
+                    (await run_in_threadpool(db.update_task_status, task_id, new_status))
                     logger.info("任务 %s 状态同步: running → %s", task_id[:16], new_status)
             except Exception as e:
                 logger.error("任务状态同步失败: %s", e)
@@ -236,7 +224,7 @@ def build_pm_routes(controller) -> APIRouter:
         # task_id 缺失时通过 pm_agent_id 反查
         if not task_id:
             try:
-                conn = db._get_conn()
+                conn = (await run_in_threadpool(db._get_conn))
                 row = conn.execute(
                     "SELECT task_id FROM tasks WHERE pm_agent_id = ? ORDER BY created_at DESC LIMIT 1",
                     (pm_id,)
@@ -248,7 +236,7 @@ def build_pm_routes(controller) -> APIRouter:
         if not task_id:
             raise HTTPException(status_code=400, detail="缺少 task_id")
 
-        task = db.get_task(task_id)
+        task = (await run_in_threadpool(db.get_task, task_id))
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
 
@@ -270,7 +258,7 @@ def build_pm_routes(controller) -> APIRouter:
             }
             merged.append(item)
 
-        db.update_task_subtasks(task_id, merged)
+        (await run_in_threadpool(db.update_task_subtasks, task_id, merged))
         task.subtasks = merged
         await _broadcast(state, "task_updated", task.to_dict())
         return {"ok": True, "task_id": task_id, "subtasks": len(merged)}
@@ -281,7 +269,7 @@ def build_pm_routes(controller) -> APIRouter:
     async def list_teams(pm_id: str = None):
         """所有团队 (支持按 pm_id 过滤)。"""
         check_secretary(controller)
-        teams = db.list_teams(pm_id=pm_id)
+        teams = (await run_in_threadpool(db.list_teams, pm_id=pm_id))
         return {
             "teams": [t.to_dict() if hasattr(t, 'to_dict') else t for t in teams],
             "total": len(teams),
@@ -291,7 +279,7 @@ def build_pm_routes(controller) -> APIRouter:
     async def get_team(team_id: str):
         """团队详情 (含 members 嵌套)。"""
         check_secretary(controller)
-        team = db.get_team(team_id)
+        team = (await run_in_threadpool(db.get_team, team_id))
         if not team:
             raise HTTPException(status_code=404, detail="团队不存在")
         return team.to_dict() if hasattr(team, 'to_dict') else team

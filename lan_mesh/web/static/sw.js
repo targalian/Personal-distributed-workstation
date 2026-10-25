@@ -10,8 +10,8 @@
  * 注意: SW 经根路径 /sw.js 挂载 (scope 默认 /), 认证白名单放行
  * (SW 注册请求由浏览器发起, 不携带 Authorization 头)。
  */
-const CACHE_NAME = 'lan-mesh-shell-v1';
-const SHELL_URLS = ['/', '/static/manifest.json'];
+const CACHE_NAME = 'lan-mesh-shell-v2';
+const SHELL_URLS = ['/', '/static/manifest.json', '/static/mesh_transport.js', '/static/dashboard.js'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

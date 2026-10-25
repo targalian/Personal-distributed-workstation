@@ -117,6 +117,8 @@ STRATEGY_WEIGHTS = {
 }
 
 
+from typing import Any
+
 class ModelRouter:
     """模型路由器 — 多目标优化决策引擎。
 
@@ -125,7 +127,7 @@ class ModelRouter:
     - 失败降级: 首选模型不可用时沿 Fallback Chain 重试
     """
 
-    def __init__(self, pool_entries: list, project_manager=None):
+    def __init__(self, pool_entries: list, project_manager=None, resource_manager: object = None):
         """初始化路由器。
 
         Args:
@@ -135,6 +137,7 @@ class ModelRouter:
         self._entries = {e.id: e for e in pool_entries}
         self._pool_list = list(pool_entries)
         self.project_manager = project_manager
+        self._resource_manager = resource_manager
 
         # 预计算成本归一化基准 (最大成本)
         all_costs = [
@@ -150,100 +153,12 @@ class ModelRouter:
         return len(self._entries)
 
     def list_models(self) -> list[dict]:
-        """返回模型池摘要列表。"""
-        return [
-            {
-                "id": e.id,
-                "provider": e.provider,
-                "capabilities": e.capabilities,
-                "quality_score": e.quality_score,
-                "cost_input_per_1k": e.cost_input_per_1k,
-                "cost_output_per_1k": e.cost_output_per_1k,
-            }
-            for e in self._pool_list
-        ]
+        return call_component(self, ModelRoutingService, 'list_models')
 
     # ── 主路由方法 ─────────────────────────────────────────────────
 
-    def route(
-        self,
-        text: str,
-        skill: str = "",
-        project_id: str = "",
-        preferred_model: str = "",
-    ) -> RoutingResult:
-        """路由决策: 为给定任务选择最优模型。
-
-        Args:
-            text: 任务描述文本
-            skill: 任务所需技能
-            project_id: 关联的项目 ID (用于获取策略和白名单)
-            preferred_model: 用户/系统偏好的模型 (可选)
-
-        Returns:
-            RoutingResult 含推荐模型、评分详情和降级链
-        """
-        # 1. 难度分类
-        difficulty = classify_difficulty(text, skill)
-
-        # 2. 确定策略和候选模型
-        strategy = "balanced"
-        allowed_models = []
-
-        if project_id and self.project_manager:
-            project = self.project_manager.get_project(project_id)
-            if project:
-                strategy = project.routing_strategy or "balanced"
-                allowed_models = project.allowed_models or []
-                # 预算紧张时强制经济策略
-                if self.project_manager.should_use_economy_model(project_id):
-                    if strategy == "quality_first":
-                        strategy = "balanced"
-                    elif strategy == "balanced":
-                        strategy = "cost_first"
-
-        weights = STRATEGY_WEIGHTS.get(strategy, STRATEGY_WEIGHTS["balanced"])
-
-        # 3. 过滤候选模型 (按白名单 + API Key 可用性)
-        candidates = self._filter_candidates(allowed_models)
-
-        if not candidates:
-            # 无可用模型, 返回默认
-            return RoutingResult(
-                selected_model="deepseek-chat",
-                provider="deepseek",
-                base_url="https://api.deepseek.com/v1",
-                difficulty=difficulty,
-                score=0.0,
-                candidates=[],
-                fallback_chain=[],
-                strategy=strategy,
-            )
-
-        # 4. 对每个候选模型计算评分
-        scored = []
-        for entry in candidates:
-            score = self._compute_score(entry, difficulty, weights)
-            scored.append({"model": entry.id, "score": round(score, 4)})
-
-        # 5. 排序选最高分
-        scored.sort(key=lambda x: x["score"], reverse=True)
-        best_id = scored[0]["model"]
-        best_entry = self._entries[best_id]
-
-        # 6. 构建降级链
-        fallback = self.get_fallback_chain(best_id, allowed_models)
-
-        return RoutingResult(
-            selected_model=best_entry.id,
-            provider=best_entry.provider,
-            base_url=best_entry.base_url,
-            difficulty=difficulty,
-            score=scored[0]["score"],
-            candidates=scored,
-            fallback_chain=fallback,
-            strategy=strategy,
-        )
+    def route(self, text: str, skill: str='', project_id: str='', preferred_model: str='') -> RoutingResult:
+        return call_component(self, ModelRoutingService, 'route', text=text, skill=skill, project_id=project_id, preferred_model=preferred_model)
 
     # ── 评分算法 ───────────────────────────────────────────────────
 
@@ -294,58 +209,30 @@ class ModelRouter:
     def _rotation_bias(self, model_id: str) -> float:
         """R5: 轮换调度加分 — 委托资源管理器, 未启用时为 0。"""
         try:
+            manager = getattr(self, '_resource_manager', None)
+            if manager is not None:
+                pool = manager._find_pool(model_id) if manager.enabled else None
+                return min(0.1, max(0.0, manager._pool_priority(pool, model_id) * 0.005)) if pool else 0.0
             from .model_resources import rotation_bias_global
             return rotation_bias_global(model_id)
         except Exception:
             return 0.0
 
+    def _resource_available(self, model_id: str) -> bool:
+        manager = getattr(self, '_resource_manager', None)
+        return manager.is_available(model_id) if manager is not None else resource_available(model_id)
+
     # ── 候选过滤 ───────────────────────────────────────────────────
 
-    def _filter_candidates(self, allowed_models: list = None) -> list:
-        """过滤可用模型: 白名单 + API Key 环境变量检查。"""
-        candidates = []
-        for entry in self._pool_list:
-            # 白名单过滤
-            if allowed_models and entry.id not in allowed_models:
-                continue
-            # API Key 可用性检查
-            api_key = os.environ.get(entry.api_key_env, "")
-            if not api_key:
-                continue
-            # R1: 资源池可用性 (耗尽/过期/暂停 → 剔除; 未启用时放行)
-            if not resource_available(entry.id):
-                logger.debug("模型 %s 资源池不可用, 从候选剔除", entry.id)
-                continue
-            candidates.append(entry)
-        return candidates
+    def _filter_candidates(self, allowed_models: list=None) -> list:
+        return call_component(self, ModelRoutingService, '_filter_candidates', allowed_models=allowed_models)
 
     # ── 降级链 ─────────────────────────────────────────────────────
 
-    def get_fallback_chain(self, model_id: str, allowed_models: list = None) -> list:
-        """获取模型的降级链。
+    def get_fallback_chain(self, model_id: str, allowed_models: list=None) -> list:
+        return call_component(self, ModelRoutingService, 'get_fallback_chain', model_id=model_id, allowed_models=allowed_models)
 
-        返回模型 ID 列表 (不含首选模型本身), 按优先级排序。
-        仅包含 API Key 可用且在白名单内的模型。
-        """
-        entry = self._entries.get(model_id)
-        if not entry:
-            return []
 
-        chain = []
-        for fallback_id in entry.fallback:
-            fb_entry = self._entries.get(fallback_id)
-            if not fb_entry:
-                continue
-            if allowed_models and fb_entry.id not in allowed_models:
-                continue
-            api_key = os.environ.get(fb_entry.api_key_env, "")
-            if not api_key:
-                continue
-            # R1: 资源池可用性
-            if not resource_available(fb_entry.id):
-                continue
-            chain.append(fb_entry.id)
-
-        # R5: 降级链内按轮换调度优先级重排 (相同优先级保持配置顺序)
-        chain.sort(key=lambda mid: self._rotation_bias(mid), reverse=True)
-        return chain
+from typing import Any
+from .component_service import call_component
+from .model_routing_service import ModelRoutingService

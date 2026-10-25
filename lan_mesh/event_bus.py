@@ -44,9 +44,11 @@ class EventBus:
         logger.info("[event_bus] sink 已装配 (history=%d)",
                     self._recent.maxlen)
 
-    def detach(self):
+    def detach(self, sink: Optional[Callable] = None) -> None:
         """解除装配 (服务关闭/热重载时调用)。"""
         with self._lock:
+            if sink is not None and self._sink is not sink:
+                return
             self._loop = None
             self._sink = None
 

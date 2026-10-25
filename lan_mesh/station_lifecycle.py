@@ -16,7 +16,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .api import create_worker_router
@@ -109,7 +109,18 @@ class StationLifecycleMixin:
         - 基础层 (始终可用): 主机注册/心跳/查询/Station API/角色激活
         - Secretary 层 (激活后可用): 任务/Agent/项目/MCP工具/模型路由
         """
-        app = FastAPI(title="LAN Mesh Station Director", version="0.1.0")
+        from .version import __version__
+        app = FastAPI(title="LAN Mesh Station Director", version=__version__)
+
+        @app.on_event("shutdown")
+        async def shutdown_event() -> None:
+            from starlette.concurrency import run_in_threadpool
+            tasks = getattr(app.state, 'background_tasks', [])
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            await run_in_threadpool(self.stop)
 
         # F1.5: 注册限流 + 认证中间件
         from .station_api import api_guard_middleware, configure_mesh_auth
@@ -135,6 +146,9 @@ class StationLifecycleMixin:
         # Station 路由 (含全部 API, Secretary 路由会检查 active 状态)
         station_router = create_station_router(self)
         app.include_router(station_router)
+        # iter-104: expose this app's Yomk server for internal callers and diagnostics.
+        from .service_runtime import get_service_runtime
+        app.state.services = get_service_runtime(self)
 
         # Worker 路由 (本机也可被其他节点查询)
         worker_router = create_worker_router(
@@ -142,6 +156,20 @@ class StationLifecycleMixin:
             shared_folder=self.state.shared_folder,
         )
         app.include_router(worker_router)
+
+        self._mount_frontend(app)
+
+        return app
+
+    def _mount_frontend(self, app: FastAPI) -> None:
+        """Mount ordered dashboard domains, assets and optional React distribution."""
+        @app.get('/static/dashboard.js', include_in_schema=False)
+        async def dashboard_script() -> Response:
+            from starlette.concurrency import run_in_threadpool
+            from .dashboard_assets import load_dashboard_script
+            script = await run_in_threadpool(load_dashboard_script)
+            return Response(script, media_type='application/javascript',
+                            headers={'Cache-Control': 'no-cache, must-revalidate'})
 
         # 静态文件
         if STATIC_DIR.is_dir():
@@ -175,7 +203,6 @@ class StationLifecycleMixin:
                     headers={"Cache-Control": "no-cache, must-revalidate"})
             return JSONResponse(status_code=404, content={"detail": "sw.js 未找到"})
 
-        return app
 
     def _find_available_port(self, start: int, count: int = 20) -> int:
         """查找可用端口。"""
@@ -196,6 +223,10 @@ class StationLifecycleMixin:
         Args:
             dev_reload: 开发模式, 监控 lan_mesh/ 文件变动自动重启进程。
         """
+        from .application_lifecycle import stop_signal
+        stop_signal(self).clear()
+        vars(self).pop("_shutdown_report", None)
+        self._services_stopping = False
         self._running = True
         try:
             guardian = self.shadow_dev_manager.start_guardian()
@@ -391,7 +422,7 @@ class StationLifecycleMixin:
         # 添加 WS 推送后台任务
         @app.on_event("startup")
         async def startup_event():
-            asyncio.create_task(self._ws_push_loop())
+            app.state.background_tasks = [asyncio.create_task(self._ws_push_loop())]
 
         config = uvicorn.Config(
             app,
@@ -419,27 +450,13 @@ class StationLifecycleMixin:
 
         try:
             server.run()
-        except KeyboardInterrupt:
-            logger.info("正在停止...")
+        finally:
             self.stop()
 
-    def stop(self):
-        """停止 Station Director。"""
-        self._running = False
-        if self.workstation_optimizer:
-            try:
-                self.workstation_optimizer.stop_guardian()
-            except Exception as exc:
-                logger.warning("[Station] 工作站优化守护停止失败: %s", exc)
-        if self.shadow_dev_manager:
-            try:
-                self.shadow_dev_manager.stop_guardian()
-            except Exception as exc:
-                logger.warning("[Station] 影子开发守护停止失败: %s", exc)
-        if self.state.cloud_sync:
-            self.state.cloud_sync.stop()
-        if self.discovery:
-            self.discovery.stop()
+    def stop(self) -> dict:
+        """Cooperatively stop owned work and release service containers."""
+        from .application_lifecycle import shutdown_application
+        return shutdown_application(self)
 
     def _dev_file_watcher(self):
         """开发模式: 监控 lan_mesh/ 目录文件变动, 检测到修改后自动重启进程。"""

@@ -14,7 +14,12 @@
 | pm_monitor.py | PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证 |
 | pm_planner.py | PM 规划器 — 任务分析与分解 |
 | pm_state.py | PM Agent 共享状态容器 |
-| project.py | 项目管理与预算控制 — Phase 3 项目隔离核心 |
+| project.py | Project composition facade preserving the public manager API. |
+| project_api_service.py | ProjectApiService: transport-neutral interaction operations behind the original API. |
+| project_blueprint_service.py | Project blueprint domain over the shared project policy. |
+| project_budget_service.py | Project budget domain over the shared project policy. |
+| project_lifecycle_service.py | Project lifecycle domain over the shared project policy. |
+| project_policy.py | Compatibility facade and composition root for independently routed domains. |
 | task.py | 任务 DAG 管理 — 子任务依赖图与拓扑排序 (增强版: 条件边 + 动态路由 + 图序列化) |
 | task_templates.py | F2.4: 任务模板库 — 预置常见任务 DAG |
 <!-- /AUTO:module-list -->
@@ -373,10 +378,45 @@ BUG-034 修了 `_clear_subtask_timer` 在子任务终态时清计时器, 但终�
 cancelled 映射移除 / error 优先级移除)。
 
 
+## BUG-041 single 模式取消竞态 (iter-103)
+
+BUG-040 修了 `cancelled` 被当成 `completed` 交付, 但留下一个竞态:
+
+### 根因
+
+`cancel()` 在 `execute_directly` 阻塞期间 (LLM 调用中) 把 `_running` 置
+`False`, 但 runtime 可能已过取消检查点而正常返回 `completed` —— 交付前
+缺 `_running` 检查, 已取消的 PM 仍走完整交付链。
+
+实测 (2026-09-11 19:34–19:37): Boss 取消 → PM 状态 `cancelled` → 但 3 分钟
+后 runtime 正常完成 → PM 内部仍写交付物 → 日志出现「交付物已接收」。
+
+### 修复
+
+在 `_run_single_pattern` 的 `execute_directly` 返回后、交付前增加:
+
+```python
+if not self._running:
+    self.report_status("cancelled")
+    self.report_progress(0.0, "cancelled", "任务已被 Boss 取消")
+    return
+```
+
+覆盖三个窗口:
+1. cancel 发生在 `execute_directly` 期间 (runtime 已过取消检查点)
+2. cancel 发生在 `execute_directly` 返回后、交付前
+3. cancel 发生在交付中极窄窗口 (交付已开始, 无法回退 — 可接受)
+
+### 验证
+
+3 专项 + 3 变异全部致红 (检查移除 / 方向反转 / return 移除)。
+
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-09-11 | iter-103 | BUG-041 single 模式取消竞态修复: `_run_single_pattern` 交付前增加 `_running` 检查, cancel() 在 execute_directly 阻塞期间置 False 后 runtime 正常返回 completed 的场景不再走交付链; 实测: 取消 → 3 分钟后仍交付的竞态已消除; 3 专项 + 3 变异致红 |
 | 2026-09-11 | iter-102 | BUG-040 single 模式终态链路三缺口修复: `_run_single_pattern` cancelled 不再被当成 completed 交付 (iter-101 根因3 孪生) + `execute_directly` 补回传 error 字段 (原失败原因变成字面量「完成」) + `_clear_subtask_timer` 终态集合补 cancelled/timeout (BUG-034 只修了两个终态, 计时器残留致误重试) + `_build_subtask_status` cancelled 映射从 assigned 改为直接透传; 6 专项 + 5 变异致红 |
 | 2026-09-09 | iter-95 | 交付结论回流蓝图: `record_delivery_to_blueprint` 按验收结论推进/保持路线图阶段并记录缺口, 交付端点集成 `_reflow_blueprint`; 回流阶段选取口径与 PM 读取口径统一; 7 专项 + 7 变异致红 |
 | 2026-09-09 | iter-94 | BUG-034 跨站子任务结果回传修复: `_local_execute_task` 忽略 `pm_id` 致跨站结果注入错误 PM (或丢弃), 新增 `_report_subtask_result` 按 `pm_id` 路由回传原始 Secretary; `subtask_start_times` 终态清理 + `_record_subtask_start` 移入 `dispatch_subtask` 使重试也有超时保护; 新增 `subtask_retry` 追踪阶段与进度上报去重; 专项 6 例 + 变异 4 处致红 |

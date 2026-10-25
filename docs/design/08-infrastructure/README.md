@@ -8,12 +8,19 @@
 | 文件/目录 | 职责一句话 |
 |---|---|
 | api.py | FastAPI 路由层 - Worker API (装配入口) |
+| application_lifecycle.py | Explicit background ownership, cooperative stop and hierarchical service shutdown. |
+| component_service.py | Yomk component composition with explicit owners and compatibility method dispatch. |
 | config.py | 配置管理 - 基于 Pydantic 的强类型配置校验 |
 | error_tracker.py | F1.4: 本地错误聚合追踪 |
 | event_bus.py | Station 事件总线 (M5)。 |
 | host_rating.py | 主机评级系统 — 基于硬件配置自动计算能力等级 |
+| lan_mesh/_vendor/yomkserverpy/ | YomkServerPy 1.4.20 固定源码、Apache-2.0 许可证及上游变更记录 |
 | logger.py | LAN Mesh 结构化日志系统 |
 | preflight.py | 启动前自检模块 - 在程序启动时检查所有前置条件 |
+| service_context.py | Explicit Station service dependencies and Secretary availability policy. |
+| service_http.py | FastAPI adapter preserving endpoint signatures over Yomk service requests. |
+| service_runtime.py | Instance-scoped YomkServerPy runtime and typed service invocation boundary. |
+| version.py | Product version from VERSION.json in a checkout, or wheel metadata after installation. |
 | worker_routes_basic.py | Worker 基础路由 — 本机信息/共享文件/任务执行 (iter-31 拆分产物) |
 | worker_routes_p2p.py | Worker P2P 路由 — 主机间消息接收 (iter-31 拆分产物) |
 | worker_routes_pm.py | Worker 角色与 PM 路由 — 角色管理/PM 生命周期/子 Agent 管理 (iter-31 拆分产物) |
@@ -166,10 +173,39 @@ Worker (station_controller 仅传 collect_info_fn/shared_folder，
 历史说明: 早期 Secretary API (register/heartbeat/hosts) 已随
 secretary.py 删除 (P3)，Secretary 端路由由 station_routes_* 承担。
 
+## iter-104：YomkServerPy 运行时与适配边界
+
+直接引入 YomkServerPy 1.4.20 固定源码；来源提交、许可证与本地修改见
+lan_mesh/_vendor/yomkserverpy/UPSTREAM.md。依赖 readerwriterlock==1.0.9。
+ServiceRuntime 为每个应用创建独立 YomkServer，启动 Context 与 ServerInfo，
+显式注册业务操作、提供拓扑内省与幂等关闭；路由 shutdown 释放运行时，
+app.state.services 和 controller.services 提供相同实例。
+
+service_http 保留 FastAPI 校验并翻译 ServiceError，service_context 注入 Station
+组件和广播适配器。服务本身不依赖 FastAPI/路由模块。异步操作必须调用
+`await services.request(...)`，由适配器 await 上游 request 返回的协程；
+同步操作放在线程池中执行。不要直接将协程 handler 交给上游 async_request。
+框架门面全局单例、已有 EventBus、已有 StationState 未混用，避免双状态源。
+
+## iter-105：并发装配与同步请求
+
+ServiceRuntime.ensure 在同一锁内完成查找与注册，get_service_runtime 保护首次创建；
+同步控制器兼容方法使用 request_sync，异步 handler 被明确拒绝，不再可能误丢协程。
+异步 HTTP 继续通过 await runtime.request 将同步服务交给线程池。
+TaskSchedulingService.deinit 唤醒并停止队列等待线程，避免关闭后的等待器再启动任务。
+业务服务的互斥与 retiring 状态见[PM 第二阶段设计](../02-station-core/pm-service-phase2.md)。
+
+## iter-111：Yomk迁移本机验收
+
+统一产品版本和依赖来源，隔离wheel验收；真实双节点环境不可用，待用户放行条件。详见[完整评估](../yomk-refactor-assessment.md)。实机联调尚待用户提供环境。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-25 | iter-111 | 统一产品版本和依赖来源，隔离wheel验收；真实双节点环境不可用，待用户放行条件 |
+| 2026-10-25 | iter-105 | 运行时并发首次装配、ensure与request_sync；关闭队列等待器 |
+| 2026-10-25 | iter-104 | YomkServerPy 1.4.20 固定源码接入、每应用独立运行时、async 桥接、内省及生命周期 |
 | 2026-08-29 | iter-60 | F4.2 全自动闭环: rotate_key/switch_pool 升级真实修复写动作 (失效池 paused/耗尽池 exhausted 经 set_pool_status_global 路由剔除, heal 端点透传) + 写动作每日配额 (auto_heal_daily_limit 默认 3) / 连续失败熔断 (错误消失自动复位) + get_auto_heal_status 扩展 |
 | 2026-08-29 | iter-57 | 并发压力验证 (补强#5): ObservabilityConfig 增 api_rate_limit/api_rate_limit_trusted 限流双桶字段 (120/1000, ≤0 禁用); station_routes_common 限流器双桶 + 阈值变化清桶 + /api/health 补登白名单 |
 | 2026-08-29 | iter-58 | 多用户权限 (补强#6 F5.2): SecurityConfig 增 users 字段 (UserAccount: name/role/token, 空表 = 关闭多用户); station_routes_common 增 configure_users/resolve_role/users_configured/list_users_public + 中间件角色分层 + auth-token 收紧 (仅 boss 获 mesh_token) |

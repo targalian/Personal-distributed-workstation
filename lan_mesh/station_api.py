@@ -85,6 +85,7 @@ def create_station_router(controller) -> APIRouter:
         if not bus.has_sink:
             def _event_sink(evt: dict):
                 asyncio.ensure_future(_broadcast(state, "event", evt))
+            state._event_sink = _event_sink
             bus.attach(asyncio.get_running_loop(), _event_sink)
         try:
             hosts = db.list_hosts()
@@ -141,7 +142,8 @@ def create_station_router(controller) -> APIRouter:
                         await websocket.send_json(
                             {"ok": False, "error": "secretary_inactive"})
                         continue
-                    result = apply_usage_batch(msg.get("records") or [])
+                    from starlette.concurrency import run_in_threadpool
+                    result = await run_in_threadpool(apply_usage_batch, msg.get("records") or [])
                     await websocket.send_json({"ok": True, **result})
                 elif msg_type:
                     from .event_bus import publish_event

@@ -8,31 +8,59 @@
 <!-- AUTO:module-list -->
 | 文件/目录 | 职责一句话 |
 |---|---|
+| agent_service.py | AgentService: Yomk service for the Station task domain. |
+| capability_api_service.py | CapabilityApiService: transport-neutral interaction operations behind the original API. |
 | database.py | SQLite 数据库存储层 - Secretary 端主机注册记录持久化 |
+| database_schema.py | Unmodified SQLite initialization scripts; migration version remains in database.py. |
+| delivery_service.py | DeliveryService: Yomk service for the Station task domain. |
+| host_registry_service.py | HostRegistryService: domain behavior separated from the public compatibility facade. |
+| optimization_queue_service.py | OptimizationQueueService: domain behavior separated from the public compatibility facade. |
+| pm_control_service.py | Yomk PM control service for local identity-safe and remote task operations. |
+| pm_lifecycle_service.py | Yomk PM lifecycle service: one serialized local owner per Station. |
+| repository_agents.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_checkpoints.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_conversations.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_hosts.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_metrics.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_operations.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_projects.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_registry.py | Ordinary aggregate repositories; SQL stays below the business service boundary. |
+| repository_resources.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_skills.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_tasks.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_teams.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_users.py | Domain SQL repository; Database remains the sole connection and schema owner. |
 | runtime_trace.py | 运行时追踪与性能审计 — P0/P1 运行时分析引擎 |
 | shadow_dev.py | 影子开发模式 — 让 PM/CLI Agent 在仓库副本上自主开发, 产出 diff 供人审。 |
+| shadow_queue_service.py | ShadowQueueService: domain behavior separated from the public compatibility facade. |
 | singleton.py | 主机级工作站单实例守护 (E6)。 |
 | station_api.py | Station Director API 路由层 (装配入口) |
 | station_controller.py | Station Director 独立控制器 — 基础设施管理入口 |
 | station_director.py | Station Director (工作站主管) — 基础设施资源管理器 |
+| station_healing_service.py | StationHealingService: domain behavior separated from the public compatibility facade. |
+| station_host_service.py | StationHostService: domain behavior separated from the public compatibility facade. |
 | station_hosts.py | 主机与发现域 — 发现回调、主机信息采集、配置刷新下发、日志修剪、Bot 通道。 |
 | station_lifecycle.py | 进程生命周期与 Web 装配 — 端口选择、FastAPI 装配、WS 推流、dev-reload。 |
 | station_local_pm.py | 内嵌 PM 执行域 — 本机启停/恢复/注入、队列派发、子 Agent、孤儿迁移。 |
 | station_pm_control.py | PM 远程反向控制与任务 DAG 图读写 — 取消/暂停/注入/图更新。 |
 | station_routes_basic.py | Station 基础路由 — 健康/错误/角色/注册心跳/主机网络/Director (P1 #2 拆分产物) |
-| station_routes_chat.py | Station 交互路由 — 秘书聊天/多对话/PM 线程/Bot 消息入口 (P1 #2 拆分产物) |
+| station_routes_chat.py | HTTP contract assembly for independently registered Yomk interaction services. |
 | station_routes_common.py | Station API 路由公共层 — 限流/认证中间件与共享工具 (P1 #2 拆分产物) |
 | station_routes_optimization.py | Station routes for the resident workstation optimization workflow. |
 | station_routes_pm.py | Station PM 路由 — PM Agent 管理/进度上报/子任务同步/团队 (P1 #2 拆分产物) |
-| station_routes_projects.py | Station 项目与能力路由 — 项目管理/MCP 工具/模型路由/技能库/Bot 通道 (P1 #2 拆分产物) |
-| station_routes_resources.py | Station 资源与密钥路由 — 模型资源池/配置向导/密钥同步/事件与角色卡 (P1 #2 拆分产物) |
+| station_routes_projects.py | HTTP contract assembly for independently registered Yomk interaction services. |
+| station_routes_resources.py | HTTP contract assembly for independently registered Yomk interaction services. |
 | station_routes_shadow.py | 影子开发 API 路由 - 提交、查询与守护状态接口。 |
-| station_routes_tasks.py | Station 任务路由 — Agent 管理/任务生命周期/图结构/交付闭环/任务记忆 (P1 #2 拆分产物) |
+| station_routes_tasks.py | Station task HTTP contracts, backed by independently registered Yomk services. |
 | station_routes_worker.py | Station Worker 侧路由 — 内嵌 Worker 端点/P2P 通讯/云存储同步 (P1 #2 拆分产物) |
 | station_scheduler.py | 任务提交与调度域 — 负载选站、联邦转发轮询、自动扩容派发。 |
 | station_secretary.py | Secretary 激活/停用与选举故障转移 — 模型资源预加载、让位、接管。 |
 | station_selfheal.py | 自愈闭环 (F4.2) — 修复动作执行、自动守护、写动作配额与熔断护栏。 |
 | station_sync.py | 集群同步域 — 密钥/资源/配置/版本四类同步与对齐。 |
+| task_memory_service.py | TaskMemoryService: Yomk service for the Station task domain. |
+| task_scheduling_service.py | Task scheduling service shared by HTTP, chat, federation, queues and autoscaling. |
+| task_service.py | TaskService: Yomk service for the Station task domain. |
+| task_submission_service.py | Task submission HTTP service adapting to the shared synchronous scheduling service. |
 | workstation_optimizer.py | 工作站常驻自我优化管理器 - 汇聚建议、审批与影子执行。 |
 <!-- /AUTO:module-list -->
 ---
@@ -483,10 +511,42 @@ import STATIC_DIR` 这类现有引用 (tests 4 处) 不变, 同时避开反向�
 提案 §8 明确不在拆分中重构), 9 个模块 docstring 齐备;
 pytest **400 passed**; `scripts/sync_docs.py` PASS。
 
+## iter-104：任务域 Yomk 服务化
+
+station_routes_tasks.py 仅保留 21 个原 HTTP 契约与装配，业务迁入
+AgentService / TaskSubmissionService / TaskService / DeliveryService /
+TaskMemoryService。所有服务继承真实 YomkService，经 ServiceRuntime 路由调用。
+HTTP 的路径、参数、状态码和 OpenAPI 保持兼容；_reflow_blueprint 保留兼容再导出。
+依赖经 StationServiceContext 注入，在每次调用时读取角色与 discovery，支持组件热替换。
+本轮只迁移任务域；PM 控制器、聊天、资源、Worker 等仍待后续迁移，
+详见[全项目重构评估](../yomk-refactor-assessment.md)。
+
+TaskSubmissionService 将预算、创建、选站、本机尝试、远程派发、登记拆为小步骤；
+远程请求使用线程池与 10 秒超时，避免阻塞 Worker 回报。本机启动保留原串行调用，
+等待 PM 生命周期阶段建立统一所有权和锁后再考虑并发化。
+
+## iter-105：PM 生命周期与统一调度服务
+
+新增 PmLifecycleService / PmControlService / TaskSchedulingService，原 mixin 方法保留为
+Yomk 请求门面。HTTP、聊天、联邦委托共用任务提交，队列接力、故障接管与扩容共用
+本机/远程实际派发。生命周期锁保护 PM 所有权，取消/暂停的网络回调在锁外执行；
+retiring 集合在旧执行/进度线程退出前阻止复用 slot。恢复后补齐任务/PM 映射，
+PM ID 校验防止旧任务控制新实例；无身份参数的旧 Worker 调用保持兼容。
+
+详见[第二阶段设计与评价](pm-service-phase2.md)。本轮未迁移独立 worker.py 执行引擎，
+未声明跨节点 exactly-once；真实多机长任务与升级演练仍需另行验证。
+
+## iter-111：Yomk迁移本机验收
+
+兼容适配器线程隔离76处；Discovery替换后实时解析；原接口快照及并发查询通过。详见[完整评估](../yomk-refactor-assessment.md)。实机联调尚待用户提供环境。
+
 ## 变更记录
 
 | 日期 | 迭代 | 摘要 |
 |---|---|---|
+| 2026-10-25 | iter-111 | 兼容适配器线程隔离76处；Discovery替换后实时解析；原接口快照及并发查询通过 |
+| 2026-10-25 | iter-105 | PM生命周期/控制/调度三个Yomk服务；并发所有权、锁外回调、退出屏障、统一提交/派发与身份校验 |
+| 2026-10-25 | iter-104 | 任务域 21 端点迁入 5 个真实 Yomk 服务；契约快照不漂移；路由 683→58 行；网络派发线程隔离 |
 | 2026-09-09 | iter-92 | BUG-032 停滞告警幽灵刷屏修复: `check_stall_alerts` 聚合后与 DB 对账 (`_stall_db_filter`), 抑制 DB 已终态与查不到记录的任务; 真实数据实测 100 条 → 0 条, 非终态任务照常告警; 专项 5 例 + 变异验证 3 处致红 |
 | 2026-09-07 | iter-88 | 项目蓝图专项 API: GET/PUT /api/projects/{id}/blueprint, 类型校验 + project_blueprint_updated WS 广播; DB 迁移 v12 |
 | 2026-09-06 | iter-84 | 本机任务取消后释放 _local_pm_agent 引用, /health 的 local_pm/active_pms 不再残留 active; 专项 17 passed |

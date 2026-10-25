@@ -297,6 +297,8 @@ BUILTIN_TOOLS = {
 }
 
 
+from typing import Any
+
 class ToolRegistry:
     """工具注册表 — 管理工具的注册、查询和执行。
 
@@ -312,112 +314,32 @@ class ToolRegistry:
         for name, entry in BUILTIN_TOOLS.items():
             self._tools[name] = entry.copy()
 
-    def register_tool(self, tool: ToolDef, handler: Callable):
-        """动态注册一个工具。"""
-        self._tools[tool.name] = {"tool": tool, "handler": handler}
+    def register_tool(self, tool: ToolDef, handler: Callable) -> Any:
+        return call_component(self, ToolCatalogService, 'register_tool', tool=tool, handler=handler)
 
-    def unregister_tool(self, name: str):
-        """注销工具。"""
-        self._tools.pop(name, None)
+    def unregister_tool(self, name: str) -> Any:
+        return call_component(self, ToolCatalogService, 'unregister_tool', name=name)
 
     def list_tools(self) -> list[dict]:
-        """列出所有已注册工具 (MCP tools/list 格式)。"""
-        return [
-            {
-                "name": entry["tool"].name,
-                "description": entry["tool"].description,
-                "inputSchema": entry["tool"].input_schema,
-            }
-            for entry in self._tools.values()
-        ]
+        return call_component(self, ToolCatalogService, 'list_tools')
 
     def list_tool_defs(self) -> list[ToolDef]:
-        """返回所有 ToolDef 对象。"""
-        return [entry["tool"] for entry in self._tools.values()]
+        return call_component(self, ToolCatalogService, 'list_tool_defs')
 
     def get_tool(self, name: str) -> Optional[dict]:
-        """获取单个工具定义。"""
-        return self._tools.get(name)
+        return call_component(self, ToolCatalogService, 'get_tool', name=name)
 
     def call_tool(self, name: str, params: dict) -> dict:
-        """执行工具调用 (MCP tools/call)。
+        return call_component(self, ToolExecutionService, 'call_tool', name=name, params=params)
 
-        Returns:
-            {"content": [...], "isError": bool}
-            content 遵循 MCP 格式: [{"type": "text", "text": "..."}]
-        """
-        entry = self._tools.get(name)
-        if not entry:
-            return {
-                "content": [{"type": "text", "text": f"工具不存在: {name}"}],
-                "isError": True,
-            }
-
-        try:
-            result = entry["handler"](params)
-            import json
-            is_error = bool(isinstance(result, dict) and (
-                result.get("timed_out") or result.get("git_safe_directory_denied")
-            ))
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": json.dumps(result, ensure_ascii=False, default=str),
-                }],
-                "isError": is_error,
-                "result": result,
-            }
-        except Exception as e:
-            return {
-                "content": [{"type": "text", "text": f"工具执行错误: {e}"}],
-                "isError": True,
-            }
-
-    def load_plugins(self, config_path: str):
-        """从 YAML 配置文件加载插件工具。
-
-        配置格式:
-            tools:
-              - name: my_custom_tool
-                description: 自定义工具
-                module: my_package.my_module
-                function: my_handler
-                input_schema:
-                  type: object
-                  properties:
-                    param1:
-                      type: string
-                  required: [param1]
-        """
-        p = Path(config_path).expanduser()
-        if not p.is_file():
-            return
-
-        with open(p, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f) or {}
-
-        for item in config.get("tools", []):
-            name = item.get("name", "")
-            if not name or name in self._tools:
-                continue
-            module_name = item.get("module", "")
-            func_name = item.get("function", "")
-            if not module_name or not func_name:
-                continue
-            try:
-                mod = importlib.import_module(module_name)
-                handler = getattr(mod, func_name)
-                tool = ToolDef(
-                    name=name,
-                    description=item.get("description", ""),
-                    mcp_compatible=True,
-                    input_schema=item.get("input_schema", {}),
-                )
-                self.register_tool(tool, handler)
-                logger.info("插件工具已加载: %s (%s.%s)", name, module_name, func_name)
-            except (ImportError, AttributeError) as e:
-                logger.error("插件加载失败: %s → %s", name, e)
+    def load_plugins(self, config_path: str) -> Any:
+        return call_component(self, ToolCatalogService, 'load_plugins', config_path=config_path)
 
     def tool_count(self) -> int:
-        """返回已注册工具数量。"""
-        return len(self._tools)
+        return call_component(self, ToolCatalogService, 'tool_count')
+
+
+from typing import Any
+from .component_service import call_component
+from .tool_catalog_service import ToolCatalogService
+from .tool_execution_service import ToolExecutionService
