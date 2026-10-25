@@ -1,6 +1,6 @@
 {
   "version": "0.41.0",
-  "commit": "cac10dd",
+  "commit": "9d21024",
   "released_at": "2026-10-25",
   "note": "iter-111 YomkServerPy全项目服务化重构候选：621 Python + 6 Node通过，前端与安装包验证通过；真实双节点验收待测试环境",
   "upgrade_hint": "先按docs/design/08-infrastructure/yomk-rollout.md在隔离节点演练；源码依赖用requirements.txt，或安装候选wheel。正式推送仍使用sync_push.ps1。"
