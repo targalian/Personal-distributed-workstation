@@ -1,6 +1,6 @@
 {
   "version": "0.41.1",
-  "commit": "26dc660",
+  "commit": "5b0cdfa",
   "released_at": "2026-10-25",
   "note": "iter-112 Yomk技能内化：3个内置技能、完整参考分发、任务相关提示词；635测试与隔离安装验证通过，实机验收待环境",
   "upgrade_hint": "先按docs/design/08-infrastructure/yomk-rollout.md在隔离节点演练；源码依赖用requirements.txt，或安装候选wheel。正式推送仍使用sync_push.ps1。"
