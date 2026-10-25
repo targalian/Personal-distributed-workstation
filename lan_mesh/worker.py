@@ -231,6 +231,10 @@ class WorkerAgent:
                         (skill_dir / "reference.md").write_text(
                             skill["reference"], encoding="utf-8"
                         )
+                    from .skill_knowledge import RESOURCE_NAMES
+                    for name, content in skill.get("resources", {}).items():
+                        if name in RESOURCE_NAMES:
+                            (skill_dir / name).write_text(content, encoding="utf-8")
                 logger.info("已拉取 %d 个技能到本地缓存", len(skills))
         except Exception as e:
             logger.error("技能拉取失败: %s", e)

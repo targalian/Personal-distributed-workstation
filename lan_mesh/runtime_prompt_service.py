@@ -3,6 +3,7 @@
 from __future__ import annotations
 from typing import Any
 from .component_service import ComponentService
+from .skill_knowledge import append_builtin_guidance, is_builtin_skill
 
 class RuntimePromptService(ComponentService):
     """RuntimePromptService business operations with explicit state ownership."""
@@ -23,12 +24,12 @@ class RuntimePromptService(ComponentService):
         若未设置, 则回退到从本地技能缓存拼装知识库 prompt。
         """
         if self.owner._custom_system_prompt:
-            return self.owner._custom_system_prompt
+            return append_builtin_guidance(self.owner._custom_system_prompt, task_context)
         if not self.owner._skills_cache_dir.is_dir():
-            return ''
+            return append_builtin_guidance('', task_context)
         current_skill = getattr(self.owner._local, 'current_skill', '')
         target_skill_dir = None
-        if current_skill:
+        if current_skill and not is_builtin_skill(current_skill):
             target_skill_dir = self.owner._skills_cache_dir / current_skill
         prompts = []
         if target_skill_dir and target_skill_dir.is_dir():
@@ -46,6 +47,8 @@ class RuntimePromptService(ComponentService):
                     pass
         else:
             for skill_dir in sorted(self.owner._skills_cache_dir.iterdir()):
+                if is_builtin_skill(skill_dir.name):
+                    continue
                 if not skill_dir.is_dir():
                     continue
                 skill_md = skill_dir / 'SKILL.md'
@@ -62,5 +65,6 @@ class RuntimePromptService(ComponentService):
                 except Exception:
                     continue
         if not prompts:
-            return ''
-        return '以下是你的能力参考知识库，请在执行任务时参考:\n\n' + '\n\n---\n\n'.join(prompts)
+            return append_builtin_guidance('', task_context)
+        prompt = '以下是你的能力参考知识库，请在执行任务时参考:\n\n' + '\n\n---\n\n'.join(prompts)
+        return append_builtin_guidance(prompt, task_context)

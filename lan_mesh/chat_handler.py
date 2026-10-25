@@ -242,6 +242,7 @@ class ChatHandler:
             "_model_preference": model_pref,
             "_fallback_models": fallback_models,
             "_system_prompt": system_prompt,
+            "description": message,
         })
         return resp.get("content", "[LLM 调用失败]")
 

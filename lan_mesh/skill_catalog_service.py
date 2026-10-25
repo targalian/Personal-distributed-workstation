@@ -6,6 +6,7 @@ from pathlib import Path
 from .protocol import SkillRecord
 from . import skill_registry as policy
 from .component_service import ComponentService
+from .skill_knowledge import builtin_directories, RESOURCE_NAMES
 
 class SkillCatalogService(ComponentService):
     """SkillCatalogService business operations with explicit state ownership."""
@@ -19,11 +20,12 @@ class SkillCatalogService(ComponentService):
             新增/更新的技能列表 [{skill_id, action: "created"|"updated"}]
         """
         results = []
-        if not self.owner.skills_dir.is_dir():
-            self.owner.skills_dir.mkdir(parents=True, exist_ok=True)
-            policy.logger.info('skills 目录已创建: %s', self.owner.skills_dir)
-            return results
-        for entry in sorted(self.owner.skills_dir.iterdir()):
+        directories = {entry.name: entry for entry in builtin_directories()}
+        if self.owner.skills_dir.is_dir():
+            directories.update({entry.name: entry for entry in self.owner.skills_dir.iterdir()
+                                if entry.is_dir()})
+        self.owner._skill_directories.clear()
+        for entry in sorted(directories.values()):
             if not entry.is_dir():
                 continue
             skill_md = entry / 'SKILL.md'
@@ -40,6 +42,7 @@ class SkillCatalogService(ComponentService):
             else:
                 default_access = (existing or {}).get('default_access', ['all'])
             self.owner.db.upsert_skill(skill_id=skill_id, name=meta.get('name', skill_id), description=meta.get('description', ''), category=meta.get('category', 'general'), tags=meta.get('tags', []), default_access=default_access, content_path=entry.name, version=meta.get('version', '1.0'))
+            self.owner._skill_directories[skill_id] = entry
             results.append({'skill_id': skill_id, 'action': action})
             policy.logger.info('%s: %s (%s)', action, skill_id, entry.name)
         self.owner._content_cache.clear()
@@ -63,6 +66,8 @@ class SkillCatalogService(ComponentService):
             return {}
         try:
             meta = policy.yaml.safe_load(parts[1]) or {}
+            if isinstance(meta, dict) and isinstance(meta.get('metadata'), dict):
+                meta = {**meta['metadata'], **meta}
             return meta
         except policy.yaml.YAMLError as e:
             policy.logger.error('YAML 解析失败 %s: %s', filepath, e)
@@ -89,7 +94,8 @@ class SkillCatalogService(ComponentService):
         skill = self.owner.get_skill(skill_id)
         if not skill:
             return {'skill_id': skill_id, 'content': '', 'reference': '', 'version': ''}
-        skill_dir = self.owner.skills_dir / skill.content_path
+        skill_dir = self.owner._skill_directories.get(skill_id,
+            self.owner.skills_dir / skill.content_path)
         result = {'skill_id': skill_id, 'name': skill.name, 'content': '', 'reference': '', 'version': skill.version}
         skill_md = skill_dir / 'SKILL.md'
         if skill_md.is_file():
@@ -102,6 +108,8 @@ class SkillCatalogService(ComponentService):
         ref_md = skill_dir / 'reference.md'
         if ref_md.is_file():
             result['reference'] = ref_md.read_text(encoding='utf-8').strip()
+        result['resources'] = {name: (skill_dir / name).read_text(encoding='utf-8')
+                               for name in RESOURCE_NAMES if (skill_dir / name).is_file()}
         self.owner._content_cache[skill_id] = result
         return result
 

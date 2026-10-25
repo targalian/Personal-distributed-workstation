@@ -65,5 +65,5 @@ ignore = ["E501"]  # 行长度由 line-length 控制
 known-first-party = ["lan_mesh"]
 
 [tool.setuptools.package-data]
-"lan_mesh" = ["web/templates/*.html", "web/static/*.*", "web/static/dashboard/*.js", "web/static/icons/*", "web/static/spa/**/*", "model_pool.yaml", "model_pool.example.yaml", "resources.example.yaml"]
+"lan_mesh" = ["web/templates/*.html", "web/static/*.*", "web/static/dashboard/*.js", "web/static/icons/*", "web/static/spa/**/*", "model_pool.yaml", "model_pool.example.yaml", "resources.example.yaml", "builtin_skills/*/*.md", "builtin_skills/*/LICENSE.txt"]
 "lan_mesh._vendor.yomkserverpy" = ["LICENSE.txt", "UPSTREAM.md"]

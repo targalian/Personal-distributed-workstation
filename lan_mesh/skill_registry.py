@@ -56,6 +56,7 @@ class SkillRegistry:
         self.db = db
         self.skills_dir = Path(skills_dir)
         self._content_cache: dict[str, dict] = {}  # skill_id → {content, reference}
+        self._skill_directories: dict[str, Path] = {}
 
     # ── 技能注册 ──────────────────────────────────────────────────
 

@@ -4,7 +4,7 @@
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
 - 更新时间：2026-10-25
-- 当前迭代：`iter-111`（Yomk代码与本机验收完成，真实双节点演练待用户环境；源码发布按 Git 记录核验）
+- 当前迭代：`iter-112`（Yomk技能内化完成，635测试与隔离安装通过；真实双节点验收仍待环境）
 
 ## 一、职责边界（长期约定）
 
@@ -24,7 +24,7 @@
 
 | Agent | 占用文件 | 任务 | 开始 | 状态 |
 |---|---|---|---|---|
-| Codex | 空闲 | iter-111 本机验收完成；实机待用户提供测试节点 | 2026-10-25 | 已释放 |
+| Codex | 空闲 | iter-112 技能内化与安装验证完成；源码发布按 Git 核验 | 2026-10-25 | 已释放 |
 | Quest | 空闲 | 无 | —— | 已释放 |
 
 > 认领格式：一行一个 Agent，`占用文件` 写通配范围（如 `lan_mesh/station_*.py`），
@@ -277,3 +277,7 @@ VERSION.json 的 commit 记录当前 HEAD（尚未包含工作区改动）；发
 iter-111 Yomk阶段8代码与本机验收完成：仪表盘16源模块、Web共用认证、React领域客户端、Tauri四域27命令兼容；统一VERSION→包/CLI/OpenAPI版本，依赖由pyproject生成，补齐cryptography/httpx并固定FastAPI0.128.8维持上传OpenAPI；兼容适配器76处阻塞调用线程池隔离、Discovery请求时解析；56业务服务类/12普通repository。隔离venv全量621 passed/125.29s，Node6 passed、两套前端类型检查与构建、Chromium桌面/手机/React任务/DAG四页37认证请求零异常、真实loopback HTTP执行/取消/关闭、wheel源码/许可证/资产/依赖/密钥配置排除通过。编译/导入/158文件名称扫描、依赖同步、docs201项11域通过。阶段1~7完成，阶段8真实多机/在线模型/升级回滚未验收：已知本机/LAN节点连接失败、VPN超时；需要用户提供两台可达隔离测试节点及联调条件。未部署、未派发外部任务、未提交或推送；保留原iter103未提交改动。详见docs/design/yomk-refactor-assessment.md及08-infrastructure/yomk-rollout.md。
 
 本轮依用户全项目重构授权包含 webui/ 与 quicklan-main/src/api*；Quest 当前已释放。
+
+## iter-112 交接
+
+iter-112 Yomk技能内化完成：随包内置yomkserverpy-modular、yomkserver-modular与lan-mesh-yomk三个知识技能，保留上游完整参考/示例/许可证及来源；注册表离线扫描包内资产并兼容旧目录与标准metadata，下载包新增固定资源白名单，Worker完整落盘；按任务激活且区分C++/Python，PM自定义角色与外部system提示词保留并增补相关知识，秘书传递消息上下文；不改required_skill执行器、工具权限或部署授权。14项新增行为通过，全量635 passed/137.91s；三个技能quick_validate通过，编译导入、159文件名称扫描、依赖同步、docs204项11域通过；0.41.1 wheel含13项技能资产、与上游资料逐字比对一致，隔离安装-I验证与pip check通过。真实多机验收仍待隔离节点；当前运行节点未重启，本轮沿既有授权通过sync_push上库，提交与远端状态以Git核验。

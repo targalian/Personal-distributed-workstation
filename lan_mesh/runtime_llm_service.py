@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Optional
 from . import agent_runtime as policy
 from .component_service import ComponentService
+from .skill_knowledge import append_builtin_guidance
 
 class RuntimeLlmService(ComponentService):
     """RuntimeLlmService business operations with explicit state ownership."""
@@ -76,6 +77,9 @@ class RuntimeLlmService(ComponentService):
         model_pref = input_data.get('_model_preference', '')
         fallbacks = input_data.get('_fallback_models', [])
         external_system_prompt = input_data.get('_system_prompt', '')
+        if external_system_prompt:
+            external_system_prompt = append_builtin_guidance(
+                external_system_prompt, input_data.get('description', input_data.get('requirement', '')))
         blueprint_suffix = policy._build_blueprint_prompt(input_data.get('_project_blueprint', ''))
         if model_pref:
             chain = [model_pref] + [m for m in fallbacks if m != model_pref]

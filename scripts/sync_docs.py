@@ -39,6 +39,9 @@ DOMAINS = [
 # py 条目: 字符串值 = 域编号, 描述自动取模块 docstring 首行
 # 非 py 条目: 元组 (域编号, 手写一句话描述)
 MAPPING = {
+    'lan_mesh/skill_knowledge.py': '04-execution-engine',
+    'tests/test_builtin_skills.py': '10-test-loop',
+    'lan_mesh/builtin_skills/': ('04-execution-engine', 'Yomk C++/Python 与工作站适配内置技能及完整参考资料'),
     'scripts/sync_dependencies.py': '11-scripts-subprojects',
     'tests/frontend/': ('10-test-loop', 'Node认证并发与Tauri IPC契约回归'),
     'lan_mesh/web/static/dashboard/': ('09-frontend', '仪表盘16个业务源模块，组装为单一classic script'),

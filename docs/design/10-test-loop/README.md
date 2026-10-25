@@ -23,6 +23,7 @@
 | test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
 | tests/frontend/ | Node认证并发与Tauri IPC契约回归 |
 | tests/test_application_lifecycle.py | Cooperative lifecycle and draining regressions with controlled blocking windows. |
+| tests/test_builtin_skills.py | Built-in skill discovery, distribution and real prompt composition behavior. |
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_execution_services.py | Worker concurrency, responsive execution API and native execution boundaries. |
 | tests/test_frontend_assets.py | Dashboard source/markup compatibility and release version resolution. |

@@ -7,6 +7,9 @@
 和[实机放行步骤](docs/design/08-infrastructure/yomk-rollout.md)。运行依赖以 pyproject.toml 为准，
 requirements.txt 由 `python scripts/sync_dependencies.py --write` 生成。
 
+0.41.1 将 Yomk Python、C++ 和工作站适配技能内置到安装包，按相关任务注入，支持 Worker 分发完整参考资料；
+见[内置技能与生效方式](docs/design/04-execution-engine/yomk-builtin-skills.md)。
+
 ## 项目结构
 
 ```

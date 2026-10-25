@@ -11,6 +11,7 @@ Worker 侧的任务执行能力：守护进程、Agent 运行时、能力卡片�
 | agent_card.py | Agent Card 生成与管理 — 借鉴 A2A 协议的 Agent Card 机制 |
 | agent_prompt.py | 子 Agent 通用 Prompt 模板与定制构建器 |
 | agent_runtime.py | Agent 运行时 — Worker 端任务执行引擎 |
+| lan_mesh/builtin_skills/ | Yomk C++/Python 与工作站适配内置技能及完整参考资料 |
 | mcp_client.py | MCP 客户端 — 轻量级 JSON-RPC 2.0 客户端 |
 | mcp_connection_service.py | McpConnectionService: domain behavior separated from the public compatibility facade. |
 | mcp_gateway.py | MCP 网关 — 中央工具调度枢纽 |
@@ -25,6 +26,7 @@ Worker 侧的任务执行能力：守护进程、Agent 运行时、能力卡片�
 | skill_access_service.py | SkillAccessService: domain behavior separated from the public compatibility facade. |
 | skill_catalog_service.py | SkillCatalogService: domain behavior separated from the public compatibility facade. |
 | skill_distribution_service.py | SkillDistributionService: domain behavior separated from the public compatibility facade. |
+| skill_knowledge.py | Packaged Yomk skill assets, task matching and bounded prompt enrichment. |
 | skill_market.py | 技能市场 — 第三方 Skill 插件浏览/安装/卸载 (F5.3 插件系统, iter-61) |
 | skill_registry.py | 技能库注册表 — 中央技能管理与分发系统 |
 | tool_catalog_service.py | ToolCatalogService: domain behavior separated from the public compatibility facade. |

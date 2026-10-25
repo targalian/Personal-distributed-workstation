@@ -139,7 +139,9 @@ class StationController(
         )
 
         # 技能库 (项目根目录下的 skills/ 文件夹)
-        skills_dir = str(Path(__file__).parent.parent / "skills")
+        source_skills = Path(__file__).parent.parent / "skills"
+        skills_dir = str(source_skills if source_skills.is_dir()
+                         else Path.home() / ".lan_mesh" / "skills")
         self.skill_registry = SkillRegistry(self.db, skills_dir)
         self.skill_registry.scan_and_register()
 

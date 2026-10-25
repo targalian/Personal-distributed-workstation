@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from .component_service import ComponentService
+from .skill_knowledge import builtin_directories, matches_activation, read_skill_document
 
 class SkillDistributionService(ComponentService):
     """SkillDistributionService business operations with explicit state ownership."""
@@ -20,7 +21,7 @@ class SkillDistributionService(ComponentService):
         package = []
         for skill in skills:
             content = self.owner.get_skill_content(skill.skill_id)
-            package.append({'skill_id': skill.skill_id, 'name': skill.name, 'category': skill.category, 'description': skill.description, 'tags': skill.tags, 'content': content.get('content', ''), 'reference': content.get('reference', ''), 'version': skill.version})
+            package.append({'skill_id': skill.skill_id, 'name': skill.name, 'category': skill.category, 'description': skill.description, 'tags': skill.tags, 'content': content.get('content', ''), 'reference': content.get('reference', ''), 'version': skill.version, 'resources': content.get('resources', {})})
         return package
 
     def build_system_prompt(self, role: str, task_context: str='', agent_id: str=None) -> str:
@@ -42,6 +43,10 @@ class SkillDistributionService(ComponentService):
             skills = self.owner.get_skills_for_agent(agent_id, role)
         else:
             skills = self.owner.get_skills_for_role(role)
+        builtin = {directory.name: read_skill_document(directory)[0]
+                   for directory in builtin_directories()}
+        skills = [skill for skill in skills if skill.skill_id not in builtin
+                  or matches_activation(builtin[skill.skill_id], task_context)]
         if not skills:
             return ''
         if task_context:
@@ -51,7 +56,7 @@ class SkillDistributionService(ComponentService):
                 tags_match = any((tag.lower() in context_lower for tag in skill.tags))
                 name_match = skill.name.lower() in context_lower
                 desc_match = any((word.lower() in context_lower for word in skill.description.split() if len(word) > 2))
-                if tags_match or name_match or desc_match:
+                if skill.skill_id in builtin or tags_match or name_match or desc_match:
                     matched.append(skill)
             skills = matched if matched else skills
         prompts = []
