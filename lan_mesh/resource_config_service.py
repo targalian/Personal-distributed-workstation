@@ -1,9 +1,12 @@
 """ResourceConfigService: domain behavior separated from the public compatibility facade."""
 
 from __future__ import annotations
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from . import model_resources as policy
 from .component_service import ComponentService
+
+if TYPE_CHECKING:
+    from .database import Database
 
 class ResourceConfigService(ComponentService):
     """ResourceConfigService business operations with explicit state ownership."""

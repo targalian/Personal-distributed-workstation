@@ -84,6 +84,11 @@ def shutdown_application(owner: object) -> dict:
         report: dict[str, Any] = {'stopped': False, 'pending': [], 'errors': []}
         vars(owner)['_shutdown_report'] = report
         vars(owner)['_shutdown_in_progress'] = True
+    from .yomk_graph import close_graph_viewer
+    try:
+        close_graph_viewer(owner)
+    except Exception as exc:
+        report['errors'].append(f'yomk_graph: {exc}')
     vars(owner)['_running'] = False
     stop_signal(owner).set()
     server = vars(owner).get('_server')

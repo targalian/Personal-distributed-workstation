@@ -24,6 +24,7 @@
 | worker_routes_basic.py | Worker 基础路由 — 本机信息/共享文件/任务执行 (iter-31 拆分产物) |
 | worker_routes_p2p.py | Worker P2P 路由 — 主机间消息接收 (iter-31 拆分产物) |
 | worker_routes_pm.py | Worker 角色与 PM 路由 — 角色管理/PM 生命周期/子 Agent 管理 (iter-31 拆分产物) |
+| yomk_graph.py | Optional instance-scoped YomkGraph metadata and asynchronous request observation. |
 <!-- /AUTO:module-list -->
 ---
 

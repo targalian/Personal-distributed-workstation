@@ -29,6 +29,11 @@ class PMState:
     dispatched: set = field(default_factory=set)           # 已分发的 task_name
     task_station: dict = field(default_factory=dict)       # task_name → station dict
     task_agent: dict = field(default_factory=dict)         # task_name → agent_info dict
+    active_attempts: dict = field(default_factory=dict)    # name → immutable dispatch envelope
+    subtask_ids: dict = field(default_factory=dict)        # stable logical subtask identities
+    received_results: set = field(default_factory=set)     # terminal result IDs in snapshots
+    settled_attempts: set = field(default_factory=set)     # one terminal result per attempt
+    review_required: dict = field(default_factory=dict)   # ambiguous effects require human review
 
     # ── 团队 / 子 Agent ──
     teams: dict = field(default_factory=dict)              # team_id → team_info
@@ -68,6 +73,11 @@ class PMState:
                 "dispatched": sorted(self.dispatched),
                 "task_station": dict(self.task_station),
                 "task_agent": dict(self.task_agent),
+                "active_attempts": dict(self.active_attempts),
+                "subtask_ids": dict(self.subtask_ids),
+                "received_results": sorted(self.received_results),
+                "settled_attempts": sorted(self.settled_attempts),
+                "review_required": dict(self.review_required),
                 "teams": dict(self.teams),
                 "subagents": dict(self.subagents),
                 "retry_counts": dict(self.retry_counts),
@@ -99,6 +109,11 @@ class PMState:
         self.dispatched = set(data.get("dispatched", []) or [])
         self.task_station = dict(data.get("task_station", {}) or {})
         self.task_agent = dict(data.get("task_agent", {}) or {})
+        self.active_attempts = dict(data.get("active_attempts", {}) or {})
+        self.subtask_ids = dict(data.get("subtask_ids", {}) or {})
+        self.received_results = set(data.get("received_results", []) or [])
+        self.settled_attempts = set(data.get("settled_attempts", []) or [])
+        self.review_required = dict(data.get("review_required", {}) or {})
         self.teams = dict(data.get("teams", {}) or {})
         self.subagents = dict(data.get("subagents", {}) or {})
         self.retry_counts = dict(data.get("retry_counts", {}) or {})

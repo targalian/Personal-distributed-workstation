@@ -4,7 +4,7 @@
 > 域内逐模块描述职责、设计要点、关键接口与依赖关系。
 > **代码设计变更时，必须同步更新对应文档**（见文末「维护规范」）。
 
-最后更新: 2026-10-25（YomkServerPy 迁移候选）
+最后更新: 2026-11-12（DS-Bot 对照研究、执行可靠性与持久跨站投递）
 
 ---
 
@@ -24,6 +24,10 @@ Work Station (LAN Mesh) 是一个**分布式个人 AI 工作站**：将局域网
 已完成后端领域服务、聚合 repository、后台生命周期及前端/发布包代码改造。
 阶段 1～7 完成；阶段 8 本机验证后等待真实双节点演练，尚未宣称全项目已上线验收。
 见[重构评估与完整证据](yomk-refactor-assessment.md)和[实机放行条件](08-infrastructure/yomk-rollout.md)。
+
+## DS-Bot 对照研究（iter-114）
+
+[完整功能对照、已落地改动、验证边界与分期验收](dsbot-optimization-assessment.md)。iter-114 完成执行可靠性与上下文管理；iter-115 落地[持久投递账本与结果确认](03-task-orchestration/durable-mesh-delivery.md)，真实双节点验收待环境。长期记忆与协作交互仍在后续路线。
 
 ## 二、系统架构总览
 

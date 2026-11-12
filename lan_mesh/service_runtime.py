@@ -33,7 +33,11 @@ class ServiceCall:
 class ServiceRuntime:
     """Own one real Yomk server per application, without process-global state."""
 
-    def __init__(self):
+    def __init__(self, graph_enabled: bool = False):
+        self.graph = None
+        if graph_enabled:
+            from .yomk_graph import RuntimeGraph
+            self.graph = RuntimeGraph()
         self.server = YomkServer.create(async_thread_count=2)
         self.server.start_service(["/YomkContext", "/YomkServerInfo"])
         self._operations: dict[str, bool] = {}
@@ -45,6 +49,8 @@ class ServiceRuntime:
         self._depth = ContextVar(f"yomk_request_{id(self)}", default=0)
         self._idle = threading.Event()
         self._idle.set()
+        if self.graph:
+            self.graph.refresh(self.server)
 
     def register(self, service: YomkService, operations: dict[str, Callable]) -> None:
         """Install an explicit operation table; reject accidental replacement."""
@@ -66,6 +72,8 @@ class ServiceRuntime:
                 )
                 self._operations[f"{name}/{operation}"] = inspect.iscoroutinefunction(handler)
             self._services[name] = service
+            if self.graph:
+                self.graph.refresh(self.server)
 
     def ensure(self, name: str, factory: Callable, operations: list[str]) -> YomkService:
         """Atomically compose a service once, including calls before HTTP startup."""
@@ -98,7 +106,11 @@ class ServiceRuntime:
             self._idle.clear()
         token = self._depth.set(self._depth.get() + 1)
         try:
-            yield
+            if self.graph:
+                with self.graph.invocation(url):
+                    yield
+            else:
+                yield
         finally:
             self._depth.reset(token)
             with self._lock:
@@ -177,6 +189,7 @@ def get_service_runtime(controller: object) -> ServiceRuntime:
         if isinstance(runtime, ServiceRuntime) and runtime.closed and runtime._active:
             raise ServiceError(503, "Service runtime is draining")
         if not isinstance(runtime, ServiceRuntime) or runtime.closed:
-            runtime = ServiceRuntime()
+            config = getattr(getattr(controller, "cfg", None), "observability", None)
+            runtime = ServiceRuntime(graph_enabled=getattr(config, "yomk_graph_enabled", False) is True)
             controller.services = runtime
         return runtime

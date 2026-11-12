@@ -76,6 +76,8 @@ class WorkerPmService(ComponentService):
         if not task_data:
             return {'ok': False, 'message': '无法获取任务详情'}
         self.owner.state.pm_agent = policy.ProjectManagerAgent(pm_id=pm_id, agent_runtime=self.owner.state.agent_runtime, secretary_url=secretary_url, device_id=self.owner.state.device_id, device_name=self.owner.state.device_name)
+        from .mesh_delivery_service import bind_pm_delivery
+        bind_pm_delivery(self.owner, self.owner.state.pm_agent)
         self.owner.state.pm_agent.start_task(task_data)
         policy.logger.info('PM Agent 已启动: %s, 任务: %s', pm_id, task_id)
         return {'ok': True, 'pm_id': pm_id, 'device_id': self.owner.state.device_id}
@@ -154,5 +156,7 @@ class WorkerPmService(ComponentService):
         """
         if not self.owner.state.pm_agent:
             return {'ok': False, 'message': 'PM Agent 未运行'}
+        if report.get('pm_id') and report['pm_id'] != self.owner.state.pm_agent.pm_id:
+            return {'ok': False, 'message': 'PM 身份不匹配'}
         self.owner.state.pm_agent.receive_progress_report(report)
         return {'ok': True}

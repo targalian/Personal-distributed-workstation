@@ -3,11 +3,18 @@
 项目定位的核心竞争力层：任务以 DAG 组织，PM Agent 驱动拆解、组队、分发、
 监控、聚合。架构范式为 **Graph Engineering**（借鉴 LangGraph Supervisor）。
 
+iter-115 接入[持久跨站投递与结果确认](durable-mesh-delivery.md)：先落 SQLite
+再投递/确认，结果按任务与执行尝试去重，支持断网重发和取消栅栏；崩溃副作用
+存在歧义时保留待核对记录。旧节点兼容原端点，物理双节点验收仍待环境。
+
 ## 模块清单
 
 <!-- AUTO:module-list -->
 | 文件/目录 | 职责一句话 |
 |---|---|
+| delivery_protocol.py | Versioned task/result envelopes with stable identities and full-payload checksums. |
+| delivery_routes.py | Authenticated mesh task/result delivery endpoints shared by Station and Worker. |
+| mesh_delivery_service.py | Owned durable mesh delivery service; receipt precedes acknowledgement and execution. |
 | orchestrator.py | 任务编排引擎 — 已废弃, 降级为工具库 (iter-30 收敛裁定) |
 | pm_agent.py | PM Agent 协调器/门面 — 持有 Planner/Dispatcher/Monitor, 对外暴露统一接口。 |
 | pm_dispatcher.py | PM 分发器 — 团队创建与子任务分发 |

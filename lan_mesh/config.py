@@ -112,6 +112,8 @@ class BotConfig(BaseModel):
 
 class ObservabilityConfig(BaseModel):
     """可观测性配置 (iter-43: 任务停滞检测参数配置化; iter-50: 自动自愈守护; iter-54: 日志容量修剪; iter-57: API 限流双桶; iter-60: 自愈写动作配额)。"""
+    yomk_graph_enabled: bool = False  # 本机只读服务图，默认关闭
+    yomk_graph_port: int = Field(default=18765, ge=1, le=65535)
     stall_check_interval: float = 60.0   # 停滞检查周期 (秒, 实际最小 10)
     stall_minutes: float = 30.0          # 停滞判定阈值 (分钟), ≤0 禁用检测与告警
     auto_heal_enabled: bool = False      # 自动自愈守护开关 (默认关, 需手动开启)

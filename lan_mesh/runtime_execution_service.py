@@ -52,10 +52,6 @@ class RuntimeExecutionService(ComponentService):
         input_data['_trace_id'] = trace_id
         try:
             result = handler(input_data)
-            if isinstance(result, dict) and result.get('status') == 'cancelled':
-                elapsed_ms = (_time.time() - exec_start) * 1000
-                runtime_trace.trace_subtask_end(trace_id, skill, 'cancelled', elapsed_ms, task_id=task_id)
-                return {'output': result, 'status': 'cancelled'}
             usage = {}
             if isinstance(result, dict) and 'usage' in result:
                 usage = result.pop('usage', {})

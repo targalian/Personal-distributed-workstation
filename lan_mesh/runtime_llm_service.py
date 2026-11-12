@@ -28,7 +28,9 @@ class RuntimeLlmService(ComponentService):
                     if default_model:
                         chain.append(default_model)
         last_error = None
-        for model_id in chain:
+        for model_id in dict.fromkeys(chain):
+            if self.owner._cancel_event.is_set():
+                return {'status': 'cancelled', 'error': '任务已取消'}
             provider_cfg = self.owner._resolve_provider(model_id)
             if not provider_cfg:
                 continue
@@ -38,7 +40,9 @@ class RuntimeLlmService(ComponentService):
                 last_error = e
                 policy.logger.warning('[ReAct] 模型 %s 调用失败: %s, 降级...', model_id, e)
                 continue
-        return {'message': {'content': f'[模型调用失败] {last_error}', 'tool_calls': []}, 'model': 'none', 'input_tokens': 0, 'output_tokens': 0}
+        error = f'[模型调用失败] {last_error or "没有配置可用模型或 API Key"}'
+        return {'message': {'content': error, 'tool_calls': []}, 'status': 'failed',
+                'error': error, 'model': 'none', 'input_tokens': 0, 'output_tokens': 0}
 
     def _call_openai_with_tools(self, messages: list[dict], tools: list[dict], model_id: str, base_url: str, api_key: str) -> dict:
         """F2.1: OpenAI 兼容 API 调用 (支持 tools 参数)。"""
@@ -49,13 +53,14 @@ class RuntimeLlmService(ComponentService):
             payload['tools'] = tools
             payload['tool_choice'] = 'auto'
         call_start = _time.time()
-        resp = policy.requests.post(url, headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, json=payload, timeout=120)
+        resp = policy.requests.post(url, headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, json=payload, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         call_ms = (_time.time() - call_start) * 1000
         usage = data.get('usage', {})
         choice_msg = data['choices'][0]['message']
         result = {'message': choice_msg, 'model': model_id, 'input_tokens': usage.get('prompt_tokens', 0), 'output_tokens': usage.get('completion_tokens', 0)}
+        result['finish_reason'] = data['choices'][0].get('finish_reason', '')
         try:
             self.owner._record_usage(model_id, result['input_tokens'], result['output_tokens'])
         except Exception:
@@ -90,7 +95,9 @@ class RuntimeLlmService(ComponentService):
             else:
                 system_prompt = self.owner._build_system_prompt(input_data.get('description', input_data.get('requirement', '')))
             system_prompt = f'{system_prompt}{blueprint_suffix}'
-            for model_id in chain:
+            for model_id in dict.fromkeys(chain):
+                if self.owner._cancel_event.is_set():
+                    return self._llm_failure('任务已取消', status='cancelled')
                 provider_cfg = self.owner._resolve_provider(model_id)
                 if not provider_cfg:
                     unresolved.append(model_id)
@@ -102,19 +109,24 @@ class RuntimeLlmService(ComponentService):
                     policy.logger.warning('模型 %s 调用失败: %s, 尝试降级...', model_id, e)
                     continue
             if unresolved and (not last_error):
-                return {'content': f"[模型调用失败] 以下模型的 API Key 未配置: {', '.join(unresolved)}。请在 .env 文件或环境变量中设置对应的 API Key。", 'model': 'none', 'input_tokens': 0, 'output_tokens': 0}
+                return self._llm_failure(f"[模型调用失败] 以下模型的 API Key 未配置: {', '.join(unresolved)}。请在 .env 文件或环境变量中设置对应的 API Key。")
             try:
                 from .error_tracker import error_tracker
                 error_tracker.capture('llm', last_error, context={'point': 'fallback_exhausted', 'chain': list(chain)})
             except Exception:
                 pass
-            return {'content': f'[模型调用失败] 降级链均不可用: {last_error}', 'model': 'none', 'input_tokens': 0, 'output_tokens': 0}
+            return self._llm_failure(f'[模型调用失败] 降级链均不可用: {last_error}')
         if external_system_prompt:
             system_prompt = external_system_prompt
         else:
             system_prompt = self.owner._build_system_prompt(input_data.get('description', input_data.get('requirement', '')))
         system_prompt = f'{system_prompt}{blueprint_suffix}'
         return self.owner._call_llm_full(prompt, system_prompt=system_prompt)
+
+    @staticmethod
+    def _llm_failure(error: str, status: str = 'failed') -> dict:
+        return {'content': error, 'model': 'none', 'input_tokens': 0,
+                'output_tokens': 0, '_error': True, 'status': status, 'error': error}
 
     def _resolve_provider(self, model_id: str) -> Optional[dict]:
         """根据模型 ID 解析 provider 配置, 返回 {base_url, api_key} 或 None。

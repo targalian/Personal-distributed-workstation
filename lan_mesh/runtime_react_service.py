@@ -4,6 +4,9 @@ from __future__ import annotations
 from typing import Any
 from . import agent_runtime as policy
 from .component_service import ComponentService
+from .runtime_context import ReactContextBudget, bounded_int
+import hashlib
+import json
 
 class RuntimeReactService(ComponentService):
     """RuntimeReactService business operations with explicit state ownership."""
@@ -21,62 +24,108 @@ class RuntimeReactService(ComponentService):
                 runtime.close()
 
     def _run_react(self, input_data: dict, registry: Any) -> dict:
-        """F2.1: ReAct (Reasoning + Acting) 工具循环执行。
-
-        子 Agent 自主决策使用哪些工具, 多步推理直到完成任务。
-        支持: file_read, file_write, shell_exec, http_request, dir_list, python_eval
-
-        流程:
-        1. 将任务描述 + 可用工具发送给 LLM (function calling)
-        2. LLM 返回 tool_calls → 执行工具 → 结果回填
-        3. 重复直到 LLM 给出最终文本回复或达到最大轮次
-        """
+        """Execute bounded tool rounds with explicit failure and cancellation states."""
         requirement = input_data.get('requirement', input_data.get('description', ''))
-        max_iterations = input_data.get('max_iterations', 30)
+        max_iterations = bounded_int(input_data.get('max_iterations'), 30, 1, 100)
         cwd = input_data.get('cwd') or self.owner.shared_folder
-        tools_schema = self.owner._build_openai_tools_schema(registry)
-        system_prompt = self.owner._build_system_prompt(requirement)
-        if not system_prompt:
-            system_prompt = ''
-        system_prompt += policy._build_react_rules_prompt(cwd)
-        system_prompt += policy._build_blueprint_prompt(input_data.get('_project_blueprint', ''))
-        messages = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': requirement}]
-        total_input_tokens = 0
-        total_output_tokens = 0
-        steps_log = []
+        tools = self.owner._build_openai_tools_schema(registry)
+        prompt = self.owner._build_system_prompt(requirement) or ''
+        prompt += policy._build_react_rules_prompt(cwd)
+        prompt += policy._build_blueprint_prompt(input_data.get('_project_blueprint', ''))
+        messages = [{'role': 'system', 'content': prompt}, {'role': 'user', 'content': requirement}]
+        budget = ReactContextBudget.from_input(input_data)
+        state = {'steps': [], 'usage': {'input_tokens': 0, 'output_tokens': 0}}
+        previous_failure, repeated_failures = '', 0
         for iteration in range(max_iterations):
             if self.owner._cancel_event.is_set():
-                return {'result': '任务已取消', 'iterations': iteration, 'steps': steps_log, 'status': 'cancelled'}
-            resp = self.owner._call_llm_messages_with_tools(messages, tools_schema, input_data)
-            total_input_tokens += resp.get('input_tokens', 0)
-            total_output_tokens += resp.get('output_tokens', 0)
-            message = resp.get('message', {})
-            tool_calls = message.get('tool_calls', [])
-            content = message.get('content', '')
+                return self._finish(state, budget, iteration, 'cancelled', '任务已取消')
+            if not budget.fit(messages, tools):
+                return self._finish(state, budget, iteration, 'failed',
+                                    '上下文预算不足；原始需求、规则和调用记录已保留，请拆分任务。', 'context_limit')
+            resp = self.owner._call_llm_messages_with_tools(messages, tools, input_data)
+            for key in ('input_tokens', 'output_tokens'):
+                state['usage'][key] += resp.get(key, 0)
+            state['usage']['model'] = resp.get('model', '')
+            if self.owner._cancel_event.is_set():
+                return self._finish(state, budget, iteration + 1, 'cancelled', '任务已取消')
+            outcome, error = policy.infer_result_status(resp)
+            if outcome != 'completed':
+                return self._finish(state, budget, iteration + 1, outcome, error, 'llm_failed')
+            message = resp.get('message') or {}
+            tool_calls = message.get('tool_calls') or []
+            content = message.get('content') or ''
+            if resp.get('finish_reason') in ('length', 'content_filter'):
+                return self._finish(state, budget, iteration + 1, 'failed',
+                                    '模型输出被截断或过滤，未执行未完成的答复。', 'incomplete_response')
             if not tool_calls:
-                policy.logger.info('[ReAct] 完成 (轮次=%d)', iteration + 1)
-                return {'result': content, 'iterations': iteration + 1, 'steps': steps_log, 'usage': {'model': resp.get('model', ''), 'input_tokens': total_input_tokens, 'output_tokens': total_output_tokens}}
-            messages.append(message)
-            for tc in tool_calls:
-                func_name = tc['function']['name']
-                try:
-                    func_args = policy._json.loads(tc['function'].get('arguments', '{}'))
-                except policy._json.JSONDecodeError:
-                    func_args = {}
-                if func_name in ('shell_exec', 'dir_list') and 'cwd' not in func_args:
-                    func_args['cwd'] = cwd
-                if func_name in ('file_read', 'file_write'):
-                    func_args['path'] = policy._resolve_tool_path(cwd, func_args.get('path', ''))
-                policy.logger.info('[ReAct] 轮次%d 工具: %s(%s)', iteration + 1, func_name, str(func_args)[:100])
-                tool_result = registry.call_tool(func_name, func_args)
-                result_text = tool_result['content'][0]['text'] if tool_result['content'] else ''
-                is_error = tool_result.get('isError', False)
-                steps_log.append({'iteration': iteration + 1, 'tool': func_name, 'args': func_args, 'result_preview': result_text[:300], 'is_error': is_error})
-                messages.append({'role': 'tool', 'tool_call_id': tc['id'], 'content': result_text})
+                if not content.strip():
+                    return self._finish(state, budget, iteration + 1, 'failed',
+                                        '模型未返回完整的最终答复。', 'incomplete_response')
+                return self._finish(state, budget, iteration + 1, 'completed', content)
+            messages.append({**message, 'role': 'assistant'})
+            batch = []
+            for call in tool_calls:
                 if self.owner._cancel_event.is_set():
-                    return {'result': '任务已取消', 'iterations': iteration + 1, 'steps': steps_log, 'status': 'cancelled'}
-        policy.logger.warning('[ReAct] 达到最大轮次 (%d), 强制结束', max_iterations)
-        return {'result': f"[达到最大执行轮次 {max_iterations}] 最后步骤: {(steps_log[-1] if steps_log else 'N/A')}", 'iterations': max_iterations, 'steps': steps_log, 'status': 'max_iterations_reached', 'usage': {'input_tokens': total_input_tokens, 'output_tokens': total_output_tokens}}
+                    return self._finish(state, budget, iteration + 1, 'cancelled', '任务已取消')
+                observation, step = self._execute_tool(call, registry, cwd, iteration + 1)
+                state['steps'].append(step)
+                if self.owner._cancel_event.is_set():
+                    return self._finish(state, budget, iteration + 1, 'cancelled', '任务已取消')
+                batch.append((step['tool'], step['args'], observation, step['is_error']))
+                messages.append({'role': 'tool', 'tool_call_id': call['id'],
+                                 'content': budget.bound_output(observation)})
+            signature = self._failure_signature(batch)
+            repeated_failures = repeated_failures + 1 if signature and signature == previous_failure else 1
+            previous_failure = signature
+            if signature and repeated_failures >= 3:
+                return self._finish(state, budget, iteration + 1, 'failed',
+                                    '相同工具参数连续三轮返回相同错误，已停止无效重试。', 'repeated_tool_failure')
+        if self.owner._cancel_event.is_set():
+            return self._finish(state, budget, max_iterations, 'cancelled', '任务已取消')
+        return self._finish(state, budget, max_iterations, 'max_iterations_reached',
+                            f'达到最大执行轮次 {max_iterations}，任务尚未完成。', 'iteration_limit')
+
+    def _execute_tool(self, call: dict, registry: Any, cwd: str, iteration: int) -> tuple[str, dict]:
+        """Reject invalid arguments without running a tool with guessed defaults."""
+        function = call['function']
+        name = function['name']
+        raw_args = function.get('arguments', '{}')
+        args = {}
+        try:
+            args = json.loads(raw_args)
+            if not isinstance(args, dict):
+                raise ValueError('工具参数必须是 JSON 对象')
+        except (TypeError, ValueError) as exc:
+            text, is_error = f'工具参数无效: {exc}', True
+            args = {'invalid_arguments': str(raw_args)[:300]}
+        else:
+            if name in ('shell_exec', 'dir_list') and 'cwd' not in args:
+                args['cwd'] = cwd
+            if name in ('file_read', 'file_write'):
+                args['path'] = policy._resolve_tool_path(cwd, args.get('path', ''))
+            result = registry.call_tool(name, args)
+            text = '\n'.join(str(item.get('text', '')) for item in result.get('content', [])
+                             if item.get('type', 'text') == 'text')
+            is_error = bool(result.get('isError', False))
+        step = {'iteration': iteration, 'tool': name, 'args': args,
+                'result_preview': text[:300], 'is_error': is_error}
+        return text, step
+
+    @staticmethod
+    def _failure_signature(batch: list) -> str:
+        if not batch or not all(item[3] for item in batch):
+            return ''
+        return hashlib.sha256(json.dumps(batch, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    @staticmethod
+    def _finish(state: dict, budget: ReactContextBudget, iterations: int, status: str,
+                result: str, reason: str = '') -> dict:
+        output = {**state, 'result': result, 'iterations': iterations, 'status': status,
+                  'context': budget.stats()}
+        if status not in ('completed', 'cancelled'):
+            output.update(error=result, stop_reason=reason)
+        print(f'[AgentRuntime] ReAct 结束: status={status}, iterations={iterations}, reason={reason}')
+        return output
 
     def _build_openai_tools_schema(self, registry) -> list[dict]:
         """F2.1: 将 ToolRegistry 的工具转换为 OpenAI function calling 格式。"""

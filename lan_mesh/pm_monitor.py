@@ -57,6 +57,8 @@ class PMMonitor:
 
         while self._agent.running:
             time.sleep(10)
+            if not self._agent.running:
+                return
 
             # F1.3: 全局超时检测
             if self.is_global_timed_out():
@@ -150,6 +152,8 @@ class PMMonitor:
         reporter_id = report.get("reporter_id", "")
         task_name = report.get("task_name", "")
         status = report.get("status", "in_progress")
+        if not getattr(self._agent, "running", True):
+            return
 
         with st.lock:
             # 支持 member_id 或 agent_id 查找 (Station 内嵌模式传 agent_id)
@@ -178,6 +182,8 @@ class PMMonitor:
 
             # F2.5: 质量验证
             quality = self._verify_output_quality(task_name, output)
+            if not getattr(self._agent, "running", True):
+                return
             if quality and not quality.get("accepted", True):
                 logger.warning("[%s] 子任务 '%s' 质量未达标 (score=%.1f): %s",
                               self._pm_id[:8], task_name, quality.get("score", 0),
@@ -193,7 +199,8 @@ class PMMonitor:
             self._dispatcher.try_dispatch_pending()
 
         # 优化5: 任务失败时触发接管策略 (跳过已在本地接管中的任务, 防止无限递归)
-        if status == "failed" and task_name:
+        uncertain = self._requires_review(report)
+        if status == "failed" and task_name and not uncertain:
             if task_name in self._local_takeover_tasks:
                 logger.error("[%s] 子任务 '%s' 本地接管后仍失败, 放弃重试",
                             self._pm_id[:8], task_name)
@@ -217,6 +224,14 @@ class PMMonitor:
         )
 
     # ── F1.3: 超时保护 ─────────────────────────────────────────
+
+    def _requires_review(self, report: dict) -> bool:
+        if report.get("execution_result", {}).get("stop_reason") != "execution_interrupted":
+            return False
+        with self._state.lock:
+            self._state.review_required[report["task_name"]] = report.get("message", "execution interrupted")
+        self._agent.report_status("awaiting_input")
+        return True
 
     def is_global_timed_out(self) -> bool:
         """F1.3: 检查全局任务是否超时。"""
@@ -376,6 +391,11 @@ class PMMonitor:
     def aggregate_results(self):
         """收集所有子任务结果, 调用 LLM 聚合为最终交付物。"""
         st = self._state
+        if not getattr(self._agent, "running", True):
+            return
+        if st.review_required:
+            self._agent.report_status("awaiting_input")
+            return
         if not st.plan or not st.task:
             return
 
@@ -411,6 +431,9 @@ class PMMonitor:
         except Exception as e:
             logger.error("[%s] LLM 聚合失败: %s", self._pm_id[:8], e)
             aggregated = f"[聚合失败] {e}"
+
+        if not getattr(self._agent, "running", True):
+            return
 
         self._agent.report_status("completed")
         self._agent.report_progress(1.0, "completed", f"任务聚合完成: {task_name}", task_name=task_name)

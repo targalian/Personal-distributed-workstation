@@ -3,6 +3,10 @@
 系统骨架：进程控制器、路由层、基础设施管理器、数据库持久化。
 设计原则: **Station Director 只管「机器」，Secretary 只管「项目」**。
 
+iter-115 增加 schema v13 与 DeliveryRepository，保存任务执行收据、投递 outbox、结果 inbox
+和 PM 本地快照，旧表结构保持兼容。协议与故障恢复见
+[持久跨站投递](../03-task-orchestration/durable-mesh-delivery.md)。
+
 ## 模块清单
 
 <!-- AUTO:module-list -->
@@ -20,6 +24,7 @@
 | repository_agents.py | Domain SQL repository; Database remains the sole connection and schema owner. |
 | repository_checkpoints.py | Domain SQL repository; Database remains the sole connection and schema owner. |
 | repository_conversations.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_delivery.py | Durable delivery, inbox deduplication, and task execution receipts. |
 | repository_hosts.py | Domain SQL repository; Database remains the sole connection and schema owner. |
 | repository_metrics.py | Domain SQL repository; Database remains the sole connection and schema owner. |
 | repository_operations.py | Domain SQL repository; Database remains the sole connection and schema owner. |

@@ -123,6 +123,8 @@ class PmLifecycleService(YomkService):
             device_name=self.controller.state.device_name,
         )
         candidate = self.controller._local_pm_agent
+        from .mesh_delivery_service import bind_pm_delivery
+        bind_pm_delivery(self.controller, candidate)
         self._owner_task_id, self._owner_pm_id = task_id, pm_id
         try:
             candidate.start_task(task_data)
@@ -211,6 +213,8 @@ class PmLifecycleService(YomkService):
             device_name=self.controller.state.device_name,
         )
         candidate = self.controller._local_pm_agent
+        from .mesh_delivery_service import bind_pm_delivery
+        bind_pm_delivery(self.controller, candidate)
         try:
             if not candidate.resume_from_snapshot(snapshot):
                 self._failed_launch(candidate, ValueError("快照解析失败, 无法恢复"))

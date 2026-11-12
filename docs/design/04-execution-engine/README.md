@@ -1,5 +1,10 @@
 # 04 执行引擎
 
+## iter-114：DS-Bot 参考优化（2026-11-12）
+
+已加入 ReAct 请求字符预算与工具结果限幅、file_read 可选字符分页、模型/命令失败透传、取消用量保留、相同工具错误三轮止损，以及缓存技能按需注入。既有 HTTP 路径与 Yomk 服务接口保留。新参数、兼容变化、验证边界和后续路线见 [DS-Bot 对照分析](../dsbot-optimization-assessment.md)。
+
+
 Worker 侧的任务执行能力：守护进程、Agent 运行时、能力卡片、Prompt 定制、
 工具/MCP/沙箱/技能体系。
 
@@ -17,9 +22,10 @@ Worker 侧的任务执行能力：守护进程、Agent 运行时、能力卡片�
 | mcp_gateway.py | MCP 网关 — 中央工具调度枢纽 |
 | mcp_tool_service.py | McpToolService: domain behavior separated from the public compatibility facade. |
 | runtime_cli_service.py | RuntimeCliService: domain behavior separated from the public compatibility facade. |
+| runtime_context.py | Bound ReAct requests while preserving instructions and tool-call/result pairs. |
 | runtime_execution_service.py | RuntimeExecutionService: domain behavior separated from the public compatibility facade. |
 | runtime_llm_service.py | RuntimeLlmService: domain behavior separated from the public compatibility facade. |
-| runtime_prompt_service.py | RuntimePromptService: domain behavior separated from the public compatibility facade. |
+| runtime_prompt_service.py | RuntimePromptService: task-scoped skill instructions and a bounded skill catalog. |
 | runtime_react_service.py | RuntimeReactService: domain behavior separated from the public compatibility facade. |
 | runtime_skill_service.py | RuntimeSkillService: domain behavior separated from the public compatibility facade. |
 | sandbox.py | F2.2: 代码执行沙箱 — 安全隔离执行 Agent 生成的代码。 |

@@ -25,7 +25,7 @@ logger = get_logger("database")
 
 _repository_lock = threading.RLock()
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -280,6 +280,56 @@ def _migration_v12(conn: sqlite3.Connection):
             pass
 
 
+def _migration_v13(conn: sqlite3.Connection):
+    """Migration v13: durable task delivery and execution receipts (DS-Bot P1-A)."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS mesh_delivery_outbox (
+            delivery_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL DEFAULT 'result',
+            destination TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            state TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at REAL NOT NULL DEFAULT 0,
+            lease_until REAL NOT NULL DEFAULT 0,
+            last_error TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_mesh_outbox_due
+            ON mesh_delivery_outbox(state, next_attempt_at);
+        CREATE TABLE IF NOT EXISTS mesh_delivery_inbox (
+            delivery_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL DEFAULT 'result',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            state TEXT NOT NULL DEFAULT 'received',
+            result_json TEXT NOT NULL DEFAULT '{}',
+            created_at REAL NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS mesh_task_executions (
+            execution_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL DEFAULT '',
+            attempt_id TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'started',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            result_json TEXT NOT NULL DEFAULT '{}',
+            started_at REAL NOT NULL DEFAULT 0,
+            completed_at REAL NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_mesh_execution_task
+            ON mesh_task_executions(task_id, attempt_id);
+        CREATE TABLE IF NOT EXISTS mesh_delivery_pm_state (
+            pm_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'running',
+            state_json TEXT NOT NULL DEFAULT '{}',
+            updated_at REAL NOT NULL DEFAULT 0
+        );
+    """)
+
+
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
     2: _migration_v2,
@@ -293,6 +343,7 @@ _MIGRATIONS: dict[int, callable] = {
     10: _migration_v10,
     11: _migration_v11,
     12: _migration_v12,
+    13: _migration_v13,
 }
 
 

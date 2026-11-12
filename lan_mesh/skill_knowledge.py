@@ -25,7 +25,7 @@ def read_skill_document(directory: Path) -> tuple[dict[str, Any], str]:
                     meta = {**extra, **meta}
                 return meta, parts[2].strip()
         return {}, raw.strip()
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
         print(f'[Skill] 技能读取失败: {directory.name}: {exc}')
         return {}, ''
 

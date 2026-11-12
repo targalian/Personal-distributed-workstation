@@ -33,3 +33,5 @@ class Repositories:
         self.metrics = MetricsRepository(database)
         from .repository_operations import OperationsRepository
         self.operations = OperationsRepository(database)
+        from .repository_delivery import DeliveryRepository
+        self.delivery = DeliveryRepository(database)

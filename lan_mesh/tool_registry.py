@@ -61,11 +61,26 @@ def mark_git_safe_directory_denied(result: dict) -> dict:
 # ── 工具执行处理器 ──────────────────────────────────────────────
 
 def _tool_file_read(params: dict) -> dict:
-    """读取文件内容。"""
+    """读取文件；可选字符分页保持旧的完整读取调用兼容。"""
     path = params.get("path", "")
     encoding = params.get("encoding", "utf-8")
+    paginated = 'offset' in params or 'limit' in params
+    offset, limit = int(params.get('offset', 0)), int(params.get('limit', 12000))
+    if offset < 0 or limit < 1 or limit > 32000:
+        raise ValueError('offset 必须 >= 0，limit 必须为 1..32000 个字符')
     with open(path, "r", encoding=encoding) as f:
-        return {"content": f.read(), "path": path}
+        if not paginated:
+            return {"content": f.read(), "path": path}
+        remaining = offset
+        while remaining:
+            chunk = f.read(min(remaining, 65536))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+        content = f.read(limit)
+        truncated = bool(f.read(1))
+    return {'content': content, 'path': path, 'offset': offset,
+            'next_offset': offset + len(content) if truncated else None, 'truncated': truncated}
 
 
 def _tool_file_write(params: dict) -> dict:
@@ -187,6 +202,9 @@ BUILTIN_TOOLS = {
                 "properties": {
                     "path": {"type": "string", "description": "文件路径"},
                     "encoding": {"type": "string", "description": "文件编码,默认 utf-8"},
+                    "offset": {"type": "integer", "minimum": 0, "description": "可选起始字符位置，默认 0"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 32000,
+                              "description": "可选每页字符数；大文件建议 4000，按 next_offset 继续读取"},
                 },
                 "required": ["path"],
             },

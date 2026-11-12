@@ -17,7 +17,7 @@ class RuntimeSkillService(ComponentService):
         if context:
             prompt += f'\n\n已有代码/上下文:\n{context}'
         resp = self.owner._call_llm_with_routing(prompt, input_data)
-        return {'code': resp['content'], 'language': language, 'usage': {'model': resp['model'], 'input_tokens': resp['input_tokens'], 'output_tokens': resp['output_tokens']}}
+        return self._llm_output(resp, 'code', language=language)
 
     def _handle_code_review(self, input_data: dict) -> dict:
         """代码审查 — 调用 LLM API。"""
@@ -27,7 +27,7 @@ class RuntimeSkillService(ComponentService):
         if language:
             prompt = f'语言: {language}\n' + prompt
         resp = self.owner._call_llm_with_routing(prompt, input_data)
-        return {'review': resp['content'], 'usage': {'model': resp['model'], 'input_tokens': resp['input_tokens'], 'output_tokens': resp['output_tokens']}}
+        return self._llm_output(resp, 'review')
 
     def _handle_document_summary(self, input_data: dict) -> dict:
         """文档摘要 — 调用 LLM API。"""
@@ -35,7 +35,20 @@ class RuntimeSkillService(ComponentService):
         max_length = input_data.get('max_length', 500)
         prompt = f'请将以下内容生成不超过 {max_length} 字的摘要:\n{text}'
         resp = self.owner._call_llm_with_routing(prompt, input_data)
-        return {'summary': resp['content'], 'usage': {'model': resp['model'], 'input_tokens': resp['input_tokens'], 'output_tokens': resp['output_tokens']}}
+        return self._llm_output(resp, 'summary')
+
+    @staticmethod
+    def _llm_output(response: dict, field: str, **extra: object) -> dict:
+        """Keep provider failure signals through each skill's compatibility payload."""
+        output = {field: response.get('content', ''), **extra,
+                  'usage': {key: response.get(key, 0 if key != 'model' else '')
+                            for key in ('model', 'input_tokens', 'output_tokens')}}
+        status, error = policy.infer_result_status(response)
+        if status != 'completed':
+            output.update(status=status, error=error)
+        elif not str(response.get('content') or '').strip():
+            output.update(status='failed', error='模型未返回有效内容')
+        return output
 
     def _handle_rag_search(self, input_data: dict) -> dict:
         """RAG 检索 — 预留接口,当前返回提示。"""

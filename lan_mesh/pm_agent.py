@@ -33,6 +33,7 @@ class ProjectManagerAgent:
         self._thread: Optional[threading.Thread] = None
         self._progress_thread: Optional[threading.Thread] = None
         self._task_id = ""  # P3: 当前任务 ID, 供任务流追踪归因
+        self._delivery_status = "running"
 
         # ── 共享状态 ──
         self._state = PMState()
@@ -95,6 +96,7 @@ class ProjectManagerAgent:
         快照通过 Secretary HTTP API 持久化, PM 无论在哪个节点运行都有效;
         落库失败仅降级为「少一个恢复点」, 不影响任务执行。
         """
+        self.persist_delivery_state()
         try:
             snapshot = self._state.to_snapshot()
             http_post(
@@ -118,6 +120,9 @@ class ProjectManagerAgent:
 
     def _clear_snapshot(self):
         """iter-53: 任务终结 (完成/失败/取消) 时清除执行态快照。"""
+        if not self._running and self._delivery_status == "running":
+            self._delivery_status = "completed"
+        self.persist_delivery_state()
         try:
             _requests.delete(
                 f"{self.secretary_url}/api/pm/{self.pm_id}/snapshot",
@@ -146,6 +151,14 @@ class ProjectManagerAgent:
 
         # 就地恢复: planner/dispatcher/monitor 共享同一 state 引用, 只重写字段
         self._state.restore_from(state_data)
+        owner = getattr(self, "_delivery_owner", None)
+        if owner is not None:
+            from .mesh_delivery_service import delivery_repository
+            local = delivery_repository(owner).get_pm(self.pm_id)
+            if local and local["task_id"] == (self._state.task or {}).get("task_id"):
+                if local["status"] in {"cancelled", "completed", "failed"}:
+                    return False
+                self._state.restore_from(_json.loads(local["state_json"]))
         self._resume_phase = snapshot.get("phase", "monitoring")
         self._running = True
         self._task_id = (self._state.task or {}).get("task_id", "")
@@ -196,6 +209,8 @@ class ProjectManagerAgent:
                         self.pm_id[:8], len(todo), len(decomposition))
             for sub in todo:
                 sub_name = sub.get("name", "")
+                if getattr(self, "_delivery_owner", None) and self._resume_delivery(sub_name):
+                    continue
                 deps = sub.get("depends_on", [])
                 if not all(d in st.subtask_outputs for d in deps):
                     # 依赖仍未满足 → 挂回 pending, 由依赖完成时触发分发
@@ -368,8 +383,59 @@ class ProjectManagerAgent:
                 self._running = False
                 self._clear_snapshot()
 
-    def receive_progress_report(self, report: dict):
+    def receive_progress_report(self, report: dict) -> None:
+        if not getattr(self, "_running", True):
+            return
+        if report.get("pm_id") and report["pm_id"] != self.pm_id:
+            return
+        # Once an attempt uses protocol v1, unscoped legacy callbacks cannot
+        # overwrite it. Protocol results enter through receive_delivery_result.
+        if self._state.active_attempts.get(report.get("task_name")):
+            return
         self._monitor.receive_progress_report(report)
+
+    def _resume_delivery(self, name: str) -> bool:
+        envelope = self._state.active_attempts.get(name)
+        if not envelope or not getattr(self, "_delivery_owner", None):
+            return False
+        from .mesh_delivery_service import call_delivery
+        station = self._state.task_station[name]
+        call_delivery(self._delivery_owner, "queue_task", payload=envelope,
+                      destination=f"http://{station['ip']}:{station['api_port']}")
+        return True
+
+    def persist_delivery_state(self, delivery_id: str = "") -> None:
+        """Persist a local checkpoint even when Secretary is unreachable."""
+        owner = getattr(self, "_delivery_owner", None)
+        if owner is None:
+            return
+        from .mesh_delivery_service import delivery_repository
+        with self._state.lock:
+            delivery_repository(owner).save_pm(
+                self.pm_id, (self._state.task or {}).get("task_id", self._task_id),
+                self._state.to_snapshot(), self._delivery_status, delivery_id)
+
+    def receive_delivery_result(self, report: dict) -> dict:
+        """Reject old attempts and handle each terminal result once per PM state."""
+        st = self._state
+        with st.lock:
+            attempt = st.active_attempts.get(report["task_name"], {})
+            if not self.running or report["pm_id"] != self.pm_id:
+                return {"ignored": "PM inactive or changed"}
+            if report["parent_task_id"] != (st.task or {}).get("task_id"):
+                return {"ignored": "parent task changed"}
+            if any(report[key] != attempt.get(key) for key in ("attempt_id", "subtask_id")):
+                return {"ignored": "stale attempt"}
+            if report["result_id"] in st.received_results:
+                return {"ignored": "duplicate result"}
+            if report["attempt_id"] in st.settled_attempts:
+                return {"ignored": "attempt already settled"}
+            st.received_results.add(report["result_id"])
+            st.settled_attempts.add(report["attempt_id"])
+        self._monitor.receive_progress_report(report)
+        self.persist_delivery_state(report["result_id"])
+        self._persist_snapshot("executing")
+        return {"applied": True}
 
     def receive_subtask_result(self, task_name: str, status: str,
                                output_data: dict, agent_id: str = ""):
@@ -378,6 +444,10 @@ class ProjectManagerAgent:
         Station 内嵌模式下，子任务执行完成后由 station_controller 调用此方法，
         让 PM Monitor 感知子任务完成/失败，触发依赖链分发或失败接管。
         """
+        if not getattr(self, "_running", True):
+            return
+        if self._state.active_attempts.get(task_name):
+            return
         report = {
             "reporter_id": agent_id,
             "task_name": task_name,
@@ -436,6 +506,8 @@ class ProjectManagerAgent:
     def cancel(self):
         st = self._state
         self._running = False
+        self._delivery_status = "cancelled"
+        self.persist_delivery_state()
         self._dispatcher.cancel()
         st.clarification_event.set()
         st.clarification_response = {"response": "", "choice": "", "cancelled": True}
@@ -458,6 +530,10 @@ class ProjectManagerAgent:
 
     def report_status(self, status: str, team_structure: dict = None,
                       task_list: list = None, collaboration_mode: str = None):
+        if status in {"completed", "failed", "cancelled"}:
+            if self._delivery_status != "cancelled":
+                self._delivery_status = status
+            self.persist_delivery_state()
         # P3: 任务流追踪 — 所有生命周期状态必经此出口 (异常静默)
         try:
             from . import runtime_trace

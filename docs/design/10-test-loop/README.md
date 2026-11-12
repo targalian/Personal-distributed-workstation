@@ -2,6 +2,10 @@
 
 四层验证体系：pytest 基线、专项验证脚本、UI 走查、Loop Engineering 每日循环。
 
+iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复、300,000 字符 Unicode 结果、
+实际子进程突然退出及取消竞态；全量 712 passed / 2 skipped。详见
+[持久投递验收及边界](../03-task-orchestration/durable-mesh-delivery.md)。
+
 ## 模块清单
 
 <!-- AUTO:module-list -->
@@ -29,13 +33,16 @@
 | tests/test_frontend_assets.py | Dashboard source/markup compatibility and release version resolution. |
 | tests/test_infrastructure_adapters.py | Compatibility and event-loop isolation for remaining infrastructure HTTP adapters. |
 | tests/test_interaction_services.py | Interaction contracts, common ingress and real project domain persistence. |
+| tests/test_mesh_delivery.py | Durable delivery acceptance: retries, crash recovery, identities and real HTTP. |
 | tests/test_network_service_integration.py | Real loopback HTTP integration of Worker API, native execution and shutdown. |
 | tests/test_pm_services.py | Concurrency and integration regressions for shared PM ownership and scheduling. |
 | tests/test_repositories.py | Database compatibility: unchanged schema and shared repositories with isolated connections. |
 | tests/test_resource_services.py | Resource contracts, secret-free metadata and scoped execution accounting. |
+| tests/test_runtime_reliability.py | Behavioral regressions for bounded context, honest outcomes and tool execution. |
 | tests/test_services.py | Behavioral regression for real Yomk routing, isolation and task API compatibility. |
 | tests/test_shadow_dev.py | Shadow development guardrail tests. |
 | tests/test_workstation_optimizer.py | Tests for the resident workstation optimization workflow. |
+| tests/test_yomk_graph.py | Real runtime, coroutine attribution and local viewer lifecycle regression. |
 <!-- /AUTO:module-list -->
 ---
 

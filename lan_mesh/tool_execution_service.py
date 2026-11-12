@@ -20,7 +20,10 @@ class ToolExecutionService(ComponentService):
         try:
             result = entry['handler'](params)
             import json
-            is_error = bool(isinstance(result, dict) and (result.get('timed_out') or result.get('git_safe_directory_denied')))
+            from .agent_runtime import infer_result_status
+            is_error = infer_result_status(result)[0] != 'completed'
+            if isinstance(result, dict) and result.get('git_safe_directory_denied'):
+                is_error = True
             return {'content': [{'type': 'text', 'text': json.dumps(result, ensure_ascii=False, default=str)}], 'isError': is_error, 'result': result}
         except Exception as e:
             return {'content': [{'type': 'text', 'text': f'工具执行错误: {e}'}], 'isError': True}

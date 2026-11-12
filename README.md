@@ -10,6 +10,10 @@ requirements.txt 由 `python scripts/sync_dependencies.py --write` 生成。
 0.41.1 将 Yomk Python、C++ 和工作站适配技能内置到安装包，按相关任务注入，支持 Worker 分发完整参考资料；
 见[内置技能与生效方式](docs/design/04-execution-engine/yomk-builtin-skills.md)。
 
+0.41.3 工作区候选加入 SQLite 持久跨站投递、结果确认与按尝试去重，支持断网重发、
+进程中断记录和取消栅栏；见[协议及验证边界](docs/design/03-task-orchestration/durable-mesh-delivery.md)。
+尚未发布，真实双节点验收待环境。
+
 ## 项目结构
 
 ```
@@ -290,3 +294,7 @@ Boss 提交任务 (Web UI)
 ## License
 
 MIT
+
+## YomkGraph 本机服务图
+
+在 `config.yaml` 的 `observability` 下设置 `yomk_graph_enabled: true`，重启 Station 或 Worker 后访问 http://127.0.0.1:18765。端口由 `yomk_graph_port` 配置，默认关闭。详情与观测边界见 [YomkGraph 接入说明](docs/design/08-infrastructure/yomk-graph.md)。

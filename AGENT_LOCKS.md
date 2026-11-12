@@ -3,8 +3,8 @@
 多 Agent（Codex CLI / Qoder Quest）并行开发时的文件占用与交接看板。
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
-- 更新时间：2026-10-25
-- 当前迭代：`iter-112`（Yomk技能内化完成，635测试与隔离安装通过；真实双节点验收仍待环境）
+- 更新时间：2026-11-12
+- 当前迭代：`iter-115`（DS-Bot P1-A持久跨站投递；712测试通过，未发布；真实模型/双节点验收待环境）
 
 ## 一、职责边界（长期约定）
 
@@ -24,13 +24,20 @@
 
 | Agent | 占用文件 | 任务 | 开始 | 状态 |
 |---|---|---|---|---|
-| Codex | 空闲 | iter-112 技能内化与安装验证完成；源码发布按 Git 核验 | 2026-10-25 | 已释放 |
+| Codex | 空闲 | iter-115 DS-Bot P1-A完成，712 passed / 2 skipped；保留iter113/114改动，未提交发布 | 2026-11-12 | 已释放 |
 | Quest | 空闲 | 无 | —— | 已释放 |
 
 > 认领格式：一行一个 Agent，`占用文件` 写通配范围（如 `lan_mesh/station_*.py`），
 > `状态` 取 `进行中` / `待验证` / `已释放`。释放后把该行改回 `——`。
 
-## 三、待推送内容归属（工作区当前脏文件）
+## 三、提交归属记录
+
+2026-11-12：用户已授权iter113/114/115全部改动统一提交并通过sync_push.ps1同步双仓库。下文“未提交/待发货”为当轮历史记录，以实际Git提交与远端核对结果为准。
+
+**Codex（iter-115，已验证未提交）**：DS-Bot P1-A持久跨站任务/结果投递、确认校验、尝试去重和取消栅栏；新四个生产模块、DB/repository、PM与Station/Worker接线、36项行为测试、设计及状态。全量712 passed / 2 skipped，pre-push 0 Blocker/7既有Warning；执行/应用崩溃保留待核对，不自动重复副作用。见 `docs/design/03-task-orchestration/durable-mesh-delivery.md`；0.41.3未发布，真实双节点与在线模型验收待环境。
+
+**Codex（iter-114，已验证未提交）**：DS-Bot 固定提交对照与执行可靠性/上下文管理；范围为 runtime 执行/LLM/ReAct/prompt/skill、runtime_context、agent_runtime、tool_registry/tool_execution、skill_knowledge、resource_config 的类型导入，以及专项测试、设计文档和共享状态。完整说明见 `docs/design/dsbot-optimization-assessment.md`。本轮 35 项新增行为，全量 676 passed / 2 skipped；原 iter-113 YomkGraph 未提交内容保留；未发布或重启。
+
 
 `scripts/sync_push.ps1` 要求工作区干净，因此下列改动必须**分两次提交**、
 按归属各自提交，不要互相 `git add .`：
@@ -281,3 +288,9 @@ iter-111 Yomk阶段8代码与本机验收完成：仪表盘16源模块、Web共�
 ## iter-112 交接
 
 iter-112 Yomk技能内化完成：随包内置yomkserverpy-modular、yomkserver-modular与lan-mesh-yomk三个知识技能，保留上游完整参考/示例/许可证及来源；注册表离线扫描包内资产并兼容旧目录与标准metadata，下载包新增固定资源白名单，Worker完整落盘；按任务激活且区分C++/Python，PM自定义角色与外部system提示词保留并增补相关知识，秘书传递消息上下文；不改required_skill执行器、工具权限或部署授权。14项新增行为通过，全量635 passed/137.91s；三个技能quick_validate通过，编译导入、159文件名称扫描、依赖同步、docs204项11域通过；0.41.1 wheel含13项技能资产、与上游资料逐字比对一致，隔离安装-I验证与pip check通过。真实多机验收仍待隔离节点；当前运行节点未重启，本轮沿既有授权通过sync_push上库，提交与远端状态以Git核验。
+
+## iter-113 YomkGraph 接入（2026-11-03）
+
+[Codex] iter-113：接入随包YomkGraph 0.1.0，配置默认关闭、仅loopback；ServiceRuntime显式span覆盖同步/协程等待、嵌套来源、异常/取消与在途统计；真实注册元信息缓存与明确模块分组；Station/Worker启动与关闭挂接、端口占用失败清理。仅主实例，独立组件/远端不合并。专项36 passed（新增8项），全量641 passed/2 skipped/89.65s；跳过原因是缺少Node.js与resources.yaml。编译、导入、166文件名称扫描、依赖一致性、docs206项11域通过；wheel独立-I进程实际读取HTML/JS/CSS/API通过。未重启运行节点、未提交推送；配置及范围见docs/design/08-infrastructure/yomk-graph.md。
+
+本轮文件占用已释放。

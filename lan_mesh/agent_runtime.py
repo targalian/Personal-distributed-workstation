@@ -108,7 +108,7 @@ def resolve_cli_backend(requested: str) -> tuple:
     return backend, None
 
 
-def infer_result_status(result) -> tuple:
+def infer_result_status(result: object) -> tuple[str, str]:
     """从技能处理器返回值推断子任务成败 (iter-101, BUG-039 根因3)。
 
     `AgentRuntime.execute` 原先只要 handler 未抛异常就一律记 `completed`,
@@ -126,12 +126,16 @@ def infer_result_status(result) -> tuple:
     if not isinstance(result, dict):
         return "completed", ""
     inner = str(result.get("status", "") or "").strip().lower()
-    if inner in ("failed", "timeout", "error", "cancelled"):
-        err = str(result.get("error", "") or result.get("stderr", "") or "")
+    if inner in ("failed", "timeout", "error", "cancelled", "max_iterations_reached"):
+        err = str(result.get("error", "") or result.get("stderr", "") or result.get("result", "") or inner)
         return ("cancelled" if inner == "cancelled" else "failed"), err
     err = str(result.get("error", "") or "")
     if err.strip():
         return "failed", err
+    if result.get('_error') or result.get('timed_out'):
+        return 'failed', str(result.get('stderr') or result.get('content') or '执行失败或超时')
+    if isinstance(result.get('returncode'), int) and result['returncode'] != 0:
+        return 'failed', str(result.get('stderr') or f"命令退出码: {result['returncode']}")
     return "completed", ""
 
 

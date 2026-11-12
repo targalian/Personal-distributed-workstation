@@ -90,6 +90,9 @@ class StationLocalPmMixin:
         import uuid as _uuid
         from .agent_runtime import AgentRuntime
         agent_id = preferred_agent_id or f"sub-{_uuid.uuid4().hex[:10]}"
+        if agent_id in self._local_sub_agents:
+            info = self._local_sub_agents[agent_id]
+            return {"agent_id": agent_id, "agent_name": info["agent_name"], "delivery_protocol": 1}
         sub_runtime = AgentRuntime(
             agent_id=agent_id,
             shared_folder_path=str(self.state.shared_folder.path),
@@ -101,7 +104,7 @@ class StationLocalPmMixin:
             "current_task": task_description, "status": "idle",
         }
         logger.info("本机子 Agent 已创建: %s (%s)", agent_id, agent_name)
-        return {"agent_id": agent_id, "agent_name": agent_name}
+        return {"agent_id": agent_id, "agent_name": agent_name, "delivery_protocol": 1}
 
     def _local_cancel_subagent(self, agent_id: str) -> dict:
         """Cancel a local sub-agent without discarding its registration."""
@@ -119,6 +122,8 @@ class StationLocalPmMixin:
     def _local_forward_progress(self, report: dict) -> dict:
         if not self._local_pm_agent:
             return {"ok": False, "message": "PM Agent 未运行"}
+        if report.get("pm_id") and report["pm_id"] != self._local_pm_agent.pm_id:
+            return {"ok": False, "message": "PM 身份不匹配"}
         self._local_pm_agent.receive_progress_report(report)
         return {"ok": True}
 

@@ -339,6 +339,13 @@ class WorkerAgent:
         from .version import __version__
         app = FastAPI(title="LAN Mesh Worker", version=__version__)
 
+        @app.on_event("startup")
+        async def delivery_startup() -> None:
+            from starlette.concurrency import run_in_threadpool
+            from .mesh_delivery_service import call_delivery
+            if hasattr(self, "data_dir") or hasattr(self, "db"):
+                await run_in_threadpool(call_delivery, self, "start")
+
         @app.on_event("shutdown")
         async def shutdown_event() -> None:
             from starlette.concurrency import run_in_threadpool
@@ -367,6 +374,8 @@ class WorkerAgent:
                 "status": "running",
             }
 
+        from .yomk_graph import install_graph_viewer
+        install_graph_viewer(app, self)
         return app
 
     def _find_available_port(self, start: int, count: int = 20) -> int:

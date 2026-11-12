@@ -23,10 +23,13 @@ class WorkerSubagentService(ComponentService):
         """
         import uuid as _uuid
         agent_id = preferred_agent_id or f'sub-{_uuid.uuid4().hex[:10]}'
+        if agent_id in self.owner.state.sub_agents:
+            info = self.owner.state.sub_agents[agent_id]
+            return {'agent_id': agent_id, 'agent_name': info['agent_name'], 'delivery_protocol': 1}
         sub_runtime = policy.AgentRuntime(agent_id=agent_id, shared_folder_path=str(self.owner.state.shared_folder.path), custom_system_prompt=system_prompt)
         self.owner.state.sub_agents[agent_id] = {'agent_id': agent_id, 'agent_name': agent_name, 'runtime': sub_runtime, 'skills': skills, 'current_task': task_description, 'status': 'idle', 'progress': 0.0, 'has_custom_prompt': bool(system_prompt)}
         policy.logger.info('子 Agent 已创建: %s (%s)', agent_id, agent_name)
-        return {'agent_id': agent_id, 'agent_name': agent_name}
+        return {'agent_id': agent_id, 'agent_name': agent_name, 'delivery_protocol': 1}
 
     def cancel_subagent(self, agent_id: str) -> dict:
         """Request cooperative cancellation for a sub-agent runtime."""

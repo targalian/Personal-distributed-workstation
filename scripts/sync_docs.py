@@ -39,6 +39,15 @@ DOMAINS = [
 # py 条目: 字符串值 = 域编号, 描述自动取模块 docstring 首行
 # 非 py 条目: 元组 (域编号, 手写一句话描述)
 MAPPING = {
+    "lan_mesh/delivery_protocol.py": "03-task-orchestration",
+    "lan_mesh/mesh_delivery_service.py": "03-task-orchestration",
+    "lan_mesh/delivery_routes.py": "03-task-orchestration",
+    "lan_mesh/repository_delivery.py": "02-station-core",
+    "tests/test_mesh_delivery.py": "10-test-loop",
+    "lan_mesh/runtime_context.py": "04-execution-engine",
+    "tests/test_runtime_reliability.py": "10-test-loop",
+    "lan_mesh/yomk_graph.py": "08-infrastructure",
+    "tests/test_yomk_graph.py": "10-test-loop",
     'lan_mesh/skill_knowledge.py': '04-execution-engine',
     'tests/test_builtin_skills.py': '10-test-loop',
     'lan_mesh/builtin_skills/': ('04-execution-engine', 'Yomk C++/Python 与工作站适配内置技能及完整参考资料'),

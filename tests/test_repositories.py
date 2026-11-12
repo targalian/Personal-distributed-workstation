@@ -14,8 +14,10 @@ def test_repository_schema_matches_pre_migration(tmp_path):
     expected=json.loads((Path(__file__).parent/'fixtures/database_schema_contract.json').read_text(encoding='utf-8'))
     actual=[list(row) for row in db._get_conn().execute(
         'SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type,name')]
-    assert actual==expected
-    assert SCHEMA_VERSION==12
+    # v13 adds journals; the pre-existing v12 tables and indexes remain exact.
+    original=[row for row in actual if not row[2].startswith('mesh_')]
+    assert original==expected
+    assert SCHEMA_VERSION==13
 
 
 def test_repositories_keep_thread_local_connection_and_compatible_reads(tmp_path):

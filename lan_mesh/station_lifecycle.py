@@ -159,6 +159,8 @@ class StationLifecycleMixin:
 
         self._mount_frontend(app)
 
+        from .yomk_graph import install_graph_viewer
+        install_graph_viewer(app, self)
         return app
 
     def _mount_frontend(self, app: FastAPI) -> None:
@@ -422,6 +424,9 @@ class StationLifecycleMixin:
         # 添加 WS 推送后台任务
         @app.on_event("startup")
         async def startup_event():
+            from .mesh_delivery_service import call_delivery
+            from starlette.concurrency import run_in_threadpool
+            await run_in_threadpool(call_delivery, self, "start")
             app.state.background_tasks = [asyncio.create_task(self._ws_push_loop())]
 
         config = uvicorn.Config(

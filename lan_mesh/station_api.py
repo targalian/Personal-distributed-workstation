@@ -53,6 +53,8 @@ def create_station_router(controller) -> APIRouter:
         controller: StationController 实例 (持有所有可变状态)
     """
     router = APIRouter()
+    from .delivery_routes import build_delivery_routes
+    router.include_router(build_delivery_routes(controller))
     router.include_router(build_basic_routes(controller))
     router.include_router(build_optimization_routes(controller))
     router.include_router(build_shadow_dev_routes(controller))

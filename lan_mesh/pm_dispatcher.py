@@ -46,6 +46,16 @@ class PMDispatcher:
 
     def cancel(self) -> None:
         """Propagate PM cancellation to the local runtime."""
+        owner = getattr(self._agent, "_delivery_owner", None)
+        if owner is not None:
+            from .mesh_delivery_service import call_delivery
+            with self._state.lock:
+                targets = [(envelope, self._state.task_station.get(name, {}))
+                           for name, envelope in self._state.active_attempts.items()]
+            for envelope, station in targets:
+                if station.get("ip") and station.get("api_port"):
+                    call_delivery(owner, "queue_cancel", payload=envelope,
+                                  destination=f"http://{station['ip']}:{station['api_port']}")
         cancel_runtime = getattr(self._runtime, "cancel", None)
         if callable(cancel_runtime):
             cancel_runtime()
@@ -221,6 +231,10 @@ class PMDispatcher:
             dispatch_ctx = build_dispatch_context(task, sub, plan, self._pm_id)
             input_data.update(dispatch_ctx)
 
+        if agent_info.get("delivery_protocol") == 1 and getattr(self._agent, "_delivery_owner", None):
+            self._dispatch_durably(station, agent_info, task, sub, input_data)
+            return
+
         try:
             resp = requests.post(
                 f"http://{ip}:{port}/tasks/execute",
@@ -238,7 +252,7 @@ class PMDispatcher:
                     "secretary_url": self._secretary_url,
                 },
                 headers=auth_headers(),
-                timeout=15,  # 新端点已异步, 应立即返回
+                timeout=10,
             )
             if resp.status_code == 200:
                 body = resp.json()
@@ -268,6 +282,35 @@ class PMDispatcher:
             logger.warning("[%s] 分发子任务 '%s' 失败: %s, 回退本地执行",
                           self._pm_id[:8], sub_name, e)
             self.execute_subtask_locally(task, sub)
+
+    def _dispatch_durably(self, station: dict, agent_info: dict, task: dict,
+                          sub: dict, input_data: dict) -> None:
+        """Bind an immutable attempt before queueing; transport retries reuse its ID."""
+        from .delivery_protocol import seal_payload
+        from .mesh_delivery_service import call_delivery
+        from .host_info import pick_reachable_ip
+        owner = self._agent._delivery_owner
+        ip = station["ip"]
+        callback_ip = "127.0.0.1" if ip.startswith("127.") else pick_reachable_ip(ip)
+        if not callback_ip or not owner.state.api_port:
+            raise ValueError("cannot resolve PM callback address")
+        name = sub["name"]
+        with self._state.lock:
+            subtask_id = self._state.subtask_ids.setdefault(name, str(uuid.uuid4()))
+            payload = seal_payload({
+                "subtask_id": subtask_id, "attempt_id": str(uuid.uuid4()),
+                "parent_task_id": task["task_id"], "pm_id": self._pm_id,
+                "name": name, "description": sub.get("description", ""),
+                "required_skill": sub.get("skill", "code_generation"),
+                "input_data": input_data, "model_preference": "", "fallback_models": [],
+                "reporter_id": agent_info["agent_id"], "secretary_url": self._secretary_url,
+                "reply_url": f"http://{callback_ip}:{owner.state.api_port}",
+                "agent_spec": agent_info.get("agent_spec", {}),
+            })
+            self._state.active_attempts[name] = payload
+            self._agent.persist_delivery_state()
+            call_delivery(owner, "queue_task", payload=payload,
+                          destination=f"http://{ip}:{station['api_port']}")
 
     # ── 依赖就绪分发 ──────────────────────────────────────────────
 
@@ -358,7 +401,12 @@ class PMDispatcher:
                 timeout=10,
             )
             if resp.status_code == 200:
-                return resp.json()
+                info = resp.json()
+                if info.get("delivery_protocol") == 1:
+                    info["agent_spec"] = {"agent_name": agent_name, "skills": skills,
+                                          "task_description": task_description,
+                                          "system_prompt": system_prompt}
+                return info
         except Exception as e:
             logger.error("[%s] 创建子 Agent 失败 (%s:%s): %s", self._pm_id[:8], ip, port, e)
         return None
@@ -400,6 +448,8 @@ class PMDispatcher:
         if not input_data.get("requirement") and not input_data.get("description"):
             input_data["requirement"] = sub_desc
         with self._state.lock:
+            # A local takeover invalidates any older remote attempt immediately.
+            self._state.active_attempts.pop(sub_name, None)
             self._state.dispatched.add(sub_name)
             self._state.subagents[member_id] = {
                 "member_id": member_id,
