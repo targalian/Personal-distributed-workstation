@@ -224,3 +224,5 @@ TaskSchedulingService.deinit 唤醒并停止队列等待线程，避免关闭后
 ### 2026-11-12 Linux推送脚本兼容
 
 `sync_push.ps1` 使用 `Join-Path` 定位版本同步脚本，支持 Windows PowerShell 与 Linux pwsh。Python版本同步返回非零状态时立即停止，防止带过期版本信息推送；目标仍为Gitee master和GitHub CN。
+
+两个远端独立尝试；单端认证/网络失败时仍尝试另一个，最终以非零状态列出失败目标，不把部分成功报告为全部同步。解决认证后重跑同一脚本即可。

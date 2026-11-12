@@ -58,10 +58,17 @@ if ($verDiff) {
 
 # 3. 推送 Gitee + GitHub CN (每次必推)
 Write-Host "==> 推送 master -> Gitee（中文版）"
-Invoke-Git push gitee master
+$pushFailures = @()
+try { Invoke-Git push gitee master }
+catch { $pushFailures += "Gitee(master): $($_.Exception.Message)" }
 
 Write-Host "==> 推送 master -> GitHub CN 分支"
-Invoke-Git push origin master:CN
+try { Invoke-Git push origin master:CN }
+catch { $pushFailures += "GitHub(CN): $($_.Exception.Message)" }
+
+if ($pushFailures.Count -gt 0) {
+    throw "同步未全部完成，请解决以下错误后重跑：`n$($pushFailures -join '`n')"
+}
 
 $pushedEndpoints = "Gitee(master) + GitHub(CN)"
 
