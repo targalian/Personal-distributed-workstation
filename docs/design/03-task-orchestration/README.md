@@ -12,10 +12,15 @@ iter-115 接入[持久跨站投递与结果确认](durable-mesh-delivery.md)：�
 <!-- AUTO:module-list -->
 | 文件/目录 | 职责一句话 |
 |---|---|
+| acceptance_evidence.py | Bind every acceptance criterion to immutable sources without treating self-review as tests. |
+| collaboration_pause.py | Serialize dispatch admission with a pause barrier without holding PM state locks. |
 | delivery_protocol.py | Versioned task/result envelopes with stable identities and full-payload checksums. |
 | delivery_routes.py | Authenticated mesh task/result delivery endpoints shared by Station and Worker. |
+| idempotent_submission.py | Stable task identity and fail-closed recovery around a potentially remote PM launch. |
 | mesh_delivery_service.py | Owned durable mesh delivery service; receipt precedes acknowledgement and execution. |
 | orchestrator.py | 任务编排引擎 — 已废弃, 降级为工具库 (iter-30 收敛裁定) |
+| periodic_service.py | Owned periodic producer using the same task scheduler, budgets and PM model as Web. |
+| periodic_spec.py | UTC due instants for interval and local daily schedules, including DST transitions. |
 | pm_agent.py | PM Agent 协调器/门面 — 持有 Planner/Dispatcher/Monitor, 对外暴露统一接口。 |
 | pm_dispatcher.py | PM 分发器 — 团队创建与子任务分发 |
 | pm_monitor.py | PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证 |
@@ -27,6 +32,7 @@ iter-115 接入[持久跨站投递与结果确认](durable-mesh-delivery.md)：�
 | project_budget_service.py | Project budget domain over the shared project policy. |
 | project_lifecycle_service.py | Project lifecycle domain over the shared project policy. |
 | project_policy.py | Compatibility facade and composition root for independently routed domains. |
+| submission_context.py | Admit a reserved periodic task only from its current submission call. |
 | task.py | 任务 DAG 管理 — 子任务依赖图与拓扑排序 (增强版: 条件边 + 动态路由 + 图序列化) |
 | task_templates.py | F2.4: 任务模板库 — 预置常见任务 DAG |
 <!-- /AUTO:module-list -->
@@ -439,3 +445,9 @@ if not self._running:
 | 2026-08-16 | iter-27 后 | 初建 |
 | 2026-09-10 | iter-99 | BUG-037 子任务作业路径恒为 "." 修复: 蓝图 `charter.repo_path` 成为路径权威来源 + `_resolve_project_path` 三级回退 (input_data→蓝图→".") + 路径正则兼容正斜杠与引号且标签优先于裸路径 + `_action_submit_task` 传递 `project_path` + 蓝图提示暴露仓库路径; M1 失败复盘发现 (三次需求分析烧 448 万 tokens 分析错目录); 12 专项 + 15 变异致红 + 真机 API 实测 |
 | 2026-09-10 | iter-100 | BUG-038 子 Agent 实际工作目录未注入修复: `attach_blueprint_context` 同时注入 `cwd` + `_resolve_workdir` 仅在目录真实存在时返回 (`"."`/不存在回落 shared_folder) + 显式 `cwd` 不覆盖 + ReAct `cwd` 空串也回落 + 规则段抽为 `_build_react_rules_prompt` 并新增「相对路径基准/禁止跨盘漫游/禁止试探消耗轮次」+ `_resolve_tool_path` 把 file_read/file_write 相对路径锚定到 cwd; BUG-037 孪生缺陷 (M1 重跑三次需求分析耗尽 30 轮烧 414 万 tokens); 10 专项 + 17 变异致红 |
+
+## iter-118：验收来源与尝试用量
+
+完整验收标准绑定交付物与已校验工具观察，模型自评与独立测试明确区分；辅助调用按任务归因。见 [设计与验证边界](acceptance-evidence-usage.md)。
+
+周期任务、UTC日历和触发幂等见[周期与IM设计](periodic-im.md)。

@@ -126,14 +126,14 @@ class PmLifecycleService(YomkService):
         from .mesh_delivery_service import bind_pm_delivery
         bind_pm_delivery(self.controller, candidate)
         self._owner_task_id, self._owner_pm_id = task_id, pm_id
+        task_name = task_data.get("name", task_id)
+        self.controller._auto_attach_pm_thread(pm_id, task_name, f"PM-{pm_id[:8]}", task_data)
         try:
             candidate.start_task(task_data)
         except Exception as exc:
             self._failed_launch(candidate, exc)
         logger.info("本机 PM Agent 已启动: %s, 任务: %s", pm_id, task_id)
         # 方案C: 自动将 PM 绑定到当前活跃对话的线程
-        task_name = task_data.get("name", task_id)
-        self.controller._auto_attach_pm_thread(pm_id, task_name, f"PM-{pm_id[:8]}")
         return {"ok": True, "pm_id": pm_id, "device_id": self.controller.state.device_id}
 
 
@@ -193,6 +193,9 @@ class PmLifecycleService(YomkService):
                 shared_folder_path=str(self.controller.state.shared_folder.path),
             )
 
+        from .collaboration_repository import CollaborationRepository
+        if CollaborationRepository(self.controller.db).get(task_id)['state'] != 'automatic':
+            return {'ok': False, 'message': '请先结束人工接管，再恢复任务'}
         snapshot = self.controller.db.get_pm_snapshot_by_task(task_id)
         if not snapshot:
             return {"ok": False, "message": "无执行态快照, 无法恢复"}
@@ -261,12 +264,12 @@ class PmLifecycleService(YomkService):
                 self._retiring.append(agent)
                 self.controller._local_pm_agent = None
         try:
-            getattr(agent, action)()
+            details = getattr(agent, action)() or {}
             if clear_subagents:
                 with self.lock:
                     self.controller._local_sub_agents.clear()
             print(f"[PM] 本机 PM {action}: {agent.pm_id}")
-            return {"ok": True, "pm_id": agent.pm_id}
+            return {"ok": True, "pm_id": agent.pm_id, **details}
         except Exception as exc:
             with self.lock:
                 if self.controller._local_pm_agent is None:

@@ -105,13 +105,13 @@ class WorkerPmService(ComponentService):
                 return {'ok': False, 'message': 'PM 身份不匹配'}
             self._transitioning = True
         try:
-            getattr(pm, operation)()
+            details = getattr(pm, operation)() or {}
             with self._lock:
                 self._retiring.append(pm)
                 if detach and self.owner.state.pm_agent is pm:
                     self.owner.state.pm_agent = None
                     self.owner.state.sub_agents.clear()
-            return {'ok': True, 'pm_id': pm.pm_id}
+            return {'ok': True, 'pm_id': pm.pm_id, **details}
         except Exception as exc:
             return {'ok': False, 'message': str(exc)}
         finally:

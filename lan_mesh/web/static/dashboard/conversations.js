@@ -1,6 +1,7 @@
 // ── 多对话管理 ──
 let _activeConvId='';
 let _convList=[];
+const _chatDrafts=new Map();
 
 async function loadConversations(){
   try{
@@ -10,7 +11,11 @@ async function loadConversations(){
     renderConvList();
     // 若无活跃对话, 选第一个
     if(!_activeConvId&&_convList.length){
-      switchConversation(_convList[0].id);
+      const requested=new URLSearchParams(location.search).get('conv');
+      const selected=_convList.find(c=>c.id===requested)||_convList[0];
+      await switchConversation(selected.id);
+      const pm=new URLSearchParams(location.search).get('pm');
+      if(selected.id===requested&&pm)await openPMThread(pm);
     }
   }catch(e){console.error('加载对话列表失败:',e);}
 }
@@ -24,6 +29,12 @@ function renderConvList(){
   }).join('');
 }
 async function switchConversation(convId){
+  if(convId!==_activeConvId&&!dagCanLeave('chat-dag-frame'))return;
+  if(convId!==_activeConvId){
+    const input=document.getElementById('chat-input');
+    _chatDrafts.set(_activeConvId,input.value);input.value=_chatDrafts.get(convId)||'';
+    document.getElementById('chat-compose-hint').textContent='Enter 发送 · Shift + Enter 换行';
+  }
   _activeConvId=convId;
   closePMThread();
   renderConvList();
@@ -32,7 +43,8 @@ async function switchConversation(convId){
   document.getElementById('chat-conv-title').textContent=meta?meta.title:'对话';
   document.getElementById('chat-conv-project').textContent=meta&&meta.project_id?`项目: ${meta.project_id}`:'';
   await loadChatHistory();
-  loadPMThreads();
+  await loadPMThreads();
+  await syncChatDag();
 }
 async function createConversation(){
   const title=await showInputDialog('对话标题:','新对话');
@@ -49,7 +61,7 @@ async function createConversation(){
   }catch(e){showToast('创建失败:'+e.message,'err');}
 }
 async function deleteCurrentConv(){
-  if(!_activeConvId)return;
+  if(!_activeConvId||!dagCanLeave('chat-dag-frame'))return;
   if(!confirm('确定删除当前对话?'))return;
   try{
     await apiFetch(`/api/conversations/${_activeConvId}`,{method:'DELETE'});
@@ -59,6 +71,7 @@ async function deleteCurrentConv(){
     else{
       document.getElementById('chat-messages').innerHTML='<div class="empty"><div class="icon">💬</div><p>点击“新建对话”开始</p></div>';
       document.getElementById('chat-conv-title').textContent='无对话';
+      await syncChatDag();
     }
     showToast('对话已删除','info');
   }catch(e){showToast('删除失败:'+e.message,'err');}

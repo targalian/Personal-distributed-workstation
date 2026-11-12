@@ -120,7 +120,7 @@ def trace_subtask_end(trace_id: str, skill: str, status: str,
 def trace_llm_call(model: str, input_tokens: int, output_tokens: int,
                    ttft_ms: float, total_ms: float, status: str = "ok",
                    task_id: str = "", error: str = "",
-                   call_type: str = "chat") -> None:
+                   call_type: str = "chat", usage_metadata: dict | None = None) -> None:
     """记录一次 LLM 调用 (JSONL + SQLite 双写)。
 
     Args:
@@ -139,6 +139,8 @@ def trace_llm_call(model: str, input_tokens: int, output_tokens: int,
         "error": error[:500] if error else "",
         "ts": time.time(),
     }
+    if usage_metadata:
+        record.update(usage_metadata)
     _write_jsonl(record)
 
     # P1: SQLite 审计表双写 (异常不影响主流程)

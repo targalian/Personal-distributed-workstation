@@ -35,3 +35,7 @@ class Repositories:
         self.operations = OperationsRepository(database)
         from .repository_delivery import DeliveryRepository
         self.delivery = DeliveryRepository(database)
+        from .repository_history import HistoryRepository
+        self.history = HistoryRepository(database)
+        from .repository_memory import MemoryRepository
+        self.memory = MemoryRepository(database)

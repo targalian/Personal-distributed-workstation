@@ -5,6 +5,9 @@ from typing import Any, Optional
 from . import agent_runtime as policy
 from .component_service import ComponentService
 from .skill_knowledge import append_builtin_guidance
+from .runtime_model_budget import ModelWindowBudget
+from .runtime_react_archive import ReactArchive
+from .runtime_usage import metered_call, observe_usage
 
 class RuntimeLlmService(ComponentService):
     """RuntimeLlmService business operations with explicit state ownership."""
@@ -28,27 +31,46 @@ class RuntimeLlmService(ComponentService):
                     if default_model:
                         chain.append(default_model)
         last_error = None
+        candidates = []
+        pool = policy._load_model_pool_entries()
+        archive = input_data.get('_react_archive')
         for model_id in dict.fromkeys(chain):
             if self.owner._cancel_event.is_set():
                 return {'status': 'cancelled', 'error': '任务已取消'}
             provider_cfg = self.owner._resolve_provider(model_id)
             if not provider_cfg:
                 continue
+            window = ModelWindowBudget.resolve(pool.get(model_id), input_data)
+            checkpoint = archive.store.latest if isinstance(archive, ReactArchive) else ''
+            fitted, report = window.prepare(messages, tools, input_data, checkpoint)
+            report['model'] = model_id
+            candidates.append(report)
+            if fitted is None:
+                last_error = ValueError(f'{model_id} 上下文预算不足，未发送请求')
+                continue
+            if isinstance(archive, ReactArchive):
+                archive.store.save('model_request', dict(messages=fitted, tools=tools, budget=report))
+            if self.owner._cancel_event.is_set():
+                return {'status': 'cancelled', 'error': '任务已取消', 'context_candidates': candidates}
             try:
-                return self.owner._call_openai_with_tools(messages, tools, model_id, provider_cfg['base_url'], provider_cfg['api_key'])
+                response = self.owner._call_openai_with_tools(
+                    fitted, tools, model_id, provider_cfg['base_url'], provider_cfg['api_key'], window.reply_tokens)
+                return {**response, 'context_candidates': candidates}
             except Exception as e:
                 last_error = e
                 policy.logger.warning('[ReAct] 模型 %s 调用失败: %s, 降级...', model_id, e)
                 continue
         error = f'[模型调用失败] {last_error or "没有配置可用模型或 API Key"}'
         return {'message': {'content': error, 'tool_calls': []}, 'status': 'failed',
-                'error': error, 'model': 'none', 'input_tokens': 0, 'output_tokens': 0}
+                'error': error, 'model': 'none', 'input_tokens': 0, 'output_tokens': 0,
+                'context_candidates': candidates}
 
-    def _call_openai_with_tools(self, messages: list[dict], tools: list[dict], model_id: str, base_url: str, api_key: str) -> dict:
+    @metered_call('tools')
+    def _call_openai_with_tools(self, messages: list[dict], tools: list[dict], model_id: str, base_url: str, api_key: str, max_tokens: int = 4096) -> dict:
         """F2.1: OpenAI 兼容 API 调用 (支持 tools 参数)。"""
         import time as _time
         url = f"{base_url.rstrip('/')}/chat/completions"
-        payload = {'model': model_id, 'messages': messages, 'max_tokens': 4096}
+        payload = {'model': model_id, 'messages': messages, 'max_tokens': max_tokens}
         if tools:
             payload['tools'] = tools
             payload['tool_choice'] = 'auto'
@@ -58,18 +80,10 @@ class RuntimeLlmService(ComponentService):
         data = resp.json()
         call_ms = (_time.time() - call_start) * 1000
         usage = data.get('usage', {})
+        observe_usage(usage)
         choice_msg = data['choices'][0]['message']
         result = {'message': choice_msg, 'model': model_id, 'input_tokens': usage.get('prompt_tokens', 0), 'output_tokens': usage.get('completion_tokens', 0)}
         result['finish_reason'] = data['choices'][0].get('finish_reason', '')
-        try:
-            self.owner._record_usage(model_id, result['input_tokens'], result['output_tokens'])
-        except Exception:
-            pass
-        try:
-            from . import runtime_trace
-            runtime_trace.trace_llm_call(model=model_id, input_tokens=result['input_tokens'], output_tokens=result['output_tokens'], ttft_ms=call_ms, total_ms=call_ms, status='ok', call_type='tools')
-        except Exception:
-            pass
         return result
 
     def _call_llm_with_routing(self, prompt: str, input_data: dict) -> dict:
@@ -86,6 +100,8 @@ class RuntimeLlmService(ComponentService):
             external_system_prompt = append_builtin_guidance(
                 external_system_prompt, input_data.get('description', input_data.get('requirement', '')))
         blueprint_suffix = policy._build_blueprint_prompt(input_data.get('_project_blueprint', ''))
+        from .pm_memory import runtime_memory
+        blueprint_suffix += runtime_memory(self.owner, input_data)
         if model_pref:
             chain = [model_pref] + [m for m in fallbacks if m != model_pref]
             last_error = None
@@ -155,6 +171,7 @@ class RuntimeLlmService(ComponentService):
                 return {'base_url': cfg['base_url'], 'api_key': api_key}
         return None
 
+    @metered_call('chat')
     def _call_openai_compatible(self, prompt: str, model_id: str, base_url: str, api_key: str, system_prompt: str='') -> dict:
         """通用 OpenAI 兼容 API 调用 — 流式输出 + 活性检测。
 
@@ -169,6 +186,7 @@ class RuntimeLlmService(ComponentService):
         TOTAL_TIMEOUT = 600
         resp = self._open_stream(prompt, model_id, base_url, api_key, system_prompt, FIRST_TOKEN_TIMEOUT)
         collected = []
+        interrupted = False
         input_tokens = 0
         output_tokens = 0
         start_time = _time.time()
@@ -179,10 +197,15 @@ class RuntimeLlmService(ComponentService):
                 now = _time.time()
                 if now - start_time > TOTAL_TIMEOUT:
                     policy.logger.warning('%s 输出超过总时长上限 %ds, 截断', model_id, TOTAL_TIMEOUT)
+                    interrupted = True
+                    break
+                if self.owner._cancel_event.is_set():
+                    interrupted = True
                     break
                 if not line:
                     if first_token_received and now - last_chunk_time > INTER_CHUNK_TIMEOUT:
                         policy.logger.warning('%s 流间超时 %ds, 截断已收集内容', model_id, INTER_CHUNK_TIMEOUT)
+                        interrupted = True
                         break
                     continue
                 if line.startswith('data: '):
@@ -206,9 +229,11 @@ class RuntimeLlmService(ComponentService):
                             last_chunk_time = now
                     u = chunk.get('usage')
                     if u:
+                        observe_usage(u)
                         input_tokens = u.get('prompt_tokens', 0)
                         output_tokens = u.get('completion_tokens', 0)
         except policy.requests.exceptions.ChunkedEncodingError:
+            interrupted = True
             if collected:
                 policy.logger.warning('%s 连接中断, 返回已收集内容 (%d 字符)', model_id, sum((len(c) for c in collected)))
             else:
@@ -218,18 +243,9 @@ class RuntimeLlmService(ComponentService):
         full_content = ''.join(collected)
         if not full_content:
             raise TimeoutError(f'{model_id} 未返回任何内容 (首 token 超时 {FIRST_TOKEN_TIMEOUT}s)')
-        result = {'content': full_content, 'model': model_id, 'input_tokens': input_tokens, 'output_tokens': output_tokens or len(full_content) // 4}
-        try:
-            self.owner._record_usage(model_id, result['input_tokens'], result['output_tokens'])
-        except Exception:
-            pass
-        try:
-            from . import runtime_trace
-            total_ms = (_time.time() - start_time) * 1000
-            ttft_ms = ttft * 1000 if first_token_received else 0
-            runtime_trace.trace_llm_call(model=model_id, input_tokens=result['input_tokens'], output_tokens=result['output_tokens'], ttft_ms=ttft_ms, total_ms=total_ms, status='ok', call_type='chat')
-        except Exception:
-            pass
+        result = {'content': full_content, 'model': model_id, 'input_tokens': input_tokens, 'output_tokens': output_tokens}
+        if interrupted:
+            result.update(status='failed', _error=True, error='模型流中断，输出未完成')
         return result
 
     def _open_stream(self, prompt: str, model_id: str, base_url: str, api_key: str, system_prompt: str, first_token_timeout: int) -> Any:

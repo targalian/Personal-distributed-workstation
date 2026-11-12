@@ -188,11 +188,12 @@ class ChatContextService(ComponentService):
 
     def _build_prompt(self, message: str, history: list) -> str:
         """拼接对话历史 + 用户消息为 prompt。"""
-        if not history:
+        reference = self._memory_reference(message)
+        if not history and not reference:
             return message
 
         # 将历史对话格式化为文本
-        lines = []
+        lines = [reference] if reference else []
         for msg in history[-20:]:  # 最近 20 条
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -203,4 +204,17 @@ class ChatContextService(ComponentService):
 
         lines.append(f"Boss: {message}")
         return "\n".join(lines)
+
+    def _memory_reference(self, message: str) -> str:
+        """Keep recalled data out of intent detection and action authorization."""
+        if vars(self.owner).get('_db') is None:
+            return ''
+        from .component_service import call_component
+        from .memory_service import MemoryService
+        try:
+            return call_component(self.owner, MemoryService, 'recall',
+                                  conv_id=self.owner._active_conv_id, query=message)
+        except Exception as exc:
+            print(f"[Chat] 记忆检索暂不可用: {type(exc).__name__}")
+            return ''
 

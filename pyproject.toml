@@ -29,6 +29,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+browser = ["playwright>=1.50,<2"]
 dev = [
     "pytest>=7.4.0,<9.0",
     "pytest-cov>=4.1.0,<6.0",
@@ -65,7 +66,7 @@ ignore = ["E501"]  # 行长度由 line-length 控制
 known-first-party = ["lan_mesh"]
 
 [tool.setuptools.package-data]
-"lan_mesh" = ["web/templates/*.html", "web/static/*.*", "web/static/dashboard/*.js", "web/static/icons/*", "web/static/spa/**/*", "model_pool.yaml", "model_pool.example.yaml", "resources.example.yaml", "builtin_skills/*/*.md", "builtin_skills/*/LICENSE.txt"]
+"lan_mesh" = ["web/templates/*.html", "web/static/*.*", "web/static/dashboard/*.js", "web/static/collaboration/*.*", "web/static/schedules/*.*", "web/static/memories/*.*", "web/static/artifacts/*.*", "web/static/dag/*.*", "web/static/icons/*", "web/static/spa/**/*", "model_pool.yaml", "model_pool.example.yaml", "resources.example.yaml", "builtin_skills/*/*.md", "builtin_skills/*/LICENSE.txt"]
 "lan_mesh._vendor.yomkserverpy" = ["LICENSE.txt", "UPSTREAM.md"]
 
 "lan_mesh._vendor.yomk_graph" = ["web/*", "LICENSE.txt", "*.md"]

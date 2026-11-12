@@ -58,6 +58,10 @@
 import secrets
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lan_mesh.database import Database
 
 # 确保项目根目录在 sys.path 中
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -7537,6 +7541,8 @@ class TestIter74SseUtf8Decoding:
         monkeypatch.setattr("lan_mesh.agent_runtime.requests.post",
                             lambda *a, **k: resp)
         rt = AgentRuntime.__new__(AgentRuntime)
+        import threading
+        rt._cancel_event = threading.Event()
         return rt._call_openai_compatible(
             "问候", "test-model", "http://x/v1", "k")
 
@@ -8342,7 +8348,9 @@ class TestIter87RuntimeCancellation:
             "agent-react-cancel", str(tmp_path))
         llm_calls = []
 
-        class FakeRegistry:
+        from lan_mesh.tool_registry import ToolRegistry
+
+        class FakeRegistry(ToolRegistry):
             def list_tools(self):
                 return []
 
@@ -8460,7 +8468,7 @@ class TestIter87RuntimeCancellation:
         result = StationController._local_cancel_subagent(
             controller, "sub-cancel")
 
-        assert result == {"ok": True, "agent_id": "sub-cancel"}
+        assert result == {"ok": True, "agent_id": "sub-cancel", "quiescent": False}
         assert runtime.cancelled is True
         assert controller._local_sub_agents["sub-cancel"]["status"] == "cancelled"
 
@@ -8491,6 +8499,7 @@ class TestIter87RuntimeCancellation:
         assert cancelled == ["sub-route"]
 
     def test_pm_cancel_broadcasts_to_mapped_subagents(self, monkeypatch):
+        from types import SimpleNamespace
         import lan_mesh.pm_dispatcher as pm_dispatcher
         from lan_mesh.pm_state import PMState
 

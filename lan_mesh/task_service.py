@@ -114,6 +114,9 @@ class TaskService(StationService):
         if not task:
             raise ServiceError(status_code=404, detail="任务不存在")
 
+        from .collaboration_repository import CollaborationRepository
+        if CollaborationRepository(db).get(task_id)['state'] != 'automatic':
+            raise ServiceError(409, '请先结束人工接管，再恢复任务')
         snapshot = db.get_pm_snapshot_by_task(task_id)
         if not snapshot:
             raise ServiceError(status_code=404, detail="无执行态快照, 无法恢复")

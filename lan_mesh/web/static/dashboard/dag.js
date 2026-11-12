@@ -1,198 +1,74 @@
-// ── DAG 图编辑器 ──────────────────────────────────────────────
-let dagNodes=[];let dagEdges=[];let dagTaskId='';let dagSelected=null;
-let dagConnectMode=false;let dagConnectSource=null;let dagDragging=null;let dagDragOffset={x:0,y:0};
-const dagSvg=()=>document.getElementById('dag-svg');
-const dagNodesG=()=>document.getElementById('dag-nodes');
-const dagEdgesG=()=>document.getElementById('dag-edges');
-const NODE_W=160,NODE_H=50;
-
-function dagStatusColor(s){
-  if(s==='completed')return'var(--green)';
-  if(s==='running'||s==='assigned')return'var(--accent)';
-  if(s==='failed')return'var(--red)';
-  return'var(--yellow)';
+// ── Secretary / workspace adapters for the shared task-flow workbench ──
+let _chatDagOpen=false;
+let _chatDagContext=null;
+function dagFrame(id){return document.getElementById(id);}
+function dagCanLeave(id){return dagFrame(id)?.contentWindow?.DagWorkbench?.canLeave()!==false;}
+function dagSend(id,data){dagFrame(id)?.contentWindow?.postMessage(data,location.origin);}
+function refreshDagTaskSelect(){
+  const frame=dagFrame('workspace-dag-frame');
+  if(frame&&!frame.getAttribute('src'))frame.src='/static/dag/index.html';
 }
-
-async function loadDAGFromSelect(){
-  const sel=document.getElementById('dag-task-select');
-  const tid=sel.value;
-  if(!tid){showToast('请先选择任务','err');return;}
-  dagTaskId=tid;
-  try{
-    const r=await apiFetch(`/api/tasks/${tid}/graph`);
-    if(!r.ok){const e=await r.json();showToast(e.detail||'加载失败','err');return;}
-    const data=await r.json();
-    dagNodes=data.nodes||[];dagEdges=data.edges||[];
-    renderDAG();
-    document.getElementById('dag-status').textContent=`已加载: ${dagNodes.length} 节点 / ${dagEdges.length} 边`;
-    showToast('DAG 图已加载','ok');
-  }catch(e){showToast('加载失败: '+e.message,'err');}
+async function openWorkspaceDag(taskId){
+  if(!dagCanLeave('workspace-dag-frame'))return;
+  const frame=dagFrame('workspace-dag-frame');
+  if(frame.contentWindow?.DagWorkbench)await frame.contentWindow.DagWorkbench.setContext({task_id:taskId});
+  else frame.src='/static/dag/index.html?'+new URLSearchParams({task_id:taskId});
+  switchTab('workspace');switchWsView('dag');
 }
-
-function renderDAG(){
-  const ng=dagNodesG();const eg=dagEdgesG();
-  ng.innerHTML='';eg.innerHTML='';
-  // 渲染边
-  dagEdges.forEach((e,i)=>{
-    const src=dagNodes.find(n=>n.id===e.source);
-    const tgt=dagNodes.find(n=>n.id===e.target);
-    if(!src||!tgt)return;
-    const x1=(src.x||0)+NODE_W/2,y1=(src.y||0)+NODE_H;
-    const x2=(tgt.x||0)+NODE_W/2,y2=(tgt.y||0);
-    const line=document.createElementNS('http://www.w3.org/2000/svg','line');
-    line.setAttribute('x1',x1);line.setAttribute('y1',y1);
-    line.setAttribute('x2',x2);line.setAttribute('y2',y2);
-    line.setAttribute('stroke',e.condition?'var(--yellow)':'var(--dim)');
-    line.setAttribute('stroke-width','2');
-    if(e.condition)line.setAttribute('stroke-dasharray','6,4');
-    line.setAttribute('marker-end',e.condition?'url(#arrowhead-cond)':'url(#arrowhead)');
-    eg.appendChild(line);
-    if(e.condition){
-      const txt=document.createElementNS('http://www.w3.org/2000/svg','text');
-      txt.setAttribute('x',(x1+x2)/2);txt.setAttribute('y',(y1+y2)/2-6);
-      txt.setAttribute('fill','var(--yellow)');txt.setAttribute('font-size','10');
-      txt.setAttribute('text-anchor','middle');
-      txt.textContent=e.condition.length>20?e.condition.slice(0,20)+'...':e.condition;
-      eg.appendChild(txt);
-    }
-  });
-  // 渲染节点
-  dagNodes.forEach((n,i)=>{
-    const g=document.createElementNS('http://www.w3.org/2000/svg','g');
-    g.setAttribute('transform',`translate(${n.x||0},${n.y||0})`);
-    g.style.cursor='grab';
-    g.dataset.idx=i;
-    const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');
-    rect.setAttribute('width',NODE_W);rect.setAttribute('height',NODE_H);
-    rect.setAttribute('rx','10');rect.setAttribute('ry','10');
-    rect.setAttribute('fill','var(--surface2)');
-    rect.setAttribute('stroke',dagSelected===n.id?'#fff':dagStatusColor(n.status));
-    rect.setAttribute('stroke-width',dagSelected===n.id?'3':'2');
-    g.appendChild(rect);
-    const txt=document.createElementNS('http://www.w3.org/2000/svg','text');
-    txt.setAttribute('x',NODE_W/2);txt.setAttribute('y',20);
-    txt.setAttribute('text-anchor','middle');txt.setAttribute('fill','var(--text)');
-    txt.setAttribute('font-size','12');txt.setAttribute('font-weight','600');
-    txt.textContent=(n.name||'unnamed').length>14?(n.name||'').slice(0,14)+'...':(n.name||'');
-    g.appendChild(txt);
-    const sub=document.createElementNS('http://www.w3.org/2000/svg','text');
-    sub.setAttribute('x',NODE_W/2);sub.setAttribute('y',38);
-    sub.setAttribute('text-anchor','middle');sub.setAttribute('fill','var(--dim)');
-    sub.setAttribute('font-size','10');
-    sub.textContent=`${n.skill||''} [${n.status||'pending'}]`;
-    g.appendChild(sub);
-    // 事件
-    g.addEventListener('mousedown',(ev)=>dagNodeMouseDown(ev,i));
-    g.addEventListener('click',(ev)=>dagNodeClick(ev,i));
-    ng.appendChild(g);
-  });
+async function toggleChatDag(force,taskId=''){
+  const open=typeof force==='boolean'?force:!_chatDagOpen;
+  if(!open&&!dagCanLeave('chat-dag-frame'))return;
+  _chatDagOpen=open;
+  const layout=document.querySelector('.chat-layout');layout.classList.toggle('with-dag',open);
+  document.getElementById('chat-dag-panel').hidden=!open;
+  document.getElementById('chat-dag-toggle').setAttribute('aria-expanded',String(open));
+  if(open)await syncChatDag(taskId);else{document.getElementById('chat-dag-panel').classList.remove('dag-expanded');document.getElementById('chat-dag-toggle').focus();}
 }
-
-function dagNodeMouseDown(ev,idx){
-  if(dagConnectMode)return;
-  ev.preventDefault();
-  dagDragging=idx;
-  const svg=dagSvg();const rect=svg.getBoundingClientRect();
-  dagDragOffset={x:ev.clientX-rect.left-(dagNodes[idx].x||0),y:ev.clientY-rect.top-(dagNodes[idx].y||0)};
+async function syncChatDag(taskId=''){
+  if(!_chatDagOpen)return;
+  const frame=dagFrame('chat-dag-frame'),meta=_convList.find(c=>c.id===_activeConvId);
+  if(!_activeConvId){frame.removeAttribute('src');_chatDagContext=null;return;}
+  const value={conv_id:_activeConvId,project_id:meta?.project_id||'',task_id:taskId};
+  const key=JSON.stringify(value);if(key===_chatDagContext)return;
+  _chatDagContext=key;
+  if(frame.contentWindow?.DagWorkbench)await frame.contentWindow.DagWorkbench.setContext(value);
+  else frame.src='/static/dag/index.html?'+new URLSearchParams(value);
 }
-
-function dagNodeClick(ev,idx){
-  ev.stopPropagation();
-  const n=dagNodes[idx];
-  if(dagConnectMode){
-    if(!dagConnectSource){dagConnectSource=n.id;showToast(`连线: 源=${n.name}`,'info');}
-    else{
-      if(dagConnectSource!==n.id){
-        dagEdges.push({source:dagConnectSource,target:n.id,condition:'',description:''});
-        renderDAG();showToast('连线已添加','ok');
-      }
-      dagConnectSource=null;
-    }
-    return;
+function chatDagRefresh(taskId){
+  for(const id of ['chat-dag-frame','workspace-dag-frame'])dagSend(id,{type:'dag-refresh',task_id:taskId});
+}
+function chatDraftContext(data){
+  const input=document.getElementById('chat-input');
+  const prefix=`关于任务“${data.task_name||data.task_id}”（${data.task_id}）${data.node_name?`的步骤“${data.node_name}”`:''}：\n`;
+  if(!input.value.startsWith(prefix))input.value=prefix+input.value;
+  input.dispatchEvent(new Event('input'));input.focus();input.setSelectionRange(input.value.length,input.value.length);
+  document.getElementById('chat-compose-hint').textContent=data.draft?'图中有未保存修改，建议先保存，再请秘书调整。':'已带入任务和步骤；补充问题后发送。Shift + Enter 换行。';
+  if(window.innerWidth<900)document.getElementById('chat-input').scrollIntoView({block:'center',behavior:'smooth'});
+}
+async function discussDagInChat(data){
+  if(!_convList.length)await loadConversations();
+  let conv=_convList.find(c=>c.id===_activeConvId);
+  if(data.project_id&&conv?.project_id!==data.project_id){
+    const match=_convList.find(c=>c.project_id===data.project_id);
+    if(!match){showToast('请先打开该项目的秘书对话，再选择对应任务。','info');return;}
+    if(!dagCanLeave('chat-dag-frame'))return;
+    await switchConversation(match.id);
   }
-  dagSelected=n.id;
-  renderDAG();
-  // 显示详情
-  const det=document.getElementById('dag-node-detail');
-  det.style.display='block';
-  document.getElementById('dag-detail-content').innerHTML=`
-    <div style="margin-bottom:6px"><b>名称:</b> ${n.name||'-'}</div>
-    <div style="margin-bottom:6px"><b>技能:</b> ${n.skill||'-'}</div>
-    <div style="margin-bottom:6px"><b>状态:</b> <span style="color:${dagStatusColor(n.status)}">${n.status||'pending'}</span></div>
-    <div style="margin-bottom:6px"><b>描述:</b> ${n.description||'-'}</div>
-    <div style="margin-bottom:6px"><b>Agent:</b> ${n.assigned_agent_id||'未分配'}</div>
-    <div><b>条件:</b> ${n.condition_expr||'无'}</div>`;
+  if(!_activeConvId){showToast('请先新建或选择一个秘书对话。','info');return;}
+  switchTab('chat');await toggleChatDag(true,data.task_id);chatDraftContext(data);
 }
-
-document.addEventListener('mousemove',(ev)=>{
-  if(dagDragging===null)return;
-  const svg=dagSvg();const rect=svg.getBoundingClientRect();
-  dagNodes[dagDragging].x=Math.max(0,ev.clientX-rect.left-dagDragOffset.x);
-  dagNodes[dagDragging].y=Math.max(0,ev.clientY-rect.top-dagDragOffset.y);
-  renderDAG();
+window.addEventListener('message',async event=>{
+  if(event.origin!==location.origin)return;
+  const id=['chat-dag-frame','workspace-dag-frame'].find(id=>dagFrame(id)?.contentWindow===event.source);
+  if(!id)return;
+  const data=event.data||{};
+  if(data.type==='dag-discuss'){
+    if(id==='chat-dag-frame')chatDraftContext(data);else await discussDagInChat(data);
+  }
+  if(data.type==='dag-saved')refreshTasks();
+  if(data.type==='dag-expand'){
+    const target=id==='chat-dag-frame'?document.getElementById('chat-dag-panel'):document.getElementById('ws-dag');
+    target.classList.toggle('dag-expanded');
+    dagSend(id,{type:'dag-expanded',expanded:target.classList.contains('dag-expanded')});
+  }
 });
-document.addEventListener('mouseup',()=>{dagDragging=null;});
-
-function dagToggleConnect(){
-  dagConnectMode=!dagConnectMode;dagConnectSource=null;
-  const btn=document.getElementById('dag-connect-btn');
-  btn.style.background=dagConnectMode?'var(--accent)':'';
-  btn.style.color=dagConnectMode?'#fff':'';
-  showToast(dagConnectMode?'连线模式: 依次点击源节点和目标节点':'连线模式已关闭','info');
-}
-
-async function dagAddNode(){
-  const name=await showInputDialog('节点名称:','新子任务');
-  if(!name)return;
-  const skill=await showInputDialog('技能 (code_generation/code_review/shell_exec/...):','code_generation')||'code_generation';
-  const id='st-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6);
-  dagNodes.push({id,name,status:'pending',skill,description:'',input_data:{},output_data:{},assigned_agent_id:'',condition_expr:'',x:100+Math.random()*200,y:100+Math.random()*200});
-  renderDAG();
-  document.getElementById('dag-status').textContent=`${dagNodes.length} 节点 / ${dagEdges.length} 边`;
-}
-
-function dagDeleteSelected(){
-  if(!dagSelected){showToast('请先点击选中一个节点','err');return;}
-  dagNodes=dagNodes.filter(n=>n.id!==dagSelected);
-  dagEdges=dagEdges.filter(e=>e.source!==dagSelected&&e.target!==dagSelected);
-  dagSelected=null;
-  document.getElementById('dag-node-detail').style.display='none';
-  renderDAG();
-  document.getElementById('dag-status').textContent=`${dagNodes.length} 节点 / ${dagEdges.length} 边`;
-  showToast('节点已删除','ok');
-}
-
-async function saveDAG(){
-  // iter-51 (F4.3): 手工/自然语言编辑图保存端点已恢复,
-  // 仅 pending 任务可保存 (后端校验环/状态)
-  if(!dagTaskId){showToast('请先选择任务','err');return;}
-  const nodes=dagNodes.map(n=>({
-    id:n.id,name:n.name||'未命名',status:n.status||'pending',
-    skill:n.skill||'',description:n.description||'',x:n.x||0,y:n.y||0,
-  }));
-  const edges=dagEdges.map(e=>({source:e.source,target:e.target,condition:e.condition||'',description:e.description||''}));
-  try{
-    const r=await apiFetch(`/api/tasks/${dagTaskId}/graph`,{
-      method:'PUT',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({nodes,edges}),
-    });
-    const d=await r.json();
-    if(r.ok&&d.ok){showToast('✅ '+(d.message||'已保存'));}
-    else{showToast('保存失败: '+(d.detail||d.message||'未知错误'),'err');}
-  }catch(e){showToast('保存失败: '+e.message,'err');}
-}
-
-async function refreshDagTaskSelect(){
-  try{
-    const r=await apiFetch('/api/tasks?limit=50');
-    const d=await r.json();
-    const sel=document.getElementById('dag-task-select');
-    sel.innerHTML='<option value="">选择任务...</option>';
-    (d.tasks||[]).forEach(t=>{
-      const opt=document.createElement('option');
-      opt.value=t.task_id;opt.textContent=`${t.name||t.task_id.slice(0,8)} [${t.status}]`;
-      sel.appendChild(opt);
-    });
-  }catch(e){}
-}
-

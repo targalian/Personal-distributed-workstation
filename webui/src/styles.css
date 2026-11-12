@@ -633,3 +633,6 @@ body {
   gap: 6px;
   flex-shrink: 0;
 }
+
+/* Shared task-flow workbench can expand without leaving the current route. */
+#spa-dag-frame.dag-expanded{position:fixed;inset:10px;width:calc(100vw - 20px)!important;height:calc(100vh - 20px)!important;min-height:0!important;z-index:1000;box-shadow:0 0 0 100vmax #0009;border-radius:12px}

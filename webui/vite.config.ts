@@ -15,6 +15,7 @@ export default defineConfig({
     // 开发模式代理到本机 Station (默认 45500)
     proxy: {
       "/api": "http://127.0.0.1:45500",
+      "/static": "http://127.0.0.1:45500",
       "/ws": { target: "ws://127.0.0.1:45500", ws: true },
     },
   },

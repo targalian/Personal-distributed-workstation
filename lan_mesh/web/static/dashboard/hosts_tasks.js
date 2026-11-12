@@ -88,7 +88,7 @@ function renderTasks(){
     const actionBtns=(canCancel?`<button class="btn sm" style="background:#e5a33c;color:#fff;border:none" onclick="event.stopPropagation();pauseTask('${t.task_id}','${escJs(t.name||'')}')">&#10074;&#10074; 暂停</button><button class="btn sm" style="background:#e5533c;color:#fff;border:none" onclick="event.stopPropagation();cancelTask('${t.task_id}','${escJs(t.name||'')}')">&#9724; 取消</button>`:'')+(canResubmit?`<button class="btn sm primary" onclick="event.stopPropagation();resubmitTask('${t.task_id}')">🔄 重新提交</button>`:'');
     const hasDelivery=t.output_data&&t.output_data._delivery;
     const review=hasDelivery?t.output_data._delivery.acceptance_review||{}:{};
-    const reviewBadge=review.verdict==='pass'?`<span class="badge" style="background:var(--green);color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">验收自检通过</span>`:review.verdict==='risk'?`<span class="badge" style="background:#e5533c;color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">验收自检未全过</span>`:'';
+    const reviewBadge=review.verdict==='pass'?`<span class="badge" style="background:var(--green);color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">模型自评满足（未独立验证）</span>`:review.verdict==='risk'?`<span class="badge" style="background:#e5533c;color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">模型自评未全过</span>`:'';
     const deliveryBadge=hasDelivery?`<span class="badge" style="background:${t.output_data._delivery.accepted===true?'var(--green)':t.output_data._delivery.accepted===false?'#e5533c':'var(--yellow)'};color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:6px">${t.output_data._delivery.accepted===true?'✅ 已验收':t.output_data._delivery.accepted===false?'❌ 已退回':'📦 待验收'}</span>`:'';
     return `<div class="card task-card" onclick="toggleTaskExpand(this)">
       <div class="card-head"><div class="card-title"><span class="task-toggle">▶</span>${esc(t.name||'未命名')}<span class="badge ${c}">${t.status}</span>${fwdBadge}${deliveryBadge}${reviewBadge}</div></div>
@@ -101,12 +101,7 @@ function renderTasks(){
   }).join('');
 }
 function projNameById(pid){const p=allProjects.find(x=>x.project_id===pid);return p?p.name:pid.slice(0,8);}
-function openDagForTask(taskId){
-  switchWsView('dag');
-  const sel=document.getElementById('dag-task-select');
-  sel.value=taskId;
-  loadDAGFromSelect();
-}
+function openDagForTask(taskId){return openWorkspaceDag(taskId);}
 async function showTaskDetail(id){
   const t=allTasks.find(x=>x.task_id===id);if(!t)return;
   let steps=(t.subtasks||[]).map(s=>`<div class="task-step"><span class="step-dot ${s.status}"></span><span>${esc(s.name||s.description||'子任务')} <span style="color:var(--dim)">[${s.status}]</span>${s.assigned_agent_id?' → '+esc(s.assigned_agent_id.slice(0,8)):''}</span></div>`).join('');

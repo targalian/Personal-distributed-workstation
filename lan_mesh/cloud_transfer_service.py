@@ -98,7 +98,7 @@ class CloudTransferService(ComponentService):
         for local_file in self.owner.local_path.rglob('*'):
             if not local_file.is_file():
                 continue
-            if local_file.name.startswith('.'):
+            if local_file.name.startswith('.') or any(part in local_file.resolve().parts for part in ('.runtime_artifacts', '.private_replicas')):
                 continue
             rel = str(local_file.relative_to(self.owner.local_path))
             cloud_key = self.owner._cloud_key(rel)
@@ -126,7 +126,9 @@ class CloudTransferService(ComponentService):
         except Exception as e:
             return (0, [f'列举云端对象失败: {e}'])
         for rel, info in cloud_objects.items():
-            local_file = self.owner.local_path / rel
+            local_file = (self.owner.local_path / rel).resolve()
+            if any(part in local_file.parts for part in ('.runtime_artifacts', '.private_replicas')) or not local_file.is_relative_to(self.owner.local_path.resolve()):
+                continue
             try:
                 if local_file.is_file():
                     local_mtime = local_file.stat().st_mtime

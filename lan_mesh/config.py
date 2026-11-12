@@ -48,7 +48,8 @@ class ModelEntryConfig(BaseModel):
     quality_score: float = 0.5        # 能力基准分 (0~1)
     speed_score: float = 0.5          # 响应速度分 (0~1)
     rate_limit_rpm: int = 100         # 请求速率限制 (RPM)
-    max_context_tokens: int = 32768   # 最大上下文窗口
+    max_context_tokens: int = Field(default=32768, ge=1024, le=2000000)
+    max_output_tokens: int = Field(default=4096, ge=1, le=1000000)
     fallback: list = Field(default_factory=list)  # 降级链 [model_id, ...]
 
 

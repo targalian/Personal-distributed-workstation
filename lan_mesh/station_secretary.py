@@ -164,6 +164,9 @@ class StationSecretaryMixin:
 
         # 任务断点恢复: 将上次运行中断的任务标记为 interrupted
         self._recover_stale_tasks()
+        from .component_service import call_component
+        from .periodic_service import PeriodicService
+        call_component(self, PeriodicService, "start")
 
         return {
             "ok": True,
@@ -226,6 +229,10 @@ class StationSecretaryMixin:
             try:
                 tasks = self.db.list_tasks(status=status, limit=100)
                 for task in tasks:
+                    from .submission_context import can_dispatch
+                    if not can_dispatch(self.db, task):
+                        logger.warning('[Station] 周期任务派发需人工核对: %s', task.task_id)
+                        continue
                     # iter-53: 有快照 → 自动续跑
                     if self.db.get_pm_snapshot_by_task(task.task_id):
                         result = self._local_resume_pm(task.task_id)

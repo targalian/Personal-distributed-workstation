@@ -18,8 +18,18 @@
 | chat_intent_service.py | ChatIntentService: extracted domain behavior with explicit component ownership. |
 | chat_policy.py | 秘书聊天处理器 — Web 端对话接口 |
 | chat_requirements_service.py | ChatRequirementsService: extracted domain behavior with explicit component ownership. |
+| collaboration_routes.py | Collaboration HTTP adapters; existing mesh/user authorization applies unchanged. |
+| collaboration_service.py | Existing task, team, L1/L2 conversation and takeover views over the Yomk bus. |
 | conversation_api_service.py | ConversationApiService: transport-neutral interaction operations behind the original API. |
 | conversation_service.py | Typed shared conversation ingress for Web, conversation threads and Bot adapters. |
+| history_index.py | Read authoritative JSONL safely and refresh only changed conversation indexes. |
+| im_service.py | Authenticated IM bridge: configured room ownership, shared ChatRequest and durable dedup. |
+| im_telegram.py | Native Telegram adapter with configured-room admission and durable reply receipts. |
+| memory_api_service.py | Authenticated Station boundary for explicit memory edits and scoped history reads. |
+| memory_routes.py | Additional memory/history routes; the existing conversation endpoints stay intact. |
+| memory_service.py | Scoped memory and history operations owned by the live ChatHandler. |
+| periodic_routes.py | Periodic and IM HTTP adapters reuse normal mesh/user role checks and Yomk ownership. |
+| pm_memory.py | Retrieve current scoped reference memories from the configured Secretary only. |
 | role_cards.py | 统一角色卡定义 (M6) — Secretary/PM/Worker 人格的单一事实源。 |
 <!-- /AUTO:module-list -->
 ---
@@ -435,3 +445,11 @@ miss), 导致 `project_path` 从未进入任务 `input_data`, 子任务在错误
 | 2026-09-01 | iter-73 | chat_handler 优化讨论纯对话通道: chat() 增 discuss_context (话题优化项/队列总览注入 system prompt + 跳过命令关键词检测, action_taken=opt_discuss), /api/secretary/chat 透传 |
 | 2026-08-16 | iter-27 后 | 初建 |
 | 2026-09-10 | iter-99 | BUG-037: `_extract_local_path` 兼容正斜杠/引号/路径标签且标签优先于裸路径, `_action_submit_task` 补传 `project_path`; 修复前对话派发任务的子任务全部在 "." 上作业 |
+
+## iter-116：有来源的作用域记忆
+
+[作用域记忆与历史检索](scoped-memory-history.md)说明MemoryService、中文历史索引、显式修订API、自动回复参考预算以及权限/恢复边界。
+
+人工接管、L1/L2协作与浏览器能力见[协作工作台设计](collaboration-workbench.md)。
+
+持久IM收件、Telegram限定来源及规范化桥接见[周期与IM设计](../03-task-orchestration/periodic-im.md)。

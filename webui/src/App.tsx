@@ -1,16 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
 import StationPage from "./pages/StationPage";
 import TasksPage from "./pages/TasksPage";
-import DagEditorPage from "./pages/DagEditorPage";
+import DagEditorPage, { canLeaveDag } from "./pages/DagEditorPage";
+import MemoriesPage from "./pages/MemoriesPage";
+import SchedulesPage from "./pages/SchedulesPage";
+import CollaborationPage from "./pages/CollaborationPage";
 import UsersPage from "./pages/UsersPage";
 import { ensureMeshToken, getRole, loginUser, logoutUser } from "./api";
 
 // iter-56: hash 路由 (服务端 /spa 静态托管无 SSR 路由, hash 免服务端配置)
-type Route = "station" | "tasks" | "dag" | "users";
+type Route = "station" | "tasks" | "dag" | "users" | "collaboration" | "schedules" | "memories";
 
 function parseHash(): { route: Route; taskId?: string } {
   const h = window.location.hash.replace(/^#\/?/, "");
   const [first, second] = h.split("/");
+  if (first === "memories") return { route: "memories" };
+  if (first === "schedules") return { route: "schedules" };
+  if (first === "collaboration") return { route: "collaboration" };
   if (first === "tasks") return { route: "tasks" };
   // dag 无 taskId 时仍进入编辑器 (任务 ID 可手输/从列表跳转带参)
   if (first === "dag")
@@ -23,7 +29,10 @@ function parseHash(): { route: Route; taskId?: string } {
 const NAV: { key: Route; label: string; icon: string }[] = [
   { key: "station", label: "Station", icon: "🏢" },
   { key: "tasks", label: "任务", icon: "📋" },
-  { key: "dag", label: "DAG 编辑", icon: "🕸️" },
+  { key: "dag", label: "任务流程", icon: "🕸️" },
+  { key: "memories", label: "记忆", icon: "🧠" },
+  { key: "schedules", label: "计划", icon: "🗓" },
+  { key: "collaboration", label: "协作", icon: "🤝" },
   { key: "users", label: "用户", icon: "👥" },
 ];
 
@@ -72,7 +81,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const onHash = () => setRoute(parseHash());
+    let previous = window.location.hash;
+    const onHash = () => {
+      if (!canLeaveDag()) { history.replaceState(null, "", previous || "#/station"); return; }
+      previous = window.location.hash;
+      setRoute(parseHash());
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -83,6 +97,7 @@ export default function App() {
 
   // 切换身份: 存用户 token 后重新拉取角色 (服务端回显)
   const applyToken = () => {
+    if (!canLeaveDag()) return;
     loginUser(tokenInput);
     setTokenInput("");
     setAuthOpen(false);
@@ -91,6 +106,7 @@ export default function App() {
 
   // 退出登录: 回到未登录态 (多用户模式下仅剩引导端点可用)
   const logout = () => {
+    if (!canLeaveDag()) return;
     logoutUser();
     setAuthOpen(false);
     refreshRole();
@@ -148,6 +164,9 @@ export default function App() {
           // key=role: 身份切换后重挂载, 刷新 viewer 只读状态
           <DagEditorPage key={role} taskId={route.taskId ?? ""} />
         )}
+        {route.route === "memories" && <MemoriesPage />}
+        {route.route === "schedules" && <SchedulesPage />}
+        {route.route === "collaboration" && <CollaborationPage />}
         {route.route === "users" && <UsersPage key={role} />}
       </main>
     </div>

@@ -15,9 +15,9 @@ def test_repository_schema_matches_pre_migration(tmp_path):
     actual=[list(row) for row in db._get_conn().execute(
         'SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type,name')]
     # v13 adds journals; the pre-existing v12 tables and indexes remain exact.
-    original=[row for row in actual if not row[2].startswith('mesh_')]
+    original=[row for row in actual if not row[2].startswith(('mesh_', 'context_', 'usage_call_', 'collaboration_', 'periodic_', 'im_', 'private_restore_'))]
     assert original==expected
-    assert SCHEMA_VERSION==13
+    assert SCHEMA_VERSION==18
 
 
 def test_repositories_keep_thread_local_connection_and_compatible_reads(tmp_path):

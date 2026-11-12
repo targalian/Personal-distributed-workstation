@@ -26,8 +26,10 @@ class BotIngressService(ComponentService):
         while self.owner._tg_polling and channel.enabled:
             try:
                 url = f'https://api.telegram.org/bot{channel.bot_token}/getUpdates'
-                params = {'offset': self.owner._tg_last_update_id + 1, 'timeout': 30}
-                resp = policy.requests.get(url, params=params, timeout=35)
+                params = {'offset': self.owner._tg_last_update_id + 1, 'timeout': 5}
+                from .im_telegram import flush_replies, receive_native
+                flush_replies(self.owner, channel)
+                resp = policy.requests.get(url, params=params, timeout=10)
                 if resp.status_code != 200:
                     wait_for_stop(self.owner, 5)
                     continue
@@ -36,18 +38,24 @@ class BotIngressService(ComponentService):
                     wait_for_stop(self.owner, 5)
                     continue
                 for update in result.get('result', []):
-                    self.owner._tg_last_update_id = update.get('update_id', self.owner._tg_last_update_id)
+                    pending_update_id = update.get('update_id', self.owner._tg_last_update_id)
                     callback_query = update.get('callback_query')
                     if callback_query:
                         self.owner._handle_callback_query(channel, callback_query)
+                        self.owner._tg_last_update_id = pending_update_id
                         continue
                     message = update.get('message')
                     if not message:
+                        self.owner._tg_last_update_id = pending_update_id
                         continue
                     text = message.get('text', '').strip()
                     chat_id = str(message.get('chat', {}).get('id', ''))
                     if text:
-                        self.owner._handle_telegram_command(channel, text, chat_id)
+                        event_id = str(channel.bot_token).split(':', 1)[0] + ':' + str(update.get('update_id', ''))
+                        handled = receive_native(self.owner, channel, {'event_id': event_id, 'room_id': chat_id, 'message': text})
+                        if not handled:
+                            self.owner._handle_telegram_command(channel, text, chat_id)
+                    self.owner._tg_last_update_id = pending_update_id
             except policy.requests.exceptions.Timeout:
                 continue
             except Exception as e:
@@ -62,6 +70,8 @@ class BotIngressService(ComponentService):
         data = callback_query.get('data', '')
         chat_id = str(callback_query.get('message', {}).get('chat', {}).get('id', ''))
         query_id = callback_query.get('id', '')
+        if not channel.chat_id or chat_id != str(channel.chat_id):
+            return
         self.owner._answer_callback_query(channel, query_id)
         if not data.startswith('decide:'):
             return
@@ -69,6 +79,10 @@ class BotIngressService(ComponentService):
         if len(parts) < 3:
             return
         _, pm_id, choice = parts
+        from .im_telegram import receive_native
+        if receive_native(self.owner, channel, {'event_id': 'callback:' + str(channel.bot_token).split(':', 1)[0] + ':' + query_id, 'room_id': chat_id,
+                'message': choice, 'kind': 'decision', 'pm_id': pm_id}):
+            return
         policy.logger.info('收到 Inline 决策: PM=%s, choice=%s (from %s)', pm_id[:12], choice, chat_id)
         if self.owner._chat_handler and hasattr(self.owner._chat_handler, 'controller'):
             try:
@@ -105,6 +119,8 @@ class BotIngressService(ComponentService):
 
     def _handle_telegram_command(self, channel: policy.BotChannel, text: str, chat_id: str) -> Any:
         """处理来自 Telegram 的命令 (优化15: 统一入口)。"""
+        if not channel.chat_id or chat_id != str(channel.chat_id):
+            return
         policy.logger.info('收到 Telegram 消息: %s (from %s)', text[:50], chat_id)
         if text == '/start' or text == '/help':
             reply = '🤖 LAN Mesh 工作站 Bot\n\n可用命令:\n/status — 工作站状态概览\n/hosts — 在线主机列表\n/tasks — 最近任务\n/help — 显示帮助\n\n或直接发送自然语言消息, 秘书将为您处理。\n示例: 「提交一个代码审查任务: 检查 xxx 项目」'

@@ -49,8 +49,9 @@ class PmControlService(YomkService):
             self.controller.db.update_task_status(task_id, "paused")
             self.controller.db.update_pm_status(pm_id, "paused")
             logger.info("本机任务已暂停: %s", task_id)
-            self.controller.bot_gateway.notify("task_paused", {"task_id": task_id, "name": task.name})
-            return {"ok": True, "message": "任务已暂停"}
+            if task.status != "paused":
+                self.controller.bot_gateway.notify("task_paused", {"task_id": task_id, "name": task.name})
+            return {**result, "ok": True, "message": "任务已暂停"}
 
         ip = worker.get("ip", "")
         port = worker.get("api_port", 0)
@@ -68,13 +69,17 @@ class PmControlService(YomkService):
                 timeout=10,
             )
             if resp.status_code == 200:
+                result = resp.json()
+                if not result.get("ok"):
+                    return {"ok": False, "message": result.get("message", "Worker 暂停失败")}
                 self.controller.db.update_task_status(task_id, "paused")
                 self.controller.db.update_pm_status(pm_id, "paused")
                 logger.info("任务已暂停: %s", task_id)
-                self.controller.bot_gateway.notify("task_paused", {
-                    "task_id": task_id, "name": task.name,
-                })
-                return {"ok": True, "message": "任务已暂停"}
+                if task.status != "paused":
+                    self.controller.bot_gateway.notify("task_paused", {
+                        "task_id": task_id, "name": task.name,
+                    })
+                return {**result, "ok": True, "message": "任务已暂停"}
             else:
                 return {"ok": False, "message": f"Worker 返回错误: {resp.text[:200]}"}
         except Exception as e:

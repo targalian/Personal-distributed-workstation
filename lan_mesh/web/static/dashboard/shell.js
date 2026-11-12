@@ -1,5 +1,10 @@
 // ── Toast 通知 + 按钮反馈 ──
+const recentToasts = new Map();
 function showToast(msg,type='info'){
+  const key=type+':'+msg, now=Date.now();
+  if(now-(recentToasts.get(key)||0)<5000)return;
+  recentToasts.set(key,now);
+  for(const [k,t] of recentToasts)if(now-t>5000)recentToasts.delete(k);
   const c=document.getElementById('toast-container');
   const t=document.createElement('div');
   t.className='toast '+type;
@@ -126,6 +131,7 @@ function connectWS(){
   ws.onopen=()=>{document.getElementById('ws-dot').classList.remove('offline');document.getElementById('ws-label').textContent='已连接';refreshAllState();};
   ws.onmessage=(e)=>{
     const msg=JSON.parse(e.data);
+    if(msg.type==='task_graph_updated'||msg.type==='task_updated')chatDagRefresh(msg.data?.task_id);
     if(msg.type==='hosts'||msg.type==='heartbeat'||msg.type==='host_registered')refreshHosts();
     if(msg.type==='task_submitted'||msg.type==='task_updated'||msg.type==='task_deleted')refreshTasks();
     if(msg.type==='task_delivered'){const r=msg.data.acceptance_review||{};showToast(`📦 任务「${msg.data.task_name||''}」已交付，等待验收${r.verdict==='risk'?` · ⚠️ 验收自检 ${r.reviewed-(r.unmet||[]).length}/${r.reviewed}`:''}`,'ok');refreshTasks();}
@@ -149,7 +155,8 @@ function connectWS(){
     // 渲染 (WS data 不含 topic 无法归属话题), 避免串台与「HTTP+WS」双渲染
     if(msg.type==='chat_reply'){
       if(!(msg.data&&msg.data.action_taken==='opt_discuss')){
-        appendChatMessage('assistant',msg.data.reply,msg.data.timestamp);
+        if((!msg.data.conv_id||msg.data.conv_id===_activeConvId)&&!chatMessages.some(m=>m.role==='assistant'&&m.content===msg.data.reply&&m.timestamp===msg.data.timestamp))appendChatMessage('assistant',msg.data.reply,msg.data.timestamp);
+        chatDagRefresh();
       }
     }
     if(msg.type==='pm_registered'){refreshPMAgents();refreshTasks();loadPMThreads();}

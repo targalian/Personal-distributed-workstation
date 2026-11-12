@@ -74,19 +74,21 @@ class ResourceReportingService(ComponentService):
             return {'reported': 0, 'error': f'query_failed: {e}'}
         if not rows:
             return {'reported': 0}
-        payload = {'records': [{'usage_id': r['usage_id'], 'model': r['model_id'], 'input_tokens': r['input_tokens'], 'output_tokens': r['output_tokens'], 'task_id': r.get('task_id', ''), 'project_id': r.get('project_id', '')} for r in rows]}
+        payload = {'records': [{'usage_id': r['usage_id'], 'model': r['model_id'], 'input_tokens': r['input_tokens'], 'output_tokens': r['output_tokens'], 'task_id': r.get('task_id', ''), 'project_id': r.get('project_id', ''), **({'usage_metadata': r['usage_metadata']} if 'usage_metadata' in r else {})} for r in rows]}
         try:
             import requests
-            resp = requests.post(f'{self.owner._secretary_url}/api/resources/usage', json=payload, timeout=10)
+            resp = requests.post(f'{self.owner._secretary_url}/api/resources/usage', json=payload, timeout=10,
+                **({'headers': {'Authorization': f'Bearer {self.owner._ws_token}'}} if self.owner._ws_token else {}))
             resp.raise_for_status()
             body = resp.json() if resp.text else {}
         except Exception as e:
             policy.logger.warning('[resources] 用量上报失败 (%d 条, 下轮重试): %s', len(rows), e)
             return {'reported': 0, 'pending': len(rows), 'error': str(e)}
-        self.owner._db.mark_usage_reported([r['id'] for r in rows])
+        accepted = _acknowledged_rows(rows, body)
+        self.owner._db.mark_usage_reported(accepted)
         dup = int(body.get('duplicate', 0))
         policy.logger.info('[resources] 用量已上报 Secretary: %d 条 (重复 %d)', len(rows), dup)
-        return {'reported': len(rows), 'duplicate': dup}
+        return {'reported': len(accepted), 'duplicate': dup}
 
     def _report_loop(self) -> Any:
         """上报线程主循环 — 异常隔离, 永不退出 (直到 stop)。"""
@@ -113,7 +115,7 @@ class ResourceReportingService(ComponentService):
         if not rows:
             self.owner._ws_last_ok = policy.time.time()
             return not self.owner._stop_evt.wait(self.owner._ws_push_interval)
-        payload = {'type': 'usage_batch', 'records': [{'usage_id': r['usage_id'], 'model': r['model_id'], 'input_tokens': r['input_tokens'], 'output_tokens': r['output_tokens'], 'task_id': r.get('task_id', ''), 'project_id': r.get('project_id', '')} for r in rows]}
+        payload = {'type': 'usage_batch', 'records': [{'usage_id': r['usage_id'], 'model': r['model_id'], 'input_tokens': r['input_tokens'], 'output_tokens': r['output_tokens'], 'task_id': r.get('task_id', ''), 'project_id': r.get('project_id', ''), **({'usage_metadata': r['usage_metadata']} if 'usage_metadata' in r else {})} for r in rows]}
         try:
             conn.send(policy.json.dumps(payload))
             raw = conn.recv(timeout=10)
@@ -129,7 +131,7 @@ class ResourceReportingService(ComponentService):
             policy.logger.warning('[resources] WS ack 解析失败')
             return False
         if isinstance(ack, dict) and ack.get('ok'):
-            self.owner._db.mark_usage_reported([r['id'] for r in rows])
+            self.owner._db.mark_usage_reported(_acknowledged_rows(rows, ack))
             self.owner._ws_last_ok = policy.time.time()
             policy.logger.info('[resources] 用量已 WS 直推 Secretary: %d 条 (重复 %d)', len(rows), int(ack.get('duplicate', 0)))
             return True
@@ -179,3 +181,11 @@ class ResourceReportingService(ComponentService):
                     pass
             policy.logger.info('[resources] WS 直推断开, 稍后重连')
             self.owner._stop_evt.wait(5.0)
+
+
+def _acknowledged_rows(rows: list[dict], acknowledgement: dict) -> list[int]:
+    accepted = acknowledgement.get('accepted_ids')
+    if isinstance(accepted, list):
+        return [row['id'] for row in rows if row['usage_id'] in accepted]
+    # Legacy servers acknowledge the entire batch. Do not discard modern metadata there.
+    return [row['id'] for row in rows if not row.get('usage_metadata')]

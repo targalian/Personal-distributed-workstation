@@ -8,7 +8,7 @@ class ResourceAccountingService(ComponentService):
     """ResourceAccountingService business operations with explicit state ownership."""
     OPERATIONS = ('record_usage', 'get_usage', 'is_available', 'probe_balances', 'summarize')
 
-    def record_usage(self, model_id: str, input_tokens: int, output_tokens: int, usage_id: str='', task_id: str='', project_id: str='') -> dict:
+    def record_usage(self, model_id: str, input_tokens: int, output_tokens: int, usage_id: str='', task_id: str='', project_id: str='', usage_metadata: dict | None = None) -> dict:
         """记录一次 LLM 调用消耗。
 
         payg 池按价格目录折算金额, token/coding 池直接计 token 数。
@@ -42,9 +42,11 @@ class ResourceAccountingService(ComponentService):
         else:
             consumed = in_tok + out_tok
             unit = 'token'
-        uid = usage_id or policy.uuid.uuid4().hex
+        from .runtime_usage import current_usage_metadata
+        metadata = usage_metadata if usage_metadata is not None else current_usage_metadata()
+        uid = usage_id or metadata.get('usage_id') or policy.uuid.uuid4().hex
         try:
-            inserted = self.owner._db.insert_resource_usage(pool.id, model_id, pool.plan_type, in_tok, out_tok, consumed, usage_id=uid, task_id=task_id, project_id=project_id)
+            inserted = self.owner._db.insert_resource_usage(pool.id, model_id, pool.plan_type, in_tok, out_tok, consumed, usage_id=uid, task_id=task_id, project_id=project_id, usage_metadata=metadata)
         except Exception as e:
             policy.logger.warning('用量写入失败: %s', e)
             return {'tracked': False}

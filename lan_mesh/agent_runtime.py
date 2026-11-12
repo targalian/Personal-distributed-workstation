@@ -653,6 +653,10 @@ class AgentRuntime:
         """Return whether cancellation has been requested."""
         return self._cancel_event.is_set()
 
+    def activity(self) -> dict:
+        """Report whether previously admitted executions have finished."""
+        return call_component(self, RuntimeExecutionService, 'activity')
+
     def execute(self, subtask: dict) -> dict:
         return call_component(self, RuntimeExecutionService, 'execute', subtask=subtask)
 
@@ -704,8 +708,8 @@ class AgentRuntime:
     def _call_llm_messages_with_tools(self, messages: list[dict], tools: list[dict], input_data: dict) -> dict:
         return call_component(self, RuntimeLlmService, '_call_llm_messages_with_tools', messages=messages, tools=tools, input_data=input_data)
 
-    def _call_openai_with_tools(self, messages: list[dict], tools: list[dict], model_id: str, base_url: str, api_key: str) -> dict:
-        return call_component(self, RuntimeLlmService, '_call_openai_with_tools', messages=messages, tools=tools, model_id=model_id, base_url=base_url, api_key=api_key)
+    def _call_openai_with_tools(self, messages: list[dict], tools: list[dict], model_id: str, base_url: str, api_key: str, max_tokens: int = 4096) -> dict:
+        return call_component(self, RuntimeLlmService, '_call_openai_with_tools', messages=messages, tools=tools, model_id=model_id, base_url=base_url, api_key=api_key, max_tokens=max_tokens)
 
     # ── LLM API 调用 (支持多 Provider + 降级链重试) ──────────────────
 

@@ -4,7 +4,7 @@
 > 域内逐模块描述职责、设计要点、关键接口与依赖关系。
 > **代码设计变更时，必须同步更新对应文档**（见文末「维护规范」）。
 
-最后更新: 2026-11-12（DS-Bot 对照研究、执行可靠性与持久跨站投递）
+最后更新: 2026-11-12（DS-Bot 优化开发路线完成，候选0.41.11）
 
 ---
 
@@ -25,9 +25,9 @@ Work Station (LAN Mesh) 是一个**分布式个人 AI 工作站**：将局域网
 阶段 1～7 完成；阶段 8 本机验证后等待真实双节点演练，尚未宣称全项目已上线验收。
 见[重构评估与完整证据](yomk-refactor-assessment.md)和[实机放行条件](08-infrastructure/yomk-rollout.md)。
 
-## DS-Bot 对照研究（iter-114）
+## DS-Bot 对照研究与优化（iter-114～123）
 
-[完整功能对照、已落地改动、验证边界与分期验收](dsbot-optimization-assessment.md)。iter-114 完成执行可靠性与上下文管理；iter-115 落地[持久投递账本与结果确认](03-task-orchestration/durable-mesh-delivery.md)，真实双节点验收待环境。长期记忆与协作交互仍在后续路线。
+[完整功能对照与分期验收](dsbot-optimization-assessment.md)。开发范围已完成：持久投递、作用域记忆与私有恢复、模型窗口与完整产物、验收与用量、协作接管、周期任务与IM入口。iter118–123连续六轮及860项最终回归证据见[交付清单](dsbot-loop-completion.md)。0.41.11为未提交工作区候选；真实多机、在线模型和断电验收待环境。
 
 ## 二、系统架构总览
 
@@ -121,3 +121,9 @@ work_station/
 | 2026-08-16 | iter-30 | F1-role-free-align: 密钥与版本对齐与主从无关 (config_ts 仲裁 + 60s 对齐线程 + 落后节点自动升级); E5-secretary-failover: Secretary 离线故障转移收录至关键机制 |
 | 2026-08-16 | iter-28 | D2-docs-sync: 模块清单自动化 (sync_docs.py + pre-push 第 8/9 项 + docs-sync skill) |
 | 2026-08-16 | iter-27 后 | 设计文档库初建: 11 个功能域, 覆盖全部 lan_mesh 模块 |
+
+- iter-116：[有来源的作用域记忆与中文历史检索](06-interaction/scoped-memory-history.md)；schema v14、修订/撤销/过期与原文锚点。
+
+- iter-117：[模型窗口、检查点与完整工具产物](04-execution-engine/model-window-artifacts.md)；回复预留、按范围分页读取及取消/恢复边界。
+
+- iter-118：[验收证据与按尝试记账](03-task-orchestration/acceptance-evidence-usage.md)。

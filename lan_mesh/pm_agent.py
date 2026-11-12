@@ -57,6 +57,7 @@ class ProjectManagerAgent:
 
     def start_task(self, task: dict):
         """接管任务，开始规划与执行 (异步)。"""
+        self._suspended = False
         self._dispatcher.reset()
         self._running = True
 
@@ -96,6 +97,8 @@ class ProjectManagerAgent:
         快照通过 Secretary HTTP API 持久化, PM 无论在哪个节点运行都有效;
         落库失败仅降级为「少一个恢复点」, 不影响任务执行。
         """
+        if getattr(self, '_suspended', False):
+            phase = 'paused'
         self.persist_delivery_state()
         try:
             snapshot = self._state.to_snapshot()
@@ -337,6 +340,8 @@ class ProjectManagerAgent:
             task = self._planner.refine_requirements(task)
 
             # 阶段 1: 规划
+            from .pm_memory import attach_memory_scope
+            task = attach_memory_scope(task, self.pm_id)
             self.report_status("planning")
             plan = self._planner.analyze_with_skill(task)
             # iter-89: 蓝图约束随 input_data 下发, 覆盖远程/本地全部执行路径
@@ -505,6 +510,7 @@ class ProjectManagerAgent:
 
     def cancel(self):
         st = self._state
+        self._suspended = True
         self._running = False
         self._delivery_status = "cancelled"
         self.persist_delivery_state()
@@ -517,9 +523,13 @@ class ProjectManagerAgent:
         self._clear_snapshot()
         logger.info("[%s] 任务已取消", self.pm_id[:8])
 
-    def pause(self):
+    def pause(self) -> dict:
         st = self._state
+        self._suspended = True
         self._running = False
+        self._delivery_status = 'paused'
+        self.persist_delivery_state()
+        stopped = self._dispatcher.cancel() or {'quiescent': False}
         st.clarification_event.set()
         st.clarification_response = {"response": "", "choice": "", "paused": True}
         self.report_status("paused")
@@ -527,9 +537,14 @@ class ProjectManagerAgent:
         # iter-53: 暂停保留快照 (resume 可继续)
         self._persist_snapshot("paused")
         logger.info("[%s] 任务已暂停", self.pm_id[:8])
+        alive = any(thread and thread.is_alive() for thread in
+                    (getattr(self, '_thread', None), getattr(self, '_progress_thread', None)))
+        return {**stopped, 'quiescent': stopped.get('quiescent') is True and not alive}
 
     def report_status(self, status: str, team_structure: dict = None,
                       task_list: list = None, collaboration_mode: str = None):
+        if getattr(self, '_suspended', False) and status not in {'paused', 'cancelled'}:
+            return
         if status in {"completed", "failed", "cancelled"}:
             if self._delivery_status != "cancelled":
                 self._delivery_status = status
@@ -642,6 +657,8 @@ class ProjectManagerAgent:
     def deliver_result(self, task_name: str, task_desc: str,
                        aggregated: str, subtask_results: list):
         """优化9: 交付闭环 — 蓝图自检 + 上报 Secretary + 产物分发 + 任务记忆。"""
+        if getattr(self, '_suspended', False):
+            return
         summary = aggregated[:500] if len(aggregated) > 500 else aggregated
         completed_count = sum(1 for r in subtask_results if r.get("status") == "completed")
         total_count = len(subtask_results)
@@ -665,6 +682,8 @@ class ProjectManagerAgent:
         if review:
             delivery["acceptance_review"] = review
 
+        if getattr(self, '_suspended', False):
+            return
         # P3: 任务流追踪 — 交付阶段点 (异常静默)
         try:
             from . import runtime_trace

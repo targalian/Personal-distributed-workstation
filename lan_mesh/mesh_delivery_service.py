@@ -36,6 +36,10 @@ def call_delivery(owner: object, operation: str, **arguments: Any) -> Any:
 def bind_pm_delivery(owner: object, pm: object) -> None:
     """Attach delivery ownership without starting work or changing PM constructors."""
     pm._delivery_owner = owner
+    runtime = getattr(pm, "runtime", None)
+    if runtime is not None:
+        runtime._browser_owner = owner
+        runtime._memory_secretary_url = getattr(pm, 'secretary_url', '')
 
 
 class DurableDeliveryService(ComponentService):
@@ -205,7 +209,7 @@ class DurableDeliveryService(ComponentService):
         checkpoint = repo.get_pm(payload["pm_id"])
         if not checkpoint:
             return False
-        if checkpoint["status"] in {"cancelled", "completed", "failed"}:
+        if checkpoint["status"] in {"cancelled", "completed", "failed", "paused"}:
             return True
         state = json.loads(checkpoint["state_json"])
         active = state.get("active_attempts", {}).get(payload["name"], {})

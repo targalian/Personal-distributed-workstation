@@ -1,0 +1,8 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>执行产物</title><link rel="stylesheet" href="../collaboration/style.css"><link rel="stylesheet" href="../memories/style.css"></head><body>
+<header><div><small>LAN MESH · 执行产物</small><h1>执行产物与保留管理</h1><p>按原始执行范围读取完整记录，复制只读副本，并在清理前核对保护状态。</p></div><button id="refresh">刷新</button></header><p id="error" role="alert" hidden></p><p id="status" role="status"></p>
+<section><form id="scope-form" class="toolbar"><label for="task">任务标识</label><input id="task" required><label for="project">项目标识</label><input id="project" placeholder="无项目可留空"><button>查看此范围</button></form></section>
+<main id="main" hidden><section><h2>本机执行记录</h2><p>验收证据和在途执行会保留。找不到关联任务时，清理前需要人工核对任务与工具结果。</p><div id="runs"></div></section>
+<section id="record-panel" hidden><h2>完整记录</h2><pre id="detail"></pre><button id="more-record" hidden>继续读取</button></section>
+<section><h2>保留期限与清理</h2><form id="cleanup-form"><label for="days">至少保留天数</label><input id="days" type="number" min="1" max="3650" value="30" required><button id="preview">预览可清理产物</button></form><pre id="cleanup-summary"></pre><button id="confirm-cleanup" hidden>确认清理预览中的产物</button></section>
+<section><h2>执行产物快照</h2><div class="toolbar"><label for="peer">复制到</label><select id="peer"><option value="">选择工作站</option></select></div><p>在目标站点恢复为只读副本，保留原始执行身份。不会覆盖本机原执行或自动恢复工具动作。</p><div id="bundles"></div></section></main>
+<script src="../mesh_transport.js"></script><script src="artifacts.js"></script></body></html>

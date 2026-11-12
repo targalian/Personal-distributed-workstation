@@ -1,5 +1,9 @@
 # 04 执行引擎
 
+## iter-117：模型窗口与完整产物
+
+ReAct 按候选模型预留回复空间，在持久检查点支持下回收旧工具轮次；完整结果可按执行范围分页读取。配置、API、恢复语义与实测边界见 [设计说明](model-window-artifacts.md)。
+
 ## iter-114：DS-Bot 参考优化（2026-11-12）
 
 已加入 ReAct 请求字符预算与工具结果限幅、file_read 可选字符分页、模型/命令失败透传、取消用量保留、相同工具错误三轮止损，以及缓存技能按需注入。既有 HTTP 路径与 Yomk 服务接口保留。新参数、兼容变化、验证边界和后续路线见 [DS-Bot 对照分析](../dsbot-optimization-assessment.md)。
@@ -16,18 +20,29 @@ Worker 侧的任务执行能力：守护进程、Agent 运行时、能力卡片�
 | agent_card.py | Agent Card 生成与管理 — 借鉴 A2A 协议的 Agent Card 机制 |
 | agent_prompt.py | 子 Agent 通用 Prompt 模板与定制构建器 |
 | agent_runtime.py | Agent 运行时 — Worker 端任务执行引擎 |
+| artifact_lock.py | Process-local execution guards shared by artifact writers, replication and cleanup. |
+| artifact_management_routes.py | Additional scoped artifact management endpoints on Station and standalone Worker. |
+| artifact_management_service.py | Yomk service for scoped artifact retention and private execution replicas. |
+| artifact_retention.py | Explicit retention previews protect active tasks, uncertain tools and acceptance evidence. |
+| browser_routes.py | Explicit human browser commands share mesh authentication and task scope checks. |
+| browser_session_service.py | Optional task browser capability with isolated contexts and serialized control transfer. |
 | lan_mesh/builtin_skills/ | Yomk C++/Python 与工作站适配内置技能及完整参考资料 |
 | mcp_client.py | MCP 客户端 — 轻量级 JSON-RPC 2.0 客户端 |
 | mcp_connection_service.py | McpConnectionService: domain behavior separated from the public compatibility facade. |
 | mcp_gateway.py | MCP 网关 — 中央工具调度枢纽 |
 | mcp_tool_service.py | McpToolService: domain behavior separated from the public compatibility facade. |
+| runtime_artifact_routes.py | Scoped read-only artifact API on the existing authenticated Station/Worker surface. |
+| runtime_artifacts.py | Atomic, immutable ReAct observations and checkpoints owned by one execution. |
 | runtime_cli_service.py | RuntimeCliService: domain behavior separated from the public compatibility facade. |
 | runtime_context.py | Bound ReAct requests while preserving instructions and tool-call/result pairs. |
 | runtime_execution_service.py | RuntimeExecutionService: domain behavior separated from the public compatibility facade. |
 | runtime_llm_service.py | RuntimeLlmService: domain behavior separated from the public compatibility facade. |
+| runtime_model_budget.py | Per-candidate model window budgets using explicit, conservative size estimates. |
 | runtime_prompt_service.py | RuntimePromptService: task-scoped skill instructions and a bounded skill catalog. |
-| runtime_react_service.py | RuntimeReactService: domain behavior separated from the public compatibility facade. |
+| runtime_react_archive.py | Execution-local archive integration and bounded re-reading of full observations. |
+| runtime_react_service.py | RuntimeReactService: bounded tool execution with durable, scoped observations. |
 | runtime_skill_service.py | RuntimeSkillService: domain behavior separated from the public compatibility facade. |
+| runtime_usage.py | Per-transport call identity, task attribution and honest provider usage capture. |
 | sandbox.py | F2.2: 代码执行沙箱 — 安全隔离执行 Agent 生成的代码。 |
 | skill_access_service.py | SkillAccessService: domain behavior separated from the public compatibility facade. |
 | skill_catalog_service.py | SkillCatalogService: domain behavior separated from the public compatibility facade. |
@@ -283,3 +298,8 @@ planner/dispatcher/monitor 的共享引用有效 (resume 关键约束)
 | 2026-08-16 | iter-27 后 | 初建 |
 | 2026-09-10 | iter-100 | BUG-038 子 Agent 作业目录注入 (运行时侧): ReAct `cwd` 改为 `get("cwd") or shared_folder` (空串也回落) + 规则段抽为 `_build_react_rules_prompt` 并新增作业目录基准/禁止跨盘漫游/禁止试探消耗轮次三条 + `_resolve_tool_path` 把 file_read/file_write 相对路径锚定 cwd (原落在 Station 启动目录, 有越界写入风险); 不放宽 CLI 自举护栏; 10 专项 + 17 变异致红 |
 | 2026-09-10 | iter-101 | BUG-039 CLI Agent 分派链路五缺口修复: `infer_result_status` + `_finalize_subtask` 采纳 handler 内层失败信号 (原 execute 无条件判 completed, 致护栏拒绝/CLI 非零退出/超时全部上报成功, PM 重试与升级链永不触发, 属全局性缺陷) + `resolve_cli_backend` 让未知/未安装后端显式失败 (原静默回退, 实测拼错后端名真跑了 claude 180s) + `CLI_AGENT_DISABLED_BACKENDS` 停用「装了但未登录」的后端且自动顺序改为 codex 优先 (唯一带沙箱+显式 cwd) + `CODEX_HOME` 兜底 ~/.codex (环境净化滤掉后必然 rc=1) + 护栏拒绝信息补 `CLI_AGENT_ALLOWED_ROOTS` 指引; 本机实测发现, 自举护栏未放宽; 13 专项 + 21 变异致红 |
+
+运行时退出统计与可选浏览器能力见[协作工作台设计](../06-interaction/collaboration-workbench.md)。
+
+### iter123 产物生命周期
+增加执行级读写保护、验收证据保留、清理预览再确认及只读副本，详见 [生命周期与崩溃语义](artifact-lifecycle.md)。

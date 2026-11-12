@@ -12,6 +12,8 @@ venv/
 
 # LAN Mesh runtime data
 .lan_mesh/
+.runtime_artifacts/
+.private_replicas/
 lan_mesh_shared/
 *.sqlite3
 

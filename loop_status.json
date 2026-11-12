@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_run": "2026-11-12T15:54:29+08:00",
+  "last_run": "2026-11-12T23:57:43.443335+08:00",
   "current_phase": "completed",
   "phase_status": "completed",
   "completed": [
@@ -125,16 +125,24 @@
     "iter-111: Yomk阶段8代码与本机验收621项通过，实机演练待用户提供环境",
     "iter-112-yomk-builtin-skills",
     "iter-113-yomk-graph",
-    "iter-114-dsbot-runtime"
+    "iter-114-dsbot-runtime",
+    "iter-117-dsbot-model-window-artifacts",
+    "iter-118-dsbot-evidence-usage",
+    "iter-119-dsbot-collaboration-takeover",
+    "iter-120-dsbot-periodic-im",
+    "iter-121-dsbot-memory-workbench-pm-index",
+    "iter-122-dsbot-private-memory-replication",
+    "iter-115-dsbot-durable-mesh-delivery",
+    "iter-116-dsbot-scoped-memory-history",
+    "iter-123-dsbot-artifact-lifecycle",
+    "iter-124-secretary-dag-ui"
   ],
   "failed": [],
   "blocked": [],
   "next_tasks": [
-    "DS-Bot P1-B：项目/会话/Agent作用域记忆、来源锚点与中文历史检索；支持更正撤销过期和索引重建。",
-    "DS-Bot P1-C/D：按模型窗口预留回复预算、语义检查点和完整工具产物；验收证据绑定与按attempt去重记账。",
+    "DS-Bot开发路线已完成；上线前在隔离环境完成物理多机/在线模型/断电、真实IM桥接与可选浏览器配置验收，见docs/design/dsbot-loop-completion.md。iter124秘书/DAG UI已完成，0.41.12纳入本次源码交付，未部署；不再列已完成的产物保留/复制为开发待办。",
     "DS-Bot P1-A源码/本机验收完成（36新增、全量712 passed）；真实双节点、在线模型与地址变化仍待环境；journal长期保留，review_required需核对产物后明确重派，见durable-mesh-delivery.md。",
-    "DS-Bot P2：现有L1/L2协作视图、独立浏览器接管能力、带时区和归属的周期任务及IM扩展。",
-    "iter-114上线前：目标在线模型验证10秒ReAct HTTP超时及长任务完成率；旧缓存技能按需配置activation；0.41.2尚未发布。",
+    "iter-114上线前：目标在线模型验证10秒ReAct HTTP超时及长任务完成率；旧缓存技能按需配置activation；相关源码已随0.41.3同步GitHub CN，线上验收未完成。",
     "按需在config.yaml开启observability.yomk_graph_enabled，重启对应实例后访问本机18765端口；跨组件实例/远端拓扑不在本次观测范围。",
     "用户介入：提供两台可达隔离测试节点及联调条件，按docs/design/08-infrastructure/yomk-rollout.md完成阶段8真实多机、在线模型、升级/回滚验收；当前不能认定已上线验收",
     "分机装好 CLI 后同步 .env 的 CLI_AGENT_BACKEND / DISABLED_BACKENDS / ALLOWED_ROOTS, 未登录的后端务必列入停用清单避免白烧超时",
@@ -162,9 +170,9 @@
     "每次发布/推送后同步更新 VERSION.json 保持版本记录与实际代码一致",
     "代码设计变更时同步 docs/design 对应功能域文档 (docs-sync skill + sync_docs.py 机制, pre-push 第 8/9 项强制)"
   ],
-  "iteration_count": 115,
-  "total_files_modified": 465,
-  "last_error": "",
+  "iteration_count": 124,
+  "total_files_modified": 490,
+  "last_error": null,
   "notes_iter80": "创建对话失败修复补验: UI-061 使用 Edge headless + 本地 mock 完成浏览器实测, 503 detail/message 可见, secretary_yielded 后 Secretary tab 立即隐藏并展示对端地址; 测试清单已关闭。",
   "notes_iter81": "真项目联测后续修复: 需求派发结构化 project_path/repo_url/planning_only + 高优先级映射 + PM 模板裁剪越界执行 + 本机 169.254 地址规范化; 专项 29 passed, 全量 426 passed, sync_docs PASS。",
   "notes_iter82": "秘书聊天线程池隔离: /api/secretary/chat 用 run_in_threadpool 调用 ChatHandler.chat, 避免同步 LLM 阻塞事件循环; 路由测试断言工作线程隔离; 专项 3 passed, 全量 426 passed, sync_docs PASS。",
@@ -174,7 +182,7 @@
   "notes_iter86": "Git safe.directory 只读降级: shell 输出识别 dubious ownership/unsafe repository, 返回 git_safe_directory_denied + remediation 并映射 isError; ReAct 禁止修改 git config 或原样重试, 引导 file_read/dir_list 只读分析; 专项 4 passed, 全量 438 passed, sync_docs PASS。",
   "notes_iter87": "本地子任务取消传播: AgentRuntime 增加协作式取消 Event, PM cancel 经 PMDispatcher 传播并广播 /pm/cancel-subagent, execute/ReAct 轮询间隙短路并返回 cancelled, 本地回退与本机子 Agent 不再误标 failed, cancel-pm 路由线程池隔离; 专项 9 passed, 全量 447 passed, sync_docs PASS。",
   "notes_iter88": "项目蓝图工作台: projects 表迁移 v12 增加 charter/roadmap/decisions JSON 列并保持旧库兼容; ProjectManager 支持蓝图创建/更新与类型校验; 新增 GET/PUT /api/projects/{id}/blueprint 并广播 project_blueprint_updated; dashboard 项目详情展示蓝图且编辑表单逐行解析路线图/决策。验证: 专项 3 passed, 全量 pytest 450 passed, 导入 OK, dashboard JS node --check OK, git diff --check OK, sync_docs PASS (104 条目)。待 Boss 真机验证 UI-062。 浏览器真机验证通过@2026-09-07: Playwright + Chromium headless 启动隔离 Station (127.0.0.1:4599, 12 项自检全过), 工作台编辑 mission/goals/non-goals/acceptance/roadmap/decisions 保存后 reload 与重进项目详情内容完整保留, 服务端打印「项目蓝图已更新」并广播 project_blueprint_updated; 清单 UI-062 转检测通过。",
-  "notes": "[Codex] iter-115 DS-Bot P1-A：新增DurableDeliveryService与schema v13四表两索引，Station/独立Worker持久任务投递、完整结果outbox/inbox与ID/SHA256确认；按task/subtask/attempt/result隔离，取消先到也持久阻止执行，同Runtime尝试串行领取，恢复复用原attempt。执行结果/outbox及PM快照/已处理收件分别事务提交；执行或应用中途崩溃保留interrupted/review_required，不自动重复副作用。36项新增行为含实际HTTP断网/重启、300000字符Unicode长结果、os._exit及取消聚合竞态；Python3.12全量712 passed/2 skipped/102.19s（resources.yaml及Node.js缺失），编译导入、名称扫描、依赖与docs213项11域通过。pre-push 0 Blocker/7既有Warning（旧超长函数、旧类型缺注及脚本print）；新4个生产模块docstring/类型/长度专项通过。0.41.3为未发布候选，保留iter113/114未提交改动；未提交推送、部署或重启运行节点。真实双节点/在线模型仍待环境，详见docs/design/03-task-orchestration/durable-mesh-delivery.md。",
+  "notes": "[Codex] 按用户上库授权整理iter116–124全部源码、测试、设计和SPA资源，版本0.41.12；新增sync_push.ps1 -SkipGitee并通过8种无网络模拟场景，保留默认双库与WithEN行为。复用最终业务回归861 passed/1 skipped/7 warnings/161.34s、23组Chrome及6项Node验收；本次追加编译导入、文档清单和提交门禁核验。Gitee明确跳过，提交SHA由推送脚本写入VERSION.json，实际同步以GitHub CN远端核验为准；未部署。",
   "notes_iter89": "项目蓝图驱动规划与执行 (闭合 iter-88 的价值断点: 蓝图此前只存不用): PMPlanner 规划前按 task.project_id 拉 GET /api/projects/{id}/blueprint, 渲染使命/目标/非目标/验收标准/硬约束/当前阶段(优先 in_progress)/近 3 条决策 为约束段落注入 LLM 规划 prompt, 并明令非目标不得进入 decomposition; 结果按 project_id 缓存, 一次任务只查一次。attach_blueprint_context 在规划后把同一 提示写入 input_data._project_blueprint, 本地执行与远程分发共用; AgentRuntime._build_blueprint_prompt 渲染为 system prompt 尾缀, 覆盖 _call_llm_with_routing 路由链/无路由回退与 _handle_react_agent 三条路径。降级: Secretary 不可达/无 project_id/蓝图为空一律静默空串, 无蓝图项目行为与旧版一致。验证: 专项 TestIter89ProjectBlueprintContext 8 passed, 全量 pytest 458 passed (450 基线 + 8 新增), 编译 OK, 导入 OK, check_unbound_names PASS, sync_docs PASS (104 条目), git diff --check 干净; 变异验证 2 处 (摘掉 pm_agent 挂载 → run_task 用例红; 摘掉 runtime 尾缀拼接 → 注入用例红), 确认非空跑。函数长度门禁比对 HEAD 基线零新增超标 (execute 73→83 系 iter-87 未提交改动所致)。待 Boss 真机验证: 给项目填蓝图后提交任务, PM 规划应对齐目标并避开非目标。 端到端真机验证通过@2026-09-07 (不 mock HTTP): 隔离 Station@4599 起真项目, 经 POST /api/projects + PUT /api/projects/{id}/blueprint 真实落库, 再由真实 PMPlanner 经 http_get 拉取 —— 规划 prompt (1340 字符) 含使命/目标/非目标/验收标准/硬约束/决策 6 段 + 非目标禁令, 当前阶段正确选中 V2(in_progress) 而非已完成的 MVP; attach_blueprint_context 挂载 _project_blueprint 且未污染原 task; 无蓝图项目返回空串且不注入任何键; Secretary 不可达 (127.0.0.1:1) 静默降级空串。服务端日志确认「项目蓝图已更新」与「项目蓝图约束注入 (project=8f8ea389, 7 条)」。",
   "notes_iter90": "交付前蓝图验收自检 (闭合 iter-89 的价值断点: 蓝图只约束规划不校验产出): PMPlanner 新增 review_against_blueprint —— 交付前按 project 蓝图 charter.acceptance_criteria (最多 6 条) 逐条审查交付物, 复用 _fetch_project_blueprint 拉蓝图, _build_acceptance_prompt 渲染逐条判断 prompt (交付物截断 4000 字符, 要求 results 顺序与标准一致, 无法确认一律 met=false), _parse_acceptance_review 剥 markdown 代码块并把 met/evidence 对齐到标准, 输出 checks/unmet/verdict(pass|risk)/summary/reviewed。pm_agent.deliver_result 上报前调 _review_delivery 挂 delivery.acceptance_review 并对未达成项打 warning 日志; Secretary /api/pm/{id}/deliver 落 output_data._delivery.acceptance_review 并随 task_delivered WS 广播; dashboard 任务卡片加验收自检徽章 (通过绿/未全过红)、交付弹窗新增「验收自检」区 (结论 + 条数 + 摘要 + 逐条 ✅❌ 标准与依据)、task_delivered toast 追加未达成计数; chat_handler 验收动作回复附自检结论与未达成清单。降级: 无 project_id / 无验收标准 / 交付物为空 / LLM 异常 / JSON 无法解析一律返回空 dict 且不写字段, 旧任务与无蓝图项目行为与 iter-89 完全一致 (零 LLM 成本)。验证: 专项 TestIter90BlueprintAcceptance 5 passed, 全量 pytest 463 passed (458 基线 + 5 新增), 编译 9 文件 OK, 导入 OK, dashboard JS node --check OK, sync_docs PASS (104 条目)。变异验证 3 处全部致红 (摘掉 deliver payload 挂载 → 1 红; 摘掉路由落库字段 → 1 红; verdict 恒为 pass → 2 红), 确认非空跑。浏览器实测通过@2026-09-08: Playwright + Chromium headless 实测任务卡片渲染「验收自检未全过」徽章, 交付弹窗展示结论/条数/摘要与逐条 ✅❌ 标准+依据, 截图 temp_resault/iter90_delivery_acceptance.png; 清单 UI-063 转检测通过。待 Boss 真机验证: 真实 LLM 下自检结论质量与交付闭环体验。",
   "notes_iter92": "iter-92: Boss 通道 (scripts/boss_channel.py 12 子命令) + stock_player 任务图交接 (16 节点/22 边 DAG + G0 澄清闸门 + 阶段化 Agent 编队) + BUG-032 停滞告警幽灵刷屏修复 (DB 对账, 真实数据 100→0, 专项 5 例, 变异 3 处致红, 全量 468 passed)。",
@@ -218,17 +226,23 @@
       "bytes": 729712,
       "pip_check": "passed",
       "installed_smoke": "passed"
-    }
+    },
+    "latest_candidate": "0.41.11; previous artifact entries are historical; final candidate details in continuous_loop.candidate_artifact"
   },
   "publication": {
-    "authorization": "用户要求总结上库（2026-10-25）",
-    "method": "scripts/sync_push.ps1",
+    "authorization": "用户要求全部上库（2026-11-13），沿用此前暂停Gitee的指示",
+    "method": "scripts/sync_push.ps1 -SkipGitee",
     "targets": [
+      "origin/CN"
+    ],
+    "summary": "docs/design/09-frontend/secretary-dag-workbench.md",
+    "verification": "发布提交与远端同步结果以 Git 提交记录及远端分支为准；源码上库不代表实机验收放行",
+    "historical_targets": [
       "gitee/master",
       "origin/CN"
     ],
-    "summary": "docs/design/04-execution-engine/yomk-builtin-skills.md",
-    "verification": "发布提交与远端同步结果以 Git 提交记录及远端分支为准；源码上库不代表实机验收放行"
+    "gitee": "temporarily cancelled by user",
+    "current_loop": "iter116–124 development completed; version 0.41.12 source handoff; actual publication is determined by Git history and origin/CN"
   },
   "notes_iter112": "iter-112 Yomk技能内化完成：随包内置yomkserverpy-modular、yomkserver-modular与lan-mesh-yomk三个知识技能，保留上游完整参考/示例/许可证及来源；注册表离线扫描包内资产并兼容旧目录与标准metadata，下载包新增固定资源白名单，Worker完整落盘；按任务激活且区分C++/Python，PM自定义角色与外部system提示词保留并增补相关知识，秘书传递消息上下文；不改required_skill执行器、工具权限或部署授权。14项新增行为通过，全量635 passed/137.91s；三个技能quick_validate通过，编译导入、159文件名称扫描、依赖同步、docs204项11域通过；0.41.1 wheel含13项技能资产、与上游资料逐字比对一致，隔离安装-I验证与pip check通过。真实多机验收仍待隔离节点；当前运行节点未重启，本轮沿既有授权通过sync_push上库，提交与远端状态以Git核验。",
   "builtin_skills_status": {
@@ -245,10 +259,118 @@
     "code": "completed",
     "local_acceptance": "712 passed / 2 skipped / 102.19s; 36 new delivery tests",
     "distributed_acceptance": "awaiting_isolated_nodes",
-    "version": "0.41.3 source delivery; distributed acceptance pending",
+    "version": "0.41.3 source delivered to GitHub CN; distributed acceptance pending",
     "docs": "docs/design/03-task-orchestration/durable-mesh-delivery.md",
     "semantics": "durable at-least-once transport; immutable attempt receipts; interrupted side effects require review",
-    "next_scope": "P1-B scoped memory and history search"
+    "next_scope": "Development roadmap completed; isolated physical multi-host and online-model acceptance pending"
   },
-  "submission_scope": "用户授权将iter113/114/115全部改动按sync_push.ps1提交到Gitee master及GitHub CN；源码交付不代表部署验收。"
+  "submission_scope": "用户授权将iter116–124全部改动及SkipGitee推送选项提交，通过sync_push.ps1 -SkipGitee同步GitHub CN；Gitee继续暂停；源码交付不代表部署验收。",
+  "submission_status": {
+    "github_cn": "0.41.12 source; source revision is recorded in VERSION.json.commit; compare local HEAD with origin/CN to verify publication",
+    "previous_github_cn_verified": "f3063881dbeffbde1d4749f6b48b53b53625f828",
+    "gitee_master": "temporarily cancelled by user; skipped explicitly with -SkipGitee",
+    "scope": "iter116–124 and GitHub-only sync_push option",
+    "deployment": "not performed; physical multi-host and online-model acceptance pending"
+  },
+  "notes_iter116": "[Codex] iter-116 DS-Bot P1-B完成：schema v14新增范围历史索引/可选FTS5与记忆修订日志；原JSONL锚点与完整分页、中文短查询/字面特殊字符、来源只认本范围用户消息并显式确认、project/conv/PM-thread隔离、事务CAS更正撤销过期、清空历史关联撤销，旧记忆来源不经自动检索回流。秘书回复参考上限5000字符，不进入意图授权；新7生产模块、7管理API、37项新测试。编译导入、全量749 passed/2 skipped/7既有警告/117.17s，名称扫描和依赖清单通过，docs221项11域一致。当前0.41.4未提交工作区候选，记忆只在Secretary本机，无多机复制/PM执行自动注入/前端面板。前置iter113–115及推送脚本修复已同步GitHub CN=f306388（已读回核验）；Gitee按用户要求暂时取消，不再等待认证。 收尾补强：来源流身份独立持久化，原文/索引缺失后清空仍撤销；重复PM绑定可以解绑恢复。最终门禁使用临时索引纳入全部新文件，0 Blocker/16既有Warning（含已上库但Gitee基线未推进的前置内容），实际暂存区为空。",
+  "dsbot_memory_status": {
+    "code": "development complete including UI/PM/scalable index/private replication",
+    "local_acceptance": "846 passed / 1 skipped; 14 new backup tests, real subprocess exit and local HTTP, Chrome four groups",
+    "version": "0.41.11 worktree candidate, uncommitted",
+    "docs": "docs/design/06-interaction/scoped-memory-history.md",
+    "distributed_memory": "explicit project snapshots, resumable peer transfer and manual standby restore; no active-active merge",
+    "next_scope": "physical multi-host deployment validation pending",
+    "gate": "Final iter123 gate: 0 blockers / 21 advisory warnings; temporary index included all new files",
+    "final_regression": "860 passed / 1 skipped / 162.04s"
+  },
+  "notes_iter117": "[Codex] iter-117 DS-Bot P1-C完成：ReAct按候选模型窗口保守估算输入并预留回复/safety预算，独立候选压缩不污染降级链；先保存完整历史，再折叠完整旧工具组，system/user与最新配对保留。随机execution和agent/task/project/attempt范围、SHA256完整content/结构化result产物、原子fsync检查点、artifact_read及Station/Worker只读API；取消后保存观察、写入失败停止后续副作用，保留pending_call供核对。HTTP移除早截断，Shell超时保留输出及旧提示；共享下载/云同步排除产物。4新增生产模块、26新增测试；相关75项通过，全量775 passed/2 skipped/7既有警告/120.41s。名称扫描修复两处旧测试缺失导入后相关17项通过，31变更Python文件扫描、编译导入、依赖一致性及docs226条目11域通过；临时索引门禁0 Blocker/17既有Warning。模拟12轮工具+最终答复逐次预算校验通过且全部原文可重读；真实在线长任务完成率/成本、断电恢复与多机产物复制未验收，无自动重放或清理策略。0.41.5为未提交工作区候选，包含iter116保留改动；GitHub已发布基线仍f306388，Gitee继续按用户要求暂停。",
+  "dsbot_context_status": {
+    "code": "development complete including retention, evidence protection and private read-only replicas",
+    "local_acceptance": "iter117: 26 new tests; iter123: 14 new tests; final 860 passed / 1 skipped / 162.04s, real SIGKILL and local HTTP tests, Chrome 6 artifact + 3 link groups",
+    "gate": "0 blockers / 21 advisory warnings; temporary index included all new files",
+    "version": "0.41.11 worktree candidate, uncommitted",
+    "docs": "docs/design/04-execution-engine/model-window-artifacts.md",
+    "estimation": "UTF-8 bytes plus framing reserve, not provider token usage",
+    "recovery": "scoped checksum reads; explicit read-only replica restore; interrupted side effects require review, no automatic replay",
+    "online_acceptance": "pending real model long-task completion and cost comparison",
+    "next_scope": "Physical multi-host, real model long-task/cost and power-loss acceptance pending",
+    "lifecycle_docs": "docs/design/04-execution-engine/artifact-lifecycle.md"
+  },
+  "continuous_loop": {
+    "status": "completed",
+    "requested": "开发计划实现完毕",
+    "scope": [
+      "P1-D",
+      "P2-A",
+      "P2-B",
+      "P1-B开发后续",
+      "P1-C开发后续"
+    ],
+    "validation_boundary": "物理多机、在线模型、断电与真实IM/浏览器配置验收待环境；本机验证不替代实机放行；未部署或发布",
+    "completed_iterations": [
+      118,
+      119,
+      120,
+      121,
+      122,
+      123
+    ],
+    "remaining_development_tasks": [],
+    "finished_at": "2026-11-12T23:14:44.288364+08:00",
+    "version": "0.41.11 worktree candidate",
+    "new_regression_tests": 84,
+    "final_validation": "860 passed / 1 skipped / 7 warnings / 162.04s; 0 Blocker / 21 Warning",
+    "docs": "docs/design/dsbot-loop-completion.md",
+    "candidate_artifact": {
+      "version": "0.41.11",
+      "bytes": 938219,
+      "sha256": "2213a96696df8faf5441837516f80c32883fc0caafe22eecb09f005d8349178e",
+      "isolated_install": "passed",
+      "replica_smoke": "passed",
+      "sensitive_config_exclusion": "passed",
+      "path": "/tmp/lan-mesh-wheel123/lan_mesh-0.41.11-py3-none-any.whl",
+      "pip_check": "passed",
+      "temporary": true
+    }
+  },
+  "notes_iter118": "[Codex] iter118 P1-D完成：验收逐条来源引用、模型自评与独立验证区分、HTTP尝试ID与辅助调用归因、失败/取消诚实用量、跨站部分确认与并发去重。15新增，全量790 passed/2 skipped/128.13s，编译导入/F821-823/docs校验通过，门禁0 Blocker/20既有Warning。未提交/未部署，Gitee暂停。",
+  "notes_iter119": "[Codex] iter119 P2-A完成：Web/React共用协作工作台、L1/L2定位、按任务持久接管状态、Runtime退出计数及派发栅栏、可选隔离Chromium能力、通知去重。10新增，全量801 passed/1 skipped/130.20s（Node已启用，剩余私有resources.yaml），门禁0 Blocker/20既有Warning；TS/Vite构建与真实Chrome桌面/390px移动/Web/React/接管阻断自动动作实测通过。未提交/部署，真实多机待验收。",
+  "notes_iter120": "[Codex] iter120 P2-B：时区周期计划、补跑/并发策略、稳定触发幂等账本、状态不明人工核对；统一IM绑定/收件/回复重试、Telegram房间限定、共享管理UI。19新增，全量820 passed/1 skipped/143.60s；真实Chrome五组、TS/Vite、wheel资产、编译导入75文件名称扫描、docs250项通过；门禁0 Blocker/21 Warning。源码候选未提交/部署，Gitee暂停；IM企业平台使用已认证桥接入口，未冒充原生签名回调。",
+  "notes_iter121": "[Codex] iter121 P1-B本机补齐：来源可追溯的记忆管理Web/React、按任务/PM/项目唯一绑定取有效记忆，规划/LLM/ReAct新执行重读，分页与每批500条JSONL索引事务回滚；创建时保存会话归属避免活跃对话切换污染。12新增、全量832 passed/1 skipped/148.76s；真实Chrome七组/手机布局、TS/Vite、编译导入77文件名称扫描、docs253项及0 Blocker/21 Warning通过。跨站复制归iter122，线上/物理多机尚未验收，未提交或部署。",
+  "notes_iter122": "[Codex] iter122 P1-B跨站补齐：项目/会话私有快照、原始JSONL及修订、SHA内容地址、512KiB分片续传、已提交响应丢失重试；schema18恢复准备账本、文件完成后原子发布会话索引、显式手工故障恢复/拒绝覆盖。Web/React备份区、配额及确认删除、共享和云隔离。14新增，全量846 passed/1 skipped/156.92s；真实子进程退出、双loopback HTTP、Chrome四组/手机布局、编译导入83文件扫描/docs259项、门禁0 Blocker/21 Warning通过。无自动主备共识；未向真实主机复制、未部署或上库。",
+  "notes_iter123": "[Codex] iter123完成P1-C产物生命周期：范围隔离保留/手工核对、候选清单预览与二次确认清理、验收来源永久保护、私有跨站只读副本、Worker到已配置Secretary复制；真实子进程SIGKILL三发布点和清理中断续办验证。14新增，全量860 passed/1 skipped/7 warnings/162.04s；89变更Python编译/导入/F821-F823、docs266项11域、门禁0 Blocker/21 Warning、Chrome产物6组与入口3组、候选wheel隔离安装/内容排除/pip check通过。DS-Bot既定开发范围完成；未提交或部署，Gitee暂停，实机/在线模型/断电验收待环境。",
+  "notes_iter124": "[Codex] iter124秘书/DAG交互优化完成：对话与流程并排、按会话/项目筛选、节点带入输入草稿；Web/React共用SVG工作台，拓扑排版/缩放平移/搜索详情/展开/节点依赖编辑/撤销重做，草稿离开保护、保存失败保留及远端变更检测；多行IME输入、回复去重、对话输入草稿和阅读位置保护。23组Chrome隔离浏览器验收与6项Node行为通过；最终全量861 passed/1 skipped/7 warnings/161.34s，另最终Node执行器专项1 passed（实际6个子测试）。编译导入/JavaScript语法与缺失名称/TypeScript/Vite/docs267项11域通过，门禁0 Blocker/21 Warning。新SPA构建已随源码更新，0.41.12 wheel隔离安装、六项DAG资源和私有配置排除通过；UI-075/076已通过。保留iter116–123，候选未提交/部署，Gitee暂停；秘书回复使用测试替身，真实模型与物理多机验收仍待环境。",
+  "ui_dag_status": {
+    "code": "completed",
+    "version": "0.41.12 source; installation artifact validation below is historical candidate evidence",
+    "docs": "docs/design/09-frontend/secretary-dag-workbench.md",
+    "browser_checks": 23,
+    "node_checks": 6,
+    "regression": "861 passed / 1 skipped / 7 warnings / 161.34s",
+    "gate": "0 blockers / 21 advisory warnings",
+    "checklist": [
+      "UI-075",
+      "UI-076"
+    ],
+    "screenshots": "temp_resault/iter124-ui/",
+    "validation_boundary": "Temporary DB and real task graph endpoints; secretary reply stub, no online model or live task modification",
+    "candidate_artifact": {
+      "version": "0.41.12",
+      "path": "/tmp/lan-mesh-wheel124/lan_mesh-0.41.12-py3-none-any.whl",
+      "bytes": 892943,
+      "sha256": "fc78709166c6bf19b917193108a343099458a1a6e66582ea61db1bb6eb1fd53d",
+      "isolated_install": "passed",
+      "dag_assets": [
+        "lan_mesh/web/static/dag/canvas.js",
+        "lan_mesh/web/static/dag/chat.css",
+        "lan_mesh/web/static/dag/index.html",
+        "lan_mesh/web/static/dag/model.js",
+        "lan_mesh/web/static/dag/style.css",
+        "lan_mesh/web/static/dag/workbench.js"
+      ],
+      "react_build": "updated and referenced assets present; stale build cache removed",
+      "private_config": "excluded"
+    }
+  },
+  "notes_submission_20261113": "[Codex] 按用户上库授权整理iter116–124全部源码、测试、设计和SPA资源，版本0.41.12；新增sync_push.ps1 -SkipGitee并通过8种无网络模拟场景，保留默认双库与WithEN行为。复用最终业务回归861 passed/1 skipped/7 warnings/161.34s、23组Chrome及6项Node验收；本次追加编译导入、文档清单和提交门禁核验。Gitee明确跳过，提交SHA由推送脚本写入VERSION.json，实际同步以GitHub CN远端核验为准；未部署。"
 }

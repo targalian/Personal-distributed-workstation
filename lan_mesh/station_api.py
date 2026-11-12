@@ -55,6 +55,22 @@ def create_station_router(controller) -> APIRouter:
     router = APIRouter()
     from .delivery_routes import build_delivery_routes
     router.include_router(build_delivery_routes(controller))
+    from .private_backup_routes import build_private_backup_routes
+    router.include_router(build_private_backup_routes(controller))
+    from .memory_routes import build_memory_routes
+    router.include_router(build_memory_routes(controller))
+    from .artifact_management_routes import build_artifact_management_routes
+    router.include_router(build_artifact_management_routes(controller))
+    from .runtime_artifact_routes import build_runtime_artifact_routes
+    router.include_router(build_runtime_artifact_routes(controller))
+    from .usage_audit_routes import build_usage_audit_routes
+    router.include_router(build_usage_audit_routes(controller))
+    from .collaboration_routes import build_collaboration_routes
+    router.include_router(build_collaboration_routes(controller))
+    from .browser_routes import build_browser_routes
+    router.include_router(build_browser_routes(controller))
+    from .periodic_routes import build_periodic_routes
+    router.include_router(build_periodic_routes(controller))
     router.include_router(build_basic_routes(controller))
     router.include_router(build_optimization_routes(controller))
     router.include_router(build_shadow_dev_routes(controller))

@@ -14,18 +14,24 @@ iter-115 增加 schema v13 与 DeliveryRepository，保存任务执行收据、�
 |---|---|
 | agent_service.py | AgentService: Yomk service for the Station task domain. |
 | capability_api_service.py | CapabilityApiService: transport-neutral interaction operations behind the original API. |
+| collaboration_repository.py | Persistent takeover state and idempotent collaboration notices. |
 | database.py | SQLite 数据库存储层 - Secretary 端主机注册记录持久化 |
 | database_schema.py | Unmodified SQLite initialization scripts; migration version remains in database.py. |
 | delivery_service.py | DeliveryService: Yomk service for the Station task domain. |
 | host_registry_service.py | HostRegistryService: domain behavior separated from the public compatibility facade. |
+| memory_schema.py | Add scoped memory journals and rebuildable conversation search tables. |
 | optimization_queue_service.py | OptimizationQueueService: domain behavior separated from the public compatibility facade. |
+| periodic_repository.py | Transactional schedule claims separate missed triggers from actual task submissions. |
+| periodic_schema.py | Durable schedules, trigger receipts, submission identities and IM inboxes. |
 | pm_control_service.py | Yomk PM control service for local identity-safe and remote task operations. |
 | pm_lifecycle_service.py | Yomk PM lifecycle service: one serialized local owner per Station. |
 | repository_agents.py | Domain SQL repository; Database remains the sole connection and schema owner. |
 | repository_checkpoints.py | Domain SQL repository; Database remains the sole connection and schema owner. |
 | repository_conversations.py | Domain SQL repository; Database remains the sole connection and schema owner. |
 | repository_delivery.py | Durable delivery, inbox deduplication, and task execution receipts. |
+| repository_history.py | Derived search over JSONL history with exact scope and immutable source anchors. |
 | repository_hosts.py | Domain SQL repository; Database remains the sole connection and schema owner. |
+| repository_memory.py | Scoped, versioned user memories; no automatic promotion of model or tool output. |
 | repository_metrics.py | Domain SQL repository; Database remains the sole connection and schema owner. |
 | repository_operations.py | Domain SQL repository; Database remains the sole connection and schema owner. |
 | repository_projects.py | Domain SQL repository; Database remains the sole connection and schema owner. |
@@ -66,6 +72,7 @@ iter-115 增加 schema v13 与 DeliveryRepository，保存任务执行收据、�
 | task_scheduling_service.py | Task scheduling service shared by HTTP, chat, federation, queues and autoscaling. |
 | task_service.py | TaskService: Yomk service for the Station task domain. |
 | task_submission_service.py | Task submission HTTP service adapting to the shared synchronous scheduling service. |
+| usage_schema.py | Additional per-call attribution without changing legacy resource-log columns or keys. |
 | workstation_optimizer.py | 工作站常驻自我优化管理器 - 汇聚建议、审批与影子执行。 |
 <!-- /AUTO:module-list -->
 ---
@@ -595,3 +602,7 @@ PM ID 校验防止旧任务控制新实例；无身份参数的旧 Worker 调用
 | 2026-08-16 | iter-30 补④ | P3: 删除历史遗留 secretary.py/master.py 与 main.py secretary 入口; api.py 移除旧 Secretary 路由及专用模型; Orchestrator stub 随之下线 |
 | 2026-08-16 | iter-28 | E4: 双 Secretary 冲突仲裁 (真实角色广播 + device_id 字典序让位) + role 落库 + 密钥接收端自愈 |
 | 2026-08-16 | iter-27 后 | 初建；收录 S1/S2/S3 同步链路设计 |
+
+## iter-116：schema v14
+
+新增context历史索引、作用域记忆与不可变修订表，保留原表及接口；记忆更新与审计事务提交，连接仍线程本地。[数据所有权与迁移说明](../06-interaction/scoped-memory-history.md)。

@@ -1,5 +1,9 @@
 # 09 Web 前端
 
+## 秘书对话与任务流程（iter124）
+
+Web秘书增加可并排使用的任务流程面板，节点可带入输入草稿；Web工作台与React DAG页改为共用流程编辑器。支持拓扑排版/缩放搜索/详情、依赖校验、撤销重做、未保存修改保护及手机布局。多行输入和新消息阅读位置同步改善。详见[交互设计、数据边界与验证](secretary-dag-workbench.md)。下文iter51/56的独立SVG/ReactFlow实现为历史记录。
+
 单文件深色仪表盘，多 Tab 布局，与 station_api 的 REST/WebSocket 对接。
 iter-56 (F5.1) 起新增 React SPA 新版（webui/），与旧版仪表盘并存演进。
 
@@ -10,8 +14,12 @@ iter-56 (F5.1) 起新增 React SPA 新版（webui/），与旧版仪表盘并存
 |---|---|
 | dashboard_assets.py | Dashboard domain assembly preserving classic JavaScript globals and source order. |
 | lan_mesh/web/static/ | CSS/JS 静态资源 (含 spa/ React 构建产物) |
+| lan_mesh/web/static/artifacts/ | 作用域执行产物读取、保留清理及只读副本管理 |
+| lan_mesh/web/static/collaboration/ | Web与React共用的协作工作台、接管与独立浏览器界面 |
 | lan_mesh/web/static/dashboard/ | 仪表盘16个业务源模块，组装为单一classic script |
+| lan_mesh/web/static/memories/ | 来源可追溯的记忆管理界面 |
 | lan_mesh/web/static/mesh_transport.js | 仪表盘与React共用认证和raw HTTP传输 |
+| lan_mesh/web/static/schedules/ | 周期任务与IM入口的共享管理界面 |
 | lan_mesh/web/templates/dashboard.html | Station Web 控制台 (10 Tab, 含运行时性能) |
 | webui/ | React SPA 源码 (Vite+TS+xyflow, 构建产物 → web/static/spa/) |
 <!-- /AUTO:module-list -->
@@ -85,7 +93,7 @@ iter-56 (F5.1) 起新增 React SPA 新版（webui/），与旧版仪表盘并存
 
 ## React SPA 新版 — webui/ (iter-56, F5.1)
 
-**技术栈**: Vite 5 + React 18 + TypeScript 5.6 + @xyflow/react 12（DAG 画布）。
+**技术栈**: Vite 5 + React 18 + TypeScript 5.6；iter124使用共享SVG流程工作台，@xyflow/react 12为保留的历史依赖。
 
 **挂载**: 构建产物输出到 `lan_mesh/web/static/spa/`，服务端
 `app.mount("/spa", StaticFiles(html=True))` 静态托管；hash 路由
@@ -293,3 +301,16 @@ HTTP 响应渲染落话题 (闭包持有发送时 topic key); WS `chat_reply` ha
 | 2026-09-10 | iter-101 | 团队与子 Agent 拓扑 (backlog UI-067, checklist UI-072): pm-tree 团队头点击折叠/展开 (折叠态 Set 存 window, WS 刷新后保持) + 成员计数徽章 + 成员点击弹 Agent 详情 (/api/agents/{id}: 状态/并发、主机、技能、工具、模型偏好、版本/心跳; 404 显式提示, 无 agent_id 兜底) + 弹窗异步段序号令牌守卫 (防过期响应覆写, 同模式回补 UI-066 两段), 后端零改动; Playwright mock 18/18 PASS (含单引号 agent_id escJs 实测/XSS 零执行/零 pageerror) |
 | 2026-09-10 | iter-101 | 运行时 JSONL 执行统计面板 (backlog UI-068, checklist UI-073): 运行时 Tab 新增「⚡ 执行统计」区 GET /api/runtime/stats (独立窗口 1h/6h/24h/7d; 子任务成功率/LLM调用均延P99/Token入出/状态徽章/模型技能分布条形表/错误Top5; 空窗口提示), 与「按模型统计」标题分别标注数据源 (JSONL 追踪 vs SQLite 审计), refreshRuntime 联动重拉, 后端零改动; Playwright mock 12/12 PASS (含 hours 透传/XSS 零执行/零 pageerror)。至此 backlog P1 三项 (UI-066/067/068) 全部交付 |
 | 2026-09-10 | iter-101 | 云存储同步状态卡 (backlog UI-069, checklist UI-074): 资源 Tab 新增「☁️ 云存储同步」区 GET /api/cloud-sync/status (启用/配置/守护三徽章、endpoint/bucket/前缀/本地路径、自动同步间隔、最近同步↑↓与错误数) + 「立即同步」「测试连接」按钮 (POST sync/test, 反馈 toast, errors 非空转警告) + 降级态 (无 endpoint) 徽章置灰/按钮禁用/config.yaml 指引 + WS cloud_sync 推送静默重拉 (不另弹 toast 防与 HTTP 响应双弹), 后端零改动; Playwright+/ws mock 13/13 PASS (含 endpoint XSS 零执行/降级双态/零 pageerror) |
+
+Web/React共用协作页面与移动端见[协作工作台设计](../06-interaction/collaboration-workbench.md)。
+
+计划/IM管理界面及移动入口见[周期与IM设计](../03-task-orchestration/periodic-im.md)。
+
+### iter121 记忆管理
+共享 `/static/memories/index.html` 接入Web及React，按来源确认/更正/撤销记忆并查看修订，权限及分页契约见 [作用域记忆](../06-interaction/scoped-memory-history.md)。
+
+### iter122 记忆备份区
+记忆页面增加独立于会话选择的快照列表、指定工作站复制、手工恢复与确认删除。所有写操作要求boss权限；共享目录不能直接下载私有快照。
+
+### iter123 执行产物管理
+Web/React共用协作页增加产物管理入口，完整记录分页读取、手动保留、保护原因、清理预览及确认、快照复制/只读恢复均由共享页面完成。

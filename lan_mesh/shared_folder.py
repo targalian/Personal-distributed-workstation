@@ -43,7 +43,7 @@ class SharedFolderManager:
             return result
 
         for entry in sorted(self.path.iterdir()):
-            if entry.name.startswith("."):
+            if entry.name.startswith(".") or any(part in entry.resolve().parts for part in (".runtime_artifacts", ".private_replicas")):
                 continue
             try:
                 if entry.is_file():
@@ -81,7 +81,7 @@ class SharedFolderManager:
         if not self.path.is_dir():
             return 0
         for entry in self.path.rglob("*"):
-            if entry.is_file() and not entry.name.startswith("."):
+            if entry.is_file() and not any(p.startswith(".") for p in entry.relative_to(self.path).parts):
                 count += 1
         return count
 
@@ -89,8 +89,10 @@ class SharedFolderManager:
         """安全解析相对路径，防止路径穿越攻击。"""
         # 标准化路径，防止 ../ 穿越
         full = (self.path / relative_path).resolve()
-        if not str(full).startswith(str(self.path)):
+        if not full.is_relative_to(self.path):
             raise ValueError(f"路径越界: {relative_path}")
+        if any(part in full.relative_to(self.path).parts for part in (".runtime_artifacts", ".private_replicas")):
+            raise ValueError("执行产物请使用作用域产物接口读取")
         return full
 
     def get_file(self, relative_path: str) -> Path:
@@ -114,6 +116,7 @@ class SharedFolderManager:
                 if not candidate.exists():
                     dest = candidate
                     break
+        dest = self.resolve_path(str(dest.relative_to(self.path)))
         dest.write_bytes(data)
         return dest
 

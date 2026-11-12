@@ -1,6 +1,16 @@
 // ── 初始化 ──
 document.addEventListener('DOMContentLoaded',()=>{
-  checkSecretaryState();
+  checkSecretaryState().then(()=>{
+    const query=new URLSearchParams(location.search);
+    if(secretaryActive&&(query.get('conv')||query.get('dag_task')))
+      document.querySelector('[data-tab="chat"]')?.click();
+    if(secretaryActive&&query.get('dag_task')){
+      apiFetch('/api/tasks/'+encodeURIComponent(query.get('dag_task'))).then(async r=>{
+        if(!r.ok)return;const task=await r.json();
+        await discussDagInChat({task_id:task.task_id,task_name:task.name,project_id:task.project_id});
+      }).catch(()=>showToast('无法打开对应任务流程','err'));
+    }
+  });
   refreshStation();
   connectWS();
   setInterval(refreshHosts,5000);

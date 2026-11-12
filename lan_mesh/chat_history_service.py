@@ -20,6 +20,7 @@ class ChatHistoryService(ComponentService):
     def clear_history(self, conv_id: str = ""):
         """清空指定对话历史。"""
         cid = conv_id or self.owner._active_conv_id
+        self._forget_memory(cid)
         self.owner._conversations[cid] = []
         # 清空文件
         self.owner._clear_conv_file(cid)
@@ -38,6 +39,11 @@ class ChatHistoryService(ComponentService):
 
     def delete_conversation(self, conv_id: str) -> bool:
         """删除对话。"""
+        if not self.owner._get_conv_meta(conv_id):
+            return False
+        self._forget_memory(conv_id)
+        for thread in self.owner._get_conv_meta(conv_id).get('pm_threads', []):
+            self._forget_memory(conv_id, thread['pm_id'])
         self.owner._conv_index = [c for c in self.owner._conv_index if c["id"] != conv_id]
         self.owner._conversations.pop(conv_id, None)
         self.owner._save_conv_index()
@@ -112,6 +118,8 @@ class ChatHistoryService(ComponentService):
         meta = self.owner._get_conv_meta(conv_id)
         if not meta:
             return False
+        if any(t['pm_id'] == pm_id for t in meta.get('pm_threads', [])):
+            self._forget_memory(conv_id, pm_id)
         threads = meta.get("pm_threads", [])
         meta["pm_threads"] = [t for t in threads if t["pm_id"] != pm_id]
         self.owner._save_conv_index()
@@ -151,6 +159,9 @@ class ChatHistoryService(ComponentService):
 
     def delete_pm_thread(self, pm_id: str):
         """彻底删除 PM 线程 (内存消息 + JSONL 文件), 任务删除时调用。"""
+        conv_id = self.owner.find_conv_by_pm(pm_id)
+        if conv_id:
+            self._forget_memory(conv_id, pm_id)
         self.owner._pm_thread_messages.pop(pm_id, None)
         import os
         safe_id = pm_id.replace("/", "_").replace("\\", "_")
@@ -384,6 +395,8 @@ class ChatHistoryService(ComponentService):
     def _save_message_to_file(self, conv_id: str, msg: dict):
         """追加写入消息到 JSONL 文件。"""
         import json, os
+        import uuid
+        msg.setdefault('message_id', uuid.uuid4().hex)
         filepath = os.path.join(self.owner._get_conv_dir(), f"{conv_id}.jsonl")
         try:
             with open(filepath, "a", encoding="utf-8") as f:
@@ -456,6 +469,8 @@ class ChatHistoryService(ComponentService):
     def _save_thread_message_to_file(self, pm_id: str, msg: dict):
         """追加写入 PM 线程消息到 JSONL 文件。"""
         import json, os
+        import uuid
+        msg.setdefault('message_id', uuid.uuid4().hex)
         safe_id = pm_id.replace("/", "_").replace("\\", "_")
         filepath = os.path.join(self.owner._get_thread_dir(), f"{safe_id}.jsonl")
         try:
@@ -482,6 +497,13 @@ class ChatHistoryService(ComponentService):
                 pass
         return messages
 
+
+    def _forget_memory(self, conv_id: str, agent_id: str = '') -> None:
+        if vars(self.owner).get('_db') is None:
+            return
+        from .component_service import call_component
+        from .memory_service import MemoryService
+        call_component(self.owner, MemoryService, 'forget_history', conv_id=conv_id, agent_id=agent_id)
 
     def _auto_title(self, conv_id: str, first_message: str):
         """O1: 根据首条消息自动生成对话标题 (5字内)。"""

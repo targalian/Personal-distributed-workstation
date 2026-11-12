@@ -20,6 +20,7 @@ from .agent_prompt import build_aggregation_prompt
 from .http_retry import auth_headers
 from .logger import get_logger
 from .pm_state import PMState
+from .runtime_usage import call_for_task
 
 logger = get_logger("pm.monitor")
 
@@ -366,9 +367,8 @@ class PMMonitor:
 注意: score >= 6 则 accepted=true。只有明显缺陷才判定为不通过。"""
 
         try:
-            resp = self._runtime._call_llm_with_routing(
-                verify_prompt,
-                {"_model_preference": "", "_fallback_models": [], "description": "质量验证"}
+            resp = call_for_task(self._runtime, verify_prompt,
+                {"_model_preference": "", "_fallback_models": [], "description": "质量验证"}, self._state.task, "quality_review"
             )
             content = resp.get("content", "")
             import json as _j
@@ -423,9 +423,8 @@ class PMMonitor:
 
         agg_prompt = build_aggregation_prompt(task_name, task_desc, subtask_results, st.plan)
         try:
-            resp = self._runtime._call_llm_with_routing(
-                agg_prompt,
-                {"_model_preference": "", "_fallback_models": [], "description": "结果聚合"}
+            resp = call_for_task(self._runtime, agg_prompt,
+                {"_model_preference": "", "_fallback_models": [], "description": "结果聚合"}, st.task, "aggregation"
             )
             aggregated = resp.get("content", "")
         except Exception as e:

@@ -10,9 +10,16 @@ requirements.txt 由 `python scripts/sync_dependencies.py --write` 生成。
 0.41.1 将 Yomk Python、C++ 和工作站适配技能内置到安装包，按相关任务注入，支持 Worker 分发完整参考资料；
 见[内置技能与生效方式](docs/design/04-execution-engine/yomk-builtin-skills.md)。
 
-0.41.3 工作区候选加入 SQLite 持久跨站投递、结果确认与按尝试去重，支持断网重发、
+0.41.3 已上库源码加入 SQLite 持久跨站投递、结果确认与按尝试去重，支持断网重发、
 进程中断记录和取消栅栏；见[协议及验证边界](docs/design/03-task-orchestration/durable-mesh-delivery.md)。
-尚未发布，真实双节点验收待环境。
+真实双节点验收仍待环境。
+
+0.41.12 包含已完成的 DS-Bot 优化开发路线：作用域记忆与私有备份、模型窗口与完整产物、
+验收来源和用量归因、协作与人工接管、周期任务与统一 IM 入口。新增界面已做浏览器验证；
+本次源码交付范围包括 iter116–124，实机放行仍独立核对。见[本次连续迭代交付清单](docs/design/dsbot-loop-completion.md)。
+
+0.41.12 进一步优化秘书交互：对话旁可直接查看任务流程、选中步骤带入讨论，
+Web/React共用带编辑保护的DAG工作台。见[操作与验证说明](docs/design/09-frontend/secretary-dag-workbench.md)。
 
 ## 项目结构
 
@@ -298,3 +305,11 @@ MIT
 ## YomkGraph 本机服务图
 
 在 `config.yaml` 的 `observability` 下设置 `yomk_graph_enabled: true`，重启 Station 或 Worker 后访问 http://127.0.0.1:18765。端口由 `yomk_graph_port` 配置，默认关闭。详情与观测边界见 [YomkGraph 接入说明](docs/design/08-infrastructure/yomk-graph.md)。
+
+### DS-Bot P1-B：作用域记忆与历史检索
+
+新增带原消息锚点的项目/会话/PM线程记忆、显式更正撤销与过期检查；中文历史搜索可检索完整JSONL并分页读取原文。管理API及边界见[设计说明](docs/design/06-interaction/scoped-memory-history.md)。记忆存于Secretary本机SQLite，支持显式私有快照复制与备用节点恢复；见[备份恢复边界](docs/design/07-data-sync/private-memory-backups.md)。
+
+### DS-Bot P1-C：模型窗口与工具产物
+
+ReAct 为每个候选模型预留回复空间，保留原始要求并压缩旧工具轮次；完整结果按执行范围归档，支持分页重读和重启后核对。配置、只读API和恢复边界见[设计说明](docs/design/04-execution-engine/model-window-artifacts.md)。

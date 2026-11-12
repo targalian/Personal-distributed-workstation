@@ -43,6 +43,12 @@ def create_worker_router(
     if role_manager is not None:
         from .delivery_routes import build_delivery_routes
         router.include_router(build_delivery_routes(role_manager))
+        from .artifact_management_routes import build_artifact_management_routes
+        router.include_router(build_artifact_management_routes(role_manager))
+        from .private_backup_routes import build_private_backup_routes
+        router.include_router(build_private_backup_routes(role_manager))
+        from .runtime_artifact_routes import build_runtime_artifact_routes
+        router.include_router(build_runtime_artifact_routes(role_manager))
     router.include_router(build_basic_routes(collect_info_fn, shared_folder, agent_runtime))
     router.include_router(build_pm_routes(role_manager))
     router.include_router(build_p2p_routes())

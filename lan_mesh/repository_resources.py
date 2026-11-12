@@ -13,7 +13,7 @@ class ResourcesRepository(Repository):
                               plan_type: str, input_tokens: int,
                               output_tokens: int, cost: float,
                               usage_id: str = "", task_id: str = "",
-                              project_id: str = "") -> bool:
+                              project_id: str = "", usage_metadata: dict | None = None) -> bool:
         """写入一条 LLM 调用用量记录。
 
         Args:
@@ -24,22 +24,26 @@ class ResourcesRepository(Repository):
             是否实际写入 (重复上报返回 False)
         """
         conn = self.database._get_conn()
-        if usage_id:
-            dup = conn.execute(
-                "SELECT 1 FROM resource_usage_log WHERE usage_id = ? LIMIT 1",
-                (usage_id,)).fetchone()
-            if dup:
-                return False
-        conn.execute("""
-            INSERT INTO resource_usage_log
-                (resource_id, model_id, plan_type, input_tokens, output_tokens,
-                 cost, created_at, usage_id, task_id, project_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (resource_id, model_id, plan_type, int(input_tokens),
-              int(output_tokens), cost, time.time(), usage_id,
-              task_id, project_id))
-        conn.commit()
-        return True
+        with conn:
+            inserted = conn.execute("""
+                INSERT OR IGNORE INTO resource_usage_log
+                    (resource_id, model_id, plan_type, input_tokens, output_tokens,
+                     cost, created_at, usage_id, task_id, project_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (resource_id, model_id, plan_type, int(input_tokens), int(output_tokens),
+                  cost, time.time(), usage_id, task_id, project_id)).rowcount
+            if not inserted and usage_id:
+                previous = conn.execute('SELECT model_id,input_tokens,output_tokens,task_id,project_id '
+                                        'FROM resource_usage_log WHERE usage_id=?', (usage_id,)).fetchone()
+                if tuple(previous) != (model_id, int(input_tokens), int(output_tokens), task_id, project_id):
+                    raise ValueError('usage_id_conflict')
+            if usage_id and usage_metadata:
+                conn.execute("INSERT OR IGNORE INTO usage_call_details VALUES (?, ?, ?, ?, ?)", (
+                    usage_id, str(usage_metadata.get('attempt_id', '')),
+                    str(usage_metadata.get('purpose', '')),
+                    str(usage_metadata.get('outcome', 'unknown')),
+                    int(bool(usage_metadata.get('usage_known', False)))))
+        return bool(inserted)
 
 
     def query_unreported_usage(self, limit: int = 200) -> list:
@@ -52,7 +56,15 @@ class ResourcesRepository(Repository):
             WHERE reported = 0
             ORDER BY id ASC LIMIT ?
         """, (int(limit),)).fetchall()
-        return [dict(r) for r in rows]
+        result = []
+        for row in rows:
+            item = dict(row)
+            details = conn.execute('SELECT * FROM usage_call_details WHERE usage_id=?',
+                                   (item['usage_id'],)).fetchone()
+            if details:
+                item['usage_metadata'] = dict(details)
+            result.append(item)
+        return result
 
 
     def mark_usage_reported(self, ids: list) -> None:
@@ -83,6 +95,18 @@ class ResourcesRepository(Repository):
         """, (resource_id, since_ts)).fetchone()
         return {"tokens": row["tokens"], "cost": row["cost"]}
 
+
+    def query_attempt_usage(self, task_id: str, project_id: str, limit: int = 100) -> list[dict]:
+        """Include failed/cancelled calls and explicitly count unknown provider usage."""
+        rows = self.database._get_conn().execute("""
+            SELECT d.attempt_id, d.purpose, d.outcome, COUNT(*) AS calls,
+                   SUM(l.input_tokens + l.output_tokens) AS reported_tokens,
+                   SUM(l.cost) AS reported_cost, SUM(1-d.usage_known) AS unknown_usage_calls
+            FROM resource_usage_log l JOIN usage_call_details d ON l.usage_id=d.usage_id
+            WHERE l.task_id=? AND l.project_id=?
+            GROUP BY d.attempt_id,d.purpose,d.outcome ORDER BY MAX(l.created_at) DESC LIMIT ?
+        """, (task_id, project_id, max(1, min(500, limit)))).fetchall()
+        return [dict(row) for row in rows]
 
     def query_cost_by_task(self, limit: int = 100) -> list:
         """R6: 按 task_id 聚合成本分摊 (含未归因汇总行)。

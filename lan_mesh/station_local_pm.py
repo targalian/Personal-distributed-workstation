@@ -65,13 +65,17 @@ class StationLocalPmMixin:
         from .pm_lifecycle_service import call_pm
         return call_pm(self, "inject_input", input_data=input_data)
 
-    def _auto_attach_pm_thread(self, pm_id: str, task_name: str, agent_name: str):
+    def _auto_attach_pm_thread(self, pm_id: str, task_name: str, agent_name: str,
+                               task_data: dict | None = None):
         """方案C: PM 启动后自动绑定到当前活跃对话的线程列表。"""
         ch = self.chat_handler
         if not ch:
             return
-        conv_id = ch._active_conv_id
+        conv_id = (task_data or {}).get('input_data', {}).get('_source_conv_id', ch._active_conv_id)
         if not conv_id:
+            return
+        if task_data and not any(m.get('id') == conv_id and m.get('project_id', '') == task_data.get('project_id', '')
+                                 for m in ch._conv_index):
             return
         try:
             ch.attach_pm_thread(conv_id, pm_id, task_name=task_name, agent_name=agent_name)
@@ -98,6 +102,7 @@ class StationLocalPmMixin:
             shared_folder_path=str(self.state.shared_folder.path),
             custom_system_prompt=system_prompt,
         )
+        sub_runtime._browser_owner = self
         self._local_sub_agents[agent_id] = {
             "agent_id": agent_id, "agent_name": agent_name,
             "runtime": sub_runtime, "skills": skills,
@@ -117,7 +122,8 @@ class StationLocalPmMixin:
             cancel_runtime()
         info["status"] = "cancelled"
         logger.info("本机子 Agent 已请求取消: %s", agent_id)
-        return {"ok": True, "agent_id": agent_id}
+        activity = getattr(runtime, 'activity', lambda: {'quiescent': False})()
+        return {"ok": True, "agent_id": agent_id, **activity}
 
     def _local_forward_progress(self, report: dict) -> dict:
         if not self._local_pm_agent:

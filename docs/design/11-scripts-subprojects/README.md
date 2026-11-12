@@ -30,7 +30,11 @@
 **规范**: 禁止 git push 直推；所有上库必须经此脚本。
 
 **流程**: 干净/分支检查 → VERSION.json 自动同步 (P2 #10, 变更自动提交)
-→ master → gitee/master；master 合并到 en → origin/CN + origin/EN。
+→ master → gitee/master + origin/CN；仅指定 `-WithEN` 时将 master 合并到 en 并推送 origin/EN。
+
+暂停 Gitee 时使用 `pwsh -NoProfile -File scripts/sync_push.ps1 -SkipGitee`，
+完全跳过该远端，只同步 GitHub CN；Windows 可将 `pwsh` 换成 `powershell`。
+此开关可与 `-WithEN` 组合，默认双库行为保留。所有已选择目标独立尝试，失败最终返回非零。
 
 ## scripts/update_version.py — VERSION.json 自动同步 (P2 #10)
 

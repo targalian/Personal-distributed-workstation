@@ -1,7 +1,7 @@
 {
-  "version": "0.41.3",
-  "commit": "5bda228",
+  "version": "0.41.12",
+  "commit": "f306388",
   "released_at": "2026-11-12",
-  "note": "0.41.3 源码交付：iter-113 YomkGraph观测、iter-114 DS-Bot执行可靠性与上下文管理、iter-115持久跨站任务/结果投递及取消恢复；全量712 passed/2 skipped。真实双节点和在线模型验收待环境。",
-  "upgrade_hint": "先按docs/design/08-infrastructure/yomk-rollout.md在隔离节点演练；源码依赖用requirements.txt，或安装候选wheel。正式推送仍使用sync_push.ps1。"
+  "note": "0.41.12源码交付：包含iter116–124全部改动，完成DS-Bot优化开发路线及秘书/DAG交互优化（共用流程工作台、节点讨论、草稿保护、排版缩放、多行输入与移动布局）。仅同步GitHub CN，Gitee暂停；真实多机及在线模型验收另行进行。",
+  "upgrade_hint": "先按docs/design/08-infrastructure/yomk-rollout.md在隔离节点演练；源码依赖用requirements.txt。Gitee暂停期间使用pwsh -NoProfile -File scripts/sync_push.ps1 -SkipGitee同步GitHub。"
 }

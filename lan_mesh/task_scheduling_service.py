@@ -8,6 +8,7 @@ from ._vendor.yomkserverpy.YomkServerPy import YomkService
 from .logger import get_logger
 from .protocol import Task
 from .http_retry import auth_headers
+from .submission_context import can_dispatch
 from .service_runtime import ServiceError, get_service_runtime
 
 logger = get_logger("station")
@@ -47,6 +48,20 @@ class TaskSchedulingService(YomkService):
         if check_secretary and not self.controller.secretary_active:
             raise ServiceError(503, "Secretary 未激活,请在 Station 面板中点击「启动秘书」")
         task = self._create_task(payload)
+        return self._dispatch_task(task)
+
+    def dispatch_existing(self, task_id: str) -> dict:
+        """Dispatch an already persisted task through the ordinary scheduling path."""
+        task = self.controller.db.get_task(task_id)
+        if task is None:
+            raise ServiceError(404, '任务不存在')
+        if task.status not in {'pending', 'queued'}:
+            return task.to_dict()
+        return self._dispatch_task(task)
+
+    def _dispatch_task(self, task: Task) -> dict:
+        if not can_dispatch(self.controller.db, task):
+            return {**task.to_dict(), "status": "review_required", "error": "周期派发需核对持久记录"}
         self._estimate_cost(task)
         self._trace_submission(task)
         hosts = self._select_hosts()
@@ -71,7 +86,7 @@ class TaskSchedulingService(YomkService):
         return self._start_remote(task, target)
 
 
-    def _create_task(self, payload: dict) -> Task:
+    def _create_task(self, payload: dict, task_id: str = '', initial_status: str = 'pending') -> Task:
         controller = self.controller
         db = controller.db
         state = controller.state
@@ -83,20 +98,31 @@ class TaskSchedulingService(YomkService):
 
         # 1. 创建 Task 记录
         task = Task(
-            task_id=f"task-{_uuid.uuid4().hex[:12]}",
+            task_id=task_id or f"task-{_uuid.uuid4().hex[:12]}",
             name=payload.get("name", ""),
             description=payload.get("description", ""),
             input_data=payload.get("input_data", {}),
             created_by=payload.get("created_by", "user"),
             project_id=project_id,
-            status="pending",
+            status=initial_status,
         )
         task.input_data = dict(task.input_data or {})
+        chat = getattr(controller, 'chat_handler', None)
+        cid = (task.created_by.removeprefix('schedule:') if task.created_by.startswith('schedule:')
+               else getattr(chat, '_active_conv_id', ''))
+        task.input_data.pop('_source_conv_id', None)
+        if isinstance(cid, str) and any(m.get('id') == cid and m.get('project_id', '') == project_id
+                                       for m in getattr(chat, '_conv_index', []) or []):
+            task.input_data['_source_conv_id'] = cid
         if "priority" in payload:
             task.input_data.setdefault("_priority", payload["priority"])
         if payload.get("fed_relay"):
             task.input_data["_federation_relay"] = True
-        db.save_task(task)
+        if task_id:
+            if not db.repositories.tasks.save_task_if_absent(task):
+                return db.get_task(task_id)
+        else:
+            db.save_task(task)
         print(f"[Task] 任务已创建: {task.task_id}")
         self._emit(state, "task_submitted", task.to_dict())
         controller.bot_gateway.notify("task_submitted", {
@@ -314,6 +340,8 @@ class TaskSchedulingService(YomkService):
                 self._claims.discard(task.task_id)
 
     def _dispatch_local_claimed(self, task: Task) -> bool:
+        if not can_dispatch(self.controller.db, task):
+            return False
         from .pm_lifecycle_service import call_pm, get_pm_service
         owner = get_pm_service(self.controller)
         with self._relay_lock, owner.lock:
@@ -340,6 +368,8 @@ class TaskSchedulingService(YomkService):
         return True
 
     def _dispatch_remote(self, task: Task, host: object) -> dict:
+        if not can_dispatch(self.controller.db, task):
+            return {"ok": False, "error": "周期派发需核对持久记录"}
         from .station_scheduler import http_post
         from .host_info import pick_reachable_ip
         ip, port = getattr(host, "ip", ""), getattr(host, "api_port", 0)
@@ -370,7 +400,7 @@ class TaskSchedulingService(YomkService):
             self._register_remote(task, host, ip, pm_id)
             attach = getattr(self.controller, "_auto_attach_pm_thread", None)
             if callable(attach):
-                attach(pm_id, task.name, f"PM-{pm_id[:8]}")
+                attach(pm_id, task.name, f"PM-{pm_id[:8]}", task.to_dict())
             return {"ok": True}
         except Exception as exc:
             logger.warning("[Station] 派发失败: %s", exc)
@@ -385,7 +415,7 @@ def get_scheduling_service(controller: object) -> TaskSchedulingService:
     runtime = get_service_runtime(controller)
     return runtime.ensure("/TaskSchedulingService",
                           lambda server: TaskSchedulingService(server, controller),
-                          ["submit_task", "relay", "dispatch_to_worker", "dispatch_local"])
+                          ["submit_task", "dispatch_existing", "relay", "dispatch_to_worker", "dispatch_local"])
 
 
 def call_schedule(controller: object, operation: str, **arguments: Any) -> dict | bool:

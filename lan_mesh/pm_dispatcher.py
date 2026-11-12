@@ -19,6 +19,7 @@ from .agent_prompt import build_subagent_prompt, build_dispatch_context
 from .http_retry import auth_headers, http_get
 from .logger import get_logger
 from .pm_state import PMState
+from .collaboration_pause import dispatch_admission
 
 logger = get_logger("pm.dispatcher")
 
@@ -43,9 +44,15 @@ class PMDispatcher:
         self._device_id = device_id
         self._state = state
         self._agent = agent
+        self._dispatch_lock = threading.RLock()
 
-    def cancel(self) -> None:
+    def cancel(self) -> dict:
         """Propagate PM cancellation to the local runtime."""
+        cancel_runtime = getattr(self._runtime, "cancel", None)
+        if callable(cancel_runtime):
+            cancel_runtime()
+        with self._dispatch_lock:
+            pass  # All admitted dispatches are now visible to the cancellation scan.
         owner = getattr(self._agent, "_delivery_owner", None)
         if owner is not None:
             from .mesh_delivery_service import call_delivery
@@ -56,13 +63,13 @@ class PMDispatcher:
                 if station.get("ip") and station.get("api_port"):
                     call_delivery(owner, "queue_cancel", payload=envelope,
                                   destination=f"http://{station['ip']}:{station['api_port']}")
-        cancel_runtime = getattr(self._runtime, "cancel", None)
-        if callable(cancel_runtime):
-            cancel_runtime()
 
-        self._cancel_subagents()
+        pending = self._cancel_subagents()
+        activity = getattr(self._runtime, 'activity', lambda: {'quiescent': False})()
+        return {'quiescent': activity.get('quiescent') is True and not pending,
+                'pending_agents': pending, **{'active_executions': activity.get('active_executions')}}
 
-    def _cancel_subagents(self) -> None:
+    def _cancel_subagents(self) -> list[str]:
         """Broadcast cancellation to dispatched sub-agents."""
         with self._state.lock:
             targets = []
@@ -74,18 +81,24 @@ class PMDispatcher:
                 if ip and port and agent_id:
                     targets.append((ip, port, agent_id))
 
+        pending = []
         for ip, port, agent_id in set(targets):
             try:
-                requests.post(
+                response = requests.post(
                     f"http://{ip}:{port}/pm/cancel-subagent",
                     json={"agent_id": agent_id},
                     headers=auth_headers(),
                     timeout=10,
                 )
+                response.raise_for_status()
+                if response.json().get('quiescent') is not True:
+                    pending.append(agent_id)
             except Exception as exc:
+                pending.append(agent_id)
                 logger.warning(
                     "[%s] 取消子 Agent %s 失败: %s",
                     self._pm_id[:8], agent_id, exc)
+        return pending
 
     def reset(self) -> None:
         """Clear runtime cancellation before a new PM task starts."""
@@ -211,6 +224,7 @@ class PMDispatcher:
 
     # ── 分发子任务 ────────────────────────────────────────────────
 
+    @dispatch_admission
     def dispatch_subtask(self, station: dict, agent_info: dict, task: dict,
                          sub: dict, plan: dict = None):
         """向目标 work_station 的子 Agent 分发任务。
@@ -283,6 +297,7 @@ class PMDispatcher:
                           self._pm_id[:8], sub_name, e)
             self.execute_subtask_locally(task, sub)
 
+    @dispatch_admission
     def _dispatch_durably(self, station: dict, agent_info: dict, task: dict,
                           sub: dict, input_data: dict) -> None:
         """Bind an immutable attempt before queueing; transport retries reuse its ID."""
@@ -318,6 +333,8 @@ class PMDispatcher:
         """检查 pending 子任务, 如果所有依赖都已完成则注入结果并分发。"""
         st = self._state
         with st.lock:
+            if getattr(self._agent, '_suspended', False) is True:
+                return
             if not st.pending_subtasks:
                 return
 

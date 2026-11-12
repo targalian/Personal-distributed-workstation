@@ -27,18 +27,27 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | test_bug/ui_tests.py | Loop Engineering — 前端 UI 静态白盒验证 |
 | tests/frontend/ | Node认证并发与Tauri IPC契约回归 |
 | tests/test_application_lifecycle.py | Cooperative lifecycle and draining regressions with controlled blocking windows. |
+| tests/test_artifact_lifecycle.py | Retention safety, scope-preserving replicas and real process crash durability. |
 | tests/test_builtin_skills.py | Built-in skill discovery, distribution and real prompt composition behavior. |
+| tests/test_collaboration.py | Control transfer must wait for admitted work, preserve scope and survive retries. |
 | tests/test_core.py | 核心模块单元测试 |
+| tests/test_dag_frontend.py | Run dependency-editor behavior checks with the available Node runtime. |
+| tests/test_evidence_usage.py | Acceptance provenance and durable per-attempt accounting regression scenarios. |
 | tests/test_execution_services.py | Worker concurrency, responsive execution API and native execution boundaries. |
 | tests/test_frontend_assets.py | Dashboard source/markup compatibility and release version resolution. |
 | tests/test_infrastructure_adapters.py | Compatibility and event-loop isolation for remaining infrastructure HTTP adapters. |
 | tests/test_interaction_services.py | Interaction contracts, common ingress and real project domain persistence. |
+| tests/test_memory_backup.py | Private memory replication, interruption recovery and scope-preserving failover. |
+| tests/test_memory_workbench.py | Large source indexing, live PM scoping, pagination and runtime reference boundaries. |
 | tests/test_mesh_delivery.py | Durable delivery acceptance: retries, crash recovery, identities and real HTTP. |
 | tests/test_network_service_integration.py | Real loopback HTTP integration of Worker API, native execution and shutdown. |
+| tests/test_periodic_im.py | Calendar edges, durable trigger admission and IM room/event ownership regressions. |
 | tests/test_pm_services.py | Concurrency and integration regressions for shared PM ownership and scheduling. |
 | tests/test_repositories.py | Database compatibility: unchanged schema and shared repositories with isolated connections. |
 | tests/test_resource_services.py | Resource contracts, secret-free metadata and scoped execution accounting. |
+| tests/test_runtime_artifacts.py | Behavioral checks for model windows, durable tool evidence and scoped recovery. |
 | tests/test_runtime_reliability.py | Behavioral regressions for bounded context, honest outcomes and tool execution. |
+| tests/test_scoped_memory.py | Behavioral acceptance for scoped memory, durable corrections and source retrieval. |
 | tests/test_services.py | Behavioral regression for real Yomk routing, isolation and task API compatibility. |
 | tests/test_shadow_dev.py | Shadow development guardrail tests. |
 | tests/test_workstation_optimizer.py | Tests for the resident workstation optimization workflow. |
@@ -140,3 +149,11 @@ PM 构造进入；还覆盖恢复竞争、同 task_id 重试幂等、取消后�
 | 2026-08-16 | iter-29 | 新增 .githooks/post-merge: git pull 升级后自动 pytest 回归验证 |
 | 2026-08-16 | iter-28 | E4: 新增 TestSecretaryConflict 7 条, 基线 98→105 |
 | 2026-08-16 | iter-27 后 | 初建 |
+
+## iter-116：作用域记忆验收
+
+`tests/test_scoped_memory.py`覆盖真实SQLite/JSONL、中文及短查询、作用域隔离、CAS并发修订、失效与重建、API认证及原消息权限边界。见[设计与验证说明](../06-interaction/scoped-memory-history.md)。
+
+## iter-117：模型窗口与完整产物验收
+
+`tests/test_runtime_artifacts.py`新增26项行为，覆盖窗口/回复预算、降级隔离、原要求/配对保留、完整结果重读、取消、写入失败、作用域/校验/认证及共享/云同步排除。相关75项通过，全量775 passed / 2 skipped / 7既有警告（120.41s）；缺少resources.yaml和Node.js的两项延续跳过。名称扫描补齐两处旧测试导入后相关17项通过。临时索引门禁0 Blocker/17既有Warning，31变更Python文件名称检查、编译导入、依赖及226条目文档清单通过。在线模型与真实断电恢复未验收，见[边界说明](../04-execution-engine/model-window-artifacts.md)。

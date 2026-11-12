@@ -34,6 +34,20 @@ class TasksRepository(Repository):
         conn.commit()
 
 
+    def save_task_if_absent(self, task: Task) -> bool:
+        """Insert a stable external trigger task without overwriting an existing execution."""
+        import json
+        with self.database._get_conn() as conn:
+            result = conn.execute("""INSERT OR IGNORE INTO tasks
+                (task_id,name,description,input_data,output_data,status,subtasks,
+                 created_at,completed_at,created_by,project_id,pm_agent_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                task.task_id, task.name, task.description, json.dumps(task.input_data),
+                json.dumps(task.output_data), task.status, json.dumps(task.subtasks),
+                task.created_at, task.completed_at, task.created_by, task.project_id, task.pm_agent_id))
+            return bool(result.rowcount)
+
+
     def get_task(self, task_id: str) -> Optional[Task]:
         """查询单个任务。"""
         import json

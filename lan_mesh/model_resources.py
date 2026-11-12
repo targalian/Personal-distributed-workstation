@@ -241,8 +241,8 @@ class ModelResourceManager:
 
     # ── 记账 ────────────────────────────────────────────────────
 
-    def record_usage(self, model_id: str, input_tokens: int, output_tokens: int, usage_id: str='', task_id: str='', project_id: str='') -> dict:
-        return call_component(self, ResourceAccountingService, 'record_usage', model_id=model_id, input_tokens=input_tokens, output_tokens=output_tokens, usage_id=usage_id, task_id=task_id, project_id=project_id)
+    def record_usage(self, model_id: str, input_tokens: int, output_tokens: int, usage_id: str='', task_id: str='', project_id: str='', usage_metadata: dict | None = None) -> dict:
+        return call_component(self, ResourceAccountingService, 'record_usage', model_id=model_id, input_tokens=input_tokens, output_tokens=output_tokens, usage_id=usage_id, task_id=task_id, project_id=project_id, usage_metadata=usage_metadata)
 
     def get_usage(self, resource_id: str) -> dict:
         return call_component(self, ResourceAccountingService, 'get_usage', resource_id=resource_id)
@@ -462,12 +462,12 @@ def save_config(yaml_path: Union[str, Path], data: dict) -> dict:
 
 def record_usage_global(model_id: str, input_tokens: int, output_tokens: int,
                         usage_id: str = "", task_id: str = "",
-                        project_id: str = "") -> dict:
+                        project_id: str = "", usage_metadata: dict | None = None) -> dict:
     """记账钩子 — 每次真实 LLM 调用成功后调用, 异常不影响主流程。"""
     try:
         return _mgr.record_usage(model_id, input_tokens, output_tokens,
                                  usage_id=usage_id, task_id=task_id,
-                                 project_id=project_id)
+                                 project_id=project_id, usage_metadata=usage_metadata)
     except Exception:
         return {"tracked": False}
 

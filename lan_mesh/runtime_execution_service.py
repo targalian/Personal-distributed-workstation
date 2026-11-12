@@ -1,22 +1,46 @@
 """RuntimeExecutionService: domain behavior separated from the public compatibility facade."""
 
 from __future__ import annotations
+import uuid
+import threading
+from typing import Any
 from . import agent_runtime as policy
 from .component_service import ComponentService
 
 class RuntimeExecutionService(ComponentService):
     """RuntimeExecutionService business operations with explicit state ownership."""
-    OPERATIONS = ('execute', '_finalize_subtask')
+    OPERATIONS = ('execute', '_finalize_subtask', 'activity')
+
+    def __init__(self, server: Any, owner: object):
+        super().__init__(server, owner)
+        self._activity_lock = threading.RLock()
+        self._active = 0
+
+    def activity(self) -> dict:
+        with self._activity_lock:
+            return {'active_executions': self._active, 'quiescent': self._active == 0}
 
     def execute(self, subtask: dict) -> dict:
         """Scope attribution and skill selection to one execution, including failures."""
         from .model_resources import usage_context
+        from .runtime_usage import attempt_scope
+        subtask = dict(subtask, attempt_id=str(subtask.get('attempt_id') or uuid.uuid4().hex))
         previous = getattr(self.owner._local, 'current_skill', '')
+        previous_secretary = getattr(self.owner._local, 'memory_secretary_url', '')
+        with self._activity_lock:
+            if self.owner._cancel_event.is_set():
+                return {'status': 'cancelled', 'output': {}}
+            self._active += 1
         try:
-            with usage_context(subtask.get('parent_task_id', ''), subtask.get('project_id', '')):
+            self.owner._local.memory_secretary_url = subtask.get('secretary_url', '')
+            with usage_context(subtask.get('parent_task_id', ''), subtask.get('project_id', '')), attempt_scope(
+                    subtask['attempt_id'], 'execution'):
                 return self._execute(subtask)
         finally:
             self.owner._local.current_skill = previous
+            self.owner._local.memory_secretary_url = previous_secretary
+            with self._activity_lock:
+                self._active -= 1
 
     def _execute(self, subtask: dict) -> dict:
         """执行子任务,返回结果字典。
@@ -50,6 +74,9 @@ class RuntimeExecutionService(ComponentService):
         input_data['_model_preference'] = model_pref
         input_data['_fallback_models'] = subtask.get('fallback_models', [])
         input_data['_trace_id'] = trace_id
+        input_data['_task_id'] = str(subtask.get('parent_task_id', ''))
+        input_data['_project_id'] = str(subtask.get('project_id', ''))
+        input_data['_attempt_id'] = str(subtask.get('attempt_id', ''))
         try:
             result = handler(input_data)
             usage = {}

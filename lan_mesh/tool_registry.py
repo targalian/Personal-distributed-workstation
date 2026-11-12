@@ -109,10 +109,14 @@ def _tool_shell_exec(params: dict) -> dict:
             "stderr": result.stderr,
             "returncode": result.returncode,
         })
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        stderr = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else stderr
         return {
-            "stdout": "",
-            "stderr": f"命令超时 ({timeout}s)",
+            "stdout": stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else stdout,
+            "stderr": stderr + f"\n命令超时 ({timeout}s)",
+            "error": f"命令超时 ({timeout}s)",
             "returncode": -1,
             "timed_out": True,
         }
@@ -143,7 +147,7 @@ def _tool_http_request(params: dict) -> dict:
     return {
         "status_code": resp.status_code,
         "headers": dict(resp.headers),
-        "body": resp.text[:10000],  # 限制返回大小
+        "body": resp.text,  # 完整观察交给运行时归档，再按模型预算裁剪
     }
 
 

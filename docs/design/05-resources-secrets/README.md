@@ -23,6 +23,7 @@ API Key 加密分发与版本同步（S1/S2/S3 迭代成果集中于此）。
 | resource_usage_batch.py | Shared idempotent usage batch adapter for HTTP and Worker WebSocket. |
 | secret_exchange_service.py | SecretExchangeService: transport-neutral interaction operations behind the original API. |
 | secret_sync.py | S1-key-sync: API Key 加密自动分发 (节点间密钥同步) |
+| usage_audit_routes.py | Read attempt-level usage without changing existing resource endpoint signatures. |
 | version_sync.py | S2: 版本记录与升级提醒 — 单机版本文件 + 局域网版本比对 + 领先节点通知 |
 <!-- /AUTO:module-list -->
 ---
@@ -189,3 +190,11 @@ mesh_token 后重试解密一次：
 | 2026-08-16 | iter-30 | F1: 角色无关密钥对齐 (config_ts 仲裁 + config_hash 排除 ts) + 版本落后自动升级 |
 | 2026-08-16 | iter-30 补③ | P2 #6: resources.yaml 备份移位 (~/.lan_mesh/backups/, 留 3 代; 含密钥明文的备份不再与源码同目录) |
 | 2026-08-16 | iter-27 后 | 初建；收录 S1/S2/S3 完整链路设计 |
+
+## iter-117：ReAct 模型窗口策略
+
+模型条目新增可选 `max_output_tokens`（默认4096），与已有 `max_context_tokens` 一起用于 ReAct 候选请求预算。字符/UTF-8估算不参与实际用量记账；配置及未登记模型回退见 [执行引擎设计](../04-execution-engine/model-window-artifacts.md)。
+
+## iter-118：调用身份与部分确认
+
+每次实际模型调用保存attempt/purpose/outcome和用量是否已知，重复上报幂等、部分确认只推进已接收记录。新增任务范围的attempt查询。见 [设计说明](../03-task-orchestration/acceptance-evidence-usage.md)。

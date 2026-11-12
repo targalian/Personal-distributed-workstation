@@ -11,17 +11,21 @@ def apply_usage_batch(records: list) -> dict:
     """
     from .model_resources import record_usage_global
     recorded = duplicate = 0
+    accepted = []
     for rec in records:
         if not isinstance(rec, dict):
             continue
+        options = {'usage_metadata': rec['usage_metadata']} if isinstance(rec.get('usage_metadata'), dict) else {}
         res = record_usage_global(
             rec.get("model", ""),
             rec.get("input_tokens", 0),
             rec.get("output_tokens", 0),
             usage_id=str(rec.get("usage_id", "")),
             task_id=str(rec.get("task_id", "")),
-            project_id=str(rec.get("project_id", "")),
+            project_id=str(rec.get("project_id", "")), **options,
         )
+        if res.get('tracked') and rec.get('usage_id'):
+            accepted.append(str(rec['usage_id']))
         if res.get("duplicate"):
             duplicate += 1
         elif res.get("tracked"):
@@ -30,6 +34,6 @@ def apply_usage_batch(records: list) -> dict:
                   {"total": len(records), "recorded": recorded,
                    "duplicate": duplicate})
     return {"total": len(records), "recorded": recorded,
-            "duplicate": duplicate}
+            "duplicate": duplicate, "accepted_ids": accepted}
 
 

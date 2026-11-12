@@ -42,7 +42,8 @@ class ResourceApiService(StationService):
         records = payload.get('records')
         if isinstance(records, list) and records:
             return {'batch': True, **apply_usage_batch(records)}
-        return record_usage_global(payload.get('model', ''), payload.get('input_tokens', 0), payload.get('output_tokens', 0), usage_id=str(payload.get('usage_id', '')), task_id=str(payload.get('task_id', '')), project_id=str(payload.get('project_id', '')))
+        options = {'usage_metadata': payload['usage_metadata']} if isinstance(payload.get('usage_metadata'), dict) else {}
+        return record_usage_global(payload.get('model', ''), payload.get('input_tokens', 0), payload.get('output_tokens', 0), usage_id=str(payload.get('usage_id', '')), task_id=str(payload.get('task_id', '')), project_id=str(payload.get('project_id', '')), **options)
 
     def get_cost_by_task(self, limit: int=100) -> dict:
         """R6: 成本分摊聚合 — 按 task_id 分组统计调用次数/token/金额。

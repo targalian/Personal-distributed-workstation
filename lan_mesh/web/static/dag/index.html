@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>任务流程 · LAN Mesh</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<div class="workbench">
+  <header class="heading"><div><span class="eyebrow">TASK FLOW</span><h1>任务流程</h1><p id="scope-hint">看清任务的先后关系，再和秘书一起调整。</p></div><button id="discuss" class="button">与秘书讨论 ↗</button></header>
+  <section class="taskbar" aria-label="任务选择">
+    <label class="task-picker">当前任务<select id="task-select"><option value="">选择任务…</option></select></label>
+    <button id="refresh" class="button" title="重新读取任务和流程">刷新</button>
+    <span id="task-state" class="badge">未选择</span><span id="save-state" role="status" aria-live="polite"></span>
+    <div class="edit-actions"><button id="edit" class="button">编辑流程</button><button id="save" class="button primary" disabled>保存修改</button></div>
+  </section>
+  <div id="notice" class="notice" role="status" hidden></div>
+  <div id="error" class="notice error" role="alert" hidden></div>
+  <div id="remote-notice" class="notice warning" hidden>任务已有新变化。当前草稿已保留；重新加载前请先核对修改。<button id="reload" class="text-button">重新加载</button></div>
+  <section class="flow-toolbar" aria-label="流程操作">
+    <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="查找步骤…" aria-label="查找步骤"><span id="search-count"></span></label>
+    <button id="layout" class="button">自动排版</button><button id="fit" class="button">适应画布</button>
+    <div class="zoom"><button id="zoom-out" class="icon-button" aria-label="缩小">−</button><output id="zoom-level">100%</output><button id="zoom-in" class="icon-button" aria-label="放大">＋</button></div>
+    <div class="structure-actions" id="structure-actions" hidden><button id="add" class="button">＋ 步骤</button><button id="connect" class="button">连接步骤</button><button id="undo" class="icon-button" aria-label="撤销" title="撤销（Ctrl / ⌘ Z）">↶</button><button id="redo" class="icon-button" aria-label="重做" title="重做（Ctrl / ⌘ Shift Z）">↷</button></div>
+    <button id="expand" class="icon-button" aria-label="展开画布" title="展开画布">↗</button>
+  </section>
+  <div class="workspace">
+    <section class="canvas" id="canvas" aria-label="任务依赖图">
+      <svg id="graph" role="group" aria-label="流程图，使用方向键平移，选中步骤可查看详情" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs><g id="edges"></g><g id="nodes"></g></svg>
+      <div id="empty" class="empty"><span class="empty-icon">◇</span><h2>让每一步都清楚</h2><p>选择一个任务，查看步骤、负责人和依赖关系。</p></div>
+      <div class="canvas-caption">滚轮缩放 · 拖动空白平移 · 点击步骤查看详情</div>
+    </section>
+    <aside id="inspector" class="inspector" aria-label="步骤详情"><div class="inspector-intro"><span class="eyebrow">DETAILS</span><h2>从一个步骤开始</h2><p>点击图中的步骤，查看说明、负责人和前后依赖；也可以把它带入与秘书的讨论。</p><div class="legend"><span>○ 待开始</span><span class="running">◉ 进行中</span><span class="completed">✓ 已完成</span><span class="failed">! 需关注</span></div></div></aside>
+  </div>
+  <footer><span id="summary">尚未加载流程</span><span id="mode-hint">查看模式</span></footer>
+</div>
+<dialog id="connection-dialog"><form id="connection-form"><h2>连接两个步骤</h2><p>后续步骤会等待前置步骤完成。</p><label>前置步骤<select id="edge-source" required></select></label><span class="dependency-arrow">↓</span><label>后续步骤<select id="edge-target" required></select></label><p id="connection-error" role="alert"></p><div class="dialog-actions"><button type="button" id="connection-cancel" class="button">取消</button><button class="button primary">添加依赖</button></div></form></dialog>
+<script src="/static/mesh_transport.js"></script><script src="model.js"></script><script src="canvas.js"></script><script src="workbench.js"></script>
+</body></html>

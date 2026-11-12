@@ -18,13 +18,14 @@ function _setChatLock(locked){
   _chatSending=locked;
   const input=document.getElementById('chat-input');
   const btn=document.getElementById('chat-send-btn');
-  if(input)input.disabled=locked;
+  if(input)input.setAttribute('aria-busy',String(locked));
   if(btn){btn.disabled=locked;btn.textContent=locked?'思考中...':'发送';}
 }
 async function sendChatMessage(){
   if(_chatSending)return;
   const input=document.getElementById('chat-input');
   const text=input.value.trim();
+  const convId=_activeConvId;
   if(!text)return;
   input.value='';
   appendChatMessage('user',text,Date.now()/1000);
@@ -36,11 +37,13 @@ async function sendChatMessage(){
   const abortCtrl=new AbortController();
   const timeout=setTimeout(()=>abortCtrl.abort(),60000);
   try{
-    const r=await apiFetch('/api/secretary/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conv_id:_activeConvId}),signal:abortCtrl.signal});
+    const r=await apiFetch('/api/secretary/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,conv_id:convId}),signal:abortCtrl.signal});
     clearTimeout(timeout);
     const d=await r.json();
     _hideTyping();
-    if(!ws||ws.readyState!==WebSocket.OPEN){appendChatMessage('assistant',d.reply,d.timestamp);}
+    if(!r.ok)throw new Error(d.detail||d.message||'秘书未能接收消息');
+    if(convId===_activeConvId&&!chatMessages.some(m=>m.role==='assistant'&&m.content===d.reply&&m.timestamp===d.timestamp))appendChatMessage('assistant',d.reply,d.timestamp);
+    chatDagRefresh();
     const elapsed=((Date.now()-t0)/1000).toFixed(1);
     showToast(`秘书已回复 (${elapsed}s)`, 'info', 2500);
     loadConversations(); // 刷新侧边栏时间
@@ -48,15 +51,19 @@ async function sendChatMessage(){
     clearTimeout(timeout);
     _hideTyping();
     const msg=e.name==='AbortError'?'[超时] 秘书响应超过60s,请重试':'[通信失败] '+e.message;
-    appendChatMessage('assistant',msg,Date.now()/1000);
+    if(convId===_activeConvId){
+      appendChatMessage('system',msg,Date.now()/1000);
+      if(!input.value)input.value=text;
+    }else if(!_chatDrafts.get(convId))_chatDrafts.set(convId,text);
     showToast(e.name==='AbortError'?'秘书响应超时':'秘书通信失败', 'err');
   }finally{
     _setChatLock(false);
-    document.getElementById('chat-input').focus();
+    if(convId===_activeConvId)document.getElementById('chat-input').focus();
   }
 }
 function appendChatMessage(role,content,timestamp,extra){
   const container=document.getElementById('chat-messages');
+  const follow=role==='user'||container.scrollHeight-container.scrollTop-container.clientHeight<90;
   const empty=container.querySelector('.empty');
   if(empty)empty.remove();
   const msg=document.createElement('div');
@@ -69,7 +76,7 @@ function appendChatMessage(role,content,timestamp,extra){
     h+='</div>';
     msg.innerHTML=h;
     container.appendChild(msg);
-    container.scrollTop=container.scrollHeight;
+    if(follow)scrollChatToLatest();else document.getElementById('chat-jump').hidden=false;
     chatMessages.push({role,content,timestamp});
     return;
   }
@@ -93,9 +100,17 @@ function appendChatMessage(role,content,timestamp,extra){
     msg.innerHTML=rendered+'<div class="msg-meta">'+(role==='user'?'Boss':(role==='system'?'':('秘书')))+' · '+fmtTime(timestamp)+'</div>';
   }
   container.appendChild(msg);
-  container.scrollTop=container.scrollHeight;
+  if(follow)scrollChatToLatest();else document.getElementById('chat-jump').hidden=false;
   chatMessages.push({role,content,timestamp});
 }
+function scrollChatToLatest(){
+  const el=document.getElementById('chat-messages');el.scrollTop=el.scrollHeight;
+  document.getElementById('chat-jump').hidden=true;
+}
+document.getElementById('chat-messages').addEventListener('scroll',()=>{
+  const el=document.getElementById('chat-messages');
+  if(el.scrollHeight-el.scrollTop-el.clientHeight<90)document.getElementById('chat-jump').hidden=true;
+});
 // 方案C: L1 快捷回复 → 直接注入 PM 线程
 async function l1QuickReply(pmId,option){
   if(!pmId)return;
@@ -136,9 +151,11 @@ function renderMarkdown(text){
 async function loadChatHistory(){
   // 加载当前活跃对话的消息
   if(!_activeConvId){return;}
+  const convId=_activeConvId;
   try{
-    const r=await apiFetch(`/api/conversations/${_activeConvId}/messages?limit=100`);
+    const r=await apiFetch(`/api/conversations/${convId}/messages?limit=100`);
     const d=await r.json();
+    if(convId!==_activeConvId)return;
     const container=document.getElementById('chat-messages');
     container.innerHTML='';
     const raw=d.messages||[];
@@ -160,6 +177,7 @@ async function loadChatHistory(){
     }
     chatMessages=[];
     msgs.forEach(m=>appendChatMessage(m.role,m.content,m.timestamp,{type:m.type,pm_id:m.pm_id,options:m.options}));
+    scrollChatToLatest();
   }catch(e){console.error('加载对话消息失败:',e);}
 }
 function clearChat(){
@@ -670,7 +688,7 @@ function _optDiscussLock(locked){
   // 讨论区自己的输入锁 (勿复用 _setChatLock, 那是主聊天的)
   const input=document.getElementById('opt-discuss-input');
   const btn=document.getElementById('opt-discuss-send');
-  if(input)input.disabled=locked;
+  if(input)input.setAttribute('aria-busy',String(locked));
   if(btn){btn.disabled=locked;btn.textContent=locked?'思考中…':'发送';}
 }
 async function optDiscussSend(){

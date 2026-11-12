@@ -25,7 +25,7 @@ logger = get_logger("database")
 
 _repository_lock = threading.RLock()
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 18
 
 
 def _migration_v1(conn: sqlite3.Connection):
@@ -330,6 +330,12 @@ def _migration_v13(conn: sqlite3.Connection):
     """)
 
 
+from .memory_schema import migrate_memory
+from .usage_schema import migrate_usage
+from .collaboration_repository import migrate_collaboration
+from .periodic_schema import migrate_periodic
+from .memory_restore import migrate_private_restore
+
 _MIGRATIONS: dict[int, callable] = {
     1: _migration_v1,
     2: _migration_v2,
@@ -344,6 +350,11 @@ _MIGRATIONS: dict[int, callable] = {
     11: _migration_v11,
     12: _migration_v12,
     13: _migration_v13,
+    14: migrate_memory,
+    15: migrate_usage,
+    16: migrate_collaboration,
+    17: migrate_periodic,
+    18: migrate_private_restore,
 }
 
 
@@ -786,8 +797,8 @@ class Database:
 
     # ── R1: 模型资源用量 ────────────────────────────────────────
 
-    def insert_resource_usage(self, resource_id: str, model_id: str, plan_type: str, input_tokens: int, output_tokens: int, cost: float, usage_id: str='', task_id: str='', project_id: str='') -> bool:
-        return self.repositories.resources.insert_resource_usage(resource_id=resource_id, model_id=model_id, plan_type=plan_type, input_tokens=input_tokens, output_tokens=output_tokens, cost=cost, usage_id=usage_id, task_id=task_id, project_id=project_id)
+    def insert_resource_usage(self, resource_id: str, model_id: str, plan_type: str, input_tokens: int, output_tokens: int, cost: float, usage_id: str='', task_id: str='', project_id: str='', usage_metadata: dict | None = None) -> bool:
+        return self.repositories.resources.insert_resource_usage(resource_id=resource_id, model_id=model_id, plan_type=plan_type, input_tokens=input_tokens, output_tokens=output_tokens, cost=cost, usage_id=usage_id, task_id=task_id, project_id=project_id, usage_metadata=usage_metadata)
 
     def query_unreported_usage(self, limit: int=200) -> list:
         return self.repositories.resources.query_unreported_usage(limit=limit)

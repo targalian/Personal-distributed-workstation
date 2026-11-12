@@ -27,6 +27,7 @@ class WorkerSubagentService(ComponentService):
             info = self.owner.state.sub_agents[agent_id]
             return {'agent_id': agent_id, 'agent_name': info['agent_name'], 'delivery_protocol': 1}
         sub_runtime = policy.AgentRuntime(agent_id=agent_id, shared_folder_path=str(self.owner.state.shared_folder.path), custom_system_prompt=system_prompt)
+        sub_runtime._browser_owner = self.owner
         self.owner.state.sub_agents[agent_id] = {'agent_id': agent_id, 'agent_name': agent_name, 'runtime': sub_runtime, 'skills': skills, 'current_task': task_description, 'status': 'idle', 'progress': 0.0, 'has_custom_prompt': bool(system_prompt)}
         policy.logger.info('子 Agent 已创建: %s (%s)', agent_id, agent_name)
         return {'agent_id': agent_id, 'agent_name': agent_name, 'delivery_protocol': 1}
@@ -42,7 +43,8 @@ class WorkerSubagentService(ComponentService):
             cancel_runtime()
         info['status'] = 'cancelled'
         policy.logger.info('子 Agent 已请求取消: %s', agent_id)
-        return {'ok': True, 'agent_id': agent_id}
+        activity = getattr(runtime, 'activity', lambda: {'quiescent': False})()
+        return {'ok': True, 'agent_id': agent_id, **activity}
 
     def get_subagent_status(self) -> dict:
         """返回本 Worker 上所有子 Agent 的状态。"""

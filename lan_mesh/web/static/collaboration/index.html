@@ -1,0 +1,12 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>协作工作台</title><link rel="stylesheet" href="style.css"></head><body>
+<header><div><small>LAN MESH · 协作</small><h1>任务协作工作台</h1><p>查看参与者与等待关系，回复 PM，或暂停执行后人工接管。</p></div><button id="refresh">刷新</button></header>
+<div class="toolbar"><label for="tasks">任务</label><select id="tasks"><option value="">选择任务</option></select><span id="status" role="status">加载中</span></div>
+<p id="error" role="alert" hidden></p><main id="detail" hidden>
+<section><div class="heading"><h2 id="task-name"></h2><span id="task-state" class="badge"></span></div><p id="ownership"></p><div class="toolbar"><button id="takeover">暂停并接管</button><button id="release">结束接管</button><a id="conversation" target="_top">打开 L1/L2 对话</a><a id="graph" target="_top">查看 DAG</a></div><p id="pause-detail"></p></section>
+<div class="columns"><section><h2>参与者</h2><div id="participants"></div></section><section><h2>正在等待</h2><div id="dependencies"></div></section></div>
+<section><h2>PM 等待回复</h2><p id="question"></p><label for="reply">你的回复</label><textarea id="reply" rows="3" maxlength="8000"></textarea><button id="send">发送给 PM</button><span id="reply-status" role="status"></span></section>
+<section><h2>验收与证据</h2><p>以下判定为模型自评；来源引用可用于复核，不代表独立测试通过。</p><div id="evidence"></div></section>
+<section><h2>完整执行产物</h2><p>读取原始记录、保留验收证据、复制只读副本或预览清理。</p><a id="artifact-manager" target="_blank" rel="noopener">打开产物管理</a></section>
+<section><h2>接管记录</h2><div id="notices"></div></section>
+<section><h2>独立浏览器</h2><p>为当前任务创建独立浏览器会话。接管浏览器后，自动浏览器动作会被拒绝。</p><button id="browser-create">创建浏览器会话</button><div id="browser-controls" hidden><p id="browser-status"></p><button id="browser-takeover">接管浏览器</button><button id="browser-release">交回自动控制</button><button id="browser-close">关闭会话</button><label for="browser-url">网址</label><input id="browser-url" type="url" placeholder="https://example.com"><button id="browser-go">打开</button><button id="browser-snapshot">刷新画面</button><label for="browser-input">点击画面选择输入框后，在此输入文字</label><input id="browser-input" maxlength="8000"><button id="browser-type">输入文字</button><button id="browser-enter">回车</button><img id="browser-image" alt="任务浏览器画面"><pre id="browser-text"></pre></div></section>
+</main><script src="../mesh_transport.js"></script><script src="workbench.js"></script></body></html>
