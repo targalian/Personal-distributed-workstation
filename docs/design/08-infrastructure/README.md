@@ -220,3 +220,7 @@ TaskSchedulingService.deinit 唤醒并停止队列等待线程，避免关闭后
 | 2026-08-28 | iter-50 | F4.2 自动化环节: _auto_heal_loop 守护线程 + _auto_heal_once 单轮扫描 (安全动作集自动执行 + 同类别冷却去重 + 需人工跳过计数), config.yaml observability.auto_heal_* 驱动 (默认关), get_auto_heal_status 状态暴露 |
 | 2026-08-16 | iter-31 | api.py 按端点域拆分 (275 行工厂 → 装配层 + worker_routes_basic/pm/p2p 三模块; 路由集合/顺序/行为不变) + 工厂签名类型标注补齐 |
 | 2026-08-16 | iter-27 后 | 初建 |
+
+### 2026-11-12 Linux推送脚本兼容
+
+`sync_push.ps1` 使用 `Join-Path` 定位版本同步脚本，支持 Windows PowerShell 与 Linux pwsh。Python版本同步返回非零状态时立即停止，防止带过期版本信息推送；目标仍为Gitee master和GitHub CN。

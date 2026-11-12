@@ -46,7 +46,10 @@ if ($branch -ne "master") {
 # 2.5 P2 #10: VERSION.json 自动同步 (commit/released_at 对齐 HEAD, 变更自动提交)
 # 注: VERSION.json 必须加引号 — 裸词含点会被 PowerShell 解析为成员访问表达式而丢失
 Write-Host "==> 同步 VERSION.json"
-& python "$root\scripts\update_version.py"
+& python (Join-Path $PSScriptRoot "update_version.py")
+if ($LASTEXITCODE -ne 0) {
+    throw "VERSION.json 同步失败，已停止推送 (exit $LASTEXITCODE)"
+}
 $verDiff = & git -C $root status --porcelain -- "VERSION.json"
 if ($verDiff) {
     Invoke-Git add "VERSION.json"
