@@ -1,0 +1,17 @@
+# Official free router. Obtain your own key at https://openrouter.ai/settings/keys
+# Set OPENROUTER_API_KEY in the local .env, never in this file.
+# Select this file via LAN_MESH_MODEL_POOL. No paid models or fallback routes.
+default_model: openrouter/free
+models:
+  - id: openrouter/free
+    provider: openrouter
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding]
+    quality_score: 0.5
+    speed_score: 0.5
+    rate_limit_rpm: 10
+    max_context_tokens: 32768
+    fallback: []

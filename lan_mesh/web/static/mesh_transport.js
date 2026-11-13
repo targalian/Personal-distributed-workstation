@@ -9,25 +9,34 @@
     let role = storage.getItem("lan_mesh_role") || "";
     let authPromise = null;
     let generation = 0;
+    let authEnabled = false;
+    function clearMeshToken() {
+      meshToken = "";
+      storage.removeItem("lan_mesh_token");
+    }
+    function state() { return { role, authEnabled }; }
 
     function ensure() {
       if (authPromise) return authPromise;
       const current = generation;
       let failed = false;
       const headers = new Headers();
-      if (userToken) headers.set("Authorization", `Bearer ${userToken}`);
+      if (userToken || meshToken) headers.set("Authorization", `Bearer ${userToken || meshToken}`);
       authPromise = (async () => {
         try {
           const response = await fetcher("/api/station/auth-token", { headers });
           if (!response.ok) throw new Error(`Authentication bootstrap: ${response.status}`);
           const data = await response.json();
           if (current !== generation) return;
+          authEnabled = Boolean(data.auth_enabled);
+          role = String(data.role ?? "");
+          if (!role || !authEnabled) clearMeshToken();
           if (data.auth_enabled && data.mesh_token) {
             meshToken = data.mesh_token;
             storage.setItem("lan_mesh_token", meshToken);
           }
-          role = String(data.role ?? "");
           storage.setItem("lan_mesh_role", role);
+          options.onAuthChange?.(state());
         } catch {
           failed = true;
         }
@@ -47,12 +56,19 @@
       if (typeof init.body === "string" && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
       }
-      return fetcher(url, { ...init, headers });
+      const response = await fetcher(url, { ...init, headers });
+      if (response.status === 401 || response.status === 403) {
+        authPromise = null;
+        await ensure();
+        if (!role) options.onAuthRequired?.(state());
+      }
+      return response;
     }
 
     function setUserToken(token) {
       generation += 1;
       userToken = token.trim();
+      clearMeshToken();
       role = "";
       authPromise = null;
       storage.removeItem("lan_mesh_role");
@@ -60,7 +76,12 @@
       else storage.removeItem("lan_mesh_user_token");
     }
 
-    return { ensure, request, setUserToken, getRole: () => role, getMeshToken: () => meshToken };
+    function webSocketProtocols() {
+      const token = userToken || meshToken;
+      return token ? ["lan-mesh", `token.${encodeURIComponent(token)}`] : ["lan-mesh"];
+    }
+    return { ensure, request, setUserToken, getRole: () => role,
+      getMeshToken: () => meshToken, getAuthState: state, webSocketProtocols };
   }
   root.MeshTransport = Object.freeze({ create });
 })(globalThis);

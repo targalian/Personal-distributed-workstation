@@ -1,7 +1,7 @@
 {
-  "version": "0.41.12",
-  "commit": "4b6719b",
+  "version": "0.41.13",
+  "commit": "1768a37",
   "released_at": "2026-11-13",
-  "note": "0.41.12源码交付：包含iter116–124全部改动，完成DS-Bot优化开发路线及秘书/DAG交互优化（共用流程工作台、节点讨论、草稿保护、排版缩放、多行输入与移动布局）。仅同步GitHub CN，Gitee暂停；真实多机及在线模型验收另行进行。",
+  "note": "0.41.13：把 gitee 分支 2026-10-27 的本地补丁移植到 CN：/ws 与仪表盘鉴权（4401 + lan-mesh 子协议）、秘书启停串行化、免费模型池 provider 边界与 thinking 开关、ReAct 失败不再误报成功、Windows 启动脚本与离线依赖自检、会话动作隔离，含 50 个新增用例与设计文档条目。CN 基线 29 个既存失败集合不变。",
   "upgrade_hint": "先按docs/design/08-infrastructure/yomk-rollout.md在隔离节点演练；源码依赖用requirements.txt。Gitee暂停期间使用pwsh -NoProfile -File scripts/sync_push.ps1 -SkipGitee同步GitHub。"
 }

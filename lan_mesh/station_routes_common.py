@@ -371,8 +371,7 @@ async def api_guard_middleware(request: Request, call_next):
     if _mesh_auth_enabled and _mesh_auth_token:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
-            from .auth import verify_token
-            trusted = verify_token(auth_header[7:], _mesh_auth_token)
+            trusted = resolve_role(auth_header[7:]) is not None
     else:
         trusted = True  # auth 未启用 (内网自由模式) 不限制合法流量
     if not _rate_limiter.is_allowed(client_ip, trusted=trusted):

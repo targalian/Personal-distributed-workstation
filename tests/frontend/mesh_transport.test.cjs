@@ -88,3 +88,40 @@ test('synchronous fetch failures also release bootstrap ownership for retry', as
   assert.equal(calls, 2);
   assert.equal(client.getRole(), 'boss');
 });
+
+test('logout clears cached boss mesh credentials before an anonymous request', async () => {
+  const saved = storage({ lan_mesh_user_token: 'boss-user', lan_mesh_token: 'boss-mesh' });
+  let businessToken;
+  const client = MeshTransport.create({ storage: saved, fetch: async (url, opts) => {
+    const token = opts.headers.get('Authorization');
+    if (url.includes('auth-token')) return json(token === 'Bearer boss-user'
+      ? { auth_enabled: true, role: 'boss', mesh_token: 'boss-mesh' }
+      : { auth_enabled: true, role: '', mesh_token: '', users: [{ role: 'boss' }] });
+    businessToken = token;
+    return new Response('unauthorized', { status: 401 });
+  }});
+  await client.ensure();
+  client.setUserToken('');
+  assert.equal(saved.getItem('lan_mesh_token'), null);
+  assert.equal((await client.request('/api/tasks')).status, 401);
+  assert.equal(businessToken, null);
+  assert.equal(client.getRole(), '');
+});
+
+test('invalid credentials cannot silently reuse a previous boss mesh token', async () => {
+  const saved = storage({ lan_mesh_user_token: 'revoked', lan_mesh_token: 'old-boss' });
+  const client = MeshTransport.create({ storage: saved, fetch: async () =>
+    json({ auth_enabled: true, mesh_token: '', role: '', users: [{ role: 'boss' }] }) });
+  await client.ensure();
+  assert.equal(client.getMeshToken(), '');
+  assert.equal(saved.getItem('lan_mesh_token'), null);
+});
+
+test('viewer permission errors remain raw and do not upgrade its identity', async () => {
+  const client = MeshTransport.create({ storage: storage({ lan_mesh_user_token: 'viewer' }), fetch: async url =>
+    url.includes('auth-token') ? json({ auth_enabled: true, role: 'viewer', mesh_token: '' })
+      : new Response('forbidden', { status: 403 }) });
+  assert.equal((await client.request('/api/station/activate-secretary', { method: 'POST' })).status, 403);
+  assert.equal(client.getRole(), 'viewer');
+  assert.deepEqual(client.webSocketProtocols(), ['lan-mesh', 'token.viewer']);
+});

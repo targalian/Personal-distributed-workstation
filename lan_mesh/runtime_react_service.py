@@ -77,6 +77,10 @@ class RuntimeReactService(ComponentService):
             archive.append({**(resp.get('message') or {}), 'role': 'assistant'})
             if self.owner._cancel_event.is_set():
                 return self._finish(state, budget, iteration, 'cancelled', '任务已取消')
+            if resp.get('_error') or resp.get('model') == 'none':
+                error = (resp.get('message') or {}).get('content') or '模型调用失败'
+                print(f"[AgentRuntime] ReAct 模型调用失败: {error}")
+                return self._finish(state, budget, iteration, 'failed', error, 'llm_failed')
             outcome, error = policy.infer_result_status(resp)
             if outcome != 'completed':
                 return self._finish(state, budget, iteration, outcome, error, 'llm_failed')

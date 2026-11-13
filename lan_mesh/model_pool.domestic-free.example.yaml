@@ -1,0 +1,31 @@
+# Official pricing checked 2026-10-27. Free models can still be rate limited.
+# Credentials belong in the ignored local .env, never in this file.
+# Select with LAN_MESH_MODEL_POOL; no paid model is included.
+default_model: glm-4.7-flash
+models:
+  - id: glm-4.7-flash
+    provider: zhipu
+    api_key_env: ZHIPU_API_KEY
+    thinking_enabled: false
+    base_url: https://open.bigmodel.cn/api/paas/v4
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding]
+    quality_score: 0.6
+    speed_score: 0.5
+    rate_limit_rpm: 5
+    max_context_tokens: 32768
+    fallback: [Qwen/Qwen3-8B]
+  - id: Qwen/Qwen3-8B
+    provider: siliconflow
+    api_key_env: SILICONFLOW_API_KEY
+    thinking_enabled: false
+    base_url: https://api.siliconflow.cn/v1
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+    capabilities: [reasoning, coding]
+    quality_score: 0.5
+    speed_score: 0.5
+    rate_limit_rpm: 5
+    max_context_tokens: 32768
+    fallback: []

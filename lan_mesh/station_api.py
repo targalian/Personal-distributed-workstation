@@ -95,7 +95,19 @@ def create_station_router(controller) -> APIRouter:
     @router.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         """WebSocket 实时推送主机状态变更 + M5 事件总线事件。"""
-        await websocket.accept()
+        from urllib.parse import unquote
+        from .station_routes_common import mesh_auth_enabled, resolve_role
+        protocols = [part.strip() for part in websocket.headers.get(
+            "sec-websocket-protocol", "").split(",") if part.strip()]
+        provided = websocket.headers.get("authorization", "").removeprefix("Bearer ")
+        for protocol in protocols:
+            if protocol.startswith("token."):
+                provided = unquote(protocol[6:])
+                break
+        if mesh_auth_enabled() and not resolve_role(provided):
+            await websocket.close(code=4401)
+            return
+        await websocket.accept(subprotocol="lan-mesh" if "lan-mesh" in protocols else None)
         state.ws_clients.add(websocket)
         # M5: 懒装配事件总线 sink (幂等) — 事件经本通道广播
         from .event_bus import get_event_bus

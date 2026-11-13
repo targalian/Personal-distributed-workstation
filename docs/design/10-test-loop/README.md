@@ -29,6 +29,7 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_application_lifecycle.py | Cooperative lifecycle and draining regressions with controlled blocking windows. |
 | tests/test_artifact_lifecycle.py | Retention safety, scope-preserving replicas and real process crash durability. |
 | tests/test_builtin_skills.py | Built-in skill discovery, distribution and real prompt composition behavior. |
+| tests/test_chat_safety.py | Conversation isolation and non-confirmation regressions found during live functional QA. |
 | tests/test_collaboration.py | Control transfer must wait for admitted work, preserve scope and survive retries. |
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_dag_frontend.py | Run dependency-editor behavior checks with the available Node runtime. |
@@ -50,6 +51,8 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_scoped_memory.py | Behavioral acceptance for scoped memory, durable corrections and source retrieval. |
 | tests/test_services.py | Behavioral regression for real Yomk routing, isolation and task API compatibility. |
 | tests/test_shadow_dev.py | Shadow development guardrail tests. |
+| tests/test_startup_scripts.py | Regression tests for Windows batch control flow and upgraded runtime dependencies. |
+| tests/test_web_functionality.py | Authenticated HTTP and WebSocket workflows using real routes and isolated SQLite. |
 | tests/test_workstation_optimizer.py | Tests for the resident workstation optimization workflow. |
 | tests/test_yomk_graph.py | Real runtime, coroutine attribution and local viewer lifecycle regression. |
 <!-- /AUTO:module-list -->
