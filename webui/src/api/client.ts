@@ -7,6 +7,7 @@ interface MeshClient {
   setUserToken(token: string): void;
   getRole(): string;
   getMeshToken(): string;
+  getAuthState(): { role: string; authEnabled: boolean };
   webSocketProtocols(): string[];
 }
 declare global {
@@ -18,6 +19,7 @@ export const loginUser = client.setUserToken;
 export const ensureMeshToken = client.ensure;
 export const rawFetch = client.request;
 export const webSocketProtocols = client.webSocketProtocols;
+export const getAuthState = client.getAuthState;
 export function logoutUser(): void { client.setUserToken(""); }
 
 export async function apiFetch<T = unknown>(url: string, opts: RequestInit = {}): Promise<T> {

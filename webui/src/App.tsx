@@ -6,7 +6,7 @@ import MemoriesPage from "./pages/MemoriesPage";
 import SchedulesPage from "./pages/SchedulesPage";
 import CollaborationPage from "./pages/CollaborationPage";
 import UsersPage from "./pages/UsersPage";
-import { ensureMeshToken, getRole, loginUser, logoutUser, webSocketProtocols } from "./api";
+import { ensureMeshToken, getAuthState, getRole, loginUser, logoutUser, webSocketProtocols } from "./api";
 
 // iter-56: hash 路由 (服务端 /spa 静态托管无 SSR 路由, hash 免服务端配置)
 type Route = "station" | "tasks" | "dag" | "users" | "collaboration" | "schedules" | "memories";
@@ -37,7 +37,7 @@ const NAV: { key: Route; label: string; icon: string }[] = [
 ];
 
 /** 顶栏 WS 连接状态 (与旧版 dashboard 一致的 /ws 通道)。 */
-function WsStatus({ role }: { role: string }) {
+function WsStatus({ role, authEnabled }: { role: string; authEnabled: boolean }) {
   const [state, setState] = useState<"connecting" | "online" | "offline">(
     "connecting",
   );
@@ -47,7 +47,8 @@ function WsStatus({ role }: { role: string }) {
     let closed = false;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ensureMeshToken().then(() => {
-      if (closed || !getRole()) { if (!closed) setState("offline"); return; }
+      if (closed) return;
+      if (authEnabled && !getRole()) { setState("offline"); return; }
       ws = new WebSocket(`${proto}://${location.host}/ws`, webSocketProtocols());
       ws.onopen = () => !closed && setState("online");
       ws.onclose = () => !closed && setState("offline");
@@ -57,7 +58,7 @@ function WsStatus({ role }: { role: string }) {
       closed = true;
       ws?.close();
     };
-  }, [role]);
+  }, [role, authEnabled]);
 
   const label =
     state === "online" ? "已连接" : state === "connecting" ? "连接中" : "离线";
@@ -77,9 +78,12 @@ export default function App() {
   const [authOpen, setAuthOpen] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [authError, setAuthError] = useState("");
+  const [authEnabled, setAuthEnabled] = useState(false);
 
   const refreshRole = useCallback(async () => {
-    await ensureMeshToken();setRole(getRole());
+    await ensureMeshToken();
+    setRole(getRole());
+    setAuthEnabled(getAuthState().authEnabled);
   }, []);
 
   useEffect(() => {
@@ -133,7 +137,7 @@ export default function App() {
             </a>
           ))}
         </nav>
-        <WsStatus role={role} />
+        <WsStatus role={role} authEnabled={authEnabled} />
         <div className="auth-chip">
           <button
             className={`role-badge role-${role || "anon"}`}
@@ -164,8 +168,8 @@ export default function App() {
         </div>
       </header>
       <main className="content" key={role}>
-        {!role && <div className="error-banner" role="alert">请先点击右上角“未登录”，输入个人令牌后查看工作站数据。</div>}
-        {role && <>
+        {authEnabled && !role && <div className="error-banner" role="alert">请先点击右上角“未登录”，输入个人令牌后查看工作站数据。</div>}
+        {(role || !authEnabled) && <>
         {route.route === "station" && <StationPage />}
         {route.route === "tasks" && <TasksPage />}
         {route.route === "dag" && (
