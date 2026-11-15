@@ -33,6 +33,7 @@ from .station_routes_projects import build_project_routes
 from .station_routes_shadow import build_shadow_dev_routes
 from .station_routes_resources import apply_usage_batch, build_resource_routes
 from .station_routes_tasks import build_task_routes
+from .station_routes_briefs import build_brief_routes
 from .station_routes_worker import build_worker_routes
 
 # 兼容再导出: 外部 (station_controller/worker) 历史上从本模块导入,
@@ -78,6 +79,7 @@ def create_station_router(controller) -> APIRouter:
     router.include_router(build_resource_routes(controller))
     router.include_router(build_pm_routes(controller))
     router.include_router(build_chat_routes(controller))
+    router.include_router(build_brief_routes(controller))
     router.include_router(build_project_routes(controller))
     router.include_router(build_worker_routes(controller))
 

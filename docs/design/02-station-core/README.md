@@ -55,6 +55,7 @@ iter-115 增加 schema v13 与 DeliveryRepository，保存任务执行收据、�
 | station_local_pm.py | 内嵌 PM 执行域 — 本机启停/恢复/注入、队列派发、子 Agent、孤儿迁移。 |
 | station_pm_control.py | PM 远程反向控制与任务 DAG 图读写 — 取消/暂停/注入/图更新。 |
 | station_routes_basic.py | Station 基础路由 — 健康/错误/角色/注册心跳/主机网络/Director (P1 #2 拆分产物) |
+| station_routes_briefs.py | Project description editing, portable Markdown export and confirmed handoff. |
 | station_routes_chat.py | HTTP contract assembly for independently registered Yomk interaction services. |
 | station_routes_common.py | Station API 路由公共层 — 限流/认证中间件与共享工具 (P1 #2 拆分产物) |
 | station_routes_optimization.py | Station routes for the resident workstation optimization workflow. |

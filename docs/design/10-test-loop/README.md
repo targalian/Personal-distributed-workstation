@@ -46,6 +46,7 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_network_service_integration.py | Real loopback HTTP integration of Worker API, native execution and shutdown. |
 | tests/test_periodic_im.py | Calendar edges, durable trigger admission and IM room/event ownership regressions. |
 | tests/test_pm_services.py | Concurrency and integration regressions for shared PM ownership and scheduling. |
+| tests/test_project_brief.py | 项目描述：存储、版本、审阅、导出与确认下发。 |
 | tests/test_repositories.py | Database compatibility: unchanged schema and shared repositories with isolated connections. |
 | tests/test_resource_services.py | Resource contracts, secret-free metadata and scoped execution accounting. |
 | tests/test_runtime_artifacts.py | Behavioral checks for model windows, durable tool evidence and scoped recovery. |

@@ -11,6 +11,9 @@
 | bot_delivery_service.py | BotDeliveryService: domain behavior separated from the public compatibility facade. |
 | bot_gateway.py | Bot 网关 — 手机消息通道 |
 | bot_ingress_service.py | BotIngressService: domain behavior separated from the public compatibility facade. |
+| brief_handoff.py | Persist confirmed project descriptions before dispatch and prevent duplicate handoffs. |
+| brief_readiness.py | Explain missing brief content and unresolved decisions before versioned handoff. |
+| brief_review.py | Build reviewable AI changes and merge an explicit selection without breaking graphs. |
 | chat_command_service.py | ChatCommandService: extracted domain behavior with explicit component ownership. |
 | chat_context_service.py | ChatContextService: extracted domain behavior with explicit component ownership. |
 | chat_handler.py | Compatibility facade and composition root for independently routed domains. |
@@ -30,6 +33,7 @@
 | memory_service.py | Scoped memory and history operations owned by the live ChatHandler. |
 | periodic_routes.py | Periodic and IM HTTP adapters reuse normal mesh/user role checks and Yomk ownership. |
 | pm_memory.py | Retrieve current scoped reference memories from the configured Secretary only. |
+| project_brief.py | Conversation-scoped project specification; Markdown and DAG share one source. |
 | role_cards.py | 统一角色卡定义 (M6) — Secretary/PM/Worker 人格的单一事实源。 |
 <!-- /AUTO:module-list -->
 ---
