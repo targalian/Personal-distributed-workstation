@@ -8,6 +8,7 @@
 | 文件/目录 | 职责一句话 |
 |---|---|
 | artifact_backup.py | Immutable execution replication preserving scope and checksums without replaying tools. |
+| backup.py | Offline, verified backups of task data, conversations, configuration and execution receipts. |
 | cloud_sync.py | 云存储同步管理器 — S3 兼容服务 (阿里云 OSS / MinIO / AWS S3) |
 | cloud_transfer_service.py | CloudTransferService: domain behavior separated from the public compatibility facade. |
 | host_info.py | 主机配置自动采集 - 使用 psutil 收集 CPU/内存/磁盘/OS/网络信息 |

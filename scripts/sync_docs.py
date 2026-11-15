@@ -39,6 +39,9 @@ DOMAINS = [
 # py 条目: 字符串值 = 域编号, 描述自动取模块 docstring 首行
 # 非 py 条目: 元组 (域编号, 手写一句话描述)
 MAPPING = {
+    "lan_mesh/backup.py": "07-data-sync",
+    "scripts/backup_workstation.py": "11-scripts-subprojects",
+    "tests/test_backup.py": "10-test-loop",
     "lan_mesh/schema_upgrade.py": "07-data-sync",
     "tests/test_database_upgrade.py": "10-test-loop",
     "lan_mesh/model_pool.free.example.yaml": ("05-resources-secrets", "仅免费路由示例：OpenRouter免费模型与空降级链，凭证使用环境变量"),

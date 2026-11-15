@@ -9,6 +9,7 @@
 |---|---|
 | .qoder/skills/ | Qoder 技能库 (docs-sync / code-review / repowiki-update 等) |
 | quicklan-main/ | 独立子项目: Tauri + React 桌面文件共享应用 |
+| scripts/backup_workstation.py | Create, verify or restore an offline workstation backup without overwriting live data. |
 | scripts/boss_channel.py | Boss 通道 — Codex 对接秘书 (Secretary) 与 PM Agent 的命令行客户端。 |
 | scripts/check_runtime_dependencies.py | Check every declared runtime requirement offline before launching the workstation. |
 | scripts/check_unbound_names.py | 静态扫描 lan_mesh/ 中「被引用但从未绑定」的全局名。 |
