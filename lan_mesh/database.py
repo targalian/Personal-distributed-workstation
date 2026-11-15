@@ -14,6 +14,7 @@ from typing import Optional
 
 from .protocol import HostRecord, HostEvent, AgentCard, Task, SubTask, PMAgent, AgentTeam, ProgressReport
 from .database_schema import SCHEMA_0, SCHEMA_1
+from .schema_upgrade import backup_before_upgrade, execute_schema
 from .repository_registry import Repositories
 from .logger import get_logger
 
@@ -370,6 +371,7 @@ class Database:
         self.path = Path(db_path).expanduser()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
+        self.upgrade_backup_path = None
         self._init_db()
         self.backup()  # P2 #7: 启动时快照备份 (失败不阻断启动)
 
@@ -427,25 +429,39 @@ class Database:
         return self._local.conn
 
     def _init_db(self):
-        """初始化数据库表结构 + 版本化迁移。"""
+        """Serialize schema initialization, snapshot old databases and roll back on failure."""
         conn = self._get_conn()
-        # 创建 schema 元数据表
-        conn.execute("""
+        self.upgrade_backup_path = None
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            current = self._get_schema_version(conn) if "schema_meta" in tables else 0
+            if current < 0 or current > SCHEMA_VERSION:
+                raise ValueError(
+                    f"Unsupported database schema v{current}; this code supports v{SCHEMA_VERSION}")
+            if tables and current < SCHEMA_VERSION:
+                self.upgrade_backup_path = backup_before_upgrade(
+                    self.path, current, SCHEMA_VERSION)
+                logger.info("[DB] 迁移前快照: %s", self.upgrade_backup_path)
+            conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_meta (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL DEFAULT ''
             )
         """)
-        conn.commit()
-
-        # 创建所有表 (幂等)
-        conn.executescript(SCHEMA_0)
-        # PM Agent 架构演进: 新增表
-        conn.executescript(SCHEMA_1)
-        conn.commit()
-
-        # 执行版本化迁移
-        self._run_migrations(conn)
+            # 创建所有表 (幂等)；用逐语句执行替代 executescript, 后者会隐式提交事务
+            execute_schema(conn, SCHEMA_0)
+            execute_schema(conn, SCHEMA_1)
+            self._run_migrations(conn)
+            conn.commit()
+            if current < SCHEMA_VERSION:
+                logger.info("[DB] 数据库 schema 已提交到 v%d", SCHEMA_VERSION)
+        except BaseException:
+            conn.rollback()
+            conn.close()
+            del self._local.conn
+            raise
 
     def _get_schema_version(self, conn: sqlite3.Connection) -> int:
         """获取当前 schema 版本号。"""
@@ -455,28 +471,25 @@ class Database:
         return int(row["value"]) if row else 0
 
     def _set_schema_version(self, conn: sqlite3.Connection, version: int):
-        """设置 schema 版本号。"""
+        """设置 schema 版本号 (由 _init_db 的事务统一提交)。"""
         conn.execute(
             "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', ?)",
             (str(version),),
         )
-        conn.commit()
 
     def _run_migrations(self, conn: sqlite3.Connection):
-        """执行所有待应用的迁移。"""
+        """执行所有待应用的迁移；缺迁移函数时中止升级而不是悄悄跳版本。"""
         current = self._get_schema_version(conn)
         if current >= SCHEMA_VERSION:
             return
 
         for ver in range(current + 1, SCHEMA_VERSION + 1):
             migration_fn = _MIGRATIONS.get(ver)
-            if migration_fn:
-                logger.info("执行 schema 迁移: v%d → v%d", ver - 1, ver)
-                migration_fn(conn)
-                self._set_schema_version(conn, ver)
-            else:
-                logger.warning("缺少迁移函数: v%d, 跳过", ver)
-                self._set_schema_version(conn, ver)
+            if not migration_fn:
+                raise ValueError(f"Missing schema migration v{ver}; upgrade aborted")
+            logger.info("执行 schema 迁移: v%d → v%d", ver - 1, ver)
+            migration_fn(conn)
+            self._set_schema_version(conn, ver)
 
         logger.info("数据库 schema 已更新到 v%d", SCHEMA_VERSION)
 

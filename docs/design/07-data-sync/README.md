@@ -16,6 +16,7 @@
 | private_backup_routes.py | Administrator-only private backup writes; receivers can remain standby Stations. |
 | private_backup_service.py | Owned private backup operations with explicit peer selection and manual failover. |
 | private_bundle.py | Immutable private bundles with bounded validation and resumable authenticated transport. |
+| schema_upgrade.py | Preserve the pre-upgrade SQLite state and execute schema changes without implicit commits. |
 | shared_folder.py | 共享文件夹自动管理 - 自动创建、列举、读写共享目录 |
 | station_sync_service.py | StationSyncService: domain behavior separated from the public compatibility facade. |
 <!-- /AUTO:module-list -->

@@ -33,6 +33,7 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_collaboration.py | Control transfer must wait for admitted work, preserve scope and survive retries. |
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_dag_frontend.py | Run dependency-editor behavior checks with the available Node runtime. |
+| tests/test_database_upgrade.py | 数据库升级安全：写前快照、原子回滚、版本守卫。 |
 | tests/test_evidence_usage.py | Acceptance provenance and durable per-attempt accounting regression scenarios. |
 | tests/test_execution_services.py | Worker concurrency, responsive execution API and native execution boundaries. |
 | tests/test_frontend_assets.py | Dashboard source/markup compatibility and release version resolution. |
