@@ -1,7 +1,7 @@
 {
-  "version": "0.41.13",
-  "commit": "d380628",
-  "released_at": "2026-11-13",
-  "note": "0.41.13：把 gitee 分支 2026-10-27 的本地补丁移植到 CN：/ws 与仪表盘鉴权（4401 + lan-mesh 子协议）、秘书启停串行化、免费模型池 provider 边界与 thinking 开关、ReAct 失败不再误报成功、Windows 启动脚本与离线依赖自检、会话动作隔离，含 50 个新增用例与设计文档条目。CN 基线 29 个既存失败集合不变。",
-  "upgrade_hint": "先按docs/design/08-infrastructure/yomk-rollout.md在隔离节点演练；源码依赖用requirements.txt。Gitee暂停期间使用pwsh -NoProfile -File scripts/sync_push.ps1 -SkipGitee同步GitHub。"
+  "version": "0.41.14",
+  "commit": "8fa9ce5",
+  "released_at": "2026-11-15",
+  "note": "0.41.14：从 EN 线回移三组能力——数据库升级安全（写前快照、单事务迁移、缺迁移中止、拒绝更高版本）、整机离线备份与校验恢复（create/verify/restore，含 WAL 快照与清单校验）、项目描述核心（13 章节 + 三层模块树 + 依赖 DAG、版本审阅、历史恢复、Markdown 导出、确认下发；对话生成与前端页面在下一片）。",
+  "upgrade_hint": "先按 docs/schema-upgrades.md 与 docs/backup-restore.md 在隔离节点演练；Gitee 暂停期间使用 pwsh -NoProfile -File scripts/sync_push.ps1 -SkipGitee 同步 GitHub。"
 }
