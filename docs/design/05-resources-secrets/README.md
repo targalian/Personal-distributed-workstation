@@ -10,7 +10,9 @@ API Key 加密分发与版本同步（S1/S2/S3 迭代成果集中于此）。
 |---|---|
 | balance_probe.py | 资源余额探测 (R2) — 从服务商 API 自动获取资源池余额 |
 | budget_advisor.py | 预算顾问 — F4.4 成本感知调度 (iter-52) |
+| codex_plan.py | ChatGPT subscription transport using the official Codex app-server. |
 | collect_config.py | LAN Mesh 主机配置独立采集脚本 |
+| model_pool.chatgpt-plan.example.yaml | 仅 ChatGPT 订阅路由示例：走本机 Codex CLI 登录，不填 API Key |
 | model_pool.free.example.yaml | 仅免费路由示例：OpenRouter免费模型与空降级链，凭证使用环境变量 |
 | model_resources.py | 模型资源管理 — 多主机 / 多 API Key 预算池管理 (R1) |
 | model_router.py | 模型路由器 — Phase 2 核心模块 |

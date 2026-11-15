@@ -84,6 +84,11 @@ class CapabilityApiService(StationService):
             return {'models': [], 'message': 'Secretary 未激活或模型路由器未加载'}
         return {'models': controller.model_router.list_models()}
 
+    async def chatgpt_plan_status(self) -> dict:
+        """只读探测本机 Codex 登录状态；不发起推理，不返回账号信息。"""
+        from .codex_plan import plan_status
+        return await run_in_threadpool(plan_status)
+
     async def list_skills(self, category: str=None) -> dict:
         """列出所有已注册技能，可按分类过滤。"""
         controller = self.context.controller

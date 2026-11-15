@@ -1,0 +1,12 @@
+# 仅 ChatGPT 订阅路由示例：使用本机 Codex CLI 登录，不填 API Key。
+# 复制为 lan_mesh/model_pool.yaml（或并入已有 models 列表），重启节点生效。
+default_model: chatgpt-codex
+models:
+  - id: chatgpt-codex
+    provider: openai
+    usage_mode: chatgpt_plan
+    model_name: ""
+    capabilities: [general, reasoning, coding, long_context]
+    quality_score: 0.95
+    speed_score: 0.7
+    fallback: []

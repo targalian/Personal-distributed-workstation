@@ -4,6 +4,14 @@ from __future__ import annotations
 from . import model_router as policy
 from .component_service import ComponentService
 
+
+def _entry_usable(entry) -> bool:
+    """API 模型看环境变量；ChatGPT 订阅模型看本机 Codex 登录状态。"""
+    if getattr(entry, "usage_mode", "api_key") == "chatgpt_plan":
+        from .codex_plan import model_available
+        return bool(model_available(entry))
+    return bool(policy.os.environ.get(entry.api_key_env, ""))
+
 class ModelRoutingService(ComponentService):
     """ModelRoutingService business operations with explicit state ownership."""
     OPERATIONS = ('list_models', 'route', '_filter_candidates', 'get_fallback_chain')
@@ -57,8 +65,7 @@ class ModelRoutingService(ComponentService):
         for entry in self.owner._pool_list:
             if allowed_models and entry.id not in allowed_models:
                 continue
-            api_key = policy.os.environ.get(entry.api_key_env, '')
-            if not api_key:
+            if not _entry_usable(entry):
                 continue
             if not self.owner._resource_available(entry.id):
                 policy.logger.debug('模型 %s 资源池不可用, 从候选剔除', entry.id)
@@ -82,8 +89,7 @@ class ModelRoutingService(ComponentService):
                 continue
             if allowed_models and fb_entry.id not in allowed_models:
                 continue
-            api_key = policy.os.environ.get(fb_entry.api_key_env, '')
-            if not api_key:
+            if not _entry_usable(fb_entry):
                 continue
             if not self.owner._resource_available(fb_entry.id):
                 continue

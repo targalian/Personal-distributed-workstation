@@ -31,6 +31,7 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_backup.py | 整机备份：在线快照、归档校验、恢复到新目录。 |
 | tests/test_builtin_skills.py | Built-in skill discovery, distribution and real prompt composition behavior. |
 | tests/test_chat_safety.py | Conversation isolation and non-confirmation regressions found during live functional QA. |
+| tests/test_codex_plan.py | ChatGPT 订阅传输：配置、可用性判定、路由与响应解析（全部 mock，不联网）。 |
 | tests/test_collaboration.py | Control transfer must wait for admitted work, preserve scope and survive retries. |
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_dag_frontend.py | Run dependency-editor behavior checks with the available Node runtime. |

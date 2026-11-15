@@ -1145,6 +1145,23 @@
         }
       }
     },
+    "/api/models/chatgpt-plan/status": {
+      "get": {
+        "summary": "Chatgpt Plan Status",
+        "description": "只读探测本机 Codex 登录状态；不发起推理，不返回账号信息。",
+        "operationId": "chatgpt_plan_status_api_models_chatgpt_plan_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/station/skills": {
       "get": {
         "summary": "List Skills",

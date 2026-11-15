@@ -63,6 +63,15 @@ class RuntimeLlmService(ComponentService):
             provider_cfg = self.owner._resolve_provider(model_id)
             if not provider_cfg:
                 continue
+            if provider_cfg.get('usage_mode') == 'chatgpt_plan':
+                try:
+                    from .codex_plan import call_plan
+                    response = call_plan(provider_cfg['model_entry'], messages, tools)
+                    return {**response, 'context_candidates': candidates}
+                except Exception as e:
+                    last_error = e
+                    policy.logger.warning('[ReAct] 模型 %s 订阅调用失败: %s, 降级...', model_id, e)
+                    continue
             window = ModelWindowBudget.resolve(pool.get(model_id), input_data)
             checkpoint = archive.store.latest if isinstance(archive, ReactArchive) else ''
             fitted, report = window.prepare(messages, tools, input_data, checkpoint)
@@ -143,6 +152,16 @@ class RuntimeLlmService(ComponentService):
                     unresolved.append(model_id)
                     continue
                 try:
+                    if provider_cfg.get('usage_mode') == 'chatgpt_plan':
+                        from .codex_plan import call_plan
+                        messages = ([{'role': 'system', 'content': system_prompt}]
+                                    if system_prompt else []) + [{'role': 'user', 'content': prompt}]
+                        result = call_plan(provider_cfg['model_entry'], messages)
+                        message = result.get('message') or {}
+                        return {'content': message.get('content', ''),
+                                'model': result.get('model', model_id),
+                                'input_tokens': result.get('input_tokens', 0),
+                                'output_tokens': result.get('output_tokens', 0)}
                     return self.owner._call_openai_compatible(prompt, model_id, provider_cfg['base_url'], provider_cfg['api_key'], system_prompt=system_prompt)
                 except Exception as e:
                     last_error = e
@@ -178,6 +197,9 @@ class RuntimeLlmService(ComponentService):
         pool = policy._load_model_pool_entries()
         entry = pool.get(model_id)
         if entry:
+            if entry.usage_mode == 'chatgpt_plan':
+                return {'base_url': entry.base_url, 'api_key': '', 'usage_mode': 'chatgpt_plan',
+                        'model_entry': entry}
             api_key = policy.os.environ.get(entry.api_key_env, '')
             if api_key:
                 return {'base_url': entry.base_url, 'api_key': api_key}
@@ -299,6 +321,21 @@ class RuntimeLlmService(ComponentService):
         """
         policy._ensure_env_loaded()
         errors = []
+        from .codex_plan import call_plan, model_available
+        for entry in policy._load_model_pool_entries().values():
+            if entry.usage_mode != 'chatgpt_plan' or not model_available(entry):
+                continue
+            try:
+                messages = ([{'role': 'system', 'content': system_prompt}]
+                            if system_prompt else []) + [{'role': 'user', 'content': prompt}]
+                result = call_plan(entry, messages)
+                message = result.get('message') or {}
+                return {'content': message.get('content', ''), 'model': entry.id,
+                        'input_tokens': result.get('input_tokens', 0),
+                        'output_tokens': result.get('output_tokens', 0)}
+            except Exception as e:
+                policy.logger.warning('%s 订阅调用失败: %s, 尝试下一模型...', entry.id, e)
+                errors.append(f'{entry.id}: {e}')
         for provider, cfg in self._configured_providers().items():
             api_key = policy.os.environ.get(cfg['api_key_env'], '')
             if not api_key:

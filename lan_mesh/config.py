@@ -5,7 +5,7 @@
 """
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -52,6 +52,8 @@ class ModelEntryConfig(BaseModel):
     max_output_tokens: int = Field(default=4096, ge=1, le=1000000)
     fallback: list = Field(default_factory=list)  # 降级链 [model_id, ...]
     thinking_enabled: Optional[bool] = None  # None preserves the provider default
+    usage_mode: Literal["api_key", "chatgpt_plan"] = "api_key"  # chatgpt_plan 走本机 Codex CLI 订阅
+    model_name: str = ""  # 订阅模式下传给 Codex 的模型名, 空串用 Codex 默认
 
 
 class ModelPoolConfig(BaseModel):

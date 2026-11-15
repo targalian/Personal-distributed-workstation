@@ -39,6 +39,9 @@ DOMAINS = [
 # py 条目: 字符串值 = 域编号, 描述自动取模块 docstring 首行
 # 非 py 条目: 元组 (域编号, 手写一句话描述)
 MAPPING = {
+    "lan_mesh/codex_plan.py": "05-resources-secrets",
+    "lan_mesh/model_pool.chatgpt-plan.example.yaml": ("05-resources-secrets", "仅 ChatGPT 订阅路由示例：走本机 Codex CLI 登录，不填 API Key"),
+    "tests/test_codex_plan.py": "10-test-loop",
     "lan_mesh/backup.py": "07-data-sync",
     "scripts/backup_workstation.py": "11-scripts-subprojects",
     "tests/test_backup.py": "10-test-loop",

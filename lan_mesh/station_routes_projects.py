@@ -34,6 +34,7 @@ def build_project_routes(controller: object) -> APIRouter:
         ("CapabilityApiService", "unregister_mcp_server", "DELETE", "/tools/servers/{name}"),
         ("CapabilityApiService", "route_dry_run", "POST", "/api/route/dry-run"),
         ("CapabilityApiService", "list_models", "GET", "/api/models"),
+        ("CapabilityApiService", "chatgpt_plan_status", "GET", "/api/models/chatgpt-plan/status"),
         ("CapabilityApiService", "list_skills", "GET", "/api/station/skills"),
         ("CapabilityApiService", "skill_stats", "GET", "/api/station/skills/stats"),
         ("CapabilityApiService", "scan_skills", "GET", "/api/station/skills/scan"),
