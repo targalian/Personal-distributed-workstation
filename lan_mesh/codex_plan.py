@@ -40,6 +40,20 @@ def _command():
     return [executable]
 
 
+def _server_args() -> list:
+    """Start the app-server with every inherited tool surface disabled.
+
+    Shell and web search are disabled above; MCP servers come from the user's
+    Codex config, so they must be cleared explicitly — the developer prompt is
+    not an execution boundary and MCP calls never reach LAN Mesh's tool list.
+    """
+    return _command() + ["app-server", "-c", 'model_provider="openai"',
+                         "-c", 'forced_login_method="chatgpt"',
+                         "-c", "features.shell_tool=false",
+                         "-c", 'web_search="disabled"',
+                         "-c", "mcp_servers={}"]
+
+
 class _Server:
     def __init__(self, timeout=600):
         self.timeout = timeout
@@ -49,9 +63,7 @@ class _Server:
         for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL"):
             env.pop(key, None)
         self.proc = subprocess.Popen(
-            _command() + ["app-server", "-c", 'model_provider="openai"',
-                          "-c", 'forced_login_method="chatgpt"',
-                          "-c", "features.shell_tool=false", "-c", 'web_search="disabled"'],
+            _server_args(),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, encoding="utf-8", env=env,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,

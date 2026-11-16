@@ -40,7 +40,7 @@ class ModelEntryConfig(BaseModel):
     """模型池条目配置 — 对应 model_pool.yaml 中每个模型定义。"""
     id: str                           # 模型 ID (e.g. deepseek-chat)
     provider: str                     # 厂商 (openai / deepseek / anthropic / qwen)
-    api_key_env: str                  # API Key 环境变量名
+    api_key_env: str = ""             # API Key 环境变量名；订阅模式 (chatgpt_plan) 可留空
     base_url: str = ""                # API Base URL
     cost_input_per_1k: float = 0.0   # 输入成本 (美元 / 1K tokens)
     cost_output_per_1k: float = 0.0  # 输出成本 (美元 / 1K tokens)

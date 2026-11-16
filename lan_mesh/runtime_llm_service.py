@@ -53,6 +53,11 @@ class RuntimeLlmService(ComponentService):
                     default_model = self.owner._get_default_model(provider)
                     if default_model:
                         chain.append(default_model)
+            # 订阅模型没有 API Key，必须单独加入无偏好候选链，否则纯订阅池会得到空链
+            from .codex_plan import model_available
+            for entry in policy._load_model_pool_entries().values():
+                if entry.usage_mode == 'chatgpt_plan' and model_available(entry):
+                    chain.append(entry.id)
         last_error = None
         candidates = []
         pool = policy._load_model_pool_entries()

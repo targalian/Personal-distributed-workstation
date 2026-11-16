@@ -15,6 +15,41 @@ def plan_entry(**overrides):
     return ModelEntryConfig(**values)
 
 
+def test_example_pool_loads_without_api_key_env():
+    from lan_mesh.config import load_model_pool
+    pool = load_model_pool("lan_mesh/model_pool.chatgpt-plan.example.yaml")
+    assert [entry.id for entry in pool.models] == ["chatgpt-codex"]
+    assert pool.models[0].usage_mode == "chatgpt_plan"
+
+
+def test_server_args_disable_inherited_tool_surfaces(monkeypatch):
+    monkeypatch.setattr(codex_plan, "_command", lambda: ["codex"])
+    args = codex_plan._server_args()
+    assert 'features.shell_tool=false' in args
+    assert 'web_search="disabled"' in args
+    assert "mcp_servers={}" in args
+
+
+def test_default_tools_chain_includes_subscription_entries(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_call(entry, messages, tools=None):
+        seen["model"] = entry.id
+        return {"message": {"content": "", "tool_calls": []}, "model": entry.id,
+                "input_tokens": 0, "output_tokens": 0}
+
+    monkeypatch.setattr(codex_plan, "call_plan", fake_call)
+    monkeypatch.setattr(codex_plan, "model_available", lambda entry: True)
+    monkeypatch.setattr(policy, "_load_model_pool_entries", lambda: {"chatgpt-codex": plan_entry()})
+    runtime = AgentRuntime("plan-default", str(tmp_path))
+    try:
+        result = runtime._call_llm_messages_with_tools([], [], {})
+        assert result["model"] == "chatgpt-codex"
+        assert seen["model"] == "chatgpt-codex"
+    finally:
+        runtime.services.close()
+
+
 def test_config_rejects_unknown_usage_mode():
     with pytest.raises(ValidationError):
         ModelEntryConfig(id="x", provider="openai", api_key_env="K", usage_mode="oauth")
