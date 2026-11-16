@@ -2,10 +2,12 @@
 
 import sqlite3
 
+from .schema_upgrade import execute_schema
+
 
 def migrate_memory(conn: sqlite3.Connection) -> None:
     """Keep existing tables intact; FTS5 is an optional derived accelerator."""
-    conn.executescript("""
+    execute_schema(conn, """
         CREATE TABLE IF NOT EXISTS context_streams (
             stream_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
             conv_id TEXT NOT NULL, agent_id TEXT NOT NULL,

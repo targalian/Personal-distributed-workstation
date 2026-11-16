@@ -5,9 +5,11 @@ import sqlite3
 import time
 from typing import Any
 
+from .schema_upgrade import execute_schema
+
 
 def migrate_collaboration(conn: sqlite3.Connection) -> None:
-    conn.executescript('''
+    execute_schema(conn, '''
         CREATE TABLE IF NOT EXISTS collaboration_takeovers (
             task_id TEXT PRIMARY KEY, state TEXT NOT NULL,
             details TEXT NOT NULL, updated_at REAL NOT NULL

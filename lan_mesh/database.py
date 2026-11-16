@@ -283,7 +283,7 @@ def _migration_v12(conn: sqlite3.Connection):
 
 def _migration_v13(conn: sqlite3.Connection):
     """Migration v13: durable task delivery and execution receipts (DS-Bot P1-A)."""
-    conn.executescript("""
+    execute_schema(conn, """
         CREATE TABLE IF NOT EXISTS mesh_delivery_outbox (
             delivery_id TEXT PRIMARY KEY,
             kind TEXT NOT NULL DEFAULT 'result',

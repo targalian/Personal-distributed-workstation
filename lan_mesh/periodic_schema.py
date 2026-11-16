@@ -2,9 +2,11 @@
 
 import sqlite3
 
+from .schema_upgrade import execute_schema
+
 
 def migrate_periodic(conn: sqlite3.Connection) -> None:
-    conn.executescript('''
+    execute_schema(conn, '''
         CREATE TABLE IF NOT EXISTS periodic_schedules (
             schedule_id TEXT PRIMARY KEY, conv_id TEXT NOT NULL, project_id TEXT NOT NULL,
             name TEXT NOT NULL, spec_json TEXT NOT NULL, template_json TEXT NOT NULL,

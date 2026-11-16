@@ -118,6 +118,23 @@ def test_failed_pre_upgrade_snapshot_prevents_any_schema_write(legacy, monkeypat
     assert dump(legacy) == before
 
 
+def test_late_migration_failure_rolls_back_nothing_from_earlier_versions(legacy, monkeypatch):
+    before = dump(legacy)
+
+    def fail(conn):
+        conn.execute("CREATE TABLE late_partial (value TEXT)")
+        raise sqlite3.OperationalError("injected v18 failure")
+
+    monkeypatch.setitem(database._MIGRATIONS, 18, fail)
+    with pytest.raises(sqlite3.OperationalError, match="injected v18 failure"):
+        Database(str(legacy))
+    assert dump(legacy) == before
+    assert_old(legacy)
+    with closing(sqlite3.connect(str(legacy))) as conn:
+        assert not conn.execute(
+            "SELECT name FROM sqlite_master WHERE name='late_partial'").fetchall()
+
+
 def test_fresh_database_has_no_upgrade_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(schema_upgrade, "backup_root", lambda: tmp_path / "snapshots")
     monkeypatch.setattr(Database, "backup", lambda self: "")

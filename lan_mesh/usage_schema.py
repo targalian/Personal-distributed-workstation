@@ -2,9 +2,11 @@
 
 import sqlite3
 
+from .schema_upgrade import execute_schema
+
 
 def migrate_usage(conn: sqlite3.Connection) -> None:
-    conn.executescript('''
+    execute_schema(conn, '''
         CREATE TABLE IF NOT EXISTS usage_call_details (
             usage_id TEXT PRIMARY KEY,
             attempt_id TEXT NOT NULL, purpose TEXT NOT NULL,
