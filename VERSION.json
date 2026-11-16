@@ -1,7 +1,7 @@
 {
   "version": "0.41.14",
-  "commit": "d380628",
-  "released_at": "2026-11-13",
+  "commit": "f6b7e64",
+  "released_at": "2026-11-17",
   "note": "0.41.14源码交付：iter125协作状态与共享通知已读、隔离双节点协议验收、离线环境诊断、同任务对照基准；合并GitHub CN既有鉴权、Windows启动、模型路由与会话隔离修复。Gitee继续暂停；物理多机、在线模型、升级回滚及硬件故障验收独立进行。",
   "upgrade_hint": "先按docs/design/08-infrastructure/yomk-rollout.md在隔离节点演练；源码依赖用requirements.txt。Gitee暂停期间使用pwsh -NoProfile -File scripts/sync_push.ps1 -SkipGitee同步GitHub。"
 }
