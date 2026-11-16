@@ -181,6 +181,20 @@ def create_backup(roots: dict[str, Path], archive: Path, *, offline_confirmed: b
                       if not _volatile(name, value[0])}
         if stable_before != stable_now or manifest["directories"] != _directories(roots):
             raise ValueError("备份期间源文件发生变化，请停止所有写入后重试")
+        # A commit after the first snapshot closes is still detectable: take a
+        # second snapshot and require byte-identical output. The alternative —
+        # holding the reader open for the whole copy — would also work, but this
+        # keeps the lock window short and costs one extra read per database.
+        for name in sorted(name for name in sqlite_names
+                           if not name.endswith(("-wal", "-shm", "-journal"))):
+            source = before[name][0]
+            with tempfile.TemporaryDirectory(prefix="lan-mesh-recheck-") as verify_dir:
+                check = Path(verify_dir) / "snapshot.sqlite3"
+                with closing(sqlite3.connect(source.absolute().as_uri() + "?mode=ro", uri=True)) as src:
+                    with closing(sqlite3.connect(str(check))) as dst:
+                        src.backup(dst)
+                if digest(check) != digest(stage / name):
+                    raise ValueError("备份期间数据库被其他连接写入，请停止写入后重试")
         # Build and verify privately before publishing, so failed validation never
         # leaves a plausible archive at the requested path.
         packed = stage / "bundle.zip"

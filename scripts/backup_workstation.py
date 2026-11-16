@@ -14,7 +14,7 @@ from lan_mesh.config import AppConfig, get_db_path, load_config  # noqa: E402
 def backup_roots(args) -> dict[str, Path]:
     """Select the live database, shared folder and config files as backup roots."""
     config_candidates = [Path(p).expanduser() for p in (args.config, os.environ.get("LAN_MESH_CONFIG")) if p]
-    config_candidates += [ROOT / "config.yaml"]
+    config_candidates += [Path.home() / ".lan_mesh" / "config.yaml", Path("config.yaml")]
     if args.config and not Path(args.config).expanduser().is_file():
         raise ValueError("指定配置文件不存在")
     config = next((path for path in config_candidates if path.is_file()), None)

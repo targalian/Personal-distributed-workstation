@@ -118,3 +118,28 @@ def test_manifest_records_roots_and_directories(dataset):
     assert set(manifest["roots"]) == {"database", "shared", "config_0"}
     assert manifest["root_types"]["config_0"] == "file"
     assert "shared/deliverables" in manifest["directories"]
+
+
+def test_backup_command_uses_the_home_config(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.backup_workstation import backup_roots
+
+    home = tmp_path / "home"
+    (home / ".lan_mesh").mkdir(parents=True)
+    db = tmp_path / "secretary.sqlite3"
+    db.write_bytes(b"")
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (home / ".lan_mesh" / "config.yaml").write_text(
+        "secretary:\n"
+        f"  db_path: {db.as_posix()}\n"
+        f"  shared_folder: {shared.as_posix()}\n",
+        encoding="utf-8")
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    roots = backup_roots(SimpleNamespace(config=None, db=None, shared=None, extra_file=[]))
+    assert roots["database"] == db.absolute()
+    assert roots["shared"] == shared.absolute()
+    assert any(path == (home / ".lan_mesh" / "config.yaml").absolute() for path in roots.values())
