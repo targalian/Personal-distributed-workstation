@@ -1,4 +1,4 @@
-# 只读环境诊断（开发增量，未发布）
+# 只读环境诊断
 
 `lan_mesh/preflight.py` 的 Python 门槛与 pyproject 对齐为 >=3.11。
 `scripts/offline_doctor.py` 仅依赖标准库，可在 Python 3.10 缺依赖时直接诊断。

@@ -125,9 +125,14 @@ document.querySelectorAll('.mobile-nav-item').forEach(t=>{
 });
 
 // ── WebSocket ──
-function connectWS(){
+async function connectWS(){
+  await _meshClient.ensure();
+  if(ws&&ws.readyState<=1)return;
+  if(_meshClient.getAuthState().authEnabled&&!_meshClient.getRole()){
+    document.getElementById('ws-label').textContent='请先登录';return;
+  }
   const proto=location.protocol==='https:'?'wss':'ws';
-  ws=new WebSocket(`${proto}://${location.host}/ws`);
+  ws=new WebSocket(`${proto}://${location.host}/ws`,_meshClient.webSocketProtocols());
   ws.onopen=()=>{document.getElementById('ws-dot').classList.remove('offline');document.getElementById('ws-label').textContent='已连接';refreshAllState();};
   ws.onmessage=(e)=>{
     const msg=JSON.parse(e.data);

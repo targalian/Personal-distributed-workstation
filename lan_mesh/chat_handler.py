@@ -17,6 +17,7 @@ from .chat_history_service import ChatHistoryService
 from .chat_context_service import ChatContextService
 from .chat_intent_service import ChatIntentService
 from .chat_command_service import ChatCommandService
+from .service_runtime import ServiceError
 
 def _serialized_chat(handler):
     """Keep the active conversation and draft stable across one complete reply."""
@@ -174,6 +175,8 @@ class ChatHandler:
             {"reply": str, "action_taken": str, "timestamp": float, "conv_id": str}
         """
         # 确定对话
+        if conv_id and conv_id not in self._conversations:
+            raise ServiceError(404, "对话不存在，请先创建或选择有效对话")
         cid = conv_id or self._active_conv_id
         if not cid or cid not in self._conversations:
             cid = self._conv_index[0]["id"] if self._conv_index else self._create_conversation("默认对话")

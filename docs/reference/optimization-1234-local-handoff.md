@@ -1,6 +1,8 @@
-# 四项优化本地交付记录（iter125，未发布）
+# 四项优化交付记录（iter125）
 
-## 当前执行板（2026-11-14）
+2026-11-17源码交接：用户授权将本地更新上库。本次将iter125与GitHub CN截至`07145b5`的修复合并为0.41.14，使用`sync_push.ps1 -SkipGitee`仅同步GitHub CN；实际提交与远端状态以Git核验。下面的“未提交/未发布”和验证数字为各日期的历史记录，实机验收边界保持独立。
+
+## 历史执行板（2026-11-14）
 
 | 字段 | 内容 |
 |---|---|
@@ -61,3 +63,9 @@ export PATH=/home/zlz/.local/opt/ds-bot-0.3.5/resources/primary-runtime/dependen
 ## 后续更新：第二节点Python已就绪
 
 用户随后明确授权独立运行时安装，已在第二节点安装并验证Python3.12.14和pip25.0.1，创建专用venv，保留系统3.10与现有服务。上文“未远端安装”是本地交付时的历史状态；当前解释器阻塞已解除，项目依赖与双机验收仍未执行。路径和实际检查见 [安装记录](remote-python312-install.md)。
+
+## 2026-11-17 合并上库验证
+
+本地增量先通过965 passed / 1 skipped / 7 warnings（176.34s），保存为`413d4a8`。与GitHub CN `07145b5`合并后，全量实际**1011 passed / 5 skipped / 27 warnings（182.85s）**；新增跳过项为4项Windows cmd专用测试，其余1项缺少私有resources.yaml。历史0.41.13记录中的29项基线失败不代表本次结果，本次合并回归无失败。
+
+30个合并Python文件编译和StationController导入通过；前端TypeScript、SPA资源引用、依赖清单、doctor、文档280条/11域通过。门禁0 Blocker、39 Warning，仍保留函数长度、类型标注和日志前缀等提示。本次没有重做历史Chrome fixture验收，也未部署或进行物理多机/在线模型验收。日志与JUnit位于`/tmp/lan-mesh-submit1117-merged-pytest.log`和`/tmp/lan-mesh-submit1117-merged-results.xml`。

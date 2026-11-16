@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { apiFetch, TaskInfo, TaskListResp } from "../api";
+import { apiFetch, ensureMeshToken, getAuthState, webSocketProtocols, TaskInfo, TaskListResp } from "../api";
 
 // iter-56: 任务列表页 — 状态筛选 + WS task_updated 自动刷新
 const STATUS_FILTERS: { value: string; label: string }[] = [
@@ -54,24 +54,32 @@ export default function TasksPage() {
 
   // WS: task_updated 事件 → 刷新列表 (仅列表页, DAG 编辑页独立处理)
   useEffect(() => {
+    let closed = false;
+    let ws: WebSocket | null = null;
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws`);
     let reloadTimer: ReturnType<typeof setTimeout> | null = null;
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === "task_updated" || msg.event === "task_updated") {
-          // 事件可能密集: 300ms 防抖合并刷新
-          if (reloadTimer) clearTimeout(reloadTimer);
-          reloadTimer = setTimeout(() => load(), 300);
+    ensureMeshToken().then(() => {
+      if (closed) return;
+      const auth = getAuthState();
+      if (auth.authEnabled && !auth.role) return;
+      ws = new WebSocket(`${proto}://${location.host}/ws`, webSocketProtocols());
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === "task_updated" || msg.event === "task_updated") {
+            // 事件可能密集: 300ms 防抖合并刷新
+            if (reloadTimer) clearTimeout(reloadTimer);
+            reloadTimer = setTimeout(() => load(), 300);
+          }
+        } catch {
+          /* 非 JSON 消息忽略 */
         }
-      } catch {
-        /* 非 JSON 消息忽略 */
-      }
-    };
+      };
+    });
     return () => {
+      closed = true;
       if (reloadTimer) clearTimeout(reloadTimer);
-      ws.close();
+      ws?.close();
     };
   }, [load]);
 

@@ -8,12 +8,26 @@ Secretary 激活/停用与选举故障转移 — 模型资源预加载、让位�
 import os
 import threading
 import time
+from functools import wraps
 from pathlib import Path
 
 from .config import load_model_pool
 from .logger import get_logger
 
 logger = get_logger("station")
+
+_secretary_lock_creation = threading.Lock()
+
+
+def _serialized_secretary(operation):
+    """Serialize role transitions on each owner, including election and failover threads."""
+    @wraps(operation)
+    def invoke(owner, *args, **kwargs):
+        with _secretary_lock_creation:
+            lock = vars(owner).setdefault('_secretary_lifecycle_lock', threading.RLock())
+        with lock:
+            return operation(owner, *args, **kwargs)
+    return invoke
 
 
 class StationSecretaryMixin:
@@ -53,6 +67,7 @@ class StationSecretaryMixin:
         except Exception as e:
             logger.warning("模型资源预加载失败 (no-op): %s", e)
 
+    @_serialized_secretary
     def activate_secretary(self) -> dict:
         """同进程激活 Secretary 模式。
 
@@ -190,6 +205,7 @@ class StationSecretaryMixin:
                 continue
         return ""
 
+    @_serialized_secretary
     def deactivate_secretary(self) -> dict:
         """停用 Secretary 模式, 回到纯 Station 模式。"""
         if not self.secretary_active:

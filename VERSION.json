@@ -1,7 +1,7 @@
 {
-  "version": "0.41.12",
-  "commit": "4b6719b",
+  "version": "0.41.14",
+  "commit": "d380628",
   "released_at": "2026-11-13",
-  "note": "0.41.12源码交付：包含iter116–124全部改动，完成DS-Bot优化开发路线及秘书/DAG交互优化（共用流程工作台、节点讨论、草稿保护、排版缩放、多行输入与移动布局）。仅同步GitHub CN，Gitee暂停；真实多机及在线模型验收另行进行。",
+  "note": "0.41.14源码交付：iter125协作状态与共享通知已读、隔离双节点协议验收、离线环境诊断、同任务对照基准；合并GitHub CN既有鉴权、Windows启动、模型路由与会话隔离修复。Gitee继续暂停；物理多机、在线模型、升级回滚及硬件故障验收独立进行。",
   "upgrade_hint": "先按docs/design/08-infrastructure/yomk-rollout.md在隔离节点演练；源码依赖用requirements.txt。Gitee暂停期间使用pwsh -NoProfile -File scripts/sync_push.ps1 -SkipGitee同步GitHub。"
 }

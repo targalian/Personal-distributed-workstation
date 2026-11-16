@@ -1,14 +1,23 @@
 @echo off
-setlocal enabledelayedexpansion
-cd /d "%~dp0.."
-chcp 65001 >nul 2>&1
-set PYTHONIOENCODING=utf-8
-set PYTHONUTF8=1
+setlocal EnableExtensions DisableDelayedExpansion
+REM Keep a parent shell alive even if a child batch command or syntax error exits.
+if /i "%~1"=="--run" goto :run
+cmd.exe /d /c call "%~f0" --run "%~1"
+set "START_RC=%ERRORLEVEL%"
+if not "%START_RC%"=="0" echo [ERROR] Workstation startup failed ^(exit %START_RC%^). See the error above.
+if not "%LANMESH_NO_PAUSE%"=="1" pause
+exit /b %START_RC%
 
-REM ========================================
-REM  LAN Mesh Work Station - One-Click Start
-REM  (bat 端与 ps1/sh 功能对齐)
-REM ========================================
+:run
+cd /d "%~dp0.."
+if errorlevel 1 exit /b 1
+chcp 65001 >nul 2>&1
+set "PYTHONIOENCODING=utf-8"
+set "PYTHONUTF8=1"
+set "PYTHON=.venv\Scripts\python.exe"
+
+REM -- Read-only diagnostic mode: no installs, config writes, CLI probes or server --
+if /i "%~2"=="--check" goto :check_only
 
 echo.
 echo ========================================
@@ -16,220 +25,93 @@ echo  LAN Mesh Work Station - One-Click Start
 echo ========================================
 echo.
 
-REM -- Step 1: Check Python (>=3.10) --
+REM -- Step 1: Check Python 3.11+ --
 echo [step] 1/6 Check Python...
-python --version >nul 2>&1
+python -c "import sys; print(sys.version.split()[0]); sys.exit(0 if sys.version_info >= (3, 11) else 1)"
 if errorlevel 1 (
-    echo   [ERROR] Python not found. Please install Python 3.11+ and add to PATH
-    echo   Download: https://www.python.org/downloads/
-    pause
+    echo [ERROR] Python 3.11+ is required. Install it and add it to PATH.
     exit /b 1
 )
-for /f "tokens=2" %%v in ('python --version 2^>^&1') do set PYVER=%%v
-echo   -^> Python %PYVER%
 
-REM -- 版本检查: 提取 major.minor 与 3.10 比较 --
-for /f "tokens=1,2 delims=." %%a in ("%PYVER%") do (
-    set PYMAJOR=%%a
-    set PYMINOR=%%b
-)
-if %PYMAJOR% LSS 3 (
-    echo   [ERROR] Python %PYVER% too old, need 3.10+
-    pause
-    exit /b 1
-)
-if %PYMAJOR% EQU 3 if %PYMINOR% LSS 10 (
-    echo   [ERROR] Python %PYVER% too old, need 3.10+
-    pause
-    exit /b 1
-)
-echo   -^> Version OK
-
-REM -- Step 2: Virtual Environment --
+REM -- Step 2: Create or repair the project virtual environment in place --
 echo [step] 2/6 Check venv...
-if not exist ".venv\Scripts\python.exe" (
-    if exist ".venv" (
-        echo   -^> .venv exists but not Windows format, rebuilding...
-        rmdir /s /q ".venv"
-    )
-    echo   Creating virtual environment...
+if not exist "%PYTHON%" (
+    echo Creating or repairing .venv without deleting existing files...
     python -m venv .venv
-    if not exist ".venv\Scripts\python.exe" (
-        echo   [ERROR] venv creation failed
-        pause
-        exit /b 1
-    )
-    echo   -^> Created .venv\
-) else (
-    echo   -^> venv already exists ^(skip^)
+    if errorlevel 1 exit /b 1
 )
-set PYTHON=.venv\Scripts\python.exe
-set PIP=.venv\Scripts\pip.exe
-
-REM -- 升级 pip (新 venv 的 pip 通常很旧, 可能不支持现代 wheel) --
-%PIP% --version 2>nul | findstr /i "2[1-9]\." >nul 2>&1
+"%PYTHON%" -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"
 if errorlevel 1 (
-    echo   Upgrading pip...
-    %PIP% install --upgrade pip -q -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn 2>nul
-    if errorlevel 1 (
-        %PIP% install --upgrade pip -q 2>nul
-    )
+    echo [ERROR] The project venv needs Python 3.11+. Recreate it with a supported interpreter.
+    exit /b 1
 )
 
-REM -- Step 3: Install Dependencies --
+REM -- Step 3: Verify all requirements, including newly added framework dependencies --
 echo [step] 3/6 Check dependencies...
-%PIP% show fastapi >nul 2>&1
+"%PYTHON%" -m pip --version >nul 2>&1
 if errorlevel 1 (
-    echo   Installing dependencies ^(--requires 1-3 min on first run--^)...
-    echo   [INFO] Trying Tsinghua mirror for faster download in China...
-    echo.
-    %PIP% install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+    "%PYTHON%" -m ensurepip --upgrade
+    if errorlevel 1 exit /b 1
+)
+"%PYTHON%" scripts\check_runtime_dependencies.py
+if errorlevel 1 (
+    echo Installing or updating runtime dependencies...
+    "%PYTHON%" -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
     if errorlevel 1 (
-        echo.
-        echo   [WARN] Tsinghua mirror failed, retrying with default PyPI...
-        echo.
-        %PIP% install -r requirements.txt
-        if errorlevel 1 (
-            echo   [ERROR] Dependencies install failed
-            echo   Please run manually: .venv\Scripts\pip install -r requirements.txt
-            pause
-            exit /b 1
-        )
+        echo [WARN] Mirror install failed. Retrying default package index...
+        "%PYTHON%" -m pip install -r requirements.txt
+        if errorlevel 1 exit /b 1
     )
-    echo.
-    echo   -^> Dependencies installed
-) else (
-    echo   -^> Dependencies already installed ^(skip^)
+    "%PYTHON%" scripts\check_runtime_dependencies.py
+    if errorlevel 1 exit /b 1
 )
 
-REM -- Step 4: Config File --
+REM -- Step 4: Config; main.py already loads .env via python-dotenv --
 echo [step] 4/6 Check config...
 if exist "lan_mesh\model_pool.example.yaml" (
     if not exist "lan_mesh\model_pool.yaml" (
         copy "lan_mesh\model_pool.example.yaml" "lan_mesh\model_pool.yaml" >nul
-        echo   -^> Created lan_mesh\model_pool.yaml ^(--edit to add API Key--^)
-    ) else (
-        echo   -^> model_pool.yaml already exists ^(skip^)
+        if errorlevel 1 exit /b 1
+        echo Created lan_mesh\model_pool.yaml. Configure your model credentials there or in .env.
     )
-) else (
-    echo   -^> model_pool.example.yaml not found ^(skip^)
 )
+if exist ".env" echo .env will be loaded by Python at startup.
 
-REM -- 加载 .env (如存在, 把 KEY=VALUE 注入环境变量) --
-if exist ".env" (
-    for /f "usebackq tokens=1,* delims==" %%k in (".env") do (
-        if not "%%k"=="" (
-            set _LINE=%%k
-            if not "!_LINE:~0,1!"=="#" (
-                if not "%%l"=="" (
-                    if not defined %%k set "%%k=%%l"
-                )
-            )
-        )
-    )
-    echo   -^> Loaded .env
-)
+REM -- Step 5: Read Git Hook configuration only; startup must not change git config --
+echo [step] 5/6 Check Git Hooks...
+git config --get core.hooksPath 2>nul
+if errorlevel 1 echo [INFO] No custom Git Hooks path configured.
 
-REM -- 检查 API Key --
-set HAS_KEY=0
-if defined DEEPSEEK_API_KEY set HAS_KEY=1
-if defined OPENAI_API_KEY set HAS_KEY=1
-if defined ALIYUN_TOKENPLAN_API_KEY set HAS_KEY=1
-if defined ARK_API_KEY set HAS_KEY=1
-if defined QWEN_API_KEY set HAS_KEY=1
-if defined ANTHROPIC_API_KEY set HAS_KEY=1
-if %HAS_KEY%==0 (
-    echo   [WARN] No LLM API Key detected in environment or .env
-    echo          Secretary chat will not use LLM until a key is configured.
-    echo   Set in .env:  DEEPSEEK_API_KEY=sk-xxx
-)
-
-REM -- Step 5: Git Hooks --
-echo [step] 5/6 Configure Git Hooks...
-if exist ".githooks" (
-    git config core.hooksPath .githooks 2>nul
-    if not errorlevel 1 (
-        echo   -^> core.hooksPath -^> .githooks ^(pre-push audit enabled^)
-    ) else (
-        echo   -^> git not found, hooks skipped
-    )
-) else (
-    echo   -^> .githooks not found ^(skip^)
-)
-
-REM -- CLI Agent PATH (npm global + Node.js, 供 shadow_dev 等使用) --
-REM 注意: 不能用 echo %%PATH%% | findstr, PATH 含括号会炸 if 块.
-REM 直接无条件追加 (重复无害).
+REM -- CLI Agent probes: npm commands may be .cmd files and must use CALL --
 set "NPM_GLOBAL=%APPDATA%\npm"
 if exist "%NPM_GLOBAL%" set "PATH=%NPM_GLOBAL%;%PATH%"
 if exist "C:\Program Files\nodejs" set "PATH=C:\Program Files\nodejs;%PATH%"
+echo [step] Check optional CLI Agents...
+call claude --version >nul 2>&1
+if errorlevel 1 echo [INFO] claude is unavailable; configure a backend when needed.
+call codex --version >nul 2>&1
+if errorlevel 1 echo [INFO] codex is unavailable; configure a backend when needed.
+REM Optional CLI tools are installed separately; installing aider here can overwrite runtime dependencies.
 
-REM -- CLI Agent 安装 (claude / aider / codex) --
-echo [step] Install CLI Agents...
-
-REM claude (npm global)
-claude --version >nul 2>&1
-if errorlevel 1 (
-    if exist "%NPM_GLOBAL%\node_modules\@anthropic-ai\claude-code" (
-        echo   -^> claude installed ^(skip^)
-    ) else (
-        echo   Installing claude-code...
-        call npm install -g @anthropic-ai/claude-code --silent >nul 2>&1
-        if not errorlevel 1 (
-            echo   -^> claude installed
-        ) else (
-            echo   [WARN] claude install failed: npm install -g @anthropic-ai/claude-code
-        )
-    )
-) else (
-    echo   -^> claude installed ^(skip^)
-)
-
-REM aider (venv pip)
-.venv\Scripts\aider --version >nul 2>&1
-if errorlevel 1 (
-    echo   Installing aider-chat...
-    %PIP% install aider-chat -q >nul 2>&1
-    if not errorlevel 1 (
-        echo   -^> aider installed
-    ) else (
-        echo   [WARN] aider install failed: .venv\Scripts\pip install aider-chat
-    )
-) else (
-    echo   -^> aider installed ^(skip^)
-)
-
-REM codex (npm global)
-codex --version >nul 2>&1
-if errorlevel 1 (
-    if exist "%NPM_GLOBAL%\node_modules\@openai\codex" (
-        echo   -^> codex installed ^(skip^)
-    ) else (
-        echo   Installing codex...
-        call npm install -g @openai/codex --silent >nul 2>&1
-        if not errorlevel 1 (
-            echo   -^> codex installed
-        ) else (
-            echo   [WARN] codex install failed: npm install -g @openai/codex
-        )
-    )
-) else (
-    echo   -^> codex installed ^(skip^)
-)
-
-REM -- Step 6: Launch --
+REM -- Step 6: Validate imports, then launch --
 echo [step] 6/6 Starting Station Director...
+"%PYTHON%" -c "from lan_mesh.station_controller import StationController; print('[Preflight] Station import OK')"
+if errorlevel 1 exit /b 1
 echo.
-echo ========================================
-echo  LAN Mesh Station Director
-echo  Web UI: http://localhost:45470
-echo  Secretary: not active ^(--click "Set as Master" in Web UI--^)
-echo ========================================
+echo Web UI: http://localhost:45470
+echo Allow Windows Firewall access if you want LAN discovery.
 echo.
-echo  [TIP] If Windows Firewall pops up, click "Allow"
-echo        to enable LAN discovery and Web UI access.
-echo.
+"%PYTHON%" main.py station --port 45470
+exit /b %ERRORLEVEL%
 
-REM Launch Station Director
-%PYTHON% main.py station --port 45470
-if not "%LANMESH_NO_PAUSE%"=="1" pause
+:check_only
+if not exist "%PYTHON%" (
+    echo [ERROR] Project venv not found. Run this script without --check to prepare it.
+    exit /b 1
+)
+"%PYTHON%" -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"
+if errorlevel 1 exit /b 1
+"%PYTHON%" scripts\check_runtime_dependencies.py
+if errorlevel 1 exit /b 1
+"%PYTHON%" -c "from lan_mesh.station_controller import StationController; print('[Preflight] Station import OK')"
+exit /b %ERRORLEVEL%

@@ -13,6 +13,29 @@ class RuntimeLlmService(ComponentService):
     """RuntimeLlmService business operations with explicit state ownership."""
     OPERATIONS = ('_call_llm_messages_with_tools', '_call_openai_with_tools', '_call_llm_with_routing', '_resolve_provider', '_call_openai_compatible', '_call_llm_full', '_get_provider_models', '_get_default_model', '_call_llm')
 
+    def _configured_providers(self) -> dict:
+        """Honor configured pool boundaries, including custom/free API providers."""
+        pool = policy._load_model_pool_entries()
+        if not pool:
+            return policy.PROVIDER_CONFIG
+        providers = {}
+        for entry in pool.values():
+            providers.setdefault(entry.provider, {'base_url': entry.base_url,
+                                                  'api_key_env': entry.api_key_env})
+        return providers
+
+    def _thinking_options(self, model_id: str) -> dict:
+        """Translate the optional thinking setting for supported providers."""
+        entry = policy._load_model_pool_entries().get(model_id)
+        enabled = getattr(entry, 'thinking_enabled', None)
+        if enabled is None:
+            return {}
+        if entry.provider == 'siliconflow':
+            return {'enable_thinking': enabled}
+        if entry.provider == 'zhipu':
+            return {'thinking': {'type': 'enabled' if enabled else 'disabled'}}
+        return {}
+
     def _call_llm_messages_with_tools(self, messages: list[dict], tools: list[dict], input_data: dict) -> dict:
         """F2.1: 支持多轮 messages + tools 的 LLM 调用。
 
@@ -24,7 +47,7 @@ class RuntimeLlmService(ComponentService):
         if model_pref:
             chain = [model_pref] + [m for m in fallbacks if m != model_pref]
         else:
-            for provider, cfg in policy.PROVIDER_CONFIG.items():
+            for provider, cfg in self._configured_providers().items():
                 api_key = policy.os.environ.get(cfg['api_key_env'], '')
                 if api_key:
                     default_model = self.owner._get_default_model(provider)
@@ -62,7 +85,7 @@ class RuntimeLlmService(ComponentService):
                 continue
         error = f'[模型调用失败] {last_error or "没有配置可用模型或 API Key"}'
         return {'message': {'content': error, 'tool_calls': []}, 'status': 'failed',
-                'error': error, 'model': 'none', 'input_tokens': 0, 'output_tokens': 0,
+                'error': error, 'model': 'none', '_error': True, 'input_tokens': 0, 'output_tokens': 0,
                 'context_candidates': candidates}
 
     @metered_call('tools')
@@ -71,6 +94,7 @@ class RuntimeLlmService(ComponentService):
         import time as _time
         url = f"{base_url.rstrip('/')}/chat/completions"
         payload = {'model': model_id, 'messages': messages, 'max_tokens': max_tokens}
+        payload.update(self._thinking_options(model_id))
         if tools:
             payload['tools'] = tools
             payload['tool_choice'] = 'auto'
@@ -255,7 +279,9 @@ class RuntimeLlmService(ComponentService):
         if system_prompt:
             messages.append({'role': 'system', 'content': system_prompt})
         messages.append({'role': 'user', 'content': prompt})
-        resp = policy.requests.post(url, headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, json={'model': model_id, 'messages': messages, 'max_tokens': 4096, 'stream': True}, timeout=(10, first_token_timeout), stream=True)
+        payload = {'model': model_id, 'messages': messages, 'max_tokens': 4096, 'stream': True}
+        payload.update(self._thinking_options(model_id))
+        resp = policy.requests.post(url, headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, json=payload, timeout=(10, first_token_timeout), stream=True)
         try:
             resp.raise_for_status()
         except Exception:
@@ -273,7 +299,7 @@ class RuntimeLlmService(ComponentService):
         """
         policy._ensure_env_loaded()
         errors = []
-        for provider, cfg in policy.PROVIDER_CONFIG.items():
+        for provider, cfg in self._configured_providers().items():
             api_key = policy.os.environ.get(cfg['api_key_env'], '')
             if not api_key:
                 continue

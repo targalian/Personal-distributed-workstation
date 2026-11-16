@@ -10,6 +10,7 @@
 | .qoder/skills/ | Qoder 技能库 (docs-sync / code-review / repowiki-update 等) |
 | quicklan-main/ | 独立子项目: Tauri + React 桌面文件共享应用 |
 | scripts/boss_channel.py | Boss 通道 — Codex 对接秘书 (Secretary) 与 PM Agent 的命令行客户端。 |
+| scripts/check_runtime_dependencies.py | Check every declared runtime requirement offline before launching the workstation. |
 | scripts/check_unbound_names.py | 静态扫描 lan_mesh/ 中「被引用但从未绑定」的全局名。 |
 | scripts/dev_status.py | Loop Engineering - 全局开发态势看板 (只读, 人在回路外时的唯一观察入口)。 |
 | scripts/fix_task_project_binding.py | 一次性修正: 把 BUG-033 修复前对话派发的任务补绑到正式项目。 |
@@ -99,6 +100,24 @@ bat / ps1 / sh 三平台版本，激活 .venv 后 `python main.py station`。
 ## iter-111：Yomk迁移本机验收
 
 requirements由pyproject生成；版本与包验收，QuickLAN27个native command保持。详见[完整评估](../yomk-refactor-assessment.md)。实机联调尚待用户提供环境。
+
+## 2026-10-27：Windows 启动闪退与依赖自检修复
+
+已复现 npm 的 claude.cmd 未通过 CALL 执行时会转移批处理控制权，跳过启动服务与最后的 pause。
+Windows BAT 对 claude/codex 探测改用 CALL；最外层独立 cmd 子进程运行实际步骤，
+子进程非零退出或语法错误都返回父层，打印失败原因并默认暂停，保留 LANMESH_NO_PAUSE 自动化约定。
+
+依赖检查从“只检测 fastapi”改为 check_runtime_dependencies.py 离线检查 requirements.txt
+的全部顶层包和版本约束，并检查 uvicorn[standard] 的常用运行模块；不满足则使用该项目
+venv 的 python -m pip 安装后复检。Python 与 venv 均要求 3.11+，已有 venv 不再递归删除。
+
+BAT 不再自动安装 claude/codex/aider，避免启动时改变全局工具与工作站依赖；现有 CLI 照常探测。
+Git Hooks 只查询现有配置，启动不改 git config；.env 使用 main.py 既有 python-dotenv 加载，
+不再由 cmd 解析含特殊字符的凭证。以上变化针对本次修复的 BAT，不代表 ps1/sh 已同步改写。
+
+`start_workstation.bat --check` 只验证 venv、依赖与 Station 导入，不安装、不修改配置，
+不启动节点、不发现其他主机或派发任务。启动回归覆盖 .cmd 控制权返回、探测失败后的继续、
+含空格/括号路径、子进程错误码及语法错误回传、依赖新增和版本漂移。
 
 ## 变更记录
 

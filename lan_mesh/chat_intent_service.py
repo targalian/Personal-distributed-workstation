@@ -61,10 +61,14 @@ class ChatIntentService(ComponentService):
         text = (message or "").strip().strip("。.!！,，~ ")
         if not text or len(text) > 30:
             return False
-        words = ("是", "对", "好", "可以", "行", "嗯", "OK", "ok", "Ok",
-                 "确认", "没问题", "足够", "够了", "同意", "继续", "开始",
-                 "麻烦你", "就这样", "如上", "以上")
-        return any(w in text for w in words)
+        # Substring matching made “不进行任何操作” match the affirmative “行”.
+        # Accept complete affirmative phrases, not arbitrary short messages.
+        compact = re.sub(r'[\s,，。.!！~]', '', text)
+        affirm = (r'(?:是的?|对的?|好的?|可以(?:了)?|行(?:了)?|嗯+|ok|yes|'
+                  r'确认|没问题|足够(?:了)?|够了|同意|继续|开始|麻烦你(?:了)?|就这样|如上|以上)')
+        sufficient = (r'(?:(?:以上|这些|所有)?(?:信息|需求|内容)?'
+                      r'(?:应该|也|已经|都|完全)*(?:足够了?|够了|可以了))')
+        return bool(re.fullmatch(f'{affirm}+(?:{sufficient})?[吧呀啊哦了]?', compact, re.I))
 
 
     def _last_suggested_action(self, history: Optional[list]) -> str:
@@ -198,6 +202,8 @@ class ChatIntentService(ComponentService):
         except Exception as exc:
             print(f"[Chat] LLM 意图分类调用失败, 回退无动作: {exc}",
                   flush=True)
+            return ""
+        if resp.get('_error') or resp.get('model') == 'none':
             return ""
         action = self.owner._parse_classifier_json(resp.get("content", ""))
         if action:
