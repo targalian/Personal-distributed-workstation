@@ -13,6 +13,9 @@
 | scripts/check_unbound_names.py | 静态扫描 lan_mesh/ 中「被引用但从未绑定」的全局名。 |
 | scripts/dev_status.py | Loop Engineering - 全局开发态势看板 (只读, 人在回路外时的唯一观察入口)。 |
 | scripts/fix_task_project_binding.py | 一次性修正: 把 BUG-033 修复前对话派发的任务补绑到正式项目。 |
+| scripts/mesh_acceptance.py | Isolated deterministic durable-delivery protocol acceptance. |
+| scripts/mesh_acceptance_peer.py | Authenticated fixture peer using production execution, inbox and outbox pumps. |
+| scripts/offline_doctor.py | Standard-library read-only environment diagnosis; never starts services or CLIs. |
 | scripts/ship.ps1 | ★ 一键发货: 按 Agent 归属分批提交 + 调 sync_push 推送 |
 | scripts/start_workstation.bat | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/start_workstation.ps1 | 跨平台一键启动 Station (bat/ps1/sh) |
@@ -20,6 +23,7 @@
 | scripts/sync_dependencies.py | Keep source-install requirements generated from the wheel dependency contract. |
 | scripts/sync_docs.py | docs/design 模块清单一致性校验/生成器 (D2-docs-sync)。 |
 | scripts/sync_push.ps1 | ★ 双库同步推送脚本 (上库唯一入口) |
+| scripts/task_benchmark.py | Offline task benchmark catalog, record validation, and comparison utility. |
 | scripts/update_version.py | VERSION.json 自动同步脚本 (P2 #10: commit/released_at 对齐 HEAD + 可选 bump) |
 | skills/ | 技能库资产 (SKILL.md 格式, 中央分发) |
 <!-- /AUTO:module-list -->

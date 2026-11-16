@@ -39,6 +39,14 @@ DOMAINS = [
 # py 条目: 字符串值 = 域编号, 描述自动取模块 docstring 首行
 # 非 py 条目: 元组 (域编号, 手写一句话描述)
 MAPPING = {
+    "scripts/mesh_acceptance.py": "11-scripts-subprojects",
+    "scripts/mesh_acceptance_peer.py": "11-scripts-subprojects",
+    "scripts/task_benchmark.py": "11-scripts-subprojects",
+    "tests/test_mesh_acceptance.py": "10-test-loop",
+    "tests/test_task_benchmark.py": "10-test-loop",
+    "tests/test_collaboration_status.py": "10-test-loop",
+    "tests/test_offline_doctor.py": "10-test-loop",
+    "scripts/offline_doctor.py": "11-scripts-subprojects",
     "lan_mesh/artifact_lock.py": "04-execution-engine",
     "lan_mesh/artifact_backup.py": "07-data-sync",
     "lan_mesh/artifact_retention.py": "04-execution-engine",

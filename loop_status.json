@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_run": "2026-11-12T23:57:43.443335+08:00",
+  "last_run": "2026-11-13T17:34:53+08:00",
   "current_phase": "completed",
   "phase_status": "completed",
   "completed": [
@@ -135,16 +135,18 @@
     "iter-115-dsbot-durable-mesh-delivery",
     "iter-116-dsbot-scoped-memory-history",
     "iter-123-dsbot-artifact-lifecycle",
-    "iter-124-secretary-dag-ui"
+    "iter-124-secretary-dag-ui",
+    "iter-125-opt1234-local-validation"
   ],
   "failed": [],
   "blocked": [],
   "next_tasks": [
+    "opt1234实测后续：真实双机部署/断网恢复/升级回滚；收集LAN Mesh和DS Bot同模型同输入同验收的真实记录后用task_benchmark比较完成率、耗时、介入、费用及恢复率；当前无在线对照成绩。",
     "DS-Bot开发路线已完成；上线前在隔离环境完成物理多机/在线模型/断电、真实IM桥接与可选浏览器配置验收，见docs/design/dsbot-loop-completion.md。iter124秘书/DAG UI已完成，0.41.12纳入本次源码交付，未部署；不再列已完成的产物保留/复制为开发待办。",
     "DS-Bot P1-A源码/本机验收完成（36新增、全量712 passed）；真实双节点、在线模型与地址变化仍待环境；journal长期保留，review_required需核对产物后明确重派，见durable-mesh-delivery.md。",
     "iter-114上线前：目标在线模型验证10秒ReAct HTTP超时及长任务完成率；旧缓存技能按需配置activation；相关源码已随0.41.3同步GitHub CN，线上验收未完成。",
     "按需在config.yaml开启observability.yomk_graph_enabled，重启对应实例后访问本机18765端口；跨组件实例/远端拓扑不在本次观测范围。",
-    "用户介入：提供两台可达隔离测试节点及联调条件，按docs/design/08-infrastructure/yomk-rollout.md完成阶段8真实多机、在线模型、升级/回滚验收；当前不能认定已上线验收",
+    "第二节点zero-mass-foam@192.168.100.30的用户目录Python3.12.14及venv已安装验证，系统3.10保留；下一步准备项目声明依赖与代码，并在允许范围内执行双机/升级回滚。运行时记录docs/reference/remote-python312-install.md。",
     "分机装好 CLI 后同步 .env 的 CLI_AGENT_BACKEND / DISABLED_BACKENDS / ALLOWED_ROOTS, 未登录的后端务必列入停用清单避免白烧超时",
     "Boss: 确认 .env 的 CLI_AGENT_ALLOWED_ROOTS=E:\\ingobj 覆盖范围是否合适 (当前放行整个 E:\\ingobj 以覆盖 stock_player; 如需收紧可改为具体项目目录)",
     "Boss: 发货+重启后真跑一次 CLI 子任务复验 BUG-039 — 预期 codex 被选为后端、业务项目目录放行、失败时子任务状态真实显示 failed (而非 completed)",
@@ -166,11 +168,9 @@
     "Boss: 真机验证 BUG-031 — 对秘书发「是, 够了」这类确认句, 确认不再出现「正在处理」幻觉; 并重发股票项目创建指令落库",
     "Boss 真机验证 iter-80 创建对话失败修复: 本机遇到优先 Secretary 时, 手动激活应提示冲突与当前 Secretary 地址; 使用当前 Secretary 创建对话应成功; 若本机让位, UI 应立即隐藏 Secretary 功能",
     "真物理多机 (>=2 台真实主机) 实压 F3.1/F3.3, 替换单机多实例模拟",
-    "station_controller.py 拆分 Phase 6 收尾 (repowiki 知识库同步, Quest 承接)",
-    "每次发布/推送后同步更新 VERSION.json 保持版本记录与实际代码一致",
-    "代码设计变更时同步 docs/design 对应功能域文档 (docs-sync skill + sync_docs.py 机制, pre-push 第 8/9 项强制)"
+    "station_controller.py 拆分 Phase 6 收尾 (repowiki 知识库同步, Quest 承接)"
   ],
-  "iteration_count": 124,
+  "iteration_count": 125,
   "total_files_modified": 490,
   "last_error": null,
   "notes_iter80": "创建对话失败修复补验: UI-061 使用 Edge headless + 本地 mock 完成浏览器实测, 503 detail/message 可见, secretary_yielded 后 Secretary tab 立即隐藏并展示对端地址; 测试清单已关闭。",
@@ -182,7 +182,7 @@
   "notes_iter86": "Git safe.directory 只读降级: shell 输出识别 dubious ownership/unsafe repository, 返回 git_safe_directory_denied + remediation 并映射 isError; ReAct 禁止修改 git config 或原样重试, 引导 file_read/dir_list 只读分析; 专项 4 passed, 全量 438 passed, sync_docs PASS。",
   "notes_iter87": "本地子任务取消传播: AgentRuntime 增加协作式取消 Event, PM cancel 经 PMDispatcher 传播并广播 /pm/cancel-subagent, execute/ReAct 轮询间隙短路并返回 cancelled, 本地回退与本机子 Agent 不再误标 failed, cancel-pm 路由线程池隔离; 专项 9 passed, 全量 447 passed, sync_docs PASS。",
   "notes_iter88": "项目蓝图工作台: projects 表迁移 v12 增加 charter/roadmap/decisions JSON 列并保持旧库兼容; ProjectManager 支持蓝图创建/更新与类型校验; 新增 GET/PUT /api/projects/{id}/blueprint 并广播 project_blueprint_updated; dashboard 项目详情展示蓝图且编辑表单逐行解析路线图/决策。验证: 专项 3 passed, 全量 pytest 450 passed, 导入 OK, dashboard JS node --check OK, git diff --check OK, sync_docs PASS (104 条目)。待 Boss 真机验证 UI-062。 浏览器真机验证通过@2026-09-07: Playwright + Chromium headless 启动隔离 Station (127.0.0.1:4599, 12 项自检全过), 工作台编辑 mission/goals/non-goals/acceptance/roadmap/decisions 保存后 reload 与重进项目详情内容完整保留, 服务端打印「项目蓝图已更新」并广播 project_blueprint_updated; 清单 UI-062 转检测通过。",
-  "notes": "[Codex] 按用户上库授权整理iter116–124全部源码、测试、设计和SPA资源，版本0.41.12；新增sync_push.ps1 -SkipGitee并通过8种无网络模拟场景，保留默认双库与WithEN行为。复用最终业务回归861 passed/1 skipped/7 warnings/161.34s、23组Chrome及6项Node验收；本次追加编译导入、文档清单和提交门禁核验。Gitee明确跳过，提交SHA由推送脚本写入VERSION.json，实际同步以GitHub CN远端核验为准；未部署。",
+  "notes": "[Codex] 按用户上库授权整理iter116–124全部源码、测试、设计和SPA资源，版本0.41.12；新增sync_push.ps1 -SkipGitee并通过8种无网络模拟场景，保留默认双库与WithEN行为。复用最终业务回归861 passed/1 skipped/7 warnings/161.34s、23组Chrome及6项Node验收；本次追加编译导入、文档清单和提交门禁核验。Gitee明确跳过，提交SHA由推送脚本写入VERSION.json，实际同步以GitHub CN远端核验为准；未部署。\n[Codex] 本轮离线文件收尾：新增 docs/reference/offline-acceptance-checklist.md；仅清理三项已有明确源码/文档证据完成的纯开发提醒：station_controller.py 拆分 Phase 6 收尾（repowiki 同步）、发布/推送后同步 VERSION.json、设计变更同步 docs/design。已知离线证据 dev_status.py --verify PASS、sync_docs.py PASS 且无工作区副作用；历史 Python3.12 全量 861 passed/1 skipped/7 warnings/0 blockers 仅作历史证据。当前系统无 python，.venv 无 bin/python，site-packages 为不完整 Python3.10 依赖，缺 readerwriterlock/uvicorn 且 FastAPI 不完整；python3 -m pytest 实际 23 个收集错误，不能宣称本轮全量通过。物理多机、在线模型、断电与磁盘故障、真实 IM 与浏览器配置四类仍未验收，SIGKILL 不能替代硬件故障验收；保留其余环境验收、Boss 操作、跨站及依赖事项。VERSION.commit 与 HEAD 差一提交按设计保留，不改 VERSION；仅提供环境恢复命令建议，未安装依赖、未访问外部服务、未提交推送。[Codex] 离线测试环境恢复完成：使用独立 /tmp/lan-mesh-test-py311（Python 3.11.18），按 requirements.txt 与 pyproject.toml 的 dev 可选依赖安装成功；使用工作站 Node v24.21.0 绕过系统 Node v12.22.9 的前端兼容问题。全量 pytest 实际 861 passed / 1 skipped / 7 warnings / 162.67s；dev_status.py --verify PASS；sync_docs.py PASS 且无工作区副作用；6 个前端专项 6 passed / 3 warnings。测试只使用临时目录、SQLite、loopback HTTP、隔离子进程和 monkeypatch，未访问真实模型、物理主机、IM 或硬件。VERSION.commit 与 HEAD 差一提交按设计保留；未提交推送。[Codex] Python 3.12.14 优先环境最终复验：独立 /tmp/lan-mesh-test-py312 按 requirements.txt 与 pyproject.toml 的 dev 可选依赖安装成功，使用工作站 Node v24.21.0；全量 pytest 实际 861 passed / 1 skipped / 7 warnings / 217.60s。Python 3.11.18 交叉环境同样 861 passed / 1 skipped / 7 warnings / 162.67s。系统 Node v12.22.9 的两项前端失败已由 Node v24 复验通过；dev_status.py --verify 与 sync_docs.py 均 PASS 且无副作用。测试未访问真实模型、物理主机、IM 或硬件；VERSION.commit 与 HEAD 差一提交按设计保留；未提交推送。\n[Codex][opt1234部分增量] 四项优化尚未完成，不增加iteration_count、不修改发布元数据。仅落地Python>=3.11预检修正、标准库offline_doctor和3项专项测试。双节点工具、协作状态入口、离线对照基准尚未实现；doctor目录隔离仅诊断声明和权限，不证明完整隔离。完整验证日志见/tmp/lanmesh-opt1234，统计待验证完成补充。保留全部已有历史及offline-acceptance-checklist。未SSH、部署、调用模型/IM、提交或推送。\n[Codex][opt1234验证边界] 新专项3 passed/0.11s；编译与StationController导入、dev_status --verify、sync_docs（269条目11域）、git diff --check通过。doctor实际Python3.12.14后端通过、系统3.10.12正确失败，VERSION关系version_sync_only。全量收集865项，既有artifact真实HTTP测试创建socket报PermissionError(EPERM)，随后停滞并以Ctrl-C中断(exit130)，无全量通过统计；单独复现1 failed/1 warning/0.56s。未完成四项任务，iteration_count保持124；占用已释放。\n[工作站][iter125本地交付] 四项优化的本地工具/交互完成：隔离双peer生产持久投递链、通知及执行/入站/验收/已读分离、Python>=3.11预检与只读doctor、严格同任务基准。新增104项测试，全量实际965 passed/1 skipped/7 warnings/176.20s；Chrome桌面/390移动共28项API替身行为断言、真实HTTP权限/交付、双peer独立7项检查通过。编译导入、212文件名称扫描、docs275项11域、dev_status与diff检查通过。此前其余三项尚未实现和socket阻断描述为中间历史；主代理已在当前允许环境实际完成本机验证。192.168.100.30只读SSH可达，Python3.10.12；遵守禁止外部服务操作约定，未安装/部署/启停远端。真实物理双机、升级回滚、断电、在线模型同任务对照仍未验收，不能据fixture宣布目标全部完成。源码未提交发布，VERSION仍描述0.41.12，保留自动同步commit关系，Gitee暂停。完整交接docs/reference/optimization-1234-local-handoff.md。\n[工作站][证据纠正] 前轮将Phase6 repowiki同步待办清理时未保留充分完成证据，已恢复该提醒；空.pending队列不能独立证明wiki已同步。未修改repowiki。\n[工作站][第二节点Python维护] 2026-11-13用户明确选择执行用户目录独立Python3.12安装，保留系统Python和服务。已安装3.12.14与pip25.0.1，新venv在/home/zero-mass-foam/.local/share/lan-mesh/venvs/py312；基础与venv均通过SSL/SQLite/压缩库/pip验证，传输SHA一致。原系统python3仍3.10.12；未改PATH、系统包或启停服务，未安装项目依赖。解释器版本阻塞解除，双机验收未执行。详见docs/reference/remote-python312-install.md；本次为运行时维护，不增加开发迭代或更改发布版本。",
   "notes_iter89": "项目蓝图驱动规划与执行 (闭合 iter-88 的价值断点: 蓝图此前只存不用): PMPlanner 规划前按 task.project_id 拉 GET /api/projects/{id}/blueprint, 渲染使命/目标/非目标/验收标准/硬约束/当前阶段(优先 in_progress)/近 3 条决策 为约束段落注入 LLM 规划 prompt, 并明令非目标不得进入 decomposition; 结果按 project_id 缓存, 一次任务只查一次。attach_blueprint_context 在规划后把同一 提示写入 input_data._project_blueprint, 本地执行与远程分发共用; AgentRuntime._build_blueprint_prompt 渲染为 system prompt 尾缀, 覆盖 _call_llm_with_routing 路由链/无路由回退与 _handle_react_agent 三条路径。降级: Secretary 不可达/无 project_id/蓝图为空一律静默空串, 无蓝图项目行为与旧版一致。验证: 专项 TestIter89ProjectBlueprintContext 8 passed, 全量 pytest 458 passed (450 基线 + 8 新增), 编译 OK, 导入 OK, check_unbound_names PASS, sync_docs PASS (104 条目), git diff --check 干净; 变异验证 2 处 (摘掉 pm_agent 挂载 → run_task 用例红; 摘掉 runtime 尾缀拼接 → 注入用例红), 确认非空跑。函数长度门禁比对 HEAD 基线零新增超标 (execute 73→83 系 iter-87 未提交改动所致)。待 Boss 真机验证: 给项目填蓝图后提交任务, PM 规划应对齐目标并避开非目标。 端到端真机验证通过@2026-09-07 (不 mock HTTP): 隔离 Station@4599 起真项目, 经 POST /api/projects + PUT /api/projects/{id}/blueprint 真实落库, 再由真实 PMPlanner 经 http_get 拉取 —— 规划 prompt (1340 字符) 含使命/目标/非目标/验收标准/硬约束/决策 6 段 + 非目标禁令, 当前阶段正确选中 V2(in_progress) 而非已完成的 MVP; attach_blueprint_context 挂载 _project_blueprint 且未污染原 task; 无蓝图项目返回空串且不注入任何键; Secretary 不可达 (127.0.0.1:1) 静默降级空串。服务端日志确认「项目蓝图已更新」与「项目蓝图约束注入 (project=8f8ea389, 7 条)」。",
   "notes_iter90": "交付前蓝图验收自检 (闭合 iter-89 的价值断点: 蓝图只约束规划不校验产出): PMPlanner 新增 review_against_blueprint —— 交付前按 project 蓝图 charter.acceptance_criteria (最多 6 条) 逐条审查交付物, 复用 _fetch_project_blueprint 拉蓝图, _build_acceptance_prompt 渲染逐条判断 prompt (交付物截断 4000 字符, 要求 results 顺序与标准一致, 无法确认一律 met=false), _parse_acceptance_review 剥 markdown 代码块并把 met/evidence 对齐到标准, 输出 checks/unmet/verdict(pass|risk)/summary/reviewed。pm_agent.deliver_result 上报前调 _review_delivery 挂 delivery.acceptance_review 并对未达成项打 warning 日志; Secretary /api/pm/{id}/deliver 落 output_data._delivery.acceptance_review 并随 task_delivered WS 广播; dashboard 任务卡片加验收自检徽章 (通过绿/未全过红)、交付弹窗新增「验收自检」区 (结论 + 条数 + 摘要 + 逐条 ✅❌ 标准与依据)、task_delivered toast 追加未达成计数; chat_handler 验收动作回复附自检结论与未达成清单。降级: 无 project_id / 无验收标准 / 交付物为空 / LLM 异常 / JSON 无法解析一律返回空 dict 且不写字段, 旧任务与无蓝图项目行为与 iter-89 完全一致 (零 LLM 成本)。验证: 专项 TestIter90BlueprintAcceptance 5 passed, 全量 pytest 463 passed (458 基线 + 5 新增), 编译 9 文件 OK, 导入 OK, dashboard JS node --check OK, sync_docs PASS (104 条目)。变异验证 3 处全部致红 (摘掉 deliver payload 挂载 → 1 红; 摘掉路由落库字段 → 1 红; verdict 恒为 pass → 2 红), 确认非空跑。浏览器实测通过@2026-09-08: Playwright + Chromium headless 实测任务卡片渲染「验收自检未全过」徽章, 交付弹窗展示结论/条数/摘要与逐条 ✅❌ 标准+依据, 截图 temp_resault/iter90_delivery_acceptance.png; 清单 UI-063 转检测通过。待 Boss 真机验证: 真实 LLM 下自检结论质量与交付闭环体验。",
   "notes_iter92": "iter-92: Boss 通道 (scripts/boss_channel.py 12 子命令) + stock_player 任务图交接 (16 节点/22 边 DAG + G0 澄清闸门 + 阶段化 Agent 编队) + BUG-032 停滞告警幽灵刷屏修复 (DB 对账, 真实数据 100→0, 专项 5 例, 变异 3 处致红, 全量 468 passed)。",
@@ -372,5 +372,39 @@
       "private_config": "excluded"
     }
   },
-  "notes_submission_20261113": "[Codex] 按用户上库授权整理iter116–124全部源码、测试、设计和SPA资源，版本0.41.12；新增sync_push.ps1 -SkipGitee并通过8种无网络模拟场景，保留默认双库与WithEN行为。复用最终业务回归861 passed/1 skipped/7 warnings/161.34s、23组Chrome及6项Node验收；本次追加编译导入、文档清单和提交门禁核验。Gitee明确跳过，提交SHA由推送脚本写入VERSION.json，实际同步以GitHub CN远端核验为准；未部署。"
+  "notes_submission_20261113": "[Codex] 按用户上库授权整理iter116–124全部源码、测试、设计和SPA资源，版本0.41.12；新增sync_push.ps1 -SkipGitee并通过8种无网络模拟场景，保留默认双库与WithEN行为。复用最终业务回归861 passed/1 skipped/7 warnings/161.34s、23组Chrome及6项Node验收；本次追加编译导入、文档清单和提交门禁核验。Gitee明确跳过，提交SHA由推送脚本写入VERSION.json，实际同步以GitHub CN远端核验为准；未部署。",
+  "notes_iter125": "[工作站][iter125本地交付] 四项优化的本地工具/交互完成：隔离双peer生产持久投递链、通知及执行/入站/验收/已读分离、Python>=3.11预检与只读doctor、严格同任务基准。新增104项测试，全量实际965 passed/1 skipped/7 warnings/176.20s；Chrome桌面/390移动共28项API替身行为断言、真实HTTP权限/交付、双peer独立7项检查通过。编译导入、212文件名称扫描、docs275项11域、dev_status与diff检查通过。此前其余三项尚未实现和socket阻断描述为中间历史；主代理已在当前允许环境实际完成本机验证。192.168.100.30只读SSH可达，Python3.10.12；遵守禁止外部服务操作约定，未安装/部署/启停远端。真实物理双机、升级回滚、断电、在线模型同任务对照仍未验收，不能据fixture宣布目标全部完成。源码未提交发布，VERSION仍描述0.41.12，保留自动同步commit关系，Gitee暂停。完整交接docs/reference/optimization-1234-local-handoff.md。",
+  "optimization_1234": {
+    "local_code": "completed_uncommitted",
+    "overall": "partial_external_acceptance_pending",
+    "base_release": "0.41.12",
+    "tests": {
+      "passed": 965,
+      "skipped": 1,
+      "warnings": 7,
+      "seconds": 176.2,
+      "new": 104
+    },
+    "browser_fixture_checks": 28,
+    "protocol_checks": 7,
+    "protocol_classification": "simulated",
+    "remote": "Independent Python3.12.14 and pip25.0.1 installed and verified in user directory; system Python3.10.12 preserved; project dependencies/deployment/services not operated",
+    "pending": [
+      "physical two-host closure",
+      "upgrade and rollback",
+      "online same-model comparison",
+      "power-loss and real IM acceptance"
+    ],
+    "handoff": "docs/reference/optimization-1234-local-handoff.md"
+  },
+  "remote_python312": {
+    "host": "zero-mass-foam@192.168.100.30",
+    "python": "/home/zero-mass-foam/.local/opt/lan-mesh/python-3.12.14/bin/python3.12",
+    "venv": "/home/zero-mass-foam/.local/share/lan-mesh/venvs/py312",
+    "version": "3.12.14",
+    "pip": "25.0.1",
+    "validated": true,
+    "project_dependencies": "not installed",
+    "record": "docs/reference/remote-python312-install.md"
+  }
 }

@@ -30,6 +30,7 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_artifact_lifecycle.py | Retention safety, scope-preserving replicas and real process crash durability. |
 | tests/test_builtin_skills.py | Built-in skill discovery, distribution and real prompt composition behavior. |
 | tests/test_collaboration.py | Control transfer must wait for admitted work, preserve scope and survive retries. |
+| tests/test_collaboration_status.py | Real Database semantics; HTTP cases must run outside the socket-restricted sandbox. |
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_dag_frontend.py | Run dependency-editor behavior checks with the available Node runtime. |
 | tests/test_evidence_usage.py | Acceptance provenance and durable per-attempt accounting regression scenarios. |
@@ -39,8 +40,10 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_interaction_services.py | Interaction contracts, common ingress and real project domain persistence. |
 | tests/test_memory_backup.py | Private memory replication, interruption recovery and scope-preserving failover. |
 | tests/test_memory_workbench.py | Large source indexing, live PM scoping, pagination and runtime reference boundaries. |
+| tests/test_mesh_acceptance.py | Pure safety tests plus explicitly selected real subprocess acceptance. |
 | tests/test_mesh_delivery.py | Durable delivery acceptance: retries, crash recovery, identities and real HTTP. |
 | tests/test_network_service_integration.py | Real loopback HTTP integration of Worker API, native execution and shutdown. |
+| tests/test_offline_doctor.py | Offline diagnosis regression checks, without production configuration access. |
 | tests/test_periodic_im.py | Calendar edges, durable trigger admission and IM room/event ownership regressions. |
 | tests/test_pm_services.py | Concurrency and integration regressions for shared PM ownership and scheduling. |
 | tests/test_repositories.py | Database compatibility: unchanged schema and shared repositories with isolated connections. |
@@ -50,6 +53,7 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_scoped_memory.py | Behavioral acceptance for scoped memory, durable corrections and source retrieval. |
 | tests/test_services.py | Behavioral regression for real Yomk routing, isolation and task API compatibility. |
 | tests/test_shadow_dev.py | Shadow development guardrail tests. |
+| tests/test_task_benchmark.py | Meaningful offline benchmark validation behavior. |
 | tests/test_workstation_optimizer.py | Tests for the resident workstation optimization workflow. |
 | tests/test_yomk_graph.py | Real runtime, coroutine attribution and local viewer lifecycle regression. |
 <!-- /AUTO:module-list -->

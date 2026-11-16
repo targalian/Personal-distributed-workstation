@@ -32,6 +32,7 @@ class TasksRepository(Repository):
             task.project_id, task.pm_agent_id,
         ))
         conn.commit()
+        self._notify_status(task.task_id, task.status)
 
 
     def save_task_if_absent(self, task: Task) -> bool:
@@ -78,6 +79,14 @@ class TasksRepository(Repository):
             (status, task_id),
         )
         conn.commit()
+        self._notify_status(task_id, status)
+
+    def _notify_status(self, task_id: str, status: str) -> None:
+        from .collaboration_repository import notify_transition
+        labels = {'completed': '执行完成，请核对结果是否入站', 'awaiting_input': '等待输入',
+                  'review_required': '待人工核对', 'failed': '执行失败', 'cancelled': '已取消'}
+        notify_transition(self.database, task_id, 'execution', status, labels.get(status, ''))
+
 
 
     def delete_task(self, task_id: str) -> bool:

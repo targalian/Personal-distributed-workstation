@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "fixture_notice": "Offline fixtures; not real model scores or rates.",
+  "tasks": [
+    {
+      "task_id": "sum-v1",
+      "input": {
+        "numbers": [
+          2,
+          3,
+          5
+        ]
+      },
+      "acceptance": {
+        "result": 10
+      },
+      "input_hash": "0d744183601c762dc02c23b05cc2ebd2a77cf1ce98ee471738073c70a8eb34da",
+      "acceptance_hash": "b9134b539070ec19bedc8d4f811615d57c5c676b369c0f9e207cdfa200de912a",
+      "acceptance_criteria": [
+        "evidence must contain exact expected JSON",
+        "no self-report without evidence"
+      ]
+    },
+    {
+      "task_id": "sort-v1",
+      "input": {
+        "values": [
+          3,
+          1,
+          2
+        ]
+      },
+      "acceptance": {
+        "ascending": [
+          1,
+          2,
+          3
+        ]
+      },
+      "input_hash": "c2d02feadd9a74ac8989f91e0f89044215f3f18e368c414771d457b8246ce293",
+      "acceptance_hash": "1b4a9f1baa4e6481911c0389b6ce50f497e73fca5536ac72dc11304944e1c785",
+      "acceptance_criteria": [
+        "evidence must contain exact expected JSON",
+        "no self-report without evidence"
+      ]
+    },
+    {
+      "task_id": "wordcount-v1",
+      "input": {
+        "text": "lan mesh offline"
+      },
+      "acceptance": {
+        "words": 3
+      },
+      "input_hash": "9b1d8c69e0806db390499f274bed6e6902eee0263ee48256278f101f09f39600",
+      "acceptance_hash": "6ec4264c79434f04dbd4a82565d5d65fdf1a10a5ae99eaafb3aa963cacdfaee4",
+      "acceptance_criteria": [
+        "evidence must contain exact expected JSON",
+        "no self-report without evidence"
+      ]
+    }
+  ]
+}

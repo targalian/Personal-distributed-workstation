@@ -3,8 +3,8 @@
 多 Agent（Codex CLI / Qoder Quest）并行开发时的文件占用与交接看板。
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
-- 更新时间：2026-11-13
-- 当前迭代：`iter-124`（秘书/DAG交互优化完成；861测试通过）
+- 更新时间：2026-11-17
+- 当前迭代：`iter-125`（四项优化本地交付；965 passed，实机与在线对照待验收）
 
 ## 一、职责边界（长期约定）
 
@@ -24,7 +24,8 @@
 
 | Agent | 占用文件 | 任务 | 开始 | 状态 |
 |---|---|---|---|---|
-| Codex | —— | iter116–124源码交接0.41.12，增加SkipGitee；校验完成，提交与远端状态以Git核验 | —— | 已释放 |
+| Codex | `VERSION.json`、`loop_status.json`、发布说明 | 按用户授权提交iter125本地更新；复验后仅同步GitHub CN，Gitee暂停 | 2026-11-17 | 进行中 |
+| Codex-opt1234 | —— | iter125本地交付：965 passed/1 skipped/7 warnings；28浏览器fixture检查；实机及在线对照待验收；未提交，详见optimization-1234-local-handoff.md | 2026-11-13 | 已释放 |
 | Quest | 空闲 | 无 | —— | 已释放 |
 
 > 认领格式：一行一个 Agent，`占用文件` 写通配范围（如 `lan_mesh/station_*.py`），
