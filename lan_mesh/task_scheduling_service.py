@@ -108,8 +108,9 @@ class TaskSchedulingService(YomkService):
         )
         task.input_data = dict(task.input_data or {})
         chat = getattr(controller, 'chat_handler', None)
-        cid = (task.created_by.removeprefix('schedule:') if task.created_by.startswith('schedule:')
-               else getattr(chat, '_active_conv_id', ''))
+        cid = (payload.get('source_conv_id')
+               or (task.created_by.removeprefix('schedule:') if task.created_by.startswith('schedule:')
+                   else getattr(chat, '_active_conv_id', '')))
         task.input_data.pop('_source_conv_id', None)
         if isinstance(cid, str) and any(m.get('id') == cid and m.get('project_id', '') == project_id
                                        for m in getattr(chat, '_conv_index', []) or []):

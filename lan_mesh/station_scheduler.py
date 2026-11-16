@@ -28,13 +28,15 @@ class StationSchedulerMixin:
                               priority: str = "normal",
                               fed_relay: bool = False,
                               input_data: dict | None = None,
-                              project_id: str = "") -> dict:
+                              project_id: str = "",
+                              source_conv_id: str = "") -> dict:
         """从对话或联邦兼容入口，经 Yomk 统一提交任务并保留项目与优先级。"""
         from .task_scheduling_service import call_schedule
         return call_schedule(self, "submit_task", payload={
             "name": name, "description": description, "created_by": created_by,
             "priority": priority, "fed_relay": fed_relay,
             "input_data": input_data or {}, "project_id": project_id,
+            "source_conv_id": source_conv_id,
         })
 
     def _pick_task_host(self, online_hosts: list):

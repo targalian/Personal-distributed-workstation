@@ -33,7 +33,7 @@ class FakeChat:
         self.root = root
 
     def _get_conv_meta(self, conv_id):
-        return {"id": conv_id} if conv_id == "conv-1" else None
+        return {"id": conv_id, "project_id": "proj-1"} if conv_id == "conv-1" else None
 
     def _get_conv_dir(self):
         return self.root
@@ -182,6 +182,8 @@ def test_handoff_dispatches_once_per_revision_and_records_task(client):
     assert record["task_status"] == "pending" and record["pm_agent_id"] == "pm-1"
     kwargs = client.controller.submit_task_from_chat.call_args.kwargs
     assert kwargs["name"] == "协作工作台" and kwargs["input_data"]["_brief"]["revision"] == 1
+    assert kwargs["project_id"] == "proj-1"
+    assert kwargs["source_conv_id"] == "conv-1"
 
     again = http.post("/api/conversations/conv-1/brief/handoffs", json={"expected_revision": 1})
     assert again.status_code == 200 and again.json()["task_id"] == "task-1"

@@ -69,10 +69,14 @@ class BriefHandoff:
                       "status": "prepared", "task_status": "unknown", "pm_agent_id": ""}
             self._write(conv_id, record)
         reference = {key: record[key] for key in ("id", "conv_id", "revision", "confirmed_at", "sha256")}
+        chat = getattr(self.controller, "chat_handler", None)
+        meta = chat._get_conv_meta(conv_id) if chat is not None else None
+        project_id = (meta or {}).get("project_id", "")
         try:
             result = self.controller.submit_task_from_chat(
                 name=record["title"], description=record["markdown"], created_by="secretary",
-                priority="normal", input_data={"_brief": reference})
+                priority="normal", input_data={"_brief": reference},
+                project_id=project_id, source_conv_id=conv_id)
             actual = result.get("task_id") or ""
             if not actual:
                 raise ValueError("任务创建未返回有效 ID")
