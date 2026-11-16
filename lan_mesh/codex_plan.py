@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -40,18 +41,38 @@ def _command():
     return [executable]
 
 
-def _server_args() -> list:
-    """Start the app-server with every inherited tool surface disabled.
+def _configured_mcp_names() -> list:
+    """Names of MCP servers declared in the user's Codex config.
 
-    Shell and web search are disabled above; MCP servers come from the user's
-    Codex config, so they must be cleared explicitly — the developer prompt is
-    not an execution boundary and MCP calls never reach LAN Mesh's tool list.
+    Plugin-provided servers are removed with ``--disable plugins``; servers
+    declared in config.toml must each be disabled by dotted path, because
+    ``-c mcp_servers={}`` merges into the existing table instead of clearing it.
+    A name that cannot be expressed as a dotted path aborts the call rather than
+    leaving that server enabled.
     """
-    return _command() + ["app-server", "-c", 'model_provider="openai"',
+    home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+    try:
+        import tomllib
+        data = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    names = sorted((data.get("mcp_servers") or {}).keys())
+    for name in names:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            raise RuntimeError(f"无法按键名禁用 MCP 服务: {name}")
+    return names
+
+
+def _server_args() -> list:
+    """Start the app-server with every inherited tool surface disabled."""
+    args = _command() + ["app-server", "--disable", "plugins",
+                         "-c", 'model_provider="openai"',
                          "-c", 'forced_login_method="chatgpt"',
                          "-c", "features.shell_tool=false",
-                         "-c", 'web_search="disabled"',
-                         "-c", "mcp_servers={}"]
+                         "-c", 'web_search="disabled"']
+    for name in _configured_mcp_names():
+        args += ["-c", f"mcp_servers.{name}.enabled=false"]
+    return args
 
 
 class _Server:
@@ -238,3 +259,4 @@ def call_plan(entry, messages, tools=None):
     except Exception:
         pass  # Optional accounting never breaks inference.
     return result
+

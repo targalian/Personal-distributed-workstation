@@ -24,10 +24,32 @@ def test_example_pool_loads_without_api_key_env():
 
 def test_server_args_disable_inherited_tool_surfaces(monkeypatch):
     monkeypatch.setattr(codex_plan, "_command", lambda: ["codex"])
+    monkeypatch.setattr(codex_plan, "_configured_mcp_names", lambda: ["node_repl"])
     args = codex_plan._server_args()
     assert 'features.shell_tool=false' in args
     assert 'web_search="disabled"' in args
-    assert "mcp_servers={}" in args
+    assert "--disable" in args and "plugins" in args
+    assert "mcp_servers.node_repl.enabled=false" in args
+
+
+def test_configured_mcp_names_reads_codex_home(tmp_path, monkeypatch):
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        '[mcp_servers.node_repl]\ncommand = "node.exe"\n'
+        '[mcp_servers.extra]\ncommand = "x.exe"\n', encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    assert codex_plan._configured_mcp_names() == ["extra", "node_repl"]
+
+
+def test_configured_mcp_names_fail_closed_on_unaddressable_name(tmp_path, monkeypatch):
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        '[mcp_servers."bad.name"]\ncommand = "x.exe"\n', encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    with pytest.raises(RuntimeError, match="无法按键名禁用"):
+        codex_plan._configured_mcp_names()
 
 
 def test_default_tools_chain_includes_subscription_entries(tmp_path, monkeypatch):
