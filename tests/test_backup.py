@@ -143,3 +143,74 @@ def test_backup_command_uses_the_home_config(tmp_path, monkeypatch):
     assert roots["database"] == db.absolute()
     assert roots["shared"] == shared.absolute()
     assert any(path == (home / ".lan_mesh" / "config.yaml").absolute() for path in roots.values())
+
+
+@pytest.fixture
+def isolated_backup_command(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from scripts import backup_workstation
+
+    project = tmp_path / "project"
+    (project / "lan_mesh").mkdir(parents=True)
+    home = tmp_path / "home"
+    home.mkdir()
+    db = tmp_path / "main.sqlite3"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE notes (value TEXT)")
+    monkeypatch.setattr(backup_workstation, "ROOT", project)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.delenv("LAN_MESH_CONFIG", raising=False)
+    monkeypatch.chdir(project)
+    args = SimpleNamespace(config=None, db=str(db), shared=None, extra_file=[])
+    return SimpleNamespace(command=backup_workstation, project=project, home=home,
+                           args=args, archive=tmp_path / "command.zip")
+
+
+def test_backup_command_includes_resources_yaml(isolated_backup_command, tmp_path, monkeypatch, capsys):
+    setup = isolated_backup_command
+    resources = setup.project / "lan_mesh" / "resources.yaml"
+    resources.write_text("resources: []\n", encoding="utf-8")
+    roots = setup.command.backup_roots(setup.args)
+    label = next(label for label, path in roots.items() if path == resources)
+    assert label.startswith("config_")
+    manifest = create_backup(roots, setup.archive, offline_confirmed=True)
+    assert f"{label}/resources.yaml" in {item["path"] for item in manifest["files"]}
+    destination = tmp_path / "resources-restored"
+    restore_backup(setup.archive, destination)
+    assert (destination / label / "resources.yaml").read_bytes() == resources.read_bytes()
+    monkeypatch.setattr("sys.argv", ["backup_workstation.py", "create", str(tmp_path / "plan.zip"), "--plan"])
+    assert setup.command.main() == 0
+    assert f"{label}: {resources}" in capsys.readouterr().out
+    assert not (tmp_path / "plan.zip").exists()
+
+
+def test_backup_command_state_preserves_identity_and_excludes_runtime(isolated_backup_command, tmp_path):
+    setup = isolated_backup_command
+    state = setup.home / ".lan_mesh"
+    state.mkdir()
+    for name in ("mesh_token", "device_id_station", "device_id_worker", "mcp_servers.yaml", "station.lock"):
+        (state / name).write_text(f"fixture-{name}", encoding="utf-8")
+    for name in ("logs", "backups"):
+        (state / name / "nested").mkdir(parents=True)
+        (state / name / "nested" / "ignored.txt").write_text("ignored", encoding="utf-8")
+    roots = setup.command.backup_roots(setup.args)
+    assert roots["state"] == state
+    manifest = create_backup(roots, setup.archive, offline_confirmed=True)
+    expected = {f"state/{name}" for name in
+                ("mesh_token", "device_id_station", "device_id_worker", "mcp_servers.yaml")}
+    assert {item["path"] for item in manifest["files"] if item["path"].startswith("state/")} == expected
+    assert not any(name.startswith(("state/logs", "state/backups")) for name in manifest["directories"])
+    destination = tmp_path / "state-restored"
+    restore_backup(setup.archive, destination)
+    for name in expected:
+        assert (destination / name).read_bytes() == (state / name.split("/")[1]).read_bytes()
+    assert not any((destination / "state" / name).exists() for name in ("logs", "backups", "station.lock"))
+
+
+def test_backup_command_skips_missing_state(isolated_backup_command):
+    setup = isolated_backup_command
+    roots = setup.command.backup_roots(setup.args)
+    assert "state" not in roots
+    manifest = create_backup(roots, setup.archive, offline_confirmed=True)
+    assert "state" not in manifest["roots"]

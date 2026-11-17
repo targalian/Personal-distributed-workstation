@@ -10,7 +10,9 @@
 .venv\Scripts\python.exe scripts\backup_workstation.py create D:\backup\workstation.zip --plan
 ```
 
-默认按配置确定主库（`secretary.db_path`）与共享目录（`secretary.shared_folder`），并收集已存在的项目 `.env`、`lan_mesh/model_pool.yaml`、`model_pool.yaml`。启动时用了自定义 `--config`、`--db`、`--shared` 的，备份时要给同样的参数；也可以 `--extra-file` 追加额外配置文件。
+默认按配置确定主库（`secretary.db_path`）与共享目录（`secretary.shared_folder`），并收集已存在的项目 `.env`、`lan_mesh/model_pool.yaml`、`model_pool.yaml`、`lan_mesh/resources.yaml`（资源配置与密钥）。启动时用了自定义 `--config`、`--db`、`--shared` 的，备份时要给同样的参数；也可以 `--extra-file` 追加额外配置文件。
+
+若 `~/.lan_mesh/` 存在，会以 `state` 根备份，其中包括 `mesh_token`、节点身份文件 `device_id_station` / `device_id_worker`、MCP 配置 `mcp_servers.yaml` 等；缺失时跳过。该根排除顶层 `logs/`、`backups/` 和 `station.lock`。`--plan` 只列出路径，不输出 token 或密钥内容。
 
 代码、虚拟环境、云端对象、外部工具工作目录、只在进程环境里的 API Key 不会被收集，需要另行保存。显式指定的缺失路径会报错，不会生成空备份。
 

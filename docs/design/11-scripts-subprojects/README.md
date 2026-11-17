@@ -27,6 +27,14 @@
 <!-- /AUTO:module-list -->
 ---
 
+## scripts/backup_workstation.py — 离线整机备份
+
+默认收集配置选定的主库、共享目录、已有配置文件（含 `lan_mesh/resources.yaml`），
+以及存在时的 `~/.lan_mesh/`（`state` 根，含 mesh token、节点身份和 MCP 配置）。
+复用备份核心的 `state` 规则，排除顶层 `logs/`、`backups/`、`station.lock`；
+不初始化 Worker 或 Database。`--plan` 仅列出路径，缺失的可选来源跳过。
+归档格式和校验/恢复流程保持不变，操作步骤见 [整机备份与恢复](../../backup-restore.md)。
+
 ## scripts/sync_push.ps1 — 双库推送（上库唯一入口）
 
 **规范**: 禁止 git push 直推；所有上库必须经此脚本。

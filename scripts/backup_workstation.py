@@ -12,7 +12,7 @@ from lan_mesh.config import AppConfig, get_db_path, load_config  # noqa: E402
 
 
 def backup_roots(args) -> dict[str, Path]:
-    """Select the live database, shared folder and config files as backup roots."""
+    """Select the live database, shared folder, configuration and node state."""
     config_candidates = [Path(p).expanduser() for p in (args.config, os.environ.get("LAN_MESH_CONFIG")) if p]
     config_candidates += [Path.home() / ".lan_mesh" / "config.yaml", Path("config.yaml")]
     if args.config and not Path(args.config).expanduser().is_file():
@@ -28,7 +28,11 @@ def backup_roots(args) -> dict[str, Path]:
         roots["shared"] = shared
     elif args.shared:
         raise ValueError(f"共享目录不存在: {shared}")
-    configs = [config, ROOT / ".env", ROOT / "lan_mesh" / "model_pool.yaml", ROOT / "model_pool.yaml"]
+    state = Path.home() / ".lan_mesh"
+    if state.is_dir():
+        roots["state"] = state.absolute()
+    configs = [config, ROOT / ".env", ROOT / "lan_mesh" / "model_pool.yaml", ROOT / "model_pool.yaml",
+               ROOT / "lan_mesh" / "resources.yaml"]
     configs.extend(Path(path).expanduser() for path in args.extra_file)
     for index, path in enumerate(configs):
         if path is not None and path.is_file() and all(path.absolute() != root for root in roots.values()):
