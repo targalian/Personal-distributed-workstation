@@ -44,40 +44,25 @@ class RuntimeCliService(ComponentService):
         policy.logger.info('[CLI Agent] 后端=%s, cwd=%s, timeout=%ds', backend, cwd, timeout)
         policy.logger.info('[CLI Agent] 任务: %s', requirement[:200])
         cmd = self._build_cli_command(cfg, backend, requirement, cwd, input_data)
-        start_time = policy.time.time()
-        try:
-            result = policy.subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=policy._build_cli_env(backend))
-            elapsed = policy.time.time() - start_time
-            stdout = result.stdout[:policy.CLI_AGENT_MAX_OUTPUT]
-            stderr = result.stderr[:policy.CLI_AGENT_MAX_OUTPUT // 4]
-            output = self.owner._parse_cli_output(backend, stdout, stderr, result.returncode)
-            output['backend'] = backend
-            output['elapsed_secs'] = round(elapsed, 1)
-            output['returncode'] = result.returncode
-            if result.returncode == 0:
-                policy.logger.info('[CLI Agent] 完成 (%.1fs, backend=%s)', elapsed, backend)
-            else:
-                policy.logger.warning('[CLI Agent] 非零退出 (code=%d, %.1fs)', result.returncode, elapsed)
-            try:
-                from . import runtime_trace
-                runtime_trace.trace_llm_call(model=f'cli:{backend}', input_tokens=0, output_tokens=0, ttft_ms=0, total_ms=elapsed * 1000, status='ok' if result.returncode == 0 else 'error', call_type='cli')
-            except Exception:
-                pass
-            return output
-        except policy.subprocess.TimeoutExpired:
-            elapsed = policy.time.time() - start_time
-            policy.logger.error('[CLI Agent] 超时 (%ds, backend=%s)', timeout, backend)
-            try:
-                from . import runtime_trace
-                runtime_trace.trace_llm_call(model=f'cli:{backend}', input_tokens=0, output_tokens=0, ttft_ms=0, total_ms=elapsed * 1000, status='timeout', error=f'超时 {timeout}s', call_type='cli')
-            except Exception:
-                pass
-            return {'error': f'CLI Agent 执行超时 ({timeout}s)', 'backend': backend, 'elapsed_secs': round(elapsed, 1), 'status': 'timeout'}
-        except FileNotFoundError:
-            return {'error': f"CLI Agent '{backend}' 命令未找到, 请确认已安装并在 PATH 中", 'backend': backend}
-        except Exception as e:
-            policy.logger.error('[CLI Agent] 执行异常: %s', e)
-            return {'error': str(e), 'backend': backend}
+        from .harness import registry
+        from . import runtime_usage
+        adapter = registry.get(backend)
+        request = dict(argv=cmd, cwd=cwd, env=policy._build_cli_env(backend), timeout=timeout,
+                       cancel_event=self.owner._cancel_event,
+                       budget_usd=input_data.get('budget_usd'), max_output=policy.CLI_AGENT_MAX_OUTPUT)
+        started = policy.time.monotonic()
+        output = {}
+        for event in adapter.stream(request):
+            if event.kind == 'run.completed':
+                output = event.data
+        output['backend'] = backend
+        usage = output.get('usage', {})
+        runtime_usage.record_external_usage(
+            owner=self.owner, model_id=f'cli:{backend}',
+            input_tokens=usage.get('input_tokens', 0), output_tokens=usage.get('output_tokens', 0),
+            call_type='cli', outcome=output['status'], usage_known=output['usage_known'], started=started)
+        print(f"[AgentRuntime] CLI {backend}: {output['status']} ({output['elapsed_secs']}s)")
+        return output
 
     def _build_cli_command(self, cfg: dict, backend: str, requirement: str, cwd: str, input_data: dict) -> list:
         """Compose backend arguments while retaining configured safety policy."""
@@ -85,6 +70,11 @@ class RuntimeCliService(ComponentService):
         resolved_exe = policy._which_with_fallback(cfg['detect'])
         if resolved_exe:
             cmd[0] = resolved_exe
+        if backend == 'codex':
+            cmd.insert(2, '--json')
+        if backend == 'claude' and '--output-format' in cmd:
+            cmd[cmd.index('--output-format') + 1] = 'stream-json'
+            cmd.insert(-1, '--verbose')
         if backend == 'claude':
             allowed_tools = input_data.get('allowed_tools', [])
             if allowed_tools:

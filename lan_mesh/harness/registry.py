@@ -1,8 +1,8 @@
-"""Registry of CLI harness specs and the legacy runtime compatibility view."""
+"""Registry of streaming CLI adapters and the legacy runtime compatibility view."""
 
 import os
 
-from .adapter import HarnessAdapter, LegacyAdapter
+from .adapter import HarnessAdapter, StreamingAdapter
 from .spec import Cap, HarnessSpec
 
 _SPECS: dict[str, HarnessSpec] = {}
@@ -20,7 +20,7 @@ def names() -> list[str]:
 
 def get(name: str) -> HarnessAdapter:
     """Return an adapter, raising KeyError for an unknown backend."""
-    return LegacyAdapter(_SPECS[name])
+    return StreamingAdapter(_SPECS[name])
 
 
 def legacy_specs() -> dict[str, dict]:
