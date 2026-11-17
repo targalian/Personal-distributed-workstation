@@ -56,6 +56,8 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_services.py | Behavioral regression for real Yomk routing, isolation and task API compatibility. |
 | tests/test_shadow_dev.py | Shadow development guardrail tests. |
 | tests/test_startup_scripts.py | Regression tests for Windows batch control flow and upgraded runtime dependencies. |
+| tests/test_subscription_fallback.py | Subscription entries must not mask API credentials or enter API model lists. |
+| tests/test_subscription_metering.py | Subscription usage must reach the runtime's own durable attempt ledger once. |
 | tests/test_web_functionality.py | Authenticated HTTP and WebSocket workflows using real routes and isolated SQLite. |
 | tests/test_workstation_optimizer.py | Tests for the resident workstation optimization workflow. |
 | tests/test_yomk_graph.py | Real runtime, coroutine attribution and local viewer lifecycle regression. |

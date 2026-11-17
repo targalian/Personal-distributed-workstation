@@ -6,6 +6,9 @@ from functools import wraps
 from typing import Any, Callable, Iterator
 import time
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 _scope: ContextVar[dict] = ContextVar('usage_scope', default={})
 _call: ContextVar[dict | None] = ContextVar('usage_call', default=None)
@@ -46,6 +49,7 @@ def _finish_call(owner: Any, model: str, current: dict, started: float, call_typ
         owner._record_usage(model, current['input_tokens'], current['output_tokens'])
     except Exception:
         current['accounting_error'] = True
+        logger.warning('[AgentRuntime] 用量记账失败: %s', model, exc_info=True)
     try:
         runtime_trace.trace_llm_call(model, current['input_tokens'], current['output_tokens'],
             ttft_ms=0, total_ms=(time.monotonic() - started) * 1000,
@@ -55,15 +59,39 @@ def _finish_call(owner: Any, model: str, current: dict, started: float, call_typ
         pass
 
 
+def _new_call() -> dict:
+    return dict(usage_id=uuid.uuid4().hex, attempt_id=_scope.get().get('attempt_id', ''),
+                purpose=_scope.get().get('purpose', 'unattributed'), outcome='failed',
+                input_tokens=0, output_tokens=0, usage_known=False)
+
+
+def record_external_usage(owner: Any, model_id: str, input_tokens: int, output_tokens: int,
+                          call_type: str = 'chat', outcome: str = 'completed',
+                          usage_known: bool | None = None, started: float | None = None) -> str:
+    """Record a subscription attempt through the same ledger and trace as HTTP calls."""
+    current = _new_call()
+    current.update(input_tokens=max(0, int(input_tokens or 0)),
+                   output_tokens=max(0, int(output_tokens or 0)), outcome=outcome)
+    current['usage_known'] = (outcome == 'completed' and
+                              current['input_tokens'] + current['output_tokens'] > 0
+                              if usage_known is None else usage_known)
+    if started is None:
+        started = time.monotonic()
+    token = _call.set(current)
+    try:
+        _finish_call(owner, model_id, current, started, call_type)
+    finally:
+        _call.reset(token)
+    return current['usage_id']
+
+
 def metered_call(call_type: str) -> Callable:
     """Create a fresh ID per actual HTTP attempt; transport retries reuse recorded IDs only."""
     def decorate(function: Callable) -> Callable:
         @wraps(function)
         def run(self: Any, *args: Any, **kwargs: Any) -> dict:
             model = kwargs['model_id'] if 'model_id' in kwargs else args[2 if call_type == 'tools' else 1]
-            current = dict(usage_id=uuid.uuid4().hex, attempt_id=_scope.get().get('attempt_id', ''),
-                           purpose=_scope.get().get('purpose', 'unattributed'), outcome='failed',
-                           input_tokens=0, output_tokens=0, usage_known=False)
+            current = _new_call()
             token, started = _call.set(current), time.monotonic()
             try:
                 result = function(self, *args, **kwargs)

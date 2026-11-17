@@ -42,6 +42,8 @@ MAPPING = {
     "lan_mesh/codex_plan.py": "05-resources-secrets",
     "lan_mesh/model_pool.chatgpt-plan.example.yaml": ("05-resources-secrets", "仅 ChatGPT 订阅路由示例：走本机 Codex CLI 登录，不填 API Key"),
     "tests/test_codex_plan.py": "10-test-loop",
+    "tests/test_subscription_fallback.py": "10-test-loop",
+    "tests/test_subscription_metering.py": "10-test-loop",
     "lan_mesh/backup.py": "07-data-sync",
     "scripts/backup_workstation.py": "11-scripts-subprojects",
     "tests/test_backup.py": "10-test-loop",

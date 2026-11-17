@@ -252,11 +252,7 @@ def call_plan(entry, messages, tools=None):
                 message = {"role": "assistant", "content": "\n".join(texts), "tool_calls": []}
                 break
     result = {"message": message, "model": entry.id,
+              "usage_known": "inputTokens" in usage and "outputTokens" in usage,
               "input_tokens": usage.get("inputTokens", 0), "output_tokens": usage.get("outputTokens", 0)}
-    from .model_resources import record_usage_global
-    try:
-        record_usage_global(entry.id, result["input_tokens"], result["output_tokens"])
-    except Exception:
-        pass  # Optional accounting never breaks inference.
     return result
 

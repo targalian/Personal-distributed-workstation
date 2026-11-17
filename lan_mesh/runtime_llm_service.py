@@ -1,13 +1,14 @@
 """RuntimeLlmService: domain behavior separated from the public compatibility facade."""
 
 from __future__ import annotations
+import time
 from typing import Any, Optional
 from . import agent_runtime as policy
 from .component_service import ComponentService
 from .skill_knowledge import append_builtin_guidance
 from .runtime_model_budget import ModelWindowBudget
 from .runtime_react_archive import ReactArchive
-from .runtime_usage import metered_call, observe_usage
+from .runtime_usage import metered_call, observe_usage, record_external_usage
 
 class RuntimeLlmService(ComponentService):
     """RuntimeLlmService business operations with explicit state ownership."""
@@ -20,9 +21,28 @@ class RuntimeLlmService(ComponentService):
             return policy.PROVIDER_CONFIG
         providers = {}
         for entry in pool.values():
+            if entry.usage_mode == 'chatgpt_plan':
+                continue
             providers.setdefault(entry.provider, {'base_url': entry.base_url,
                                                   'api_key_env': entry.api_key_env})
         return providers
+
+    def _call_plan(self, entry: Any, messages: list[dict], tools: Optional[list[dict]] = None) -> dict:
+        """Keep subscription accounting owned by this runtime, including failed attempts."""
+        from .codex_plan import call_plan
+        call_type = 'tools' if tools is not None else 'chat'
+        started = time.monotonic()
+        try:
+            result = call_plan(entry, messages, tools)
+        except Exception:
+            record_external_usage(self.owner, entry.id, 0, 0, call_type, outcome='failed',
+                                  usage_known=False, started=started)
+            raise
+        result['usage_id'] = record_external_usage(
+            self.owner, entry.id, result.get('input_tokens', 0),
+            result.get('output_tokens', 0), call_type, outcome='completed',
+            usage_known=bool(result.get('usage_known')), started=started)
+        return result
 
     def _thinking_options(self, model_id: str) -> dict:
         """Translate the optional thinking setting for supported providers."""
@@ -70,8 +90,7 @@ class RuntimeLlmService(ComponentService):
                 continue
             if provider_cfg.get('usage_mode') == 'chatgpt_plan':
                 try:
-                    from .codex_plan import call_plan
-                    response = call_plan(provider_cfg['model_entry'], messages, tools)
+                    response = self._call_plan(provider_cfg['model_entry'], messages, tools)
                     return {**response, 'context_candidates': candidates}
                 except Exception as e:
                     last_error = e
@@ -158,10 +177,9 @@ class RuntimeLlmService(ComponentService):
                     continue
                 try:
                     if provider_cfg.get('usage_mode') == 'chatgpt_plan':
-                        from .codex_plan import call_plan
                         messages = ([{'role': 'system', 'content': system_prompt}]
                                     if system_prompt else []) + [{'role': 'user', 'content': prompt}]
-                        result = call_plan(provider_cfg['model_entry'], messages)
+                        result = self._call_plan(provider_cfg['model_entry'], messages)
                         message = result.get('message') or {}
                         return {'content': message.get('content', ''),
                                 'model': result.get('model', model_id),
@@ -326,14 +344,14 @@ class RuntimeLlmService(ComponentService):
         """
         policy._ensure_env_loaded()
         errors = []
-        from .codex_plan import call_plan, model_available
+        from .codex_plan import model_available
         for entry in policy._load_model_pool_entries().values():
             if entry.usage_mode != 'chatgpt_plan' or not model_available(entry):
                 continue
             try:
                 messages = ([{'role': 'system', 'content': system_prompt}]
                             if system_prompt else []) + [{'role': 'user', 'content': prompt}]
-                result = call_plan(entry, messages)
+                result = self._call_plan(entry, messages)
                 message = result.get('message') or {}
                 return {'content': message.get('content', ''), 'model': entry.id,
                         'input_tokens': result.get('input_tokens', 0),
@@ -368,8 +386,9 @@ class RuntimeLlmService(ComponentService):
         qwen3.8-max → qwen3.7-max → qwen3.7-plus → qwen3.6-flash
         """
         pool = policy._load_model_pool_entries()
-        candidates = [e for e in pool.values() if e.provider == provider]
-        if candidates:
+        candidates = [e for e in pool.values()
+                      if e.provider == provider and e.usage_mode != 'chatgpt_plan']
+        if pool:
             candidates.sort(key=lambda e: e.quality_score, reverse=True)
             return [e.id for e in candidates]
         defaults = {'volcengine-ark': ['ark-code-latest'], 'deepseek': ['deepseek-chat'], 'openai': ['gpt-4o-mini'], 'anthropic': ['claude-3-haiku'], 'qwen': ['qwen-turbo'], 'aliyun-tokenplan': []}
