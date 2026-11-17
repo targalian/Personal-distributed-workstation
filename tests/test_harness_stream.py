@@ -68,6 +68,49 @@ def test_native_records(tmp_path, records, expected):
         assert result['cost_estimated'] is False
 
 
+def test_codex_jsonl_telemetry_does_not_leak_into_result(tmp_path):
+    records = [
+        {'type': 'thread.started', 'thread_id': 'thread-1'},
+        {'type': 'turn.started'},
+        {'type': 'item.started', 'item': {'id': 'change-1', 'type': 'file_change'}},
+        {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': 'Done'}},
+        {'type': 'item.completed', 'item': {'type': 'file_change', 'changes': []}},
+        {'type': 'turn.completed', 'usage': {'input_tokens': 12, 'output_tokens': 8}},
+        {'type': 'future.event', 'detail': 'unknown telemetry'},
+    ]
+    events = run_script(tmp_path, json_script(records))
+    outcome = events[-1].data
+    assert outcome['result'] == 'Done'
+    assert '"type"' not in outcome['result']
+    assert '"item":' not in outcome['result']
+    assert [e.data['text'] for e in events if e.kind == 'assistant'] == ['Done']
+    assert outcome['session_id'] == 'thread-1'
+    assert outcome['usage'] == dict(input_tokens=12, output_tokens=8)
+    assert outcome['usage_known'] is True
+
+
+def test_codex_repeated_agent_message_is_emitted_once(tmp_path):
+    records = [
+        {'type': 'item.started', 'item': {'type': 'agent_message', 'text': 'Done'}},
+        {'type': 'turn.started'},
+        {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': 'Done'}},
+    ]
+    events = run_script(tmp_path, json_script(records))
+    assert events[-1].data['result'] == 'Done'
+    assert [e.data['text'] for e in events if e.kind == 'assistant'] == ['Done']
+
+
+@pytest.mark.parametrize('final_text,expected', [('FINAL', 'FINAL'), ('', 'streamed')])
+def test_codex_final_message_file_takes_precedence(tmp_path, final_text, expected):
+    script = json_script([{
+        'type': 'item.completed', 'item': {'type': 'agent_message', 'text': 'streamed'}}])
+    script += ('\nfrom pathlib import Path\n'
+               f'Path(".codex_last_message.txt").write_text({final_text!r}, encoding="utf-8")')
+    outcome = run_script(tmp_path, script)[-1].data
+    assert outcome['status'] == 'completed'
+    assert outcome['result'] == expected
+
+
 def test_pool_price_estimate(tmp_path, monkeypatch):
     pool = tmp_path / 'pool.yaml'
     pool.write_text('models:\n- id: test-model\n  provider: openai\n'

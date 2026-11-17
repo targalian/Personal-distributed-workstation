@@ -101,7 +101,7 @@ def _number(value: object) -> float | None:
 
 
 def _consume(line: str, outcome: HarnessOutcome, state: dict) -> tuple[str, dict]:
-    """Normalize known JSONL records, retaining unrecognized output as text."""
+    """Normalize JSONL telemetry, retaining non-object output as plain text."""
     try:
         data = json.loads(line)
     except (ValueError, TypeError):
@@ -144,14 +144,15 @@ def _consume(line: str, outcome: HarnessOutcome, state: dict) -> tuple[str, dict
             outcome.status = 'failed'
         return 'telemetry', data
     if text:
-        outcome.result += str(text)
-        return 'assistant', {'text': text}
+        text = str(text)
+        if text != state.get('last_text'):
+            outcome.result += text
+            state['last_text'] = text
+            return 'assistant', {'text': text}
+        return 'telemetry', data
     if usage:
         return 'usage', data
-    if kind in ('system', 'thread.started', 'turn.started', 'run.started'):
-        return 'telemetry', data
-    outcome.result += line
-    return 'assistant', {'text': line}
+    return 'telemetry', data
 
 
 def _estimate_cost(outcome: HarnessOutcome, state: dict) -> None:
@@ -271,6 +272,15 @@ class StreamingAdapter(LegacyAdapter):
                     readers.append(reader)
                 yield from self._drain(process, pending, request, outcome, state, started)
                 stderr = state.get('stderr', '')
+                if self.spec.name == 'codex' and outcome.status == 'completed' and process.poll() == 0:
+                    try:
+                        path = os.path.join(prepared['cwd'], '.codex_last_message.txt')
+                        with open(path, encoding='utf-8') as final_message:
+                            text = final_message.read(request.get('max_output', 100000)).strip()
+                        if text:
+                            outcome.result = text
+                    except (OSError, UnicodeError):
+                        pass
         except FileNotFoundError as exc:
             outcome.status, outcome.error_class, stderr = 'failed', 'not_installed', str(exc)
         except Exception as exc:
