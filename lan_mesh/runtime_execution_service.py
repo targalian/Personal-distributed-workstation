@@ -56,19 +56,26 @@ class RuntimeExecutionService(ComponentService):
             {"output": {...}, "status": "completed"|"failed", "error": "..."}
         """
         import time as _time
-        from . import runtime_trace
+        from . import runtime_trace, graph_compat
         skill = subtask.get('required_skill', '')
         handler = self.owner._handlers.get(skill)
         task_id = subtask.get('parent_task_id', '')
         model_pref = subtask.get('model_preference', '')
         trace_id = runtime_trace.trace_subtask_start(skill=skill, task_id=task_id, model_pref=model_pref)
         exec_start = _time.time()
-        if not handler:
-            runtime_trace.trace_subtask_end(trace_id, skill, 'failed', 0, error=f'未知的技能类型: {skill}', task_id=task_id)
-            return {'output': {}, 'status': 'failed', 'error': f'未知的技能类型: {skill}'}
         if self.owner._cancel_event.is_set():
             runtime_trace.trace_subtask_end(trace_id, skill, 'cancelled', 0, task_id=task_id)
             return {'output': {}, 'status': 'cancelled'}
+        node_result = graph_compat.execute_node(self.owner, subtask)
+        if node_result is not None:
+            elapsed_ms = (_time.time() - exec_start) * 1000
+            runtime_trace.trace_subtask_end(
+                trace_id, skill, node_result['status'], elapsed_ms,
+                error=node_result['error'], task_id=task_id)
+            return node_result
+        if not handler:
+            runtime_trace.trace_subtask_end(trace_id, skill, 'failed', 0, error=f'未知的技能类型: {skill}', task_id=task_id)
+            return {'output': {}, 'status': 'failed', 'error': f'未知的技能类型: {skill}'}
         self.owner._local.current_skill = skill
         input_data = dict(subtask.get('input_data', {}))
         input_data['_model_preference'] = model_pref

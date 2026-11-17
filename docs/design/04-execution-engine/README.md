@@ -26,6 +26,7 @@ Worker 侧的任务执行能力：守护进程、Agent 运行时、能力卡片�
 | artifact_retention.py | Explicit retention previews protect active tasks, uncertain tools and acceptance evidence. |
 | browser_routes.py | Explicit human browser commands share mesh authentication and task scope checks. |
 | browser_session_service.py | Optional task browser capability with isolated contexts and serialized control transfer. |
+| graph_compat.py | Plain step plans and executor dispatch over the existing TaskDAG engine. |
 | lan_mesh/builtin_skills/ | Yomk C++/Python 与工作站适配内置技能及完整参考资料 |
 | lan_mesh/harness/adapter.py | Adapter contract and conservative plain-output implementation. |
 | lan_mesh/harness/events.py | Common event and outcome records for CLI harness adapters. |
