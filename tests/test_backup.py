@@ -214,3 +214,52 @@ def test_backup_command_skips_missing_state(isolated_backup_command):
     assert "state" not in roots
     manifest = create_backup(roots, setup.archive, offline_confirmed=True)
     assert "state" not in manifest["roots"]
+
+
+def test_backup_command_expands_shared_environment(isolated_backup_command, monkeypatch, capsys):
+    setup = isolated_backup_command
+    shared = setup.home / "shared"
+    shared.mkdir()
+    monkeypatch.setenv("AUDIT_SHARED", str(shared))
+    config = setup.project / "config.yaml"
+    config.write_text('secretary:\n  shared_folder: "$AUDIT_SHARED"\n', encoding="utf-8")
+    roots = setup.command.backup_roots(setup.args)
+    assert roots["shared"] == shared.absolute()
+    monkeypatch.setattr("sys.argv", ["backup_workstation.py", "create", str(setup.archive),
+                                    "--db", setup.args.db, "--plan"])
+    monkeypatch.setattr(setup.command, "create_backup",
+                        lambda *a, **kw: pytest.fail("plan must not create an archive"))
+    assert setup.command.main() == 0
+    assert f"shared: {shared.absolute()}" in capsys.readouterr().out
+    assert not setup.archive.exists()
+
+
+def test_backup_command_rejects_missing_shared(isolated_backup_command, monkeypatch, capsys):
+    setup = isolated_backup_command
+    config = setup.project / "config.yaml"
+    missing = setup.home / "missing"
+    monkeypatch.setenv("AUDIT_SHARED", str(missing))
+    config.write_text('worker:\n  shared_folder: "$AUDIT_SHARED"\n', encoding="utf-8")
+    setup.args.role = "worker"
+    with pytest.raises(ValueError, match="共享目录不存在"):
+        setup.command.backup_roots(setup.args)
+    for options in (["--role", "worker"], ["--shared", "$AUDIT_SHARED"]):
+        monkeypatch.setattr("sys.argv", ["backup_workstation.py", "create", str(setup.archive),
+                                        "--db", setup.args.db, "--plan", *options])
+        assert setup.command.main() == 1
+        assert str(missing.absolute()) in capsys.readouterr().err
+    assert not missing.exists()
+    assert not setup.archive.exists()
+
+
+def test_backup_command_skips_missing_default_shared(isolated_backup_command, monkeypatch, capsys):
+    setup = isolated_backup_command
+    # expanduser uses the platform home environment, independently of Path.home().
+    monkeypatch.setenv("USERPROFILE", str(setup.home))
+    monkeypatch.setenv("HOME", str(setup.home))
+    roots = setup.command.backup_roots(setup.args)
+    assert "shared" not in roots
+    warning = capsys.readouterr().err
+    assert "WARNING" in warning
+    assert str(setup.home / "lan_mesh_shared") in warning
+    assert not (setup.home / "lan_mesh_shared").exists()

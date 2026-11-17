@@ -8,10 +8,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from lan_mesh.backup import create_backup, restore_backup, verify_backup  # noqa: E402
-from lan_mesh.config import AppConfig, get_db_path, load_config  # noqa: E402
+from lan_mesh.config import AppConfig, _expand, get_db_path, get_shared_folder, load_config  # noqa: E402
 
 
-def backup_roots(args) -> dict[str, Path]:
+def backup_roots(args: argparse.Namespace) -> dict[str, Path]:
     """Select the live database, shared folder, configuration and node state."""
     config_candidates = [Path(p).expanduser() for p in (args.config, os.environ.get("LAN_MESH_CONFIG")) if p]
     config_candidates += [Path.home() / ".lan_mesh" / "config.yaml", Path("config.yaml")]
@@ -22,12 +22,18 @@ def backup_roots(args) -> dict[str, Path]:
     db = Path(args.db).expanduser().absolute() if args.db else get_db_path(cfg).absolute()
     if not db.is_file():
         raise ValueError(f"主库不存在: {db}")
-    shared = Path(args.shared or cfg.secretary.shared_folder).expanduser().absolute()
+    role = getattr(args, "role", "secretary")
+    if role not in {"secretary", "worker"}:
+        raise ValueError(f"不支持的角色: {role}")
+    role_config = cfg.secretary if role == "secretary" else cfg.worker
+    shared = (Path(_expand(args.shared)) if args.shared else get_shared_folder(cfg, role)).absolute()
     roots = {"database": db}
     if shared.is_dir():
         roots["shared"] = shared
-    elif args.shared:
+    elif args.shared or role_config.shared_folder != "~/lan_mesh_shared":
         raise ValueError(f"共享目录不存在: {shared}")
+    else:
+        print(f"[Station] WARNING: 默认共享目录不存在，跳过 shared: {shared}", file=sys.stderr)
     state = Path.home() / ".lan_mesh"
     if state.is_dir():
         roots["state"] = state.absolute()
@@ -51,6 +57,8 @@ def main() -> int:
     create.add_argument("--config")
     create.add_argument("--db")
     create.add_argument("--shared")
+    create.add_argument("--role", choices=("secretary", "worker"), default="secretary",
+                        help="选择共享目录对应的角色（默认 secretary）")
     create.add_argument("--extra-file", action="append", default=[])
     create.add_argument("--offline-confirmed", action="store_true",
                         help="确认所有节点和外部工具已停止写入这些数据")

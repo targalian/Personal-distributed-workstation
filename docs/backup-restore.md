@@ -12,6 +12,8 @@
 
 默认按配置确定主库（`secretary.db_path`）与共享目录（`secretary.shared_folder`），并收集已存在的项目 `.env`、`lan_mesh/model_pool.yaml`、`model_pool.yaml`、`lan_mesh/resources.yaml`（资源配置与密钥）。启动时用了自定义 `--config`、`--db`、`--shared` 的，备份时要给同样的参数；也可以 `--extra-file` 追加额外配置文件。
 
+`--role secretary|worker` 选择共享目录配置，默认 `secretary`；Worker 使用 `--role worker` 读取 `worker.shared_folder`，主库仍由 `secretary.db_path` 或 `--db` 指定。共享路径按运行时规则展开环境变量与 `~`，`--shared` 优先于角色配置。缺失的默认 `~/lan_mesh_shared` 会输出 warning 并跳过；其他配置共享路径或显式 `--shared` 缺失时失败（退出码 1），避免漏备份。`--plan` 列出展开后的绝对路径，也执行这些检查，不创建归档。
+
 若 `~/.lan_mesh/` 存在，会以 `state` 根备份，其中包括 `mesh_token`、节点身份文件 `device_id_station` / `device_id_worker`、MCP 配置 `mcp_servers.yaml` 等；缺失时跳过。该根排除顶层 `logs/`、`backups/` 和 `station.lock`。`--plan` 只列出路径，不输出 token 或密钥内容。
 
 代码、虚拟环境、云端对象、外部工具工作目录、只在进程环境里的 API Key 不会被收集，需要另行保存。显式指定的缺失路径会报错，不会生成空备份。
