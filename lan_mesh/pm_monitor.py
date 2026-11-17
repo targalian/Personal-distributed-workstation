@@ -12,6 +12,7 @@ PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证
 """
 import time
 import uuid
+from copy import deepcopy
 from typing import Optional
 
 import requests
@@ -20,6 +21,7 @@ from .agent_prompt import build_aggregation_prompt
 from .http_retry import auth_headers
 from .logger import get_logger
 from .pm_state import PMState
+from .pm_planner import PMPlanner
 from .runtime_usage import call_for_task
 
 logger = get_logger("pm.monitor")
@@ -48,6 +50,7 @@ class PMMonitor:
         self._local_takeover_tasks = set()  # 防重入: PM本地接管中的子任务
         self._last_reported_progress = -1.0  # BUG-034: 进度去重
         self._last_reported_completed = -1
+        self._replanning: set[str] = set()
 
     # ── 进度轮询 ──────────────────────────────────────────────────
 
@@ -197,6 +200,7 @@ class PMMonitor:
                     self.handle_subagent_failure(task_name, f"质量验证未通过: {quality.get('issues', '')}")
                     return
 
+            self._dispatch_replan_pending()
             self._dispatcher.try_dispatch_pending()
 
         # 优化5: 任务失败时触发接管策略 (跳过已在本地接管中的任务, 防止无限递归)
@@ -262,7 +266,7 @@ class PMMonitor:
 
     # ── 优化5: 失败接管 ───────────────────────────────────────────
 
-    def handle_subagent_failure(self, task_name: str, error_msg: str):
+    def handle_subagent_failure(self, task_name: str, error_msg: str) -> None:
         """三级策略: 同站重试 → 换站重试 → PM 本地接管。"""
         st = self._state
         with st.lock:
@@ -298,6 +302,9 @@ class PMMonitor:
                 }
                 task["input_data"] = input_data
                 self._dispatcher.dispatch_subtask(original_station, original_agent, task, sub, plan=st.plan)
+            return
+
+        if self._try_replan(task_name, error_msg):
             return
 
         # 策略2: 换站重试
@@ -336,6 +343,138 @@ class PMMonitor:
         self._report_escalation(task_name, error_msg, sub)
 
     # ── F2.5: 质量验证器 ───────────────────────────────────────
+
+    def _try_replan(self, task_name: str, error_msg: str) -> bool:
+        """Reserve a lineage budget, call LLM unlocked, then atomically splice."""
+        st = self._state
+        with st.lock:
+            if task_name in self._replanning:
+                return True
+            sub = next((s for s in st.plan.get("decomposition", [])
+                        if s.get("name") == task_name), None)
+            if sub is None or task_name in st.subtask_outputs:
+                return True
+            root = sub.get("_replan_root", task_name)
+            if st.replan_counts.get(root, 0) >= 1 or sum(st.replan_counts.values()) >= 5:
+                hint = f"\n上次失败原因: {error_msg[:500]}"
+                if hint not in sub.get("description", ""):
+                    sub["description"] = sub.get("description", "") + hint
+                logger.info("[PM] 子任务 '%s' 重规划预算已耗尽，继续接管", task_name)
+                return False
+            st.replan_counts[root] = st.replan_counts.get(root, 0) + 1
+            self._replanning.add(task_name)
+            plan, task = deepcopy(st.plan), deepcopy(st.task)
+            outputs = dict(st.subtask_outputs)
+        committed = False
+        try:
+            self._trace_replan(task_name, "attempt")
+            logger.info("[PM] 开始重规划失败子任务 '%s'", task_name)
+            planner = getattr(self._agent, "_planner", None) or PMPlanner(
+                self._pm_id, self._runtime, st, self._agent)
+            candidates = planner.replan_failed_subtask(task, plan, task_name, error_msg, outputs)
+            replacements = PMPlanner.validate_replan(plan, candidates)
+            with st.lock:
+                if not getattr(self._agent, "running", True) or st.task != task:
+                    return True
+                if st.plan != plan or task_name in st.subtask_outputs:
+                    return True
+                if not replacements:
+                    return False
+                previous = list(sub.get("depends_on", []))
+                for item in replacements:
+                    item.update(depends_on=previous, status="pending", _replan_root=root)
+                    previous = [item["name"]]
+                decomposition = st.plan["decomposition"]
+                index = next(i for i, s in enumerate(decomposition) if s["name"] == task_name)
+                decomposition[index:index + 1] = replacements
+                for item in decomposition:
+                    if task_name in item.get("depends_on", []):
+                        item["depends_on"] = list(dict.fromkeys(
+                            replacements[-1]["name"] if d == task_name else d
+                            for d in item["depends_on"]))
+                self._queue_replacements(task_name, replacements)
+                committed = True
+            logger.info("[PM] 子任务 '%s' 已重规划为 %s", task_name,
+                        [s["name"] for s in replacements])
+            self._trace_replan(task_name, ', '.join(s['name'] for s in replacements))
+            self._agent.sync_subtasks()
+            self._dispatch_replan_pending()
+            return True
+        except Exception as exc:
+            logger.warning("[PM] 子任务 '%s' 重规划异常: %s", task_name, exc)
+            return committed
+        finally:
+            with st.lock:
+                self._replanning.discard(task_name)
+
+    def _trace_replan(self, task_name: str, outcome: str) -> None:
+        """Tracing must never interrupt scheduling, including failed LLM attempts."""
+        try:
+            from . import runtime_trace
+            runtime_trace.trace_task_event(self._state.task.get("task_id", ""),
+                "subtask_replan", detail=f"{task_name}: {outcome}", pm_id=self._pm_id)
+        except Exception:
+            pass
+
+    def _queue_replacements(self, task_name: str, replacements: list[dict]) -> None:
+        """Update waiting references and retire failed execution under the state lock."""
+        st = self._state
+        station = st.task_station.pop(task_name, {})
+        st.task_agent.pop(task_name, None)
+        st.pending_subtasks.pop(task_name, None)
+        st.dispatched.discard(task_name)
+        st.subtask_start_times.pop(task_name, None)
+        st.active_attempts.pop(task_name, None)
+        for member_id, member in list(st.subagents.items()):
+            if member.get("current_task") == task_name:
+                del st.subagents[member_id]
+        for info in st.pending_subtasks.values():
+            sub = info["sub"]
+            if task_name in sub.get("depends_on", []):
+                sub["depends_on"] = [replacements[-1]["name"] if d == task_name else d
+                                     for d in sub["depends_on"]]
+        for sub in replacements:
+            name = sub["name"]
+            st.retry_counts[name] = 0
+            st.pending_subtasks[name] = {
+                "sub": sub, "station": station, "agent_info": {}, "replanned": True}
+
+    def _dispatch_replan_pending(self) -> None:
+        """Create workers for ready replacements; local fallback preserves dependencies."""
+        st = self._state
+        with st.lock:
+            if not getattr(self._agent, "running", True):
+                return
+            ready = [name for name, info in st.pending_subtasks.items()
+                     if info.get("replanned") and all(
+                         dep in st.subtask_outputs for dep in info["sub"].get("depends_on", []))]
+            items = [st.pending_subtasks.pop(name) for name in ready]
+            st.dispatched.update(ready)
+        for info in items:
+            sub, station = info["sub"], info["station"]
+            task = deepcopy(st.task)
+            task.setdefault("input_data", {})["_dependency_outputs"] = {
+                dep: st.subtask_outputs[dep] for dep in sub["depends_on"]}
+            agent_info = None
+            if station:
+                try:
+                    agent_id = f"sub-{uuid.uuid4().hex[:10]}"
+                    prompt = self._dispatcher._build_subagent_prompt_for_sub(
+                        task, sub, st.plan, agent_id, sub["name"])
+                    agent_info = self._dispatcher._create_subagent_on_station(
+                        station, sub["name"], [sub["skill"]], sub["description"],
+                        system_prompt=prompt, preferred_agent_id=agent_id)
+                except Exception as exc:
+                    logger.warning("[PM] 重规划子任务创建失败: %s", exc)
+            if agent_info:
+                with st.lock:
+                    st.task_station[sub["name"]] = station
+                    st.task_agent[sub["name"]] = agent_info
+                    st.subagents[agent_info["agent_id"]] = {
+                        **agent_info, "current_task": sub["name"], "status": "pending"}
+                self._dispatcher.dispatch_subtask(station, agent_info, task, sub, plan=st.plan)
+            else:
+                self._dispatcher.execute_subtask_locally(task, sub)
 
     def _verify_output_quality(self, task_name: str, output) -> Optional[dict]:
         """F2.5: 生成-验证器模式 — 用 LLM 评估子任务输出质量。"""

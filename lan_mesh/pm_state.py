@@ -42,6 +42,7 @@ class PMState:
     # ── 失败接管 ──
     retry_counts: dict = field(default_factory=dict)       # task_name → 已重试次数
     max_retries: int = 2
+    replan_counts: dict = field(default_factory=dict)      # original subtask -> replan attempts
 
     # ── 超时保护 ──
     global_timeout: float = 3600.0
@@ -81,6 +82,7 @@ class PMState:
                 "teams": dict(self.teams),
                 "subagents": dict(self.subagents),
                 "retry_counts": dict(self.retry_counts),
+                "replan_counts": dict(self.replan_counts),
                 "max_retries": self.max_retries,
                 "global_timeout": self.global_timeout,
                 "subtask_timeout": self.subtask_timeout,
@@ -117,6 +119,7 @@ class PMState:
         self.teams = dict(data.get("teams", {}) or {})
         self.subagents = dict(data.get("subagents", {}) or {})
         self.retry_counts = dict(data.get("retry_counts", {}) or {})
+        self.replan_counts = dict(data.get("replan_counts", {}) or {})
         self.max_retries = int(data.get("max_retries", 2))
         self.global_timeout = float(data.get("global_timeout", 3600.0))
         self.subtask_timeout = float(data.get("subtask_timeout", 1800.0))

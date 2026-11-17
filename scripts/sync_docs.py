@@ -322,6 +322,7 @@ MAPPING = {
     "tests/test_harness_stream.py": "10-test-loop",
     "tests/test_services.py": "10-test-loop",
     "tests/test_pm_services.py": "10-test-loop",
+    "tests/test_pm_replan.py": "10-test-loop",
     "test_bug/run_loop.py": "10-test-loop",
     "test_bug/dev_loop.py": "10-test-loop",
     "test_bug/nightly_loop.py": "10-test-loop",
