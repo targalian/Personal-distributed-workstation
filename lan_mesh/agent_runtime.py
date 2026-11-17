@@ -390,45 +390,9 @@ TOKEN_PLAN_OPENAI_BASE = "https://token-plan.cn-beijing.maas.aliyuncs.com/compat
 TOKEN_PLAN_ANTHROPIC_BASE = "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic"
 
 # 支持的 CLI Agent 后端 (name → 检测命令 + 调用模板)
-CLI_AGENT_BACKENDS = {
-    "claude": {
-        "detect": "claude",
-        "build_cmd": lambda prompt, cwd: [
-            "claude", "--print", "--output-format", "json",
-            "--model", "qwen3.8-max",
-            "--max-turns", "30", prompt,
-        ],
-        "timeout": 600,
-        "description": "Claude Code CLI — 自主编码 Agent (Token Plan qwen3.8-max)",
-    },
-    "aider": {
-        "detect": "aider",
-        "build_cmd": lambda prompt, cwd: [
-            "aider", "--yes", "--no-auto-commits",
-            "--model", "openai/qwen3.8-max",
-            "--architect-model", "openai/qwen3.6-flash",
-            "--message", prompt,
-        ],
-        "timeout": 600,
-        "description": "Aider — Git-aware 双模型编码 Agent (Token Plan 零成本)",
-    },
-    "codex": {
-        "detect": "codex",
-        # codex exec: 非交互模式 (旧 CLI 的 --quiet/--full-auto 已废弃)
-        # -s workspace-write: 沙箱限制写入范围
-        # -C cwd: 显式指定工作目录 (subprocess cwd 之外的双重保险)
-        # --output-last-message: 单文件输出最后消息, 便于机器读取
-        "build_cmd": lambda prompt, cwd: [
-            "codex", "exec",
-            "-s", "workspace-write",
-            "-C", cwd,
-            "--output-last-message", os.path.join(cwd, ".codex_last_message.txt"),
-            prompt,
-        ],
-        "timeout": 600,
-        "description": "OpenAI Codex CLI - 沙箱编码 Agent (exec 非交互模式)",
-    },
-}
+from .harness import registry as _harness_registry
+
+CLI_AGENT_BACKENDS = _harness_registry.legacy_specs()
 
 # CLI Agent 默认超时 (s), 可通过环境变量覆盖
 CLI_AGENT_TIMEOUT = int(os.environ.get("CLI_AGENT_TIMEOUT", "600"))

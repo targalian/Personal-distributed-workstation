@@ -261,6 +261,10 @@ MAPPING = {
     # 04-execution-engine — Worker/Agent/工具/技能
     "lan_mesh/worker.py": "04-execution-engine",
     "lan_mesh/agent_runtime.py": "04-execution-engine",
+    "lan_mesh/harness/spec.py": "04-execution-engine",
+    "lan_mesh/harness/events.py": "04-execution-engine",
+    "lan_mesh/harness/adapter.py": "04-execution-engine",
+    "lan_mesh/harness/registry.py": "04-execution-engine",
     "lan_mesh/agent_card.py": "04-execution-engine",
     "lan_mesh/agent_prompt.py": "04-execution-engine",
     "lan_mesh/tool_registry.py": "04-execution-engine",
@@ -312,6 +316,7 @@ MAPPING = {
     'tests/test_shadow_dev.py': '10-test-loop',
     'tests/test_workstation_optimizer.py': '10-test-loop',
     "tests/test_core.py": "10-test-loop",
+    "tests/test_harness_registry.py": "10-test-loop",
     "tests/test_services.py": "10-test-loop",
     "tests/test_pm_services.py": "10-test-loop",
     "test_bug/run_loop.py": "10-test-loop",

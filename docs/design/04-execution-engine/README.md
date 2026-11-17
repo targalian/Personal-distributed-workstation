@@ -27,6 +27,10 @@ Worker 侧的任务执行能力：守护进程、Agent 运行时、能力卡片�
 | browser_routes.py | Explicit human browser commands share mesh authentication and task scope checks. |
 | browser_session_service.py | Optional task browser capability with isolated contexts and serialized control transfer. |
 | lan_mesh/builtin_skills/ | Yomk C++/Python 与工作站适配内置技能及完整参考资料 |
+| lan_mesh/harness/adapter.py | Adapter contract and conservative plain-output implementation. |
+| lan_mesh/harness/events.py | Common event and outcome records for CLI harness adapters. |
+| lan_mesh/harness/registry.py | Registry of CLI harness specs and the legacy runtime compatibility view. |
+| lan_mesh/harness/spec.py | Immutable metadata for CLI harness backends. |
 | mcp_client.py | MCP 客户端 — 轻量级 JSON-RPC 2.0 客户端 |
 | mcp_connection_service.py | McpConnectionService: domain behavior separated from the public compatibility facade. |
 | mcp_gateway.py | MCP 网关 — 中央工具调度枢纽 |
