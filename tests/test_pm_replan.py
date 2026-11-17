@@ -78,8 +78,57 @@ def test_same_station_retries_happen_before_replanning(setup_pm):
     st.retry_counts.clear()
     monitor.handle_subagent_failure("B", "boom")
     runtime._call_llm_with_routing.assert_not_called()
+    assert st.replan_counts == {}
+    dispatcher.get_available_stations.assert_not_called()
+    dispatcher.execute_subtask_locally.assert_not_called()
     assert st.retry_counts["B"] == 1
     assert dispatcher.dispatch_subtask.call_args.args[3]["name"] == "B"
+
+
+def test_other_station_retry_happens_before_replanning(setup_pm):
+    st, runtime, agent, dispatcher, monitor = setup_pm
+    agent._planner = SimpleNamespace(replan_failed_subtask=Mock())
+    original = deepcopy(st.plan)
+    other = {"device_id": "other", "ip": "127.0.0.2", "api_port": 2}
+    dispatcher.get_available_stations.return_value = [st.task_station["B"], other]
+    monitor.handle_subagent_failure("B", "boom")
+    agent._planner.replan_failed_subtask.assert_not_called()
+    runtime._call_llm_with_routing.assert_not_called()
+    assert st.replan_counts == {}
+    assert st.plan == original
+    assert st.retry_counts["B"] == st.max_retries + 1
+    assert st.task_station["B"] == other
+    dispatcher.dispatch_subtask.assert_called_once_with(
+        other, st.task_agent["B"], st.task, st.plan["decomposition"][1], plan=st.plan)
+    dispatcher.execute_subtask_locally.assert_not_called()
+
+
+@pytest.mark.parametrize("valid", [True, False])
+def test_replanning_precedes_local_takeover_when_no_other_station(setup_pm, valid):
+    st, runtime, _, dispatcher, monitor = setup_pm
+    st.subtask_outputs["A"] = "completed evidence"
+    dispatcher.get_available_stations.return_value = [st.task_station["B"]]
+    events = []
+
+    def respond(*args):
+        dispatcher.get_available_stations.assert_called_once_with()
+        dispatcher.execute_subtask_locally.assert_not_called()
+        events.append("replan")
+        return {"content": json.dumps([sub("replacement")]) if valid else "[]"}
+
+    runtime._call_llm_with_routing.side_effect = respond
+    dispatcher.execute_subtask_locally.side_effect = lambda *args: events.append("local")
+    monitor.handle_subagent_failure("B", "boom")
+    runtime._call_llm_with_routing.assert_called_once()
+    assert st.replan_counts == {"B": 1}
+    assert events == (["replan"] if valid else ["replan", "local"])
+    if valid:
+        assert dispatcher.dispatch_subtask.call_args.args[3]["name"] == "replacement"
+        monitor._report_escalation.assert_not_called()
+    else:
+        dispatcher.dispatch_subtask.assert_not_called()
+        assert dispatcher.execute_subtask_locally.call_args.args[1]["name"] == "B"
+        monitor._report_escalation.assert_called_once()
 
 
 def test_lineage_cannot_replan_again_and_records_error(setup_pm):

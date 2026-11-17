@@ -125,8 +125,10 @@ def infer_result_status(result: object) -> tuple[str, str]:
     """
     if not isinstance(result, dict):
         return "completed", ""
+    if result.get("error_class") == "budget_exceeded" or result.get("stop_reason") == "budget_exceeded":
+        return "failed", str(result.get("error") or result.get("result") or "budget_exceeded")
     inner = str(result.get("status", "") or "").strip().lower()
-    if inner in ("failed", "timeout", "error", "cancelled", "max_iterations_reached"):
+    if inner in ("failed", "timeout", "error", "cancelled", "max_iterations_reached", "budget_exceeded"):
         err = str(result.get("error", "") or result.get("stderr", "") or result.get("result", "") or inner)
         return ("cancelled" if inner == "cancelled" else "failed"), err
     err = str(result.get("error", "") or "")

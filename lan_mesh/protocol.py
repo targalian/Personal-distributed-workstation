@@ -307,6 +307,7 @@ class SubTask:
     completed_at: float = 0.0
     error: str = ""
     executor: dict = field(default_factory=dict)
+    budget: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -323,6 +323,7 @@ MAPPING = {
     "tests/test_services.py": "10-test-loop",
     "tests/test_pm_services.py": "10-test-loop",
     "tests/test_pm_replan.py": "10-test-loop",
+    "tests/test_subtask_budget.py": "10-test-loop",
     "test_bug/run_loop.py": "10-test-loop",
     "test_bug/dev_loop.py": "10-test-loop",
     "test_bug/nightly_loop.py": "10-test-loop",

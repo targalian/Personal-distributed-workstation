@@ -5,7 +5,7 @@ PM 进度监控器 — 进度收集、超时检测、失败接管、质量验证
 1. progress_loop 轮询收集进度
 2. 接收子 Agent 进度上报
 3. 超时检测 (全局 + 子任务)
-4. 失败接管 (三级策略: 同站重试 → 换站重试 → PM 本地接管)
+4. 失败接管 (同站重试 → 换站重试 → 重规划 → PM 本地接管；预算耗尽直接重规划)
 5. 质量验证 (F2.5 生成-验证器模式)
 6. 结果聚合 (优化4)
 7. 升级上报 (优化10)
@@ -212,6 +212,12 @@ class PMMonitor:
                 self._local_takeover_tasks.discard(task_name)
             else:
                 error_msg = report.get("message", "未知错误")
+                execution = report.get("execution_result") or {}
+                outputs = (report, report.get("output"), execution, execution.get("output"))
+                if any(isinstance(item, dict) and
+                       (item.get("error_class") == "budget_exceeded" or
+                        item.get("stop_reason") == "budget_exceeded") for item in outputs):
+                    error_msg = f"budget_exceeded: {error_msg}"
                 logger.error("[%s] 子任务 '%s' 失败: %s", self._pm_id[:8], task_name, error_msg[:200])
                 self.handle_subagent_failure(task_name, error_msg)
 
@@ -267,7 +273,12 @@ class PMMonitor:
     # ── 优化5: 失败接管 ───────────────────────────────────────────
 
     def handle_subagent_failure(self, task_name: str, error_msg: str) -> None:
-        """三级策略: 同站重试 → 换站重试 → PM 本地接管。"""
+        """同站重试 → 换站重试 → 重规划 → 本地接管；预算耗尽直接重规划。"""
+        if "budget_exceeded" in error_msg:
+            print(f"[PM] 子任务预算耗尽，直接重规划: {task_name}")
+            if not self._try_replan(task_name, error_msg):
+                self._report_escalation(task_name, error_msg, {})
+            return
         st = self._state
         with st.lock:
             retry_count = st.retry_counts.get(task_name, 0)
@@ -304,9 +315,6 @@ class PMMonitor:
                 self._dispatcher.dispatch_subtask(original_station, original_agent, task, sub, plan=st.plan)
             return
 
-        if self._try_replan(task_name, error_msg):
-            return
-
         # 策略2: 换站重试
         stations = self._dispatcher.get_available_stations()
         other_stations = [s for s in stations
@@ -334,6 +342,10 @@ class PMMonitor:
                 st.task_station[task_name] = new_station
                 st.task_agent[task_name] = new_agent_info
                 self._dispatcher.dispatch_subtask(new_station, new_agent_info, st.task, sub, plan=st.plan)
+            return
+
+        # 同站、换站重试均不可用后，再尝试重规划。
+        if self._try_replan(task_name, error_msg):
             return
 
         # 策略3: PM 本地接管 (最终回退, 失败后不再递归)
@@ -589,7 +601,7 @@ class PMMonitor:
     # ── 优化10: 升级上报 ──────────────────────────────────────────
 
     def _report_escalation(self, task_name: str, error_msg: str, sub: dict):
-        """三级接管全失败后, 上报 escalated 状态到 Secretary。"""
+        """自动恢复不可用或预算耗尽无法重规划时，上报 escalated。"""
         st = self._state
         escalation = {
             "pm_id": self._pm_id,
@@ -610,7 +622,7 @@ class PMMonitor:
         self._agent.report_status("escalated")
         self._agent.report_progress(
             -2.0, "escalated",
-            f"子任务 '{task_name}' 三级接管全失败: {error_msg[:200]}",
+            f"子任务 '{task_name}' 自动恢复不可用: {error_msg[:200]}",
             reporter_type="pm_escalation",
             task_name=task_name,
         )

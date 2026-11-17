@@ -59,6 +59,9 @@ class RuntimeReactService(ComponentService):
               state: dict, budget: ReactContextBudget) -> dict:
         tools = self.owner._build_openai_tools_schema(registry)
         maximum = bounded_int(data.get('max_iterations'), 30, 1, 100)
+        limits = data.get('_budget') or {}
+        maximum = min(maximum, bounded_int(limits.get('max_steps'), maximum, 1, 100))
+        max_tokens = bounded_int(limits.get('max_tokens'), 0, 1, 2**63 - 1)
         archive = state['_archive']
         previous_failure, repeated_failures = '', 0
         for iteration in range(1, maximum + 1):
@@ -77,6 +80,10 @@ class RuntimeReactService(ComponentService):
             archive.append({**(resp.get('message') or {}), 'role': 'assistant'})
             if self.owner._cancel_event.is_set():
                 return self._finish(state, budget, iteration, 'cancelled', '任务已取消')
+            used = state['usage']['input_tokens'] + state['usage']['output_tokens']
+            if max_tokens and used >= max_tokens:
+                return self._finish(state, budget, iteration, 'failed',
+                                    f'子任务 token 预算耗尽 ({used}/{max_tokens})', 'budget_exceeded')
             if resp.get('_error') or resp.get('model') == 'none':
                 error = (resp.get('message') or {}).get('content') or '模型调用失败'
                 print(f"[AgentRuntime] ReAct 模型调用失败: {error}")

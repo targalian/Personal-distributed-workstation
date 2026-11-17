@@ -49,7 +49,7 @@ class RuntimeCliService(ComponentService):
         adapter = registry.get(backend)
         request = dict(argv=cmd, cwd=cwd, env=policy._build_cli_env(backend), timeout=timeout,
                        cancel_event=self.owner._cancel_event,
-                       budget_usd=input_data.get('budget_usd'), max_output=policy.CLI_AGENT_MAX_OUTPUT)
+                       budget_usd=(input_data.get('_budget') or {}).get('budget_usd', input_data.get('budget_usd')), max_output=policy.CLI_AGENT_MAX_OUTPUT)
         started = policy.time.monotonic()
         output = {}
         for event in adapter.stream(request):

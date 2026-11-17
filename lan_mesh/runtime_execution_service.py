@@ -78,6 +78,7 @@ class RuntimeExecutionService(ComponentService):
             return {'output': {}, 'status': 'failed', 'error': f'未知的技能类型: {skill}'}
         self.owner._local.current_skill = skill
         input_data = dict(subtask.get('input_data', {}))
+        input_data['_budget'] = dict(subtask.get('budget') or input_data.get('_budget') or {})
         input_data['_model_preference'] = model_pref
         input_data['_fallback_models'] = subtask.get('fallback_models', [])
         input_data['_trace_id'] = trace_id
