@@ -1,0 +1,850 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "G01",
+      "name": "Release meeting summary",
+      "category": "doc",
+      "description": "Read meeting.txt. Write summary.md with exactly three numbered decisions and fewer than 200 words. Include the responsible owner and due date for each decision.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "meeting.txt": "Decision: ship v2 on Friday; owner Lin. Decision: backup SQLite daily from Monday; owner Mei. Decision: audit keys by Thursday; owner Bo. Discussion: a dark theme is deferred."
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "summary.md"
+        },
+        {
+          "type": "file_contains",
+          "path": "summary.md",
+          "text": "Lin"
+        },
+        {
+          "type": "file_contains",
+          "path": "summary.md",
+          "text": "Friday"
+        },
+        {
+          "type": "file_contains",
+          "path": "summary.md",
+          "text": "Mei"
+        },
+        {
+          "type": "file_contains",
+          "path": "summary.md",
+          "text": "Monday"
+        },
+        {
+          "type": "file_contains",
+          "path": "summary.md",
+          "text": "Bo"
+        },
+        {
+          "type": "file_contains",
+          "path": "summary.md",
+          "text": "Thursday"
+        }
+      ],
+      "budget": {
+        "max_steps": 10,
+        "max_tokens": 80000
+      },
+      "difficulty": "simple"
+    },
+    {
+      "id": "G02",
+      "name": "Translate a quickstart",
+      "category": "doc",
+      "description": "Translate guide.txt to English in guide-en.md. Preserve the command verbatim and retain the port and local-network restriction.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "guide.txt": "启动工作站：python main.py station --port 8080\n仅在局域网访问。"
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "guide-en.md"
+        },
+        {
+          "type": "file_contains",
+          "path": "guide-en.md",
+          "text": "python main.py station --port 8080"
+        },
+        {
+          "type": "file_contains",
+          "path": "guide-en.md",
+          "text": "8080"
+        }
+      ],
+      "budget": {
+        "max_steps": 10,
+        "max_tokens": 80000
+      },
+      "difficulty": "simple"
+    },
+    {
+      "id": "G03",
+      "name": "Write API reference",
+      "category": "doc",
+      "description": "Read api.json and write api.md documenting method, route, required request field, and both response statuses. Do not invent endpoints.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "api.json": "{\"method\": \"POST\", \"path\": \"/v1/jobs\", \"body\": {\"title\": \"required string\"}, \"responses\": {\"201\": \"job created\", \"422\": \"invalid title\"}}"
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "api.md"
+        },
+        {
+          "type": "file_contains",
+          "path": "api.md",
+          "text": "POST"
+        },
+        {
+          "type": "file_contains",
+          "path": "api.md",
+          "text": "/v1/jobs"
+        },
+        {
+          "type": "file_contains",
+          "path": "api.md",
+          "text": "title"
+        },
+        {
+          "type": "file_contains",
+          "path": "api.md",
+          "text": "201"
+        },
+        {
+          "type": "file_contains",
+          "path": "api.md",
+          "text": "422"
+        }
+      ],
+      "budget": {
+        "max_steps": 10,
+        "max_tokens": 80000
+      },
+      "difficulty": "simple"
+    },
+    {
+      "id": "G04",
+      "name": "Reconcile conflicting requirements",
+      "category": "doc",
+      "description": "Read notes.txt. Produce decision.md with sections Scope, Deferred, Acceptance. The latest decision wins. Explicitly record why PDF is deferred and the CSV release deadline.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "notes.txt": "Monday: export CSV and PDF. Tuesday FINAL: CSV only for November 30; PDF deferred because no renderer is available. Acceptance: UTF-8 header id,total and one row per order."
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "decision.md"
+        },
+        {
+          "type": "file_contains",
+          "path": "decision.md",
+          "text": "Scope"
+        },
+        {
+          "type": "file_contains",
+          "path": "decision.md",
+          "text": "Deferred"
+        },
+        {
+          "type": "file_contains",
+          "path": "decision.md",
+          "text": "Acceptance"
+        },
+        {
+          "type": "file_contains",
+          "path": "decision.md",
+          "text": "CSV"
+        },
+        {
+          "type": "file_contains",
+          "path": "decision.md",
+          "text": "PDF"
+        },
+        {
+          "type": "file_contains",
+          "path": "decision.md",
+          "text": "November 30"
+        },
+        {
+          "type": "file_contains",
+          "path": "decision.md",
+          "text": "id,total"
+        }
+      ],
+      "budget": {
+        "max_steps": 10,
+        "max_tokens": 80000
+      },
+      "difficulty": "simple"
+    },
+    {
+      "id": "G05",
+      "name": "Security review of deployment notes",
+      "category": "doc",
+      "description": "Review deploy.txt and create review.md with Findings and Remediation sections, discussing credential exposure, bind address and missing backups. Refer to environment variables rather than inventing credentials.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "deploy.txt": "Bind the admin API to 0.0.0.0 without authentication. Put credentials directly in config committed to git. SQLite backups are not scheduled."
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "review.md"
+        },
+        {
+          "type": "file_contains",
+          "path": "review.md",
+          "text": "Findings"
+        },
+        {
+          "type": "file_contains",
+          "path": "review.md",
+          "text": "Remediation"
+        },
+        {
+          "type": "file_contains",
+          "path": "review.md",
+          "text": "0.0.0.0"
+        },
+        {
+          "type": "file_contains",
+          "path": "review.md",
+          "text": "SQLite"
+        }
+      ],
+      "budget": {
+        "max_steps": 15,
+        "max_tokens": 80000
+      },
+      "difficulty": "moderate"
+    },
+    {
+      "id": "G06",
+      "name": "Fix empty mean input",
+      "category": "code",
+      "description": "Fix mean.py: mean([]) must return None; nonempty lists keep arithmetic mean. Create test_mean.py covering empty and [2,4]. Run python -m unittest test_mean and print MEAN_OK only after it passes.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "mean.py": "def mean(values):\n    return sum(values) / len(values)\n"
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "test_mean.py"
+        },
+        {
+          "type": "file_contains",
+          "path": "test_mean.py",
+          "text": "assertIsNone"
+        },
+        {
+          "type": "file_contains",
+          "path": "test_mean.py",
+          "text": "assertEqual"
+        },
+        {
+          "type": "stdout_contains",
+          "text": "MEAN_OK"
+        },
+        {
+          "type": "file_exists",
+          "path": "mean.py"
+        }
+      ],
+      "budget": {
+        "max_steps": 10,
+        "max_tokens": 80000
+      },
+      "difficulty": "simple"
+    },
+    {
+      "id": "G07",
+      "name": "Fix inclusive pagination",
+      "category": "code",
+      "description": "Fix page.py so page([1,2,3,4,5],2,2) gives [3,4], page 1 gives [1,2], and page 4 gives []. Page numbers start at 1. Write test_page.py using unittest and run it. Print PAGE_OK after success.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "page.py": "def page(items, number, size):\n    start = number * size\n    return items[start:start + size]\n"
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "test_page.py"
+        },
+        {
+          "type": "file_contains",
+          "path": "test_page.py",
+          "text": "[3, 4]"
+        },
+        {
+          "type": "file_contains",
+          "path": "test_page.py",
+          "text": "assertEqual"
+        },
+        {
+          "type": "stdout_contains",
+          "text": "PAGE_OK"
+        },
+        {
+          "type": "file_exists",
+          "path": "page.py"
+        }
+      ],
+      "budget": {
+        "max_steps": 10,
+        "max_tokens": 80000
+      },
+      "difficulty": "simple"
+    },
+    {
+      "id": "G08",
+      "name": "Stable deduplication",
+      "category": "code",
+      "description": "Implement unique(values) in unique.py preserving first occurrence order. Add a runnable unittest file test_unique.py covering empty, repeated and already unique lists. Run it and print UNIQUE_OK.",
+      "skill": "react_agent",
+      "workspace_files": {},
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "unique.py"
+        },
+        {
+          "type": "file_contains",
+          "path": "unique.py",
+          "text": "def unique"
+        },
+        {
+          "type": "stdout_contains",
+          "text": "UNIQUE_OK"
+        },
+        {
+          "type": "file_exists",
+          "path": "test_unique.py"
+        }
+      ],
+      "budget": {
+        "max_steps": 10,
+        "max_tokens": 80000
+      },
+      "difficulty": "simple"
+    },
+    {
+      "id": "G09",
+      "name": "Repair mutable default state",
+      "category": "code",
+      "description": "Fix cart.py so independent add calls do not share lists, but explicitly passed lists are mutated. Add test_cart.py with both regression cases, run unittest and print CART_OK.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "cart.py": "def add(item, cart=[]):\n    cart.append(item)\n    return cart\n"
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "cart.py"
+        },
+        {
+          "type": "file_contains",
+          "path": "cart.py",
+          "text": "def add"
+        },
+        {
+          "type": "file_contains",
+          "path": "cart.py",
+          "text": "None"
+        },
+        {
+          "type": "stdout_contains",
+          "text": "CART_OK"
+        },
+        {
+          "type": "file_exists",
+          "path": "test_cart.py"
+        }
+      ],
+      "budget": {
+        "max_steps": 10,
+        "max_tokens": 80000
+      },
+      "difficulty": "simple"
+    },
+    {
+      "id": "G10",
+      "name": "Implement nested lookup",
+      "category": "code",
+      "description": "Create lookup.py exposing lookup(data, path, default=None), traversing dot-separated dict keys; missing or non-dict intermediates return default. Values of 0 and False must survive. Add and run unittest cases for all behaviors; print LOOKUP_OK.",
+      "skill": "react_agent",
+      "workspace_files": {},
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "lookup.py"
+        },
+        {
+          "type": "file_contains",
+          "path": "lookup.py",
+          "text": "def lookup"
+        },
+        {
+          "type": "stdout_contains",
+          "text": "LOOKUP_OK"
+        },
+        {
+          "type": "file_exists",
+          "path": "test_lookup.py"
+        }
+      ],
+      "budget": {
+        "max_steps": 15,
+        "max_tokens": 80000
+      },
+      "difficulty": "moderate"
+    },
+    {
+      "id": "G11",
+      "name": "Repair UTF-8 JSON loader",
+      "category": "code",
+      "description": "Fix loader.py to read UTF-8 JSON via a context manager and return parsed data. Missing file must still raise FileNotFoundError. Add unittest cases for Unicode and missing files, run them, then print LOADER_OK.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "loader.py": "import json\ndef load(path):\n    return json.load(open(path, encoding=\"ascii\"))\n"
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "loader.py"
+        },
+        {
+          "type": "file_contains",
+          "path": "loader.py",
+          "text": "utf-8"
+        },
+        {
+          "type": "file_contains",
+          "path": "loader.py",
+          "text": "with "
+        },
+        {
+          "type": "stdout_contains",
+          "text": "LOADER_OK"
+        },
+        {
+          "type": "file_exists",
+          "path": "test_loader.py"
+        }
+      ],
+      "budget": {
+        "max_steps": 10,
+        "max_tokens": 80000
+      },
+      "difficulty": "simple"
+    },
+    {
+      "id": "G12",
+      "name": "Implement dependency ordering",
+      "category": "code",
+      "description": "Implement topo(graph) in topo.py using only Python standard library. graph maps node to prerequisite names. Return each node once with prerequisites before consumers. Reject cycles with ValueError. Handle disconnected nodes and empty input. Add and run unittest covering chain, diamond, cycle and empty graph; print TOPO_OK.",
+      "skill": "react_agent",
+      "workspace_files": {},
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "topo.py"
+        },
+        {
+          "type": "file_contains",
+          "path": "topo.py",
+          "text": "def topo"
+        },
+        {
+          "type": "file_contains",
+          "path": "topo.py",
+          "text": "ValueError"
+        },
+        {
+          "type": "stdout_contains",
+          "text": "TOPO_OK"
+        },
+        {
+          "type": "file_exists",
+          "path": "test_topo.py"
+        }
+      ],
+      "budget": {
+        "max_steps": 15,
+        "max_tokens": 80000
+      },
+      "difficulty": "moderate"
+    },
+    {
+      "id": "G13",
+      "name": "Fix retry boundary",
+      "category": "code",
+      "description": "Fix retry.py: attempts means total calls, at least 1; attempts<=0 raises ValueError before calling fn. Re-raise the final failure. Add and run unittest for immediate success, recovery, exhaustion and invalid attempts. Print RETRY_OK.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "retry.py": "def retry(fn, attempts):\n    for _ in range(attempts + 1):\n        try:\n            return fn()\n        except Exception:\n            pass\n"
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "retry.py"
+        },
+        {
+          "type": "file_contains",
+          "path": "retry.py",
+          "text": "ValueError"
+        },
+        {
+          "type": "file_contains",
+          "path": "retry.py",
+          "text": "raise"
+        },
+        {
+          "type": "stdout_contains",
+          "text": "RETRY_OK"
+        },
+        {
+          "type": "file_exists",
+          "path": "test_retry.py"
+        }
+      ],
+      "budget": {
+        "max_steps": 15,
+        "max_tokens": 80000
+      },
+      "difficulty": "moderate"
+    },
+    {
+      "id": "G14",
+      "name": "Summarize sales CSV",
+      "category": "data",
+      "description": "Read sales.csv. Write totals.json mapping each region to the integer sum of amount, sorted by region; amounts can be negative. Use pretty JSON with a space after colons. Print SALES_OK when written.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "sales.csv": "region,amount\nEast,10\nWest,20\nEast,-3\nWest,5\n"
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "totals.json"
+        },
+        {
+          "type": "file_contains",
+          "path": "totals.json",
+          "text": "\"East\": 7"
+        },
+        {
+          "type": "file_contains",
+          "path": "totals.json",
+          "text": "\"West\": 25"
+        },
+        {
+          "type": "stdout_contains",
+          "text": "SALES_OK"
+        }
+      ],
+      "budget": {
+        "max_steps": 10,
+        "max_tokens": 80000
+      },
+      "difficulty": "simple"
+    },
+    {
+      "id": "G15",
+      "name": "Normalize contact records",
+      "category": "data",
+      "description": "Read contacts.json, trim and lowercase emails, discard empty emails, keep the first name for each normalized email. Write clean.json as a pretty JSON array sorted by email.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "contacts.json": "[{\"name\": \"Ada\", \"email\": \" ADA@EXAMPLE.ORG \"}, {\"name\": \"Duplicate\", \"email\": \"ada@example.org\"}, {\"name\": \"Bo\", \"email\": \"bo@example.org\"}, {\"name\": \"Empty\", \"email\": \"\"}]"
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "clean.json"
+        },
+        {
+          "type": "file_contains",
+          "path": "clean.json",
+          "text": "\"name\": \"Ada\""
+        },
+        {
+          "type": "file_contains",
+          "path": "clean.json",
+          "text": "\"email\": \"ada@example.org\""
+        },
+        {
+          "type": "file_contains",
+          "path": "clean.json",
+          "text": "\"email\": \"bo@example.org\""
+        }
+      ],
+      "budget": {
+        "max_steps": 10,
+        "max_tokens": 80000
+      },
+      "difficulty": "simple"
+    },
+    {
+      "id": "G16",
+      "name": "Aggregate service errors",
+      "category": "data",
+      "description": "Read events.jsonl; skip malformed lines and count errors by service when level is ERROR. Produce counts.json using pretty JSON and include malformed_lines. Print LOGS_OK.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "events.jsonl": "{\"service\":\"api\",\"level\":\"ERROR\"}\n{\"service\":\"worker\",\"level\":\"INFO\"}\nbroken\n{\"service\":\"api\",\"level\":\"ERROR\"}\n{\"service\":\"worker\",\"level\":\"ERROR\"}\n"
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "counts.json"
+        },
+        {
+          "type": "file_contains",
+          "path": "counts.json",
+          "text": "\"api\": 2"
+        },
+        {
+          "type": "file_contains",
+          "path": "counts.json",
+          "text": "\"worker\": 1"
+        },
+        {
+          "type": "file_contains",
+          "path": "counts.json",
+          "text": "\"malformed_lines\": 1"
+        },
+        {
+          "type": "stdout_contains",
+          "text": "LOGS_OK"
+        }
+      ],
+      "budget": {
+        "max_steps": 15,
+        "max_tokens": 80000
+      },
+      "difficulty": "moderate"
+    },
+    {
+      "id": "G17",
+      "name": "Join orders with customer data",
+      "category": "data",
+      "description": "Join customers.csv and orders.csv on customer_id. Write report.json as pretty JSON containing totals_by_customer keyed by customer name and orphan_order_ids. Sum only known-customer orders. Preserve orphan IDs as strings.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "customers.csv": "customer_id,name\nc1,Ada\nc2,Bo\n",
+        "orders.csv": "order_id,customer_id,amount\no1,c1,12\no2,c1,8\no3,c2,5\no4,c9,99\n"
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "report.json"
+        },
+        {
+          "type": "file_contains",
+          "path": "report.json",
+          "text": "\"Ada\": 20"
+        },
+        {
+          "type": "file_contains",
+          "path": "report.json",
+          "text": "\"Bo\": 5"
+        },
+        {
+          "type": "file_contains",
+          "path": "report.json",
+          "text": "\"orphan_order_ids\""
+        },
+        {
+          "type": "file_contains",
+          "path": "report.json",
+          "text": "\"o4\""
+        }
+      ],
+      "budget": {
+        "max_steps": 15,
+        "max_tokens": 80000
+      },
+      "difficulty": "moderate"
+    },
+    {
+      "id": "G18",
+      "name": "Design a migration with independent reviews",
+      "category": "collaboration",
+      "description": "Act as database designer, migration implementer and independent reviewer. Inspect schema.sql and requirements.txt. Produce migration.sql, rollback.sql, verification.sql, and handoff.md with sections Design, Implementation, Review, Acceptance. Add nullable email and an email index without changing users primary key or deleting records. Explain SQLite rollback limitations and verification queries. Review must check data preservation explicitly.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "schema.sql": "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\nINSERT INTO users VALUES (1,'Ada');\n",
+        "requirements.txt": "Add optional email to users. Existing rows survive. Index email. Supply upgrade, rollback guidance and verification SQL."
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "handoff.md"
+        },
+        {
+          "type": "file_contains",
+          "path": "handoff.md",
+          "text": "Design"
+        },
+        {
+          "type": "file_contains",
+          "path": "handoff.md",
+          "text": "Implementation"
+        },
+        {
+          "type": "file_contains",
+          "path": "handoff.md",
+          "text": "Review"
+        },
+        {
+          "type": "file_contains",
+          "path": "handoff.md",
+          "text": "Acceptance"
+        },
+        {
+          "type": "file_contains",
+          "path": "handoff.md",
+          "text": "SQLite"
+        },
+        {
+          "type": "file_exists",
+          "path": "migration.sql"
+        },
+        {
+          "type": "file_exists",
+          "path": "rollback.sql"
+        },
+        {
+          "type": "file_exists",
+          "path": "verification.sql"
+        }
+      ],
+      "budget": {
+        "max_steps": 25,
+        "max_tokens": 160000
+      },
+      "difficulty": "complex"
+    },
+    {
+      "id": "G19",
+      "name": "Build a parser and independently validate it",
+      "category": "collaboration",
+      "description": "Take three roles: specification author, parser implementer and independent tester. Parse sample.txt key=value lines, ignore comments and blanks, split only on first =, reject lines without = with ValueError, last duplicate wins. Create parser.py, test_parser.py and handoff.md with Specification, Implementation, Independent tests, Findings sections. Run unittest tests including every edge case and print PARSER_OK. Record test evidence and any issues in handoff.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "sample.txt": "# config\nhost=localhost\nmessage=a=b\nhost=mesh\n"
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "handoff.md"
+        },
+        {
+          "type": "file_contains",
+          "path": "handoff.md",
+          "text": "Specification"
+        },
+        {
+          "type": "file_contains",
+          "path": "handoff.md",
+          "text": "Implementation"
+        },
+        {
+          "type": "file_contains",
+          "path": "handoff.md",
+          "text": "Independent tests"
+        },
+        {
+          "type": "file_contains",
+          "path": "handoff.md",
+          "text": "Findings"
+        },
+        {
+          "type": "stdout_contains",
+          "text": "PARSER_OK"
+        },
+        {
+          "type": "file_exists",
+          "path": "parser.py"
+        },
+        {
+          "type": "file_exists",
+          "path": "test_parser.py"
+        }
+      ],
+      "budget": {
+        "max_steps": 25,
+        "max_tokens": 160000
+      },
+      "difficulty": "complex"
+    },
+    {
+      "id": "G20",
+      "name": "Reconcile billing with audit handoff",
+      "category": "collaboration",
+      "description": "Use analyst, implementer and independent auditor roles. Read ledger.csv and policy.txt. Build reconcile.py that computes reconciliation.json in pretty JSON with net_total, duplicate_ids and rejected_ids; duplicate IDs keep first occurrence. Write audit.md with Analysis, Implementation, Independent audit, Handoff sections explaining the arithmetic and invalid records. Independently check the output and print AUDIT_OK only after verification.",
+      "skill": "react_agent",
+      "workspace_files": {
+        "ledger.csv": "id,amount\na,10\nb,-2\na,99\nc,invalid\nd,5\n",
+        "policy.txt": "Amounts must be integers. First occurrence of duplicate id wins. Invalid amounts are rejected. Net total excludes duplicates and rejections."
+      },
+      "acceptance": [
+        {
+          "type": "file_exists",
+          "path": "reconciliation.json"
+        },
+        {
+          "type": "file_contains",
+          "path": "reconciliation.json",
+          "text": "\"net_total\": 13"
+        },
+        {
+          "type": "file_contains",
+          "path": "reconciliation.json",
+          "text": "\"duplicate_ids\""
+        },
+        {
+          "type": "file_contains",
+          "path": "reconciliation.json",
+          "text": "\"a\""
+        },
+        {
+          "type": "file_contains",
+          "path": "reconciliation.json",
+          "text": "\"rejected_ids\""
+        },
+        {
+          "type": "file_contains",
+          "path": "reconciliation.json",
+          "text": "\"c\""
+        },
+        {
+          "type": "stdout_contains",
+          "text": "AUDIT_OK"
+        },
+        {
+          "type": "file_exists",
+          "path": "reconcile.py"
+        },
+        {
+          "type": "file_exists",
+          "path": "audit.md"
+        }
+      ],
+      "budget": {
+        "max_steps": 25,
+        "max_tokens": 160000
+      },
+      "difficulty": "complex"
+    }
+  ]
+}

@@ -40,6 +40,7 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_evidence_usage.py | Acceptance provenance and durable per-attempt accounting regression scenarios. |
 | tests/test_execution_services.py | Worker concurrency, responsive execution API and native execution boundaries. |
 | tests/test_frontend_assets.py | Dashboard source/markup compatibility and release version resolution. |
+| tests/test_golden_eval.py | Golden evaluation schema, offline CLI and isolated runtime contract tests. |
 | tests/test_graph_compat.py | Behavioral coverage for plain plans, graph serialization and explicit executors. |
 | tests/test_harness_registry.py | Compatibility and adapter contract tests without launching CLI processes. |
 | tests/test_harness_stream.py | Offline JSONL subprocess, accounting and CLI policy regressions. |

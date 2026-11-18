@@ -319,6 +319,7 @@ MAPPING = {
     # 10-test-loop - 测试与验证循环
     'tests/test_shadow_dev.py': '10-test-loop',
     'tests/test_workstation_optimizer.py': '10-test-loop',
+    "tests/test_golden_eval.py": "10-test-loop",
     "tests/test_core.py": "10-test-loop",
     "tests/test_harness_registry.py": "10-test-loop",
     "tests/test_harness_stream.py": "10-test-loop",
@@ -342,6 +343,8 @@ MAPPING = {
     "AGENT_LOCKS.md": ("10-test-loop", "多 Agent 占用登记与交接看板 (根目录)"),
     ".githooks/": ("10-test-loop", "commit-msg / pre-push / post-merge / post-commit 钩子"),
     # 11-scripts-subprojects — 运维脚本/技能库/独立子项目
+    "scripts/golden_eval.py": "11-scripts-subprojects",
+    "scripts/golden_tasks.json": ("11-scripts-subprojects", "20 deterministic Golden evaluation tasks"),
     "scripts/sync_docs.py": "11-scripts-subprojects",
     "scripts/update_version.py": "11-scripts-subprojects",
     "scripts/dev_status.py": "11-scripts-subprojects",

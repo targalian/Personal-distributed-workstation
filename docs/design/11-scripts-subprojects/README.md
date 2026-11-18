@@ -15,6 +15,8 @@
 | scripts/check_unbound_names.py | 静态扫描 lan_mesh/ 中「被引用但从未绑定」的全局名。 |
 | scripts/dev_status.py | Loop Engineering - 全局开发态势看板 (只读, 人在回路外时的唯一观察入口)。 |
 | scripts/fix_task_project_binding.py | 一次性修正: 把 BUG-033 修复前对话派发的任务补绑到正式项目。 |
+| scripts/golden_eval.py | Offline-first Golden task validation, single-agent execution and planning evaluation. |
+| scripts/golden_tasks.json | 20 deterministic Golden evaluation tasks |
 | scripts/ship.ps1 | ★ 一键发货: 按 Agent 归属分批提交 + 调 sync_push 推送 |
 | scripts/start_workstation.bat | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/start_workstation.ps1 | 跨平台一键启动 Station (bat/ps1/sh) |
