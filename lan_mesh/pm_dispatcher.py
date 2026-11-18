@@ -591,6 +591,9 @@ class PMDispatcher:
             milestones=milestones,
             input_data=task.get("input_data", {}),
             extra_instructions=extra,
+            output_format=sub.get("output_format", ""),
+            boundaries=sub.get("boundaries"),
+            allowed_tools=sub.get("allowed_tools"),
         )
 
     # ── 内部工具 ──────────────────────────────────────────────────

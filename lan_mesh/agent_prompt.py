@@ -176,6 +176,43 @@ DEFAULT_ROLE = {
 
 # ── Prompt 构建器 ────────────────────────────────────────────────
 
+def _build_task_contract(
+    skill: str, output_format: str, allowed_tools: Optional[list],
+    forbidden_actions: Optional[list], boundaries: Optional[list],
+) -> str:
+    """渲染任务输出、工具和范围约定，仅作为提示词约束。"""
+    default_formats = {
+        "code_generation": "完整可运行代码 + 文件路径 + 简要说明",
+        "code_review": "问题清单（严重程度、文件路径、行号、修复建议）",
+        "document_summary": "结构化 Markdown 摘要",
+    }
+    result_format = output_format or default_formats.get(
+        skill, "结构化 Markdown + 简要执行说明")
+    tools = (
+        "- 仅允许使用以下工具: " + ("、".join(allowed_tools) or "无（不调用工具）")
+        if allowed_tools is not None else
+        "- 仅使用完成当前任务所必需且已获授权的工具。"
+    )
+    forbidden = [
+        "不得执行破坏性操作（删除数据、重置仓库等），除非任务明确授权。",
+        "不得读取或泄露与任务无关的密钥、密码及其他敏感信息。",
+        "不得修改任务范围外的文件、配置或资源。",
+    ]
+    forbidden.extend(forbidden_actions or [])
+    scope = [
+        "仅完成当前子任务，不接管队友任务，不擅自扩大任务范围。",
+        "遇到范围外需求或权限不足时停止相关操作并向 PM 上报阻塞。",
+    ]
+    scope.extend(boundaries or [])
+    return "\n".join([
+        "## 预期输出格式", result_format,
+        "以上格式用于最终任务产出，进度上报仍遵循通用协议。",
+        "## 工具使用约束", tools,
+        *(f"- {item}" for item in forbidden),
+        "## 任务边界", *(f"- {item}" for item in scope),
+    ])
+
+
 def build_subagent_prompt(
     pm_id: str,
     agent_id: str,
@@ -192,6 +229,10 @@ def build_subagent_prompt(
     milestones: Optional[list] = None,
     input_data: Optional[dict] = None,
     extra_instructions: str = "",
+    output_format: str = "",
+    allowed_tools: Optional[list] = None,
+    forbidden_actions: Optional[list] = None,
+    boundaries: Optional[list] = None,
 ) -> str:
     """构建子 Agent 的完整 system prompt。
 
@@ -215,11 +256,17 @@ def build_subagent_prompt(
         milestones: 关键里程碑列表 ["阶段1: xxx", "阶段2: xxx"]
         input_data: 任务输入数据 (JSON 序列化后注入)
         extra_instructions: PM 额外叮嘱 (自由文本)
+        output_format: 最终产出格式，空值时按技能选取默认格式
+        allowed_tools: 允许使用的工具；None 表示未另行限定，空列表表示禁用工具
+        forbidden_actions: 追加禁止操作，不替换默认约束
+        boundaries: 追加任务范围约束
 
     Returns:
         完整的 system prompt 字符串
     """
     sections = [BASE_SUBAGENT_PROMPT]
+    sections.append(_build_task_contract(
+        skill, output_format, allowed_tools, forbidden_actions, boundaries))
 
     # ── 角色定位 ──
     role_tpl = ROLE_TEMPLATES.get(skill, DEFAULT_ROLE)

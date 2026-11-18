@@ -361,7 +361,7 @@ class PMPlanner:
   "pattern": "single|orchestrator|teams|bus|shared_state",
   "team_size": 1,
   "decomposition": [
-    {{"name": "子任务名", "skill": "react_agent|code_generation|code_review|document_summary|shell_exec|file_ops|monitoring", "depends_on": [], "description": "子任务描述"}}
+    {{"name": "子任务名", "skill": "react_agent|code_generation|code_review|document_summary|shell_exec|file_ops|monitoring", "depends_on": [], "description": "子任务描述", "output_format": "明确的交付格式", "boundaries": ["允许修改的文件或资源范围、禁止越界的工作"], "budget": {{"max_steps": 10, "max_tokens": 80000}}}}
   ],
   "reasoning": "决策理由"
 }}
@@ -372,6 +372,9 @@ class PMPlanner:
 - moderate → orchestrator, team_size=2-3
 - complex → orchestrator 或 teams, team_size=3-5
 - decomposition 中的 depends_on 是子任务名称列表 (前序依赖)
+- 每个子任务给出 output_format（具体交付格式）和 boundaries（任务范围及非目标）。
+- 多步工具任务应给出 budget: {{"max_steps": 10, "max_tokens": 80000}}；按复杂度合理估算，通常不超过 10 步 / 80000 tokens，复杂任务最多建议 30 步 / 300000 tokens。
+- budget 是规划建议，不是运行时硬限制；不要为凑预算扩大任务范围。
 - skill 选择: 需要多步工具操作(读文件+执行命令+写文件) → react_agent; 纯代码生成 → code_generation; 纯审查 → code_review
 
 自主执行原则 (极其重要):
