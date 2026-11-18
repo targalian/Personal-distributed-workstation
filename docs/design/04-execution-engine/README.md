@@ -23,6 +23,7 @@ Worker 侧的任务执行能力：守护进程、Agent 运行时、能力卡片�
 | artifact_lock.py | Process-local execution guards shared by artifact writers, replication and cleanup. |
 | artifact_management_routes.py | Additional scoped artifact management endpoints on Station and standalone Worker. |
 | artifact_management_service.py | Yomk service for scoped artifact retention and private execution replicas. |
+| artifact_refs.py | 子任务产出文件引用、有限摘要与共享目录内的安全读取。 |
 | artifact_retention.py | Explicit retention previews protect active tasks, uncertain tools and acceptance evidence. |
 | browser_routes.py | Explicit human browser commands share mesh authentication and task scope checks. |
 | browser_session_service.py | Optional task browser capability with isolated contexts and serialized control transfer. |

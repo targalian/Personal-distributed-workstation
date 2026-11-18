@@ -18,6 +18,7 @@ from typing import Optional
 import requests
 
 from .agent_prompt import build_aggregation_prompt
+from .artifact_refs import DEFAULT_LIMIT, store_output, summarize
 from .http_retry import auth_headers
 from .logger import get_logger
 from .pm_state import PMState
@@ -466,7 +467,8 @@ class PMMonitor:
             sub, station = info["sub"], info["station"]
             task = deepcopy(st.task)
             task.setdefault("input_data", {})["_dependency_outputs"] = {
-                dep: st.subtask_outputs[dep] for dep in sub["depends_on"]}
+                dep: self._summarize_output(dep, st.subtask_outputs[dep])
+                for dep in sub["depends_on"]}
             agent_info = None
             if station:
                 try:
@@ -539,6 +541,21 @@ class PMMonitor:
 
     # ── 优化4: 结果聚合 ───────────────────────────────────────────
 
+    def _summarize_output(self, name: str, output: object) -> str:
+        """保存原始产出；共享目录不可写时仍提供有限摘要。"""
+        from .config import get_shared_folder, load_config
+
+        text = output if isinstance(output, str) else str(output)
+        if len(text) <= DEFAULT_LIMIT:
+            return text
+        ref = None
+        try:
+            shared = get_shared_folder(load_config(), "worker")
+            ref = store_output(str(shared), self._state.task.get("task_id", "unknown"), name, text)
+        except Exception as exc:
+            print(f"[PM] 子任务产出保存失败: {name}: {exc}")
+        return summarize(text, ref=ref)
+
     def aggregate_results(self):
         """收集所有子任务结果, 调用 LLM 聚合为最终交付物。"""
         st = self._state
@@ -572,7 +589,9 @@ class PMMonitor:
 
         logger.info("[%s] 开始聚合 %d 个子任务结果", self._pm_id[:8], len(subtask_results))
 
-        agg_prompt = build_aggregation_prompt(task_name, task_desc, subtask_results, st.plan)
+        prompt_results = [dict(result, output=self._summarize_output(result["name"], result["output"]))
+                          for result in subtask_results]
+        agg_prompt = build_aggregation_prompt(task_name, task_desc, prompt_results, st.plan)
         try:
             resp = call_for_task(self._runtime, agg_prompt,
                 {"_model_preference": "", "_fallback_models": [], "description": "结果聚合"}, st.task, "aggregation"

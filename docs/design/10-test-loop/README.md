@@ -28,6 +28,7 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/frontend/ | Node认证并发与Tauri IPC契约回归 |
 | tests/test_application_lifecycle.py | Cooperative lifecycle and draining regressions with controlled blocking windows. |
 | tests/test_artifact_lifecycle.py | Retention safety, scope-preserving replicas and real process crash durability. |
+| tests/test_artifact_refs.py | 子任务产出引用、路径边界及 PM 聚合提示词回归测试。 |
 | tests/test_backup.py | 整机备份：在线快照、归档校验、恢复到新目录。 |
 | tests/test_builtin_skills.py | Built-in skill discovery, distribution and real prompt composition behavior. |
 | tests/test_chat_safety.py | Conversation isolation and non-confirmation regressions found during live functional QA. |
