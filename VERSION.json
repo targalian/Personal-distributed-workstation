@@ -1,7 +1,7 @@
 {
   "version": "0.41.14",
-  "commit": "8fa9ce5",
-  "released_at": "2026-11-15",
-  "note": "0.41.14：从 EN 线回移三组能力——数据库升级安全（写前快照、单事务迁移、缺迁移中止、拒绝更高版本）、整机离线备份与校验恢复（create/verify/restore，含 WAL 快照与清单校验）、项目描述核心（13 章节 + 三层模块树 + 依赖 DAG、版本审阅、历史恢复、Markdown 导出、确认下发；对话生成与前端页面在下一片）。",
-  "upgrade_hint": "先按 docs/schema-upgrades.md 与 docs/backup-restore.md 在隔离节点演练；Gitee 暂停期间使用 pwsh -NoProfile -File scripts/sync_push.ps1 -SkipGitee 同步 GitHub。"
+  "commit": "f6b7e64",
+  "released_at": "2026-11-17",
+  "note": "0.41.14源码交付：iter125协作状态与共享通知已读、隔离双节点协议验收、离线环境诊断、同任务对照基准；合并GitHub CN既有鉴权、Windows启动、模型路由与会话隔离修复。Gitee继续暂停；物理多机、在线模型、升级回滚及硬件故障验收独立进行。",
+  "upgrade_hint": "先按docs/design/08-infrastructure/yomk-rollout.md在隔离节点演练；源码依赖用requirements.txt。Gitee暂停期间使用pwsh -NoProfile -File scripts/sync_push.ps1 -SkipGitee同步GitHub。"
 }

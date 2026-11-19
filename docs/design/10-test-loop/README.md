@@ -34,6 +34,7 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_chat_safety.py | Conversation isolation and non-confirmation regressions found during live functional QA. |
 | tests/test_codex_plan.py | ChatGPT 订阅传输：配置、可用性判定、路由与响应解析（全部 mock，不联网）。 |
 | tests/test_collaboration.py | Control transfer must wait for admitted work, preserve scope and survive retries. |
+| tests/test_collaboration_status.py | Real Database semantics; HTTP cases must run outside the socket-restricted sandbox. |
 | tests/test_core.py | 核心模块单元测试 |
 | tests/test_dag_frontend.py | Run dependency-editor behavior checks with the available Node runtime. |
 | tests/test_database_upgrade.py | 数据库升级安全：写前快照、原子回滚、版本守卫。 |
@@ -48,8 +49,10 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_interaction_services.py | Interaction contracts, common ingress and real project domain persistence. |
 | tests/test_memory_backup.py | Private memory replication, interruption recovery and scope-preserving failover. |
 | tests/test_memory_workbench.py | Large source indexing, live PM scoping, pagination and runtime reference boundaries. |
+| tests/test_mesh_acceptance.py | Pure safety tests plus explicitly selected real subprocess acceptance. |
 | tests/test_mesh_delivery.py | Durable delivery acceptance: retries, crash recovery, identities and real HTTP. |
 | tests/test_network_service_integration.py | Real loopback HTTP integration of Worker API, native execution and shutdown. |
+| tests/test_offline_doctor.py | Offline diagnosis regression checks, without production configuration access. |
 | tests/test_periodic_im.py | Calendar edges, durable trigger admission and IM room/event ownership regressions. |
 | tests/test_pm_replan.py | Bounded PM replanning, dependency rewiring and failure fallback regressions. |
 | tests/test_pm_services.py | Concurrency and integration regressions for shared PM ownership and scheduling. |
@@ -66,6 +69,7 @@ iter-115 新增 36 项持久投递行为测试，包含真实 HTTP 断网恢复�
 | tests/test_subscription_fallback.py | Subscription entries must not mask API credentials or enter API model lists. |
 | tests/test_subscription_metering.py | Subscription usage must reach the runtime's own durable attempt ledger once. |
 | tests/test_subtask_budget.py | Subtask budgets survive transport and stop execution before tool side effects. |
+| tests/test_task_benchmark.py | Meaningful offline benchmark validation behavior. |
 | tests/test_web_functionality.py | Authenticated HTTP and WebSocket workflows using real routes and isolated SQLite. |
 | tests/test_workstation_optimizer.py | Tests for the resident workstation optimization workflow. |
 | tests/test_yomk_graph.py | Real runtime, coroutine attribution and local viewer lifecycle regression. |

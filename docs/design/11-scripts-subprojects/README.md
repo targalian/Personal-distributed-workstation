@@ -17,6 +17,9 @@
 | scripts/fix_task_project_binding.py | 一次性修正: 把 BUG-033 修复前对话派发的任务补绑到正式项目。 |
 | scripts/golden_eval.py | Offline-first Golden task validation, single-agent execution and planning evaluation. |
 | scripts/golden_tasks.json | 20 deterministic Golden evaluation tasks |
+| scripts/mesh_acceptance.py | Isolated deterministic durable-delivery protocol acceptance. |
+| scripts/mesh_acceptance_peer.py | Authenticated fixture peer using production execution, inbox and outbox pumps. |
+| scripts/offline_doctor.py | Standard-library read-only environment diagnosis; never starts services or CLIs. |
 | scripts/ship.ps1 | ★ 一键发货: 按 Agent 归属分批提交 + 调 sync_push 推送 |
 | scripts/start_workstation.bat | 跨平台一键启动 Station (bat/ps1/sh) |
 | scripts/start_workstation.ps1 | 跨平台一键启动 Station (bat/ps1/sh) |
@@ -24,18 +27,11 @@
 | scripts/sync_dependencies.py | Keep source-install requirements generated from the wheel dependency contract. |
 | scripts/sync_docs.py | docs/design 模块清单一致性校验/生成器 (D2-docs-sync)。 |
 | scripts/sync_push.ps1 | ★ 双库同步推送脚本 (上库唯一入口) |
+| scripts/task_benchmark.py | Offline task benchmark catalog, record validation, and comparison utility. |
 | scripts/update_version.py | VERSION.json 自动同步脚本 (P2 #10: commit/released_at 对齐 HEAD + 可选 bump) |
 | skills/ | 技能库资产 (SKILL.md 格式, 中央分发) |
 <!-- /AUTO:module-list -->
 ---
-
-## scripts/backup_workstation.py — 离线整机备份
-
-默认收集配置选定的主库、共享目录、已有配置文件（含 `lan_mesh/resources.yaml`），
-以及存在时的 `~/.lan_mesh/`（`state` 根，含 mesh token、节点身份和 MCP 配置）。
-复用备份核心的 `state` 规则，排除顶层 `logs/`、`backups/`、`station.lock`；
-不初始化 Worker 或 Database。`--plan` 仅列出路径，缺失的可选来源跳过。
-归档格式和校验/恢复流程保持不变，操作步骤见 [整机备份与恢复](../../backup-restore.md)。
 
 ## scripts/sync_push.ps1 — 双库推送（上库唯一入口）
 

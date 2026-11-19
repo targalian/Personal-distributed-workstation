@@ -1,6 +1,8 @@
 """DeliveryService: Yomk service for the Station task domain."""
 
 import time
+import json
+import hashlib
 
 
 from .logger import get_logger
@@ -57,12 +59,18 @@ class DeliveryService(StationService):
         subtask_stats = payload.get("subtask_stats", {})
         acceptance_review = payload.get("acceptance_review", {})
 
+        task = db.get_task(task_id) if task_id else None
+        if not task:
+            raise ServiceError(404, '任务不存在')
+        if task.pm_agent_id and task.pm_agent_id != pm_id:
+            raise ServiceError(409, 'PM 与当前任务不匹配')
         # 存储交付物到 DB (追加到 task output_data)
         if task_id:
             task = db.get_task(task_id)
             if task:
                 if not task.output_data:
                     task.output_data = {}
+                previous = task.output_data.get("_delivery", {})
                 task.output_data["_delivery"] = {
                     "pm_id": pm_id,
                     "deliverable": deliverable,
@@ -72,7 +80,17 @@ class DeliveryService(StationService):
                     "accepted": None,  # 等待 Boss 验收
                     "acceptance_review": acceptance_review,  # iter-90: 蓝图验收自检
                 }
+                delivery = task.output_data['_delivery']
+                identity = lambda item: json.dumps({k: item.get(k) for k in
+                    ('pm_id', 'deliverable', 'summary', 'subtask_stats', 'acceptance_review')},
+                    sort_keys=True, ensure_ascii=False)
+                if identity(previous) == identity(delivery):
+                    task.output_data['_delivery'] = previous
                 db.save_task(task)
+                from .collaboration_repository import notify_transition
+                notify_transition(db, task_id, 'delivery', hashlib.sha256(identity(task.output_data['_delivery']).encode()).hexdigest(),
+                                  '最终结果已入 Station，等待用户验收')
+
 
         # iter-95: 交付结论回流项目蓝图 (蓝图↔项目闭环, 异常不阻断交付)
         blueprint_updated = False
@@ -80,21 +98,24 @@ class DeliveryService(StationService):
             blueprint_updated = _reflow_blueprint(
                 controller, task_id, task_name, acceptance_review)
 
-        # WebSocket 广播
-        await self.context.broadcast(state, "task_delivered", {
-            "pm_id": pm_id,
-            "task_id": task_id,
-            "task_name": task_name,
-            "summary": summary,
-            "subtask_stats": subtask_stats,
-            "acceptance_review": acceptance_review,
-            "blueprint_updated": blueprint_updated,
-        })
+        try:
+            # WebSocket 广播
+            await self.context.broadcast(state, "task_delivered", {
+                "pm_id": pm_id,
+                "task_id": task_id,
+                "task_name": task_name,
+                "summary": summary,
+                "subtask_stats": subtask_stats,
+                "acceptance_review": acceptance_review,
+                "blueprint_updated": blueprint_updated,
+            })
 
-        # Bot 推送
-        controller.bot_gateway.notify("task_delivered", {
-            "name": task_name, "task_id": task_id[:12] if task_id else "",
-        })
+            # Bot 推送
+            controller.bot_gateway.notify("task_delivered", {
+                "name": task_name, "task_id": task_id[:12] if task_id else "",
+            })
+        except Exception as exc:
+            logger.warning("交付通知失败（结果已入库）: %s", exc)
 
         logger.info("PM %s 交付物已接收: %s", pm_id[:12], task_name)
         print(f"[Task] 交付物已接收: {task_id}")

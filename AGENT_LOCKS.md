@@ -3,8 +3,8 @@
 多 Agent（Codex CLI / Qoder Quest）并行开发时的文件占用与交接看板。
 **开工前必读，认领后立即回写，完工后立即释放。** 规则见 AGENTS.md「多 Agent 协作」。
 
-- 更新时间：2026-11-13
-- 当前迭代：`iter-124`（秘书/DAG交互优化完成；861测试通过）
+- 更新时间：2026-11-17
+- 当前迭代：`iter-125`（0.41.14源码交接；合并回归1011 passed/5 skipped，实机与在线对照待验收）
 
 ## 一、职责边界（长期约定）
 
@@ -24,13 +24,16 @@
 
 | Agent | 占用文件 | 任务 | 开始 | 状态 |
 |---|---|---|---|---|
-| Codex | —— | iter116–124源码交接0.41.12，增加SkipGitee；校验完成，提交与远端状态以Git核验 | —— | 已释放 |
+| Codex | —— | iter125与GitHub CN 07145b5合并，0.41.14源码交接；1011 passed/5 skipped，门禁0阻断；远端结果以Git核验 | —— | 已释放 |
+| Codex-opt1234 | —— | iter125本地交付：965 passed/1 skipped/7 warnings；28浏览器fixture检查；实机及在线对照待验收；未提交，详见optimization-1234-local-handoff.md | 2026-11-13 | 已释放 |
 | Quest | 空闲 | 无 | —— | 已释放 |
 
 > 认领格式：一行一个 Agent，`占用文件` 写通配范围（如 `lan_mesh/station_*.py`），
 > `状态` 取 `进行中` / `待验证` / `已释放`。释放后把该行改回 `——`。
 
 ## 三、提交归属记录
+
+**2026-11-17本次源码交接**：用户授权全部本地更新上库。iter125本地改动保存为`413d4a8`，合并GitHub CN `07145b5`；仅清单与状态冲突，双方内容均保留。版本0.41.14，使用`sync_push.ps1 -SkipGitee`，Gitee继续暂停。合并全量1011 passed/5 skipped/27 warnings/182.85s；4项Windows cmd测试与1项私有resources.yaml测试跳过。编译导入、TypeScript、资源引用、doctor、依赖、文档280项11域通过；门禁0 Blocker/39 Warning。未部署或开展实机/在线验收。下方“未提交”均为历史交接状态。
 
 **本次源码交接：Codex iter-116～124，版本0.41.12，用户于2026-11-13授权全部上库**。iter124完成秘书对话与DAG联动、共享流程工作台、编辑与输入草稿保护、移动布局；23组Chrome、6项Node行为、全量861 passed/1 skipped/161.34s，门禁0 Blocker/21 Warning，TypeScript/Vite及wheel验证通过。UI-075/076已通过；详见 `docs/design/09-frontend/secretary-dag-workbench.md`，预览位于 `temp_resault/iter124-ui/`。未调用真实模型或修改用户任务，未部署；实际提交与GitHub CN同步状态以Git核验。
 

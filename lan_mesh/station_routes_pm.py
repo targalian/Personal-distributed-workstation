@@ -115,6 +115,10 @@ def build_pm_routes(controller) -> APIRouter:
         collaboration_mode = payload.get("collaboration_mode")
 
         (await run_in_threadpool(db.update_pm_status, pm_id, status, team_structure=team_structure, task_list=task_list, collaboration_mode=collaboration_mode))
+        task_id = pm.task_id
+        if task_id:
+            from .collaboration_repository import notify_transition
+            notify_transition(db, task_id, "pm:" + pm_id, status, f"PM 状态更新：{status}")
 
         # 优化7: awaiting_input 状态时附带澄清问题
         broadcast_data = {

@@ -2,7 +2,7 @@
 启动前自检模块 - 在程序启动时检查所有前置条件
 
 检查项:
-1. Python 版本 >= 3.10
+1. Python 版本 >= 3.11
 2. 核心依赖是否安装 (psutil, fastapi, uvicorn, requests, yaml, pydantic)
 3. 配置文件是否存在 (不存在则自动创建默认配置)
 4. 数据目录是否可写
@@ -61,12 +61,12 @@ class CheckResult:
 # ── 检查项实现 ──────────────────────────────────────────────────
 
 def _check_python() -> CheckResult:
-    """检查 Python 版本 >= 3.10。"""
+    """检查 Python 版本 >= 3.11。"""
     v = sys.version_info
     version_str = f"{v.major}.{v.minor}.{v.micro}"
-    if v >= (3, 10):
-        return CheckResult("Python 版本", True, f"{version_str} (>= 3.10)")
-    return CheckResult("Python 版本", False, f"{version_str} — 需要 3.10+", critical=True)
+    if v >= (3, 11):
+        return CheckResult("Python 版本", True, f"{version_str} (>= 3.11)")
+    return CheckResult("Python 版本", False, f"{version_str} — 需要 3.11+", critical=True)
 
 
 def _check_dependencies() -> CheckResult:
