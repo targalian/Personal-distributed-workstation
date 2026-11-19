@@ -172,6 +172,72 @@ def read_runtime_trace(task_id: str) -> list[dict]:
             if r.get("task_id") == task_id]
 
 
+def token_accounting(result: dict, attempted: bool = True) -> tuple[int | None, str]:
+    """Count only reported usage or explicit failures before a connection exists."""
+    if not attempted:
+        return None, "not_attempted"
+    tokens = usage_tokens(result)
+    if tokens is not None:
+        return tokens, "reported"
+    trace = result.get("runtime_trace", [])
+    if isinstance(trace, dict):
+        trace = [trace]
+    if not isinstance(trace, list):
+        trace = []
+    calls = [r for r in trace if isinstance(r, dict) and r.get("type") == "llm_call"]
+    records = calls or trace or [result]
+    totals = []
+    reported = False
+    for record in records:
+        if not isinstance(record, dict):
+            return None, "unknown"
+        count = _token_pair(record) if trace else None
+        if count is not None:
+            reported = True
+        elif _connect_failed(str(record.get("error", ""))):
+            count = 0
+        else:
+            return None, "unknown"
+        totals.append(count)
+    return sum(totals), "reported" if reported else "connect_failed"
+
+
+def _connect_failed(error: str) -> bool:
+    text = error.lower()
+    # A read timeout can follow a successful connection and billable generation.
+    if any(marker in text for marker in ("read timed out", "readtimeout", "read timeout")):
+        return False
+    return any(marker in text for marker in (
+        "connecttimeout", "connection refused", "name or service not known",
+        "failed to establish a new connection", "getaddrinfo failed"))
+
+
+def summarize_rows(rows: list[dict]) -> dict:
+    """Keep legacy totals and add averages over known usage only."""
+    failed = [r["id"] for r in rows if r["status"] != "completed"]
+    known = [r["tokens"] for r in rows if r["tokens"] is not None]
+    summary = {"passed": len(rows) - len(failed), "failed": len(failed),
+               "failed_ids": failed, "elapsed_s": sum(r["elapsed_s"] for r in rows),
+               "tokens": sum(known) if len(known) == len(rows) else None,
+               "known_tokens": sum(known), "unknown_token_tasks": len(rows) - len(known),
+               "token_accounting": {reason: 0 for reason in
+                                    ("reported", "connect_failed", "unknown", "not_attempted")}}
+    for row in rows:
+        summary["token_accounting"][row["token_reason"]] += 1
+    for field in ("difficulty", "category"):
+        groups = {}
+        for row in rows:
+            group = groups.setdefault(row[field], {"runs": 0, "known": 0, "known_tokens": 0})
+            group["runs"] += 1
+            if row["token_reason"] in ("reported", "connect_failed"):
+                group["known"] += 1
+                group["known_tokens"] += row["tokens"]
+        for group in groups.values():
+            group["avg"] = group["known_tokens"] / group["known"] if group["known"] else None
+        summary[f"by_{field}"] = groups
+    return summary
+
+
 def _token_pair(usage):
     if not isinstance(usage, dict) or usage.get("usage_known") is False:
         return None
@@ -196,9 +262,13 @@ def evaluate_task(task: dict, mode: str, keep: bool = False) -> dict:
     workspace = Path(tempfile.mkdtemp(prefix=f"golden-{task['id']}-"))
     started = time.perf_counter()
     row = {"id": task["id"], "status": "failed", "elapsed_s": 0, "tokens": None,
+           "token_reason": "not_attempted", "difficulty": task["difficulty"],
+           "category": task["category"],
            "acceptance_passed": False if mode == "single" else None,
            "acceptance_details": [], "failures": [], "artifacts": []}
     runtime = None
+    result = {}
+    attempted = False
     try:
         for path, content in task["workspace_files"].items():
             destination = safe_path(workspace, path)
@@ -210,14 +280,17 @@ def evaluate_task(task: dict, mode: str, keep: bool = False) -> dict:
         capture = io.StringIO()
         with contextlib.redirect_stdout(capture):
             if mode == "plan":
-                result = create_planner(runtime).analyze_with_skill(payload)
+                planner = create_planner(runtime)
+                attempted = True
+                result = planner.analyze_with_skill(payload)
             else:
+                attempted = True
                 result = runtime.execute(payload)
         if not isinstance(result, dict):
             raise ValueError("runtime/planner must return an object")
         if not result.get("runtime_trace"):
             result["runtime_trace"] = read_runtime_trace(payload["parent_task_id"])
-        row["tokens"] = usage_tokens(result)
+        row["tokens"], row["token_reason"] = token_accounting(result)
         if mode == "plan":
             if result.get("error") or result.get("status", "completed") != "completed":
                 raise ValueError(f"planner failed: {result.get('error') or result.get('status')}")
@@ -240,6 +313,12 @@ def evaluate_task(task: dict, mode: str, keep: bool = False) -> dict:
                 row["status"] = "completed"
     except Exception as exc:
         row["failures"].append(f"{type(exc).__name__}: {exc}")
+        if row["token_reason"] == "not_attempted":
+            evidence = dict(result) if isinstance(result, dict) else {}
+            evidence["error"] = row["failures"][-1]
+            if attempted:
+                evidence["runtime_trace"] = read_runtime_trace(payload["parent_task_id"])
+            row["tokens"], row["token_reason"] = token_accounting(evidence, attempted)
     finally:
         row["elapsed_s"] = round(time.perf_counter() - started, 6)
         row["artifacts"] = sorted(p.relative_to(workspace).as_posix()
@@ -297,15 +376,13 @@ def main(argv: list[str] | None = None) -> int:
             report["tasks"].append(row)
             print(f"[Task] {task['id']}: {row['status']}")
         rows = report["tasks"]
-        failed = [r["id"] for r in rows if r["status"] != "completed"]
-        known = [r["tokens"] for r in rows if r["tokens"] is not None]
-        report["summary"] = {"passed": len(rows) - len(failed), "failed": len(failed),
-                             "failed_ids": failed, "elapsed_s": sum(r["elapsed_s"] for r in rows),
-                             "tokens": sum(known) if len(known) == len(rows) else None,
-                             "known_tokens": sum(known), "unknown_token_tasks": len(rows) - len(known)}
+        report["summary"] = summarize_rows(rows)
         args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(report["summary"], ensure_ascii=False))
-        return 1 if failed else 0
+        counts = report["summary"]["token_accounting"]
+        print(f"[Task] token 统计: reported {counts['reported']} / "
+              f"connect_failed {counts['connect_failed']} / unknown {counts['unknown']}")
+        return 1 if report["summary"]["failed"] else 0
     except (OSError, ValueError, TypeError) as exc:
         print(f"[Task] configuration error: {exc}", file=sys.stderr)
         return 2

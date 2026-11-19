@@ -267,3 +267,90 @@ def test_fixture_python_sources_compile(suite):
         for name, content in task["workspace_files"].items():
             if name.endswith(".py"):
                 compile(content, name, "exec")
+
+
+@pytest.mark.parametrize("result,attempted,expected", [
+    ({"error": "ConnectTimeoutError: connection timed out"}, True, (0, "connect_failed")),
+    ({"error": "Connection refused"}, True, (0, "connect_failed")),
+    ({"error": "Name or service not known"}, True, (0, "connect_failed")),
+    ({"error": "Read timed out"}, True, (None, "unknown")),
+    ({"error": "request timed out"}, True, (None, "unknown")),
+    ({}, True, (None, "unknown")),
+    ({}, False, (None, "not_attempted")),
+    ({"error": "ConnectTimeout", "usage": {"input_tokens": 7, "output_tokens": 3}},
+     True, (10, "reported")),
+    ({"usage": {"input_tokens": 0, "output_tokens": 0}}, True, (0, "reported")),
+    ({"runtime_trace": [{"type": "llm_call", "usage_known": False,
+                         "input_tokens": 0, "output_tokens": 0,
+                         "error": "ConnectTimeoutError"}]}, True, (0, "connect_failed")),
+    ({"error": "ConnectTimeout", "runtime_trace": [
+        {"type": "llm_call", "error": "Read timed out", "usage_known": False}]},
+     True, (None, "unknown")),
+    ({"runtime_trace": [
+        {"type": "llm_call", "input_tokens": 5, "output_tokens": 2},
+        {"type": "llm_call", "error": "Connection refused", "usage_known": False}]},
+     True, (7, "reported")),
+    ({"runtime_trace": [
+        {"type": "llm_call", "input_tokens": 5, "output_tokens": 2},
+        {"type": "llm_call", "error": "Read timed out", "usage_known": False}]},
+     True, (None, "unknown")),
+])
+def test_token_accounting(result, attempted, expected):
+    assert golden.token_accounting(result, attempted) == expected
+
+
+@pytest.mark.parametrize("error,reason,tokens", [
+    ("ConnectTimeoutError", "connect_failed", 0),
+    ("Read timed out", "unknown", None),
+])
+@pytest.mark.parametrize("throws", [False, True])
+def test_failure_token_classification(suite, monkeypatch, error, reason, tokens, throws):
+    def execute(payload):
+        if throws:
+            raise RuntimeError(error)
+        return {"status": "failed", "error": error}
+    monkeypatch.setattr(golden, "create_runtime", lambda p: SimpleNamespace(execute=execute))
+    row = golden.evaluate_task(suite["tasks"][0], "single")
+    assert (row["tokens"], row["token_reason"]) == (tokens, reason)
+
+
+def test_setup_failure_not_attempted(suite, monkeypatch):
+    def broken(workspace):
+        raise RuntimeError("runtime unavailable")
+    monkeypatch.setattr(golden, "create_runtime", broken)
+    row = golden.evaluate_task(suite["tasks"][0], "single")
+    assert row["token_reason"] == "not_attempted" and row["tokens"] is None
+
+
+def test_mixed_token_report(suite, monkeypatch, tmp_path, capsys):
+    outcomes = [(120, "reported"), (0, "connect_failed"),
+                (None, "unknown"), (None, "not_attempted")]
+    def evaluate(task, mode, keep):
+        tokens, reason = outcomes.pop(0)
+        return {"id": task["id"], "difficulty": "simple", "category": task["category"],
+                "status": "failed", "elapsed_s": 1, "tokens": tokens, "token_reason": reason}
+    monkeypatch.setattr(golden, "evaluate_task", evaluate)
+    out = tmp_path / "mixed.json"
+    assert golden.main(["--run", "--ids", "G01,G02,G06,G07", "--out", str(out)]) == 1
+    report = json.loads(out.read_text(encoding="utf-8"))
+    summary = report["summary"]
+    assert summary["by_difficulty"]["simple"] == {
+        "runs": 4, "known": 2, "known_tokens": 120, "avg": 60}
+    assert summary["by_category"] == {
+        "doc": {"runs": 2, "known": 2, "known_tokens": 120, "avg": 60},
+        "code": {"runs": 2, "known": 0, "known_tokens": 0, "avg": None}}
+    assert summary["token_accounting"] == {
+        "reported": 1, "connect_failed": 1, "unknown": 1, "not_attempted": 1}
+    assert summary["tokens"] is None
+    assert summary["known_tokens"] == 120 and summary["unknown_token_tasks"] == 2
+    assert report["tasks"][2]["tokens"] is None
+    assert "token 统计: reported 1 / connect_failed 1 / unknown 1" in capsys.readouterr().out
+
+
+def test_known_zero_and_empty_summaries():
+    row = {"id": "G01", "status": "failed", "elapsed_s": 0, "tokens": 0,
+           "token_reason": "connect_failed", "difficulty": "simple", "category": "doc"}
+    summary = golden.summarize_rows([row])
+    assert summary["tokens"] == 0 and summary["unknown_token_tasks"] == 0
+    assert summary["by_difficulty"]["simple"]["avg"] == 0
+    assert golden.summarize_rows([])["by_category"] == {}
